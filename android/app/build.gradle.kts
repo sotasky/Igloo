@@ -115,7 +115,7 @@ kotlin {
 }
 
 ksp {
-    // Room schema export — committed under app/schemas/ as the version-bump audit trail.
+    // Room schema export for the current app schema.
     arg("room.schemaLocation", "$projectDir/schemas")
 }
 
