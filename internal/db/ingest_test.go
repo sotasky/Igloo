@@ -57,6 +57,12 @@ func TestUpdateIngestStateSuccess(t *testing.T) {
 	if s.LastSuccessAt == 0 {
 		t.Error("expected last_success_at to be set")
 	}
+	if s.LastError != "" {
+		t.Errorf("expected last_error to be cleared after success, got %q", s.LastError)
+	}
+	if s.LastHTTPStatus != 0 {
+		t.Errorf("expected last_http_status to be cleared after success, got %d", s.LastHTTPStatus)
+	}
 }
 
 func TestUpdateIngestStateFailure(t *testing.T) {
@@ -322,5 +328,52 @@ func TestResetIngestBackoff(t *testing.T) {
 	}
 	if s.NextRetryAt != 0 {
 		t.Errorf("expected next_retry_at=0 after reset, got %f", s.NextRetryAt)
+	}
+}
+
+func TestResetExpiredIngestBackoffKeepsActiveBackoff(t *testing.T) {
+	d := openWritableTestDB(t)
+
+	active := "handle_active_backoff"
+	expired := "handle_expired_backoff"
+	if err := d.RecordIngestFailure(active, "HTTP 503: Service Unavailable", 503); err != nil {
+		t.Fatalf("RecordIngestFailure active: %v", err)
+	}
+	if err := d.RecordIngestFailure(expired, "HTTP 503: Service Unavailable", 503); err != nil {
+		t.Fatalf("RecordIngestFailure expired: %v", err)
+	}
+	_, err := d.conn.Exec(
+		"UPDATE ingest_state SET next_retry_at = ?, fail_count = 3 WHERE handle = ?",
+		float64(time.Now().Add(-time.Minute).Unix()),
+		expired,
+	)
+	if err != nil {
+		t.Fatalf("age expired backoff: %v", err)
+	}
+
+	if err := d.ResetExpiredIngestBackoff(); err != nil {
+		t.Fatalf("ResetExpiredIngestBackoff: %v", err)
+	}
+
+	activeState, err := d.GetIngestState(active)
+	if err != nil {
+		t.Fatalf("GetIngestState active: %v", err)
+	}
+	if activeState.FailCount == 0 {
+		t.Fatal("active backoff fail_count should be preserved")
+	}
+	if activeState.NextRetryAt <= float64(time.Now().Unix()) {
+		t.Fatalf("active next_retry_at should remain in the future, got %f", activeState.NextRetryAt)
+	}
+
+	expiredState, err := d.GetIngestState(expired)
+	if err != nil {
+		t.Fatalf("GetIngestState expired: %v", err)
+	}
+	if expiredState.FailCount != 0 {
+		t.Errorf("expired backoff fail_count = %d, want 0", expiredState.FailCount)
+	}
+	if expiredState.NextRetryAt != 0 {
+		t.Errorf("expired next_retry_at = %f, want 0", expiredState.NextRetryAt)
 	}
 }

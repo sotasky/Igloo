@@ -27,6 +27,9 @@ var translateAutoQueued = {}
 var translateAutoQueue = []
 var translateAutoActive = 0
 var translateAutoConcurrency = 2
+var translateAutoRetryAttempts = {}
+var translateAutoRetryTimers = {}
+var translateAutoRetryDelays = [5000, 15000, 30000, 60000]
 
 // setHtmlContent safely sets HTML content using a template element.
 // All callers use jsLinkify (which HTML-escapes input) or restore our own saved DOM.
@@ -63,22 +66,21 @@ function translateBlock(card, container) {
   var field = container.getAttribute('data-translate-field')
   var targetLang = container.getAttribute('data-target-lang') || translateTarget
   var key = tweetId + ':' + field
-  if (translatePending[key]) return Promise.resolve()
+  if (translatePending[key]) return Promise.resolve('pending')
   translatePending[key] = true
 
   var textEl = translateTextElement(container)
-  if (!textEl) { delete translatePending[key]; return Promise.resolve() }
-  if (!hasTranslatableText(container)) { delete translatePending[key]; return Promise.resolve() }
-
-  if (!textEl.hasAttribute('data-original-html') && !textEl.hasAttribute('data-original-text')) {
-    textEl.setAttribute('data-original-html', textEl.innerHTML)
-  }
+  if (!textEl) { delete translatePending[key]; return Promise.resolve('skipped') }
+  if (!hasTranslatableText(container)) { delete translatePending[key]; return Promise.resolve('skipped') }
 
   return apiFetch('/api/translate', {
     method: 'POST',
     body: JSON.stringify({ tweet_id: tweetId, field: field, target_lang: targetLang })
   }).then(function (resp) {
-    if (!resp || !resp.translated_text) return
+    if (!resp || !resp.translated_text) return 'skipped'
+    if (!textEl.hasAttribute('data-original-html') && !textEl.hasAttribute('data-original-text')) {
+      textEl.setAttribute('data-original-html', textEl.innerHTML)
+    }
     setHtmlContent(textEl, jsLinkify(resp.translated_text))
     container.setAttribute('data-translated', '1')
     // Prefer feed item's detected lang (data-lang) over kagi's source_lang —
@@ -89,9 +91,20 @@ function translateBlock(card, container) {
     if (label) label.textContent = srcLang ? srcLang.toUpperCase() : ''
     var tBtn = card.querySelector('.feed-translate-btn')
     if (tBtn) tBtn.classList.add('active')
-  }).catch(function () {}).finally(function () {
+    return 'translated'
+  }).catch(function () {
+    return 'failed'
+  }).finally(function () {
     delete translatePending[key]
   })
+}
+
+function clearAutoTranslateRetry(key) {
+  if (translateAutoRetryTimers[key]) {
+    window.clearTimeout(translateAutoRetryTimers[key])
+    delete translateAutoRetryTimers[key]
+  }
+  delete translateAutoRetryAttempts[key]
 }
 
 function queueAutoTranslateBlock(card, container) {
@@ -104,16 +117,44 @@ function queueAutoTranslateBlock(card, container) {
   drainAutoTranslateQueue()
 }
 
+function scheduleAutoTranslateRetry(item) {
+  if (!autoTranslateAvailable()) return
+  if (!item.card.isConnected || !item.container.isConnected || !shouldAutoTranslateContainer(item.container)) return
+  var attempt = translateAutoRetryAttempts[item.key] || 0
+  if (attempt >= translateAutoRetryDelays.length) {
+    delete item.card.dataset.feedTranslateBackground
+    return
+  }
+  var delay = translateAutoRetryDelays[attempt]
+  translateAutoRetryAttempts[item.key] = attempt + 1
+  if (translateAutoRetryTimers[item.key]) window.clearTimeout(translateAutoRetryTimers[item.key])
+  translateAutoRetryTimers[item.key] = window.setTimeout(function () {
+    delete translateAutoRetryTimers[item.key]
+    if (!item.card.isConnected || !item.container.isConnected || !shouldAutoTranslateContainer(item.container)) return
+    queueAutoTranslateBlock(item.card, item.container)
+  }, delay)
+}
+
+function runAutoTranslateItem(item) {
+  translateAutoActive++
+  translateBlock(item.card, item.container).then(function (status) {
+    if (status === 'failed') {
+      scheduleAutoTranslateRetry(item)
+    } else if (status === 'translated' || status === 'skipped') {
+      clearAutoTranslateRetry(item.key)
+    }
+  }).finally(function () {
+    translateAutoActive--
+    drainAutoTranslateQueue()
+  })
+}
+
 function drainAutoTranslateQueue() {
   while (translateAutoActive < translateAutoConcurrency && translateAutoQueue.length) {
     var item = translateAutoQueue.shift()
     delete translateAutoQueued[item.key]
     if (!item.card.isConnected || !item.container.isConnected || !shouldAutoTranslateContainer(item.container)) continue
-    translateAutoActive++
-    translateBlock(item.card, item.container).finally(function () {
-      translateAutoActive--
-      drainAutoTranslateQueue()
-    })
+    runAutoTranslateItem(item)
   }
 }
 

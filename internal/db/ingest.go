@@ -54,6 +54,8 @@ func (db *DB) RecordIngestSuccess(handle string, successAt float64, latencyMs fl
 				next_retry_at   = 0,
 				last_success_at = excluded.last_success_at,
 				last_attempt_at = excluded.last_attempt_at,
+				last_error      = '',
+				last_http_status = NULL,
 				avg_latency_ms  = CASE
 					WHEN ingest_state.avg_latency_ms = 0 THEN excluded.avg_latency_ms
 					ELSE (ingest_state.avg_latency_ms * 0.8 + excluded.avg_latency_ms * 0.2)
@@ -129,6 +131,20 @@ func (db *DB) ResetIngestHandle(handle string) error {
 func (db *DB) ResetIngestBackoff() error {
 	return db.WithWrite(func(tx *sql.Tx) error {
 		_, err := tx.Exec("UPDATE ingest_state SET fail_count = 0, next_retry_at = 0")
+		return err
+	})
+}
+
+// ResetExpiredIngestBackoff clears backoff rows whose retry time has already
+// passed. Active backoffs are preserved so restarts do not immediately retry
+// the same failing sources at the front of the ingest cycle.
+func (db *DB) ResetExpiredIngestBackoff() error {
+	return db.WithWrite(func(tx *sql.Tx) error {
+		_, err := tx.Exec(`
+			UPDATE ingest_state
+			SET fail_count = 0, next_retry_at = 0
+			WHERE next_retry_at > 0 AND next_retry_at <= ?
+		`, float64(time.Now().Unix()))
 		return err
 	})
 }

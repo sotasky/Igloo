@@ -132,8 +132,8 @@ func NewManager(database *db.DB, cfg *config.Config) *Manager {
 //  6. [async] runFeedMediaWorker   — long-running download
 //  7. [async] runProfileRefreshLoop — unified profile/avatar/banner refresh for all platforms
 func (m *Manager) StartAll() {
-	if err := m.db.ResetIngestBackoff(); err != nil {
-		log.Printf("[worker] ResetIngestBackoff: %v", err)
+	if err := m.db.ResetExpiredIngestBackoff(); err != nil {
+		log.Printf("[worker] ResetExpiredIngestBackoff: %v", err)
 	}
 
 	// Reset jobs left in processing state from a previous run.
