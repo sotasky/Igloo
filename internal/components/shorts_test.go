@@ -173,3 +173,20 @@ func TestShortsOverlayPrewarmsNearbyVideosBeforeScrollActivation(t *testing.T) {
 		}
 	}
 }
+
+func TestShortsItemsDoNotAnimateViewportSizeDuringScrollSnap(t *testing.T) {
+	cssBytes, err := os.ReadFile("../../static/style.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := cssRuleBody(t, string(cssBytes), ".shorts-item")
+	for _, bad := range []string{
+		"transform:",
+		"transition:",
+		"opacity: 0.",
+	} {
+		if strings.Contains(body, bad) {
+			t.Errorf(".shorts-item should not animate viewport size during scroll snap; found %q in %s", bad, body)
+		}
+	}
+}

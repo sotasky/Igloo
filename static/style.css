@@ -5295,21 +5295,7 @@ select.input.themed-select-native {
     display: flex;
     justify-content: center;
     background: #000;
-    opacity: 0.88;
-    transform: scale(0.992);
-    transition: opacity 0.22s ease, transform 0.22s ease;
     contain: layout style;
-}
-
-.shorts-item.is-active {
-    opacity: 1;
-    transform: scale(1);
-}
-
-.shorts-layout.is-switching-tabs .shorts-item {
-    opacity: 1;
-    transform: scale(1);
-    transition: none;
 }
 
 .shorts-layout.shorts-story-mode .shorts-container {
