@@ -1,0 +1,68 @@
+package components
+
+import (
+	"fmt"
+
+	"github.com/screwys/igloo/internal/model"
+)
+
+// PlayerComments renders the full comments list, including empty-state message.
+// The caller owns the outer container (hx-target).
+templ PlayerComments(p PageProps, comments []model.Comment, creatorAuthorID string) {
+	if len(comments) == 0 {
+		<div class="video-card" style="display:block; padding:0.75rem;">{ L(p, "player_comments_empty", "No comments found.") }</div>
+	} else {
+		for _, n := range BuildCommentTree(comments) {
+			@playerCommentCard(p, n, 0, creatorAuthorID)
+		}
+	}
+}
+
+// playerCommentCard recursively renders a comment and its replies.
+templ playerCommentCard(p PageProps, node *CommentNode, depth int, creatorAuthorID string) {
+	{{ c := node.Comment }}
+	{{ avatarURL := c.AuthorThumbnail }}
+	{{ hasChildren := len(node.Children) > 0 }}
+	{{ isReply := depth > 0 }}
+	{{ metaText := CommentMetaText(p, c) }}
+	<div
+		class={ templ.KV("video-card", !isReply), "player-comment-card", templ.KV("is-reply", isReply), templ.KV("has-children", hasChildren) }
+		data-comment-depth={ fmt.Sprintf("%d", depth) }
+		style={ fmt.Sprintf("display:block; padding:0.66rem 0.72rem; margin-left:%dpx;", CommentIndentPx(depth)) }
+	>
+		<div class="player-comment-node" style="display:flex; gap:0.6rem; align-items:flex-start;">
+			<span class="player-channel-avatar-wrap" style="width:24px;height:24px;">
+					if avatarURL != "" {
+						<img class="player-channel-avatar" src={ avatarURL } alt="" onload="window.MpaSiteBase&&window.MpaSiteBase.avatarLoad(this)" onerror="if(window.MpaSiteBase&&window.MpaSiteBase.avatarError(this))return; this.style.display='none'; this.nextElementSibling.style.display='inline-flex';"/>
+						<span class="player-channel-avatar-fallback" style="display:none;">{ CommentAuthorInitialText(p, c) }</span>
+					} else {
+						<span class="player-channel-avatar-fallback">{ CommentAuthorInitialText(p, c) }</span>
+					}
+				</span>
+				<div class="player-comment-content" style="min-width:0; flex:1;">
+					<div class="player-comment-head" style="display:flex; gap:0.45rem; align-items:baseline; flex-wrap:wrap;">
+						<strong class={ "player-comment-author", templ.KV("is-creator", CommentIsCreator(c, creatorAuthorID)) }>{ CommentAuthorNameText(p, c) }</strong>
+					if metaText != "" {
+						<span class="player-comment-meta">{ metaText }</span>
+					}
+				</div>
+				<div class="player-comment-body" style="white-space:pre-wrap; margin-top:0.24rem; word-break:break-word;">
+					@templ.Raw(RenderCommentRichText(c.Text))
+				</div>
+				if hasChildren {
+					<div class="player-comment-replies">
+						for _, child := range node.Children {
+							@playerCommentCard(p, child, depth+1, creatorAuthorID)
+						}
+					</div>
+				}
+			</div>
+		</div>
+	</div>
+}
+
+// PlayerStatValue is the updatable number inside #player-stat-likes / -views.
+// Rendered as an OOB swap by the comments refresh endpoint.
+templ PlayerStatValue(id string, n int64) {
+	<span class="player-stat-value" id={ id } hx-swap-oob="true">{ FormatCompactNumber(n) }</span>
+}

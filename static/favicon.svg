@@ -1,0 +1,8 @@
+<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Igloo">
+  <title>Igloo</title>
+  <path d="M12 1.1 22 5.3v6.6c0 5.9-3.7 9.5-10 11.1C5.7 21.4 2 17.8 2 11.9V5.3z" fill="var(--ctp-surface2, #585b70)"/>
+  <circle cx="12" cy="7.7" r="2.8" fill="var(--text-primary, #cdd6f4)"/>
+  <circle cx="6.9" cy="15.2" r="2.45" fill="var(--accent-primary, #f38ba8)"/>
+  <circle cx="17.1" cy="15.2" r="2.45" fill="var(--accent-primary, #f38ba8)"/>
+  <path d="M10.4 10.1 8 13.1M13.6 10.1l2.4 3M9.6 15.2h4.8" stroke="var(--text-primary, #cdd6f4)" stroke-width="2" stroke-linecap="round"/>
+</svg>

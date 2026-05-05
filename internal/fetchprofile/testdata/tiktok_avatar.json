@@ -1,0 +1,18 @@
+[
+  [
+    2,
+    {
+      "type": "avatar",
+      "uniqueId": "user_alpha",
+      "nickname": "User Alpha",
+      "signature": "Synthetic TikTok profile fixture.",
+      "avatarLarger": "https://cdn.example.invalid/tiktok/user_alpha/avatar-large.jpeg",
+      "avatarMedium": "https://cdn.example.invalid/tiktok/user_alpha/avatar-medium.jpeg",
+      "bioLink": {
+        "link": "example.invalid/user_alpha",
+        "risk": 0
+      },
+      "verified": true
+    }
+  ]
+]

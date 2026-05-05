@@ -1,0 +1,74 @@
+package components
+
+import "fmt"
+
+// YouTubeSearchPage renders the YouTube search results page wrapped in the Base layout.
+templ YouTubeSearchPage(p PageProps, query string, results []map[string]any, searchErr string) {
+	@Base(p) {
+		<div class="search-results-page">
+			@youtubeSearchBar(p, query)
+			if query != "" {
+				if searchErr != "" {
+					<div class="empty-state">
+						<h3>{ L(p, "search_failed", "Search failed") }</h3>
+						<p>{ searchErr }</p>
+					</div>
+				} else if len(results) > 0 {
+					<div class="video-grid">
+						for _, r := range results {
+							@YouTubeSearchCard(r)
+						}
+					</div>
+				} else {
+					<div class="empty-state">
+						<h3>{ L(p, "search_no_results", "No results") }</h3>
+						<p>{ fmt.Sprintf(L(p, "search_nothing_found_for", "Nothing found for %q"), query) }</p>
+					</div>
+				}
+			} else {
+				<div class="empty-state">
+					<h3>{ L(p, "youtube_search_title", "YouTube Search") }</h3>
+					<p>{ L(p, "youtube_search_empty_prompt", "Enter a query to search YouTube.") }</p>
+				</div>
+			}
+		</div>
+	}
+}
+
+// youtubeSearchBar renders the YouTube-style search bar, pre-filled with the
+// current query so it persists across result navigations.
+templ youtubeSearchBar(p PageProps, query string) {
+	<form method="get" action="/search/youtube" class="youtube-search-bar" role="search">
+		<div class="youtube-search-input-wrap">
+			<input class="input youtube-search-input" type="search" name="q" value={ query } placeholder={ L(p, "youtube_search_placeholder", "Search YouTube") } autocomplete="off" spellcheck="false" autofocus onfocus="var l=this.value.length;this.setSelectionRange(l,l);"/>
+			<button type="button" class="input-clear-btn" aria-label={ L(p, "action_clear", "Clear") } onclick="var i=this.previousElementSibling;i.value='';i.focus();">&times;</button>
+		</div>
+		<button class="btn btn-secondary youtube-search-submit" type="submit" aria-label={ L(p, "search_title", "Search") }>
+			<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.35-4.35"></path></svg>
+		</button>
+	</form>
+}
+
+// YouTubeSearchCard renders a single YouTube search result using the same
+// card structure as VideoCard (same CSS classes) for visual consistency.
+templ YouTubeSearchCard(r map[string]any) {
+	<a class="video-card" href={ templ.SafeURL("/temp/watch?v=" + mapStr(r, "VideoID")) } data-video-id={ mapStr(r, "VideoID") }>
+		<div class="video-thumbnail">
+			<img src={ mapStr(r, "ThumbnailURL") } loading="lazy" alt=""/>
+			if mapInt(r, "Duration") > 0 {
+				<span class="video-duration">{ FormatDuration(mapInt(r, "Duration")) }</span>
+			}
+		</div>
+		<div class="video-info">
+			<div class="video-title" title={ mapStr(r, "Title") }>{ mapStr(r, "Title") }</div>
+			<div class="video-meta">
+				<span class="video-channel-wrap">
+					if mapStr(r, "AvatarURL") != "" {
+						<img class="video-channel-avatar" src={ mapStr(r, "AvatarURL") } alt="" loading="lazy"/>
+					}
+					<span class="video-channel">{ mapStr(r, "ChannelName") }</span>
+				</span>
+			</div>
+		</div>
+	</a>
+}

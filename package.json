@@ -1,0 +1,27 @@
+{
+  "name": "igloo",
+  "version": "1.0.0",
+  "description": "Personal video aggregation platform for YouTube, TikTok, and X/Twitter feeds.",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/screwys/Igloo.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "GPL-3.0-only",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/screwys/Igloo/issues"
+  },
+  "homepage": "https://github.com/screwys/Igloo#readme",
+  "devDependencies": {
+    "esbuild": "^0.28.0"
+  }
+}

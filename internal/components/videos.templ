@@ -1,0 +1,45 @@
+package components
+
+import (
+	"fmt"
+	"github.com/screwys/igloo/internal/model"
+)
+
+// VideosPage renders the full videos page wrapped in the Base layout.
+templ VideosPage(p PageProps, videos []model.Video, pager model.Pager, search string) {
+	@Base(p) {
+		<div id="video-grid" class="video-grid">
+			if len(videos) > 0 {
+				for _, v := range videos {
+					@VideoCard(p, v)
+				}
+			} else {
+				<div class="empty-state">
+					<h3>{ L(p, "videos_empty_title", "No Videos") }</h3>
+					<p>{ L(p, "videos_empty_body", "No videos found.") }</p>
+				</div>
+			}
+		</div>
+		if pager.HasNext() {
+			@InfiniteScrollTrigger(videosNextURL(pager, search))
+		}
+	}
+}
+
+// VideosPartial renders just the video cards and next trigger for HTMX infinite scroll responses.
+templ VideosPartial(p PageProps, videos []model.Video, pager model.Pager, search string) {
+	for _, v := range videos {
+		@VideoCard(p, v)
+	}
+	if pager.HasNext() {
+		@InfiniteScrollTrigger(videosNextURL(pager, search))
+	}
+}
+
+func videosNextURL(pager model.Pager, search string) string {
+	url := fmt.Sprintf("/videos?page=%d", pager.Page+1)
+	if search != "" {
+		url += "&q=" + search
+	}
+	return url
+}

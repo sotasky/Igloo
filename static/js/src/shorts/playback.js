@@ -1,0 +1,156 @@
+// Shorts playback — video and slideshow playback, progress bar, mute, autoplay.
+
+var _state = null
+var _goNext = null
+
+export function initPlayback(stateRef, goNextFn) {
+  _state = stateRef
+  _goNext = goNextFn
+}
+
+function currentData() {
+  if (_state.currentIndex < 0 || _state.currentIndex >= _state.items.length) return null
+  return _state.items[_state.currentIndex] ? _state.items[_state.currentIndex].data : null
+}
+
+function autoAdvanceEnabled() {
+  return !!(_state && _state.autoPlayNext)
+}
+
+export function pauseAllShorts(exceptId) {
+  _state.items.forEach(function (entry) {
+    var slideshow = entry && entry.refs && entry.refs.slideshow
+    if (slideshow && slideshow.timer) {
+      try { clearTimeout(slideshow.timer) } catch (_) { }
+      slideshow.timer = 0
+    }
+    if (slideshow && slideshow.audio) {
+      try { slideshow.audio.pause(); slideshow.audio.currentTime = 0 } catch (_) { }
+    }
+    var video = entry && entry.refs && entry.refs.video
+    if (!video) return
+    if (exceptId && entry.data.id === exceptId) return
+    try { video.pause() } catch (_) { }
+  })
+}
+
+export function maybeMarkAspect(wrapper, video) {
+  if (!wrapper || !video) return
+  var w = Number(video.videoWidth || 0)
+  var h = Number(video.videoHeight || 0)
+  wrapper.classList.remove('is-vertical', 'is-wide')
+  if (!w || !h) return
+  if (h > w) wrapper.classList.add('is-vertical')
+  else if (w > h * 1.2) wrapper.classList.add('is-wide')
+}
+
+export function setSlideshowIndex(entry, index) {
+  var slideshow = entry && entry.refs && entry.refs.slideshow
+  if (!slideshow || !slideshow.count) return
+  var next = Math.max(0, parseInt(index, 10) || 0)
+  if (next >= slideshow.count) next = slideshow.count - 1
+  slideshow.index = next
+  slideshow.images.forEach(function (img, idx) {
+    if (img) img.classList.toggle('active', idx === next)
+  })
+  ;(slideshow.dots || []).forEach(function (dot, idx) {
+    if (dot) dot.classList.toggle('active', idx === next)
+  })
+  if (slideshow.counter) {
+    slideshow.counter.textContent = String(next + 1) + ' / ' + String(slideshow.count)
+  }
+}
+
+export function startSlideshowPlayback(entry) {
+  var slideshow = entry && entry.refs && entry.refs.slideshow
+  if (!slideshow || !slideshow.count) return
+  if (slideshow.timer) {
+    try { clearTimeout(slideshow.timer) } catch (_) { }
+    slideshow.timer = 0
+  }
+  setSlideshowIndex(entry, slideshow.index || 0)
+  var audio = slideshow.audio
+  if (audio && audio.src) {
+    audio.preload = 'auto'
+    var ap = audio.play()
+    if (ap && typeof ap.catch === 'function') ap.catch(function () {})
+  }
+  if (audio && !audio._endedWired) {
+    audio._endedWired = true
+    audio.addEventListener('ended', function () {
+      if (!_state.overlayOpen) return
+      var cur = currentData()
+      if (!cur || cur.id !== entry.data.id) return
+      if (autoAdvanceEnabled()) _goNext()
+      else {
+        try { audio.currentTime = 0; audio.play().catch(function () {}) } catch (_) { }
+      }
+    })
+  }
+  if (_state.storyMode && !audio) return
+  if (slideshow.count <= 1) {
+    if (!slideshow.audio || !slideshow.audio.src) {
+      slideshow.timer = setTimeout(function () {
+        slideshow.timer = 0
+        if (!_state.overlayOpen) return
+        var cur = currentData()
+        if (!cur || cur.id !== entry.data.id) return
+        if (autoAdvanceEnabled()) _goNext()
+        else { setSlideshowIndex(entry, 0); startSlideshowPlayback(entry) }
+      }, 5000)
+    }
+    return
+  }
+  slideshow.timer = setTimeout(function () {
+    slideshow.timer = 0
+    if (!_state.overlayOpen) return
+    var current = currentData()
+    if (!current || current.id !== entry.data.id) return
+    var next = (slideshow.index || 0) + 1
+    if (next >= slideshow.count) {
+      if (autoAdvanceEnabled()) _goNext()
+      else { setSlideshowIndex(entry, 0); startSlideshowPlayback(entry) }
+      return
+    }
+    setSlideshowIndex(entry, next)
+    startSlideshowPlayback(entry)
+  }, 3200)
+}
+
+export function toggleShortPlayback(entry) {
+  if (!entry || !entry.refs) return
+  var video = entry.refs.video
+  if (video) {
+    if (video.paused) {
+      var p = video.play()
+      if (p && typeof p.catch === 'function') p.catch(function () { })
+    } else {
+      video.pause()
+    }
+    return
+  }
+  var slideshow = entry.refs.slideshow
+  if (!slideshow || !slideshow.count) return
+  var audio = slideshow.audio
+  if (audio && audio.src && !audio.paused) {
+    try { audio.pause() } catch (_) { }
+    if (slideshow.timer) { try { clearTimeout(slideshow.timer) } catch (_) { } slideshow.timer = 0 }
+    return
+  }
+  if (slideshow.count > 1) {
+    var next = (slideshow.index || 0) + 1
+    if (next >= slideshow.count) next = 0
+    setSlideshowIndex(entry, next)
+  }
+  startSlideshowPlayback(entry)
+}
+
+export function handleVideoTimeUpdate(entry) {
+  var video = entry && entry.refs && entry.refs.video
+  var bar = entry && entry.refs && entry.refs.progressBar
+  if (!video || !bar) return
+  var dur = Number(video.duration || 0)
+  var cur = Number(video.currentTime || 0)
+  var pct = dur > 0 ? Math.max(0, Math.min(100, (cur / dur) * 100)) : 0
+  bar.style.width = pct + '%'
+}

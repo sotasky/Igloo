@@ -1,0 +1,215 @@
+package components
+
+import (
+	"fmt"
+	"strconv"
+	"github.com/screwys/igloo/internal/model"
+)
+
+// ChannelPage renders the full single-channel page wrapped in Base layout.
+templ ChannelPage(p PageProps, channel model.Channel, profile *model.ChannelProfile, videos []model.Video, pager model.Pager, search string, avatarURL string, usesShorts bool) {
+	@Base(p) {
+		if usesProfileHero(channel.Platform) && profile != nil {
+			@ProfileCard(p, profile, "hero", channel.IsSubscribed, channel.IsStarred)
+		} else {
+			<div class="page-actions-bar">
+				if avatarURL != "" {
+					<img src={ avatarURL } class="page-actions-avatar" alt="" onerror="this.style.display='none'"/>
+				}
+				<span class="page-actions-name">{ channel.Name }</span>
+				@ChannelStarButton(p, channel.ChannelID, channel.IsStarred)
+				<button
+					class="btn btn-secondary js-open-channel-settings"
+					type="button"
+					data-channel-id={ channel.ChannelID }
+					data-channel-name={ channel.Name }
+					data-channel-platform={ channelPlatformOrDefault(channel.Platform) }
+				>{ L(p, "settings_screen_title", "Settings") }</button>
+				<button
+					class="btn btn-secondary"
+					type="button"
+					hx-delete={ "/api/unsubscribe/" + channel.ChannelID + "?delete_files=true" }
+					hx-swap="none"
+					hx-confirm={ fmt.Sprintf(L(p, "confirm_remove_channel_and_files", "Remove channel and files for %q?"), channel.Name) }
+					hx-on::after-request="if(event.detail.successful)window.location.href='/channels'"
+				>{ L(p, "action_unsubscribe", "Unsubscribe") }</button>
+			</div>
+		}
+		<div
+			id="video-grid"
+			if usesShorts {
+				class="video-grid shorts-grid"
+				style="grid-template-columns: repeat(auto-fill, minmax(236px, 1fr)); gap:1.25rem;"
+			} else {
+				class="video-grid"
+			}
+		>
+			@VideoGrid(p, videos, channel, pager, search, usesShorts, false)
+		</div>
+		if usesShorts {
+			<div id="shorts-layout" class="shorts-layout hidden" data-auto-open="0" data-persist-history="0" data-source-container-selector="#video-grid" data-source-card-selector="a.video-card" data-infinite-container-selector="#video-grid" tabindex="-1">
+				<button id="close-shorts-btn" class="shorts-close-btn" title={ L(p, "action_close_shorts_mode", "Close Shorts mode") }>&#x2715;</button>
+				<div id="shorts-container" class="shorts-container"></div>
+				<div id="shorts-uptodate-overlay" class="shorts-uptodate-overlay hidden">
+					<div class="uptodate-content"><span>{ L(p, "status_up_to_date", "You're up to date!") }</span></div>
+				</div>
+			</div>
+		}
+	}
+}
+
+// channelPlatformOrDefault returns the platform or "youtube" as default.
+func channelPlatformOrDefault(platform string) string {
+	if platform == "" {
+		return "youtube"
+	}
+	return platform
+}
+
+func usesProfileHero(platform string) bool {
+	return platform == "youtube" || platform == "tiktok" || platform == "instagram"
+}
+
+// VideoGrid renders the video cards and an infinite scroll trigger if there are more pages.
+// When isPartial is true, the outer container div is NOT rendered (cards are injected into existing grid).
+templ VideoGrid(p PageProps, videos []model.Video, channel model.Channel, pager model.Pager, search string, usesShorts bool, isPartial bool) {
+	if len(videos) > 0 {
+		for _, v := range videos {
+			@VideoCard(p, v)
+		}
+		if pager.HasNext() {
+			@InfiniteScrollTrigger(nextPageURL(channel.ChannelID, pager.Page+1, search))
+		}
+	} else {
+		if !isPartial {
+			<div class="empty-state">
+				<h3>{ L(p, "videos_empty_title", "No Videos") }</h3>
+				<p>{ L(p, "channel_empty_videos", "No channel videos found.") }</p>
+			</div>
+		}
+	}
+}
+
+// VideoCard renders a single video card matching the original video_card.html template.
+// All data attributes are preserved for JavaScript interactivity.
+// p.Prefs.VideoTitle and p.Prefs.VideoThumbURL are used for VISIBLE rendering; data attributes
+// always carry the original values so JS search/display logic is unaffected.
+templ VideoCard(p PageProps, v model.Video) {
+	{{ taggedAccounts := videoTaggedAccounts(v) }}
+	<a
+		href={ templ.SafeURL("/player/" + v.VideoID) }
+		class={ videoCardClass(v) }
+		data-video-id={ v.VideoID }
+		data-video-title={ videoTitle(v) }
+		data-video-description={ v.Description }
+		data-channel-name={ videoChannelName(v) }
+		data-channel-id={ v.ChannelID }
+		data-channel-href={ "/channels/" + v.ChannelID }
+		data-avatar-url={ videoAvatarURL(v) }
+		data-thumb-url={ videoThumbURL(v) }
+		data-stream-url={ "/api/media/stream/" + v.VideoID }
+		if v.MediaKind == "slideshow" {
+			data-audio-url={ "/api/media/audio/" + v.VideoID }
+		}
+		data-bookmarked={ boolDataAttr(v.BookmarkCategoryID != nil) }
+		data-bookmark-category-id={ bookmarkCategoryIDStr(v.BookmarkCategoryID) }
+		data-platform={ v.Platform }
+		data-published-at={ publishedAtStr(v.PublishedAt) }
+		data-channel-followed={ boolDataAttr(v.IsSubscribed) }
+		data-repost-introduced={ boolDataAttr(v.RepostIntroduced) }
+		data-repost-label={ videoRepostLabel(v) }
+		data-repost-channel-id={ videoRepostChannelID(v) }
+		data-repost-handle={ videoRepostHandle(v) }
+		data-repost-display-name={ videoRepostDisplayName(v) }
+		data-repost-avatar-url={ videoRepostAvatarURL(v) }
+		data-story-state={ storyStateAttr(v.StoryState) }
+		data-story-count={ strconv.Itoa(v.StoryCount) }
+		data-story-unseen-count={ strconv.Itoa(v.StoryUnseenCount) }
+		data-story-first-video-id={ v.StoryFirstVideoID }
+		data-story-unseen={ boolDataAttr(v.StoryUnseen) }
+		data-media-kind={ v.MediaKind }
+		data-media-slide-count={ strconv.Itoa(v.MediaSlideCount) }
+		data-shorts-eligible={ boolDataAttr(v.IsShortForm) }
+		data-original-url={ videoWebpageURL(v) }
+		if len(taggedAccounts) > 0 {
+			data-tagged-accounts={ toJSONAttr(taggedAccounts) }
+		}
+	>
+		<div class="video-thumbnail">
+			if v.EagerLoad {
+				<img src={ p.Prefs.VideoThumbURL(v) } alt="" onerror="this.style.display='none'"/>
+			} else {
+				<img src={ p.Prefs.VideoThumbURL(v) } loading="lazy" alt="" onerror="this.style.display='none'"/>
+			}
+			if v.Duration > 0 {
+				if dur := FormatDuration(v.Duration); dur != "" {
+					<span class="video-duration">{ dur }</span>
+				}
+			}
+			@VideoMediaTypeBadge(p, v)
+		</div>
+		<div class="video-info">
+			<div class="video-title" title={ p.Prefs.VideoTitle(v) }>{ p.Prefs.VideoTitle(v) }</div>
+			<div class="video-meta">
+				<span class="video-channel-wrap">
+					<img class="video-channel-avatar" src={ videoAvatarURL(v) } alt="" loading="lazy" onerror="this.style.display='none'"/>
+					<span class="video-channel">{ videoChannelName(v) }</span>
+				</span>
+				<span class="video-date" data-video-date={ publishedAtStr(v.PublishedAt) } title={ publishedAtStr(v.PublishedAt) }>
+					{ RelativeTimeText(p, v.PublishedAt) }
+				</span>
+			</div>
+		</div>
+	</a>
+}
+
+// VideoMediaTypeBadge renders the vertical-grid media-kind indicator.
+templ VideoMediaTypeBadge(p PageProps, v model.Video) {
+	{{ mediaType := videoCardMediaType(v) }}
+	<span
+		class={ "video-media-type-badge", "video-media-type-" + mediaType }
+		title={ videoCardMediaTypeLabel(p, mediaType) }
+		aria-label={ videoCardMediaTypeLabel(p, mediaType) }
+	>
+		@templ.Raw(videoCardMediaTypeIcon(mediaType))
+	</span>
+}
+
+// videoCardClass returns the CSS class for a video card.
+func videoCardClass(v model.Video) string {
+	if v.Watched {
+		return "video-card watched"
+	}
+	return "video-card"
+}
+
+// InfiniteScrollTrigger renders a div that triggers HTMX to load the next page
+// when it scrolls into view. The trigger replaces itself with the new content.
+templ InfiniteScrollTrigger(nextURL string) {
+	<div
+		hx-get={ nextURL }
+		hx-trigger="revealed"
+		hx-swap="outerHTML"
+	></div>
+}
+
+// VideoGridInfiniteScrollTrigger lets static/js/infinite_page.js append cards
+// into the shared #video-grid without prefetching the entire collection.
+templ VideoGridInfiniteScrollTrigger(nextURL string) {
+	<div
+		class="js-infinite-scroll"
+		data-container-selector="#video-grid"
+		data-item-selector=".video-card"
+		data-next-url={ nextURL }
+		data-no-prefetch="1"
+	></div>
+}
+
+// nextPageURL builds the URL for the next page of channel videos.
+func nextPageURL(channelID string, page int, search string) string {
+	u := fmt.Sprintf("/channels/%s?page=%d", channelID, page)
+	if search != "" {
+		u += "&q=" + search
+	}
+	return u
+}

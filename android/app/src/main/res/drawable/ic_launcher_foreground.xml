@@ -1,0 +1,31 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Shield boundary -->
+    <path
+        android:pathData="M54,18 L84,30.75 L84,51 C84,68.25 72.75,80.25 54,85.5 C35.25,80.25 24,68.25 24,51 L24,30.75 Z"
+        android:fillColor="@color/ic_launcher_surface"/>
+
+    <!-- Primary source node -->
+    <path
+        android:pathData="M54,32.625 A7.875,7.875 0,1,0 54,48.375 A7.875,7.875 0,1,0 54,32.625 Z"
+        android:fillColor="@color/ic_launcher_light"/>
+
+    <!-- Protected local nodes -->
+    <path
+        android:pathData="M39,56.25 A6.75,6.75 0,1,0 39,69.75 A6.75,6.75 0,1,0 39,56.25 Z"
+        android:fillColor="@color/ic_launcher_accent"/>
+    <path
+        android:pathData="M69,56.25 A6.75,6.75 0,1,0 69,69.75 A6.75,6.75 0,1,0 69,56.25 Z"
+        android:fillColor="@color/ic_launcher_accent"/>
+
+    <!-- Relay links -->
+    <path
+        android:pathData="M49.875,46.875 L42.375,57 M58.125,46.875 L65.625,57 M45.75,63 L62.25,63"
+        android:strokeColor="@color/ic_launcher_light"
+        android:strokeWidth="5.625"
+        android:strokeLineCap="round"/>
+</vector>

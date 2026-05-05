@@ -1,0 +1,106 @@
+package components
+
+// TempDownloadPage renders the temp download / watch page wrapped in the Base layout.
+templ TempDownloadPage(p PageProps, videoID string, youtubeURL string) {
+	@Base(p) {
+		<div style="display:flex;align-items:center;justify-content:center;min-height:60vh;">
+			<div style="text-align:center;max-width:500px;padding:2rem;">
+				<div
+					id="temp-dl-config"
+					data-youtube-url={ youtubeURL }
+					data-title-cancelled={ L(p, "temp_download_title_cancelled", "Download cancelled") }
+					data-status-cancelled={ L(p, "temp_download_status_cancelled", "Cancelled.") }
+					data-action-back-to-videos={ L(p, "temp_download_action_back_to_videos", "Back to videos") }
+					data-title-failed={ L(p, "temp_download_title_failed", "Download failed") }
+					data-status-failed={ L(p, "temp_download_status_failed", "Download failed") }
+					data-status-error-prefix={ L(p, "temp_download_status_error_prefix", "Error:") }
+					style="display:none"
+				></div>
+				<div class="temp-dl-spinner"></div>
+				<h1 id="temp-dl-title" style="font-size:1.5rem;margin-bottom:0.5rem;">{ L(p, "temp_download_title_downloading", "Downloading...") }</h1>
+				<p style="color:var(--text-muted);font-family:monospace;margin-bottom:2rem;word-break:break-all;" id="temp-dl-video-id">{ videoID }</p>
+				<p id="temp-dl-status" style="color:var(--accent-secondary);">{ L(p, "temp_download_status_downloading_video", "Downloading the video") }</p>
+				<button type="button" id="temp-dl-cancel-btn" class="btn" style="display:block;padding:0.75rem 2rem;border-radius:12px;font-weight:600;font-size:1rem;background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.12);color:inherit;cursor:pointer;margin:1.5rem auto 0;width:fit-content;">{ L(p, "action_cancel", "Cancel") }</button>
+			</div>
+		</div>
+		<style>
+			.temp-dl-spinner{width:50px;height:50px;border:4px solid rgba(255,255,255,0.1);border-top-color:var(--accent-primary);border-radius:50%;animation:tdl-spin 1s linear infinite;margin:0 auto 1.5rem;}
+			.temp-dl-spinner.stopped{display:none;animation:none;}
+			@keyframes tdl-spin{to{transform:rotate(360deg);}}
+		</style>
+		@templ.Raw(`<script>
+(function(){
+  var cfg = document.getElementById('temp-dl-config');
+  var youtubeUrl = cfg ? cfg.dataset.youtubeUrl : '';
+  var titleCancelled = cfg ? cfg.dataset.titleCancelled : '';
+  var statusCancelled = cfg ? cfg.dataset.statusCancelled : '';
+  var actionBackToVideos = cfg ? cfg.dataset.actionBackToVideos : '';
+  var titleFailed = cfg ? cfg.dataset.titleFailed : '';
+  var statusFailed = cfg ? cfg.dataset.statusFailed : '';
+  var statusErrorPrefix = cfg ? cfg.dataset.statusErrorPrefix : '';
+  var csrfMeta = document.querySelector('meta[name="csrf-token"]');
+  var csrfToken = csrfMeta ? csrfMeta.content : '';
+  var spinnerEl = document.querySelector('.temp-dl-spinner');
+  var titleEl = document.getElementById('temp-dl-title');
+  var statusEl = document.getElementById('temp-dl-status');
+  var cancelBtn = document.getElementById('temp-dl-cancel-btn');
+  var cancelled = false;
+  var downloadedVideoId = null;
+  var requestController = window.AbortController ? new AbortController() : null;
+  function stopSpinner() {
+    if (spinnerEl) spinnerEl.className = 'temp-dl-spinner stopped';
+  }
+  function setCancelledState() {
+    cancelled = true;
+    stopSpinner();
+    if (titleEl) titleEl.textContent = titleCancelled;
+    if (statusEl) statusEl.textContent = statusCancelled;
+    if (cancelBtn) {
+      cancelBtn.disabled = false;
+      cancelBtn.dataset.cancelled = '1';
+      cancelBtn.textContent = actionBackToVideos;
+    }
+  }
+  function setFailedState(message) {
+    stopSpinner();
+    if (titleEl) titleEl.textContent = titleFailed;
+    if (statusEl) statusEl.textContent = message || statusFailed;
+  }
+  var requestOptions = {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken},
+    body: JSON.stringify({url: youtubeUrl})
+  };
+  if (requestController) requestOptions.signal = requestController.signal;
+  fetch('/api/quick-download', requestOptions)
+  .then(function(r){ return r.json(); })
+  .then(function(data){
+    if (cancelled) return;
+    if (data.success && data.video_id) {
+      downloadedVideoId = data.video_id;
+      window.location.href = '/player/' + data.video_id;
+    } else {
+      setFailedState(data.message || data.error || statusFailed);
+    }
+  })
+  .catch(function(e){
+    if (cancelled || (e && e.name === 'AbortError')) return;
+    setFailedState(statusErrorPrefix + ' ' + e.message);
+  });
+  cancelBtn.addEventListener('click', function(){
+    if (cancelBtn.dataset.cancelled === '1') {
+      window.location.href = '/videos';
+      return;
+    }
+    if (requestController) requestController.abort();
+    setCancelledState();
+    fetch('/api/cancel-download', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken},
+      body: JSON.stringify({video_id: downloadedVideoId || ''})
+    }).catch(function(){});
+  });
+})();
+</script>`)
+	}
+}

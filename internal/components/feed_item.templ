@@ -1,0 +1,818 @@
+package components
+
+import (
+	"fmt"
+	"strings"
+
+	"github.com/screwys/igloo/internal/model"
+)
+
+templ FeedItem(p PageProps, item model.FeedItem) {
+	if len(item.ThreadChain) > 0 {
+		{{ repostList := repostEntries(item) }}
+		<div class="feed-thread" data-feed-thread data-leaf-tweet-id={ item.TweetID }>
+			if len(repostList) > 0 {
+				<div class="feed-thread-repost">
+					@feedRepostLine(p, item, repostList)
+				</div>
+			}
+			for _, ancestor := range item.ThreadChain {
+				@feedThreadCard(p, stripThreadNoise(ancestor))
+			}
+			@feedLeafCard(p, stripThreadNoise(item))
+		</div>
+	} else {
+		@feedLeafCard(p, item)
+	}
+}
+
+// feedThreadCard renders an ancestor in a thread chain. Same as FeedItem but
+// flagged with data-feed-thread-row so CSS can draw the connector line and
+// dim non-followed ghost rows.
+templ feedThreadCard(p PageProps, item model.FeedItem) {
+	{{ authorLabel := feedAuthorLabel(item) }}
+	{{ externalURL := feedExternalURL(item) }}
+	{{ pure := isPureRepost(item) }}
+	<article
+		class={ "feed-card channel-row feed-thread-row", templ.KV("feed-thread-ghost", item.IsGhost) }
+		data-feed-item
+		data-feed-thread-row
+		data-tweet-id={ item.TweetID }
+		data-feed-link={ externalURL }
+		data-content-hash={ item.ContentHash }
+		data-feed-is-retweet={ boolDataAttr(item.IsRetweet) }
+		data-feed-seen={ boolDataAttr(item.IsSeen) }
+		data-channel-id={ item.ChannelID }
+		data-source-channel-id={ feedSourceChannelID(item) }
+		data-liked={ boolDataAttr(item.IsLiked) }
+		data-bookmarked={ boolDataAttr(item.IsBookmarked) }
+		data-source-handle={ item.SourceHandle }
+		data-author-handle={ item.AuthorHandle }
+		data-channel-name={ authorLabel }
+		data-channel-platform="twitter"
+		data-feed-date={ feedPublishedAtStr(item.PublishedAt) }
+		data-feed-published={ feedPublishedAtStr(item.PublishedAt) }
+		data-media-count={ fmt.Sprintf("%d", len(item.Media)) }
+	>
+		@feedHeader(p, item, authorLabel, pure)
+		if item.BodyText != "" {
+			@feedBodyText(p, item)
+		}
+		if len(item.Media) > 0 {
+			@feedMedia(p, item)
+		}
+		if item.QuoteTweetID != "" {
+			@feedQuoteCard(p, item)
+		}
+		if len(item.TaggedAccounts) > 0 {
+			@feedTaggedAccounts(p, item)
+		}
+		@feedActions(p, item)
+		@feedFallbackForms(p, item)
+	</article>
+}
+
+// feedLeafCard is the original feed card body. Extracted from FeedItem so the
+// thread wrapper above can compose it with ancestors.
+templ feedLeafCard(p PageProps, item model.FeedItem) {
+	{{ authorLabel := feedAuthorLabel(item) }}
+	{{ externalURL := feedExternalURL(item) }}
+	{{ pure := isPureRepost(item) }}
+	<article
+		class={ "feed-card channel-row", templ.KV("feed-thread-leaf", len(item.ThreadChain) > 0) }
+		data-feed-item
+		data-tweet-id={ item.TweetID }
+		data-feed-link={ externalURL }
+		data-content-hash={ item.ContentHash }
+		data-feed-is-retweet={ boolDataAttr(item.IsRetweet) }
+		data-feed-seen={ boolDataAttr(item.IsSeen) }
+		data-feed-algo-score={ feedAlgoScore(item.AlgoInterestScore) }
+		data-channel-id={ item.ChannelID }
+		data-source-channel-id={ feedSourceChannelID(item) }
+		data-liked={ boolDataAttr(item.IsLiked) }
+		data-bookmarked={ boolDataAttr(item.IsBookmarked) }
+		data-source-handle={ item.SourceHandle }
+		data-author-handle={ item.AuthorHandle }
+		if item.QuoteAuthorHandle != "" {
+			data-quote-author-handle={ item.QuoteAuthorHandle }
+		}
+		data-feed-author-channel-id={ item.ChannelID }
+		data-feed-quote-tweet-id={ item.QuoteTweetID }
+		if item.QuoteChannelID != "" {
+			data-feed-quote-author-channel-id={ item.QuoteChannelID }
+		}
+		data-feed-retweeters={ retweetersChannelIDsJSON(item.Retweeters) }
+		data-feed-date={ feedPublishedAtStr(item.PublishedAt) }
+		data-feed-published={ feedPublishedAtStr(item.PublishedAt) }
+		data-channel-name={ authorLabel }
+		data-channel-platform="twitter"
+		data-media-count={ fmt.Sprintf("%d", len(item.Media)) }
+		data-quote-media-count={ fmt.Sprintf("%d", len(item.QuoteMedia)) }
+		if len(item.TaggedAccounts) > 0 {
+			data-tagged-accounts={ toJSONAttr(item.TaggedAccounts) }
+		}
+		if p.TrackFeedSeen && !item.IsSeen {
+			hx-post={ "/api/feed/seen?tweet_id=" + item.TweetID }
+			hx-trigger="intersect once threshold:0.4"
+			hx-swap="none"
+			hx-on::after-request="if (event.detail.successful) { this.setAttribute('data-feed-seen', '1'); this.classList.add('feed-card-seen') }"
+		}
+	>
+		{{ repostList := repostEntries(item) }}
+		if len(repostList) > 0 && len(item.ThreadChain) == 0 {
+			@feedRepostLine(p, item, repostList)
+		}
+		@feedHeader(p, item, authorLabel, pure)
+		if item.BodyText != "" {
+			@feedBodyText(p, item)
+		}
+		if len(item.Media) > 0 {
+			@feedMedia(p, item)
+		}
+		if item.QuoteTweetID != "" {
+			@feedQuoteCard(p, item)
+		}
+		if len(item.TaggedAccounts) > 0 {
+			@feedTaggedAccounts(p, item)
+		}
+		@feedActions(p, item)
+		@feedFallbackForms(p, item)
+	</article>
+}
+
+templ feedRepostLine(p PageProps, item model.FeedItem, entries []repostEntry) {
+	{{ visible, hidden := splitRepostCap(entries, 6) }}
+	{{ hasOverflow := len(hidden) > 0 }}
+	<div class="feed-repost-line" data-feed-repost-line>
+		<span class="feed-repost-glyph">&#x21bb;</span>
+		{ " " }
+		for i, e := range visible {
+			@feedRepostLink(e)
+			@feedRepostSep(p, i, len(visible), hasOverflow)
+		}
+		if hasOverflow {
+			<span class="feed-repost-hidden-wrap" hidden data-feed-repost-hidden>
+				for i, e := range hidden {
+					@feedRepostHiddenSep(p, i, len(hidden))
+					@feedRepostLink(e)
+				}
+			</span>
+			<span class="feed-repost-sep">, </span>
+			<button
+				class="feed-repost-more"
+				type="button"
+				data-feed-repost-more
+			>+{ fmt.Sprintf("%d", len(hidden)) } { L(p, "feed_repost_more", "more") }</button>
+		}
+		<span class="feed-repost-suffix"> { " " + L(p, "feed_repost_suffix", "reposted") }</span>
+	</div>
+}
+
+// feedRepostSep renders the separator AFTER the i-th visible entry.
+// When overflow exists, use comma-only; the +N more chip carries no "and".
+// Otherwise, use "and" before the last entry, commas in between.
+templ feedRepostSep(p PageProps, i, total int, hasOverflow bool) {
+	if i == total-1 {
+		// last visible — no trailing sep (suffix/chip handles it)
+	} else if hasOverflow {
+		<span class="feed-repost-sep">, </span>
+	} else if i == total-2 {
+		<span class="feed-repost-sep"> { " " + L(p, "list_sep_and", "and") + " " }</span>
+	} else {
+		<span class="feed-repost-sep">, </span>
+	}
+}
+
+// feedRepostHiddenSep renders the separator BEFORE the i-th hidden entry.
+// The last hidden entry is preceded by " and ", everything else by ", ".
+templ feedRepostHiddenSep(p PageProps, i, total int) {
+	if i == total-1 {
+		<span class="feed-repost-sep"> { " " + L(p, "list_sep_and", "and") + " " }</span>
+	} else {
+		<span class="feed-repost-sep">, </span>
+	}
+}
+
+templ feedRepostLink(e repostEntry) {
+	if e.ChannelID != "" {
+		<a
+			class="feed-repost-link"
+			href={ templ.SafeURL("/channels/" + e.ChannelID) }
+			data-repost-channel-id={ e.ChannelID }
+			data-repost-handle={ e.Handle }
+		>{ e.Label }</a>
+	} else {
+		<span
+			class="feed-repost-link feed-repost-link-inert"
+			data-repost-handle={ e.Handle }
+		>{ e.Label }</span>
+	}
+}
+
+templ feedHeader(p PageProps, item model.FeedItem, authorLabel string, pure bool) {
+	{{ externalURL := feedExternalURL(item) }}
+	<div class="feed-card-header">
+		<div class="feed-author-wrap">
+			if item.ChannelID != "" {
+				<a class="feed-author-trigger" href={ templ.SafeURL("/channels/" + item.ChannelID) }>
+					@feedAvatar(p, item.AuthorAvatarURL, authorLabel)
+					<span class="feed-author">{ authorLabel }</span>
+				</a>
+			} else if externalURL != "" {
+				<a class="feed-author-trigger" href={ templ.SafeURL(externalURL) } target="_blank" rel="noopener noreferrer">
+					@feedAvatar(p, item.AuthorAvatarURL, authorLabel)
+					<span class="feed-author">{ authorLabel }</span>
+				</a>
+			} else {
+				<a class="feed-author-trigger" href="#">
+					@feedAvatar(p, item.AuthorAvatarURL, authorLabel)
+					<span class="feed-author">{ authorLabel }</span>
+				</a>
+			}
+			@feedAuthorAside(p, item)
+		</div>
+		@feedHeaderActions(p, item, authorLabel, pure)
+	</div>
+}
+
+templ feedAvatar(p PageProps, avatarURL string, authorLabel string) {
+	<div class="feed-avatar">
+		if avatarURL != "" {
+			<img
+				class="feed-avatar-image"
+				src={ avatarURL }
+				loading="lazy"
+				alt={ L(p, "content_description_channel_avatar", "Channel avatar") }
+				onload="window.MpaSiteBase&&window.MpaSiteBase.avatarLoad(this)"
+				onerror="if(window.MpaSiteBase&&window.MpaSiteBase.avatarError(this))return; this.style.display='none'; this.nextElementSibling.style.display='inline-flex';"
+			/>
+		}
+		if avatarURL != "" {
+			<span class="feed-avatar-fallback" style="display:none;">{ strings.ToUpper(FirstChar(authorLabel)) }</span>
+		} else {
+			<span class="feed-avatar-fallback">{ strings.ToUpper(FirstChar(authorLabel)) }</span>
+		}
+	</div>
+}
+
+// feedAuthorAside renders @handle, date, and translate pill alongside the
+// trigger anchor — kept OUTSIDE the link so the hover card doesn't open from
+// these elements and the handle text stays selectable.
+templ feedAuthorAside(p PageProps, item model.FeedItem) {
+	if item.AuthorHandle != "" {
+		<span class="feed-author-handle">{ "@" + item.AuthorHandle }</span>
+	}
+	if item.PublishedAt != nil {
+		<span
+			class="feed-date-inline"
+			data-feed-date-raw={ feedPublishedAtStr(item.PublishedAt) }
+			title={ feedPublishedAtStr(item.PublishedAt) }
+			>&middot; { RelativeTimeText(p, item.PublishedAt) }</span>
+	}
+	if hasForeignLang(item) {
+		<span class="feed-date-inline">&middot;</span>
+		@feedTranslatePill(p, item)
+	}
+}
+
+// feedTranslatePill is the compact translate toggle that lives next to the
+// timestamp. Inactive: gray icon, no text. Active: colored icon + source-lang
+// code (e.g., "KO"). JS toggles .active and rewrites the label to the lang
+// code on translate, empty on revert.
+templ feedTranslatePill(p PageProps, item model.FeedItem) {
+	{{ active := item.BodyTranslation != "" || item.QuoteTranslation != "" }}
+	<button
+		class={ "feed-translate-btn feed-translate-pill", templ.KV("active", active) }
+		type="button"
+		data-feed-action="translate"
+		title={ L(p, "feed_toggle_translation", "Toggle translation") }
+		aria-label={ L(p, "feed_toggle_translation", "Toggle translation") }
+	>
+		<svg class="feed-translate-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+			<rect x="2" y="2" width="12" height="12" rx="2"></rect>
+			<path d="M5 6h6M8 6V4.5M6.5 6c.4 1.8 1.3 3.2 2.7 4.3"></path>
+			<rect x="10" y="10" width="12" height="12" rx="2"></rect>
+			<text x="16" y="19" text-anchor="middle" font-size="8" font-weight="600" fill="currentColor" stroke="none">{ L(p, "feed_translate_icon_letter", "A") }</text>
+		</svg>
+		<span
+			class="feed-translate-label"
+			data-translate-label
+			data-translate-default-label=""
+		>
+			if active {
+				{ langCodeUpper(item.Lang) }
+			}
+		</span>
+	</button>
+}
+
+templ feedHeaderActions(p PageProps, item model.FeedItem, authorLabel string, pure bool) {
+	<div class="feed-header-actions">
+		if item.ChannelID != "" && !item.FollowTargetFollowed {
+			@FollowButton(p, item.ChannelID, feedFollowHandle(item), authorLabel, false)
+		}
+		if item.ChannelID != "" {
+			if item.FollowTargetFollowed {
+				@FeedStarButton(p, item.ChannelID, item.ChannelIsStarred)
+			}
+			@feedCardMenu(p, item, authorLabel)
+		}
+	</div>
+}
+
+templ feedTranslateControl(p PageProps, item model.FeedItem) {
+	<div class="feed-translate-row">
+		<button
+			class={ "feed-translate-btn", templ.KV("active", item.BodyTranslation != "" || item.QuoteTranslation != "") }
+			type="button"
+			data-feed-action="translate"
+			title={ L(p, "action_translate", "Translate") }
+			aria-label={ L(p, "action_translate", "Translate") }
+		>
+			<svg class="feed-translate-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+				<rect x="2" y="2" width="12" height="12" rx="2"></rect>
+				<path d="M5 6h6M8 6V4.5M6.5 6c.4 1.8 1.3 3.2 2.7 4.3"></path>
+				<rect x="10" y="10" width="12" height="12" rx="2"></rect>
+				<text x="16" y="19" text-anchor="middle" font-size="8" font-weight="600" fill="currentColor" stroke="none">{ L(p, "feed_translate_icon_letter", "A") }</text>
+			</svg>
+			<span
+				class="feed-translate-label"
+				data-translate-label
+				data-translate-default-label={ L(p, "feed_show_translation", "Show translation") }
+			>{ feedTranslateLabel(item) }</span>
+		</button>
+	</div>
+}
+
+templ feedCardMenu(p PageProps, item model.FeedItem, authorLabel string) {
+	<div class="feed-card-menu" data-feed-menu>
+		<button class="feed-card-menu-btn" type="button" data-feed-menu-toggle title={ L(p, "feed_post_actions", "Post actions") } aria-label={ L(p, "feed_post_actions", "Post actions") }>&#x22ef;</button>
+		<div class="feed-card-menu-list">
+			<button
+				class="feed-card-menu-item"
+				type="button"
+				data-feed-menu-action="retweets_off"
+				data-feed-channel-id={ feedSourceChannelID(item) }
+				data-feed-label={ authorLabel }
+			>{ L(p, "feed_turn_off_retweets", "Turn off retweets") }</button>
+			<button
+				class="feed-card-menu-item"
+				type="button"
+				data-feed-menu-action="media_only"
+				data-feed-channel-id={ item.ChannelID }
+				data-feed-label={ authorLabel }
+			>{ L(p, "feed_open_x_feed_settings", "Open X feed settings") }&#x2026;</button>
+			<button
+				class="feed-card-menu-item"
+				type="button"
+				data-feed-menu-action="refresh"
+				data-feed-channel-id={ item.ChannelID }
+				data-feed-label={ authorLabel }
+			>{ L(p, "feed_refresh_account", "Refresh account") }</button>
+			if item.IsRetweet && item.AuthorHandle != "" {
+				<button
+					class="feed-card-menu-item"
+					type="button"
+					data-feed-mute-btn
+					hx-post={ "/api/feed/mute/" + item.AuthorHandle }
+					hx-swap="none"
+				>{ L(p, "action_mute", "Mute") } { "@" + item.AuthorHandle }</button>
+			}
+			if item.QuoteAuthorHandle != "" && !item.QuoteChannelFollowed {
+				<button
+					class="feed-card-menu-item"
+					type="button"
+					data-feed-mute-btn
+					hx-post={ "/api/feed/mute/" + item.QuoteAuthorHandle }
+					hx-swap="none"
+				>{ L(p, "action_mute", "Mute") } { "@" + item.QuoteAuthorHandle }</button>
+			}
+			if item.FollowTargetFollowed {
+				<button
+					class="feed-card-menu-item danger"
+					type="button"
+					data-feed-menu-action="unfollow"
+					data-feed-channel-id={ item.ChannelID }
+					data-feed-label={ authorLabel }
+				>{ L(p, "action_unfollow_account", "Unfollow account") }&#x2026;</button>
+			} else {
+				<button
+					class="feed-card-menu-item danger"
+					type="button"
+					data-feed-menu-action="unfollow"
+					data-feed-channel-id={ item.ChannelID }
+					data-feed-label={ authorLabel }
+					style="display:none;"
+				>{ L(p, "action_unfollow_account", "Unfollow account") }&#x2026;</button>
+			}
+		</div>
+	</div>
+}
+
+templ feedBodyText(p PageProps, item model.FeedItem) {
+	<div
+		class="feed-text-block"
+		data-feed-text-container
+		data-translate-field="body"
+		data-lang={ item.Lang }
+		data-target-lang="en"
+	>
+		if item.BodyTranslation != "" {
+			<p
+				class="feed-body-text feed-text-clamp"
+				data-feed-text-clamp
+				data-feed-clamp-lines="15"
+				data-original-text={ item.BodyText }
+			>
+				@templ.Raw(Linkify(item.BodyTranslation))
+			</p>
+		} else {
+			<p
+				class="feed-body-text feed-text-clamp"
+				data-feed-text-clamp
+				data-feed-clamp-lines="15"
+			>
+				@templ.Raw(Linkify(item.BodyText))
+			</p>
+		}
+		<button class="feed-text-toggle hidden" type="button" data-feed-text-toggle aria-expanded="false">{ L(p, "action_read_more", "Read more") }</button>
+	</div>
+}
+
+templ feedMedia(p PageProps, item model.FeedItem) {
+	{{ mediaCount := len(item.Media) }}
+	if mediaCount == 1 && item.Media[0].Type != "photo" {
+		if item.MediaStreamURL != "" {
+			<div
+				class="feed-media-wrap"
+				data-feed-media
+				data-feed-media-kind="video"
+				data-feed-media-stream={ item.MediaStreamURL }
+				role="button"
+				tabindex="0"
+				aria-label={ L(p, "action_open_media", "Open media") }
+			>
+				if item.Media[0].ThumbnailURL != "" {
+					<video class="feed-media-video" muted playsinline loop preload="none" data-feed-inline-video poster={ item.Media[0].ThumbnailURL }>
+						<source src={ item.MediaStreamURL } type="video/mp4"/>
+					</video>
+				} else {
+					<video class="feed-media-video" muted playsinline loop preload="none" data-feed-inline-video>
+						<source src={ item.MediaStreamURL } type="video/mp4"/>
+					</video>
+				}
+				<button class="feed-video-expand-btn" type="button" aria-label={ L(p, "action_enter_fullscreen", "Enter fullscreen") } data-feed-video-expand>&#x2922;</button>
+				<div class="feed-video-progress" data-feed-progress role="slider" aria-label={ L(p, "player_seek_video", "Seek video") } tabindex="0">
+					<div class="feed-video-progress-fill" data-feed-progress-fill></div>
+				</div>
+			</div>
+		}
+	} else if mediaCount == 1 {
+		<div
+			class="feed-media-wrap"
+			data-feed-media
+			data-feed-media-kind="image"
+			data-feed-media-url={ "/api/media/slide/" + item.TweetID + "/0" }
+			role="button"
+			tabindex="0"
+			aria-label={ L(p, "action_open_media", "Open media") }
+		>
+			<img class="feed-media-image" src={ "/api/media/slide/" + item.TweetID + "/0" } loading="lazy" alt={ L(p, "feed_post_media", "Post media") }/>
+		</div>
+	} else {
+		{{ visible := mediaGridCount(mediaCount) }}
+		<div class="feed-media-wrap feed-media-wrap-grid">
+			<div class={ fmt.Sprintf("feed-media-grid count-%d", visible) }>
+				for i, m := range item.Media {
+					if i < 4 {
+						@feedMediaTile(p, item.TweetID, i, m, mediaCount, item.MediaStreamURL)
+					}
+				}
+			</div>
+		</div>
+	}
+}
+
+templ feedMediaTile(p PageProps, tweetID string, index int, m model.MediaRef, mediaCount int, streamURL string) {
+	{{ slideURL := fmt.Sprintf("/api/media/slide/%s/%d", tweetID, index) }}
+	{{ ariaLabel := fmt.Sprintf(L(p, "feed_open_media_index", "Open media %d"), index+1) }}
+	if m.Type == "video" || m.Type == "gif" {
+		<div
+			class="feed-media-tile"
+			data-feed-media
+			data-feed-media-kind="video"
+			data-feed-media-url={ slideURL }
+			if streamURL != "" {
+				data-feed-media-stream={ streamURL }
+			}
+			if streamURL != "" && m.Type == "video" {
+				data-feed-media-preview={ slideURL }
+			}
+			role="button"
+			tabindex="0"
+			aria-label={ ariaLabel }
+		>
+			if streamURL != "" {
+				if m.ThumbnailURL != "" && m.Type == "video" {
+					<video class="feed-media-video" muted playsinline loop preload="none" data-feed-inline-video poster={ m.ThumbnailURL }>
+						<source src={ streamURL } type="video/mp4"/>
+					</video>
+				} else {
+					<video class="feed-media-video" muted playsinline loop preload="none" data-feed-inline-video>
+						<source src={ streamURL } type="video/mp4"/>
+					</video>
+				}
+			} else {
+				<img class="feed-media-image" src={ slideURL } loading="lazy" alt={ fmt.Sprintf(L(p, "feed_post_media_index", "Post media %d"), index+1) }/>
+			}
+			if index == 3 && mediaCount > 4 {
+				<span class="feed-media-more">+{ fmt.Sprintf("%d", mediaCount-4) }</span>
+			}
+		</div>
+	} else {
+		<button
+			class="feed-media-tile"
+			type="button"
+			data-feed-media
+			data-feed-media-kind="image"
+			data-feed-media-url={ slideURL }
+			aria-label={ ariaLabel }
+		>
+			<img class="feed-media-image" src={ slideURL } loading="lazy" alt={ fmt.Sprintf(L(p, "feed_post_media_index", "Post media %d"), index+1) }/>
+			if index == 3 && mediaCount > 4 {
+				<span class="feed-media-more">+{ fmt.Sprintf("%d", mediaCount-4) }</span>
+			}
+		</button>
+	}
+}
+
+templ feedQuoteCard(p PageProps, item model.FeedItem) {
+	{{ qLabel := feedQuoteLabel(item) }}
+	{{ qMediaCount := len(item.QuoteMedia) }}
+	{{ isUnavailable := item.QuoteCanonicalURL == "" && qMediaCount == 0 && item.QuoteBodyText == "" }}
+	<div
+		class={ "feed-quote-card", templ.KV("unavailable", isUnavailable) }
+		data-quote-tweet-id={ item.QuoteTweetID }
+		if item.QuoteCanonicalURL != "" {
+			data-quote-link={ item.QuoteCanonicalURL }
+		}
+		data-quote-liked={ boolDataAttr(item.QuoteIsLiked) }
+		data-quote-bookmarked={ boolDataAttr(item.QuoteIsBookmarked) }
+	>
+		<div class="feed-quote-head">
+			<span class="feed-quote-avatar">
+				if item.QuoteAuthorAvatarURL != "" {
+					<img
+						class="feed-quote-avatar-image"
+						src={ item.QuoteAuthorAvatarURL }
+						loading="lazy"
+						alt={ L(p, "feed_quoted_author_avatar", "Quoted author avatar") }
+						onload="window.MpaSiteBase&&window.MpaSiteBase.avatarLoad(this)"
+						onerror="if(window.MpaSiteBase&&window.MpaSiteBase.avatarError(this))return; this.style.display='none'; this.nextElementSibling.style.display='inline-flex';"
+					/>
+				}
+				if item.QuoteAuthorAvatarURL != "" {
+					<span class="feed-quote-avatar-fallback" style="display:none;">{ strings.ToUpper(FirstChar(qLabel)) }</span>
+				} else {
+					<span class="feed-quote-avatar-fallback">{ strings.ToUpper(FirstChar(qLabel)) }</span>
+				}
+			</span>
+			<span class="feed-quote-head-main">
+				if item.QuoteChannelID != "" {
+					<a class="feed-quote-author feed-quote-author-link" href={ templ.SafeURL("/channels/" + item.QuoteChannelID) }>{ qLabel }</a>
+				} else {
+					<span class="feed-quote-author">{ qLabel }</span>
+				}
+				if item.QuoteAuthorHandle != "" {
+					<span class="feed-author-handle">{ "@" + item.QuoteAuthorHandle }</span>
+				}
+				if item.QuotePublishedAt != nil {
+						<span class="feed-quote-date" data-feed-date-raw={ feedPublishedAtStr(item.QuotePublishedAt) } title={ feedPublishedAtStr(item.QuotePublishedAt) }>&middot; { RelativeTimeText(p, item.QuotePublishedAt) }</span>
+				}
+			</span>
+			if item.QuoteChannelID != "" && item.QuoteAuthorHandle != "" && !item.QuoteChannelFollowed {
+				<button
+					class="feed-follow-btn feed-quote-follow-btn"
+					type="button"
+					data-feed-follow-toggle
+					data-feed-channel-id={ item.QuoteChannelID }
+					data-feed-handle={ item.QuoteAuthorHandle }
+					data-feed-label={ qLabel }
+					data-following="0"
+					>{ L(p, "action_follow", "Follow") }</button>
+			}
+		</div>
+		if item.QuoteBodyText != "" {
+			<div data-feed-text-container data-translate-field="quote" data-lang={ item.QuoteLang } data-target-lang="en">
+				if item.QuoteTranslation != "" {
+					<div
+						class="feed-quote-text feed-text-clamp"
+						data-feed-text-clamp
+						data-feed-clamp-lines="4"
+						data-original-text={ item.QuoteBodyText }
+					>
+						@templ.Raw(Linkify(item.QuoteTranslation))
+					</div>
+				} else {
+					<div
+						class="feed-quote-text feed-text-clamp"
+						data-feed-text-clamp
+						data-feed-clamp-lines="4"
+					>
+						@templ.Raw(Linkify(item.QuoteBodyText))
+					</div>
+				}
+				<button class="feed-text-toggle hidden" type="button" data-feed-text-toggle aria-expanded="false">{ L(p, "action_read_more", "Read more") }</button>
+			</div>
+		}
+		@feedQuoteMedia(p, item, qMediaCount)
+	</div>
+}
+
+templ feedQuoteMedia(p PageProps, item model.FeedItem, qMediaCount int) {
+	if qMediaCount == 1 && item.QuoteMedia[0].Type != "photo" && item.QuoteMediaStreamURL != "" {
+		<div
+			class="feed-media-wrap"
+			data-feed-media
+			data-feed-media-kind="video"
+			data-feed-media-stream={ item.QuoteMediaStreamURL }
+			role="button"
+			tabindex="0"
+			aria-label={ L(p, "action_open_media", "Open media") }
+		>
+			<video class="feed-media-video" muted playsinline loop preload="none" data-feed-inline-video>
+				<source src={ item.QuoteMediaStreamURL } type="video/mp4"/>
+			</video>
+			<button class="feed-video-expand-btn" type="button" aria-label={ L(p, "action_enter_fullscreen", "Enter fullscreen") } data-feed-video-expand>&#x2922;</button>
+			<div class="feed-video-progress" data-feed-progress role="slider" aria-label={ L(p, "player_seek_video", "Seek video") } tabindex="0">
+				<div class="feed-video-progress-fill" data-feed-progress-fill></div>
+			</div>
+		</div>
+	} else if qMediaCount == 1 {
+		<div
+			class="feed-media-wrap"
+			data-feed-media
+			data-feed-media-kind="image"
+			data-feed-media-url={ "/api/media/slide/" + item.QuoteTweetID + "/0" }
+			role="button"
+			tabindex="0"
+			aria-label={ L(p, "action_open_media", "Open media") }
+		>
+			<img class="feed-media-image" src={ "/api/media/slide/" + item.QuoteTweetID + "/0" } loading="lazy" alt={ L(p, "feed_quoted_post_media", "Quoted post media") }/>
+		</div>
+	} else if qMediaCount > 1 {
+		{{ qVisible := mediaGridCount(qMediaCount) }}
+		<div class="feed-media-wrap feed-media-wrap-grid">
+			<div class={ fmt.Sprintf("feed-media-grid count-%d", qVisible) }>
+				for i, qm := range item.QuoteMedia {
+					if i < 4 {
+						@feedQuoteMediaTile(p, item.QuoteTweetID, i, qm, qMediaCount, item.QuoteMediaStreamURL)
+					}
+				}
+			</div>
+		</div>
+	} else if item.QuoteBodyText == "" {
+		<div class="feed-quote-unavailable">{ L(p, "feed_quoted_post", "Quoted post") }</div>
+	}
+}
+
+templ feedQuoteMediaTile(p PageProps, quoteTweetID string, index int, qm model.MediaRef, qMediaCount int, streamURL string) {
+	{{ slideURL := fmt.Sprintf("/api/media/slide/%s/%d", quoteTweetID, index) }}
+	{{ ariaLabel := fmt.Sprintf(L(p, "feed_open_media_index", "Open media %d"), index+1) }}
+	if qm.Type == "video" || qm.Type == "gif" {
+		<div
+			class="feed-media-tile"
+			data-feed-media
+			data-feed-media-kind="video"
+			data-feed-media-url={ slideURL }
+			if streamURL != "" {
+				data-feed-media-stream={ streamURL }
+			}
+			if streamURL != "" && qm.Type == "video" {
+				data-feed-media-preview={ slideURL }
+			}
+			role="button"
+			tabindex="0"
+			aria-label={ ariaLabel }
+		>
+			if streamURL != "" {
+				if qm.ThumbnailURL != "" && qm.Type == "video" {
+					<video class="feed-media-video" muted playsinline loop preload="none" data-feed-inline-video poster={ qm.ThumbnailURL }>
+						<source src={ streamURL } type="video/mp4"/>
+					</video>
+				} else {
+					<video class="feed-media-video" muted playsinline loop preload="none" data-feed-inline-video>
+						<source src={ streamURL } type="video/mp4"/>
+					</video>
+				}
+			} else {
+				<img class="feed-media-image" src={ slideURL } loading="lazy" alt={ fmt.Sprintf(L(p, "feed_quoted_post_media_index", "Quoted post media %d"), index+1) }/>
+			}
+			if index == 3 && qMediaCount > 4 {
+				<span class="feed-media-more">+{ fmt.Sprintf("%d", qMediaCount-4) }</span>
+			}
+		</div>
+	} else {
+		<button
+			class="feed-media-tile"
+			type="button"
+			data-feed-media
+			data-feed-media-kind="image"
+			data-feed-media-url={ slideURL }
+			aria-label={ ariaLabel }
+		>
+			<img class="feed-media-image" src={ slideURL } loading="lazy" alt={ fmt.Sprintf(L(p, "feed_quoted_post_media_index", "Quoted post media %d"), index+1) }/>
+			if index == 3 && qMediaCount > 4 {
+				<span class="feed-media-more">+{ fmt.Sprintf("%d", qMediaCount-4) }</span>
+			}
+		</button>
+	}
+}
+
+templ feedTaggedAccounts(p PageProps, item model.FeedItem) {
+	<button class="feed-tagged-row feed-tagged-multi" type="button" data-tagged={ toJSONAttr(item.TaggedAccounts) }>
+		for i, ta := range item.TaggedAccounts {
+			if i > 0 {
+				{ " " }
+				<span class="feed-tagged-sep">{ L(p, "list_sep_and", "and") }</span>
+				{ " " }
+			}
+			if ta.DisplayName != "" {
+				{ ta.DisplayName }
+			} else {
+				{ ta.Handle }
+			}
+		}
+	</button>
+}
+
+templ feedActions(p PageProps, item model.FeedItem) {
+	{{ externalURL := feedExternalURL(item) }}
+	<div class="feed-actions" data-feed-index="0">
+		<button class="feed-action-btn" type="button" data-feed-action="share" title={ L(p, "action_copy_link", "Copy link") } aria-label={ L(p, "action_copy_link", "Copy link") }>
+			<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+				<path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"></path>
+				<polyline points="16 6 12 2 8 6"></polyline>
+				<line x1="12" y1="2" x2="12" y2="15"></line>
+			</svg>
+		</button>
+		@LikeButton(p, item.TweetID, item.IsLiked)
+		<button
+			class={ "feed-action-btn", templ.KV("active", item.IsBookmarked) }
+			type="button"
+			data-feed-action="bookmark"
+			if item.IsBookmarked {
+				title={ L(p, "action_unbookmark", "Unbookmark") }
+				aria-label={ L(p, "action_unbookmark", "Unbookmark") }
+			} else {
+				title={ L(p, "action_bookmark", "Bookmark") }
+				aria-label={ L(p, "action_bookmark", "Bookmark") }
+			}
+		>
+			<svg width="20" height="20" viewBox="0 0 24 24" fill={ heartFill(item.IsBookmarked) } stroke="currentColor" stroke-width="2">
+				<path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"></path>
+			</svg>
+		</button>
+		if externalURL != "" {
+			<a
+				class="feed-action-btn"
+				data-feed-action="openx"
+				href={ templ.SafeURL(externalURL) }
+				target="_blank"
+				rel="noopener noreferrer"
+				title={ L(p, "action_open_on_x", "Open on X") }
+				aria-label={ L(p, "action_open_on_x", "Open on X") }
+			>
+				<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+					<path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-4.714-6.231-5.401 6.231H2.746l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"></path>
+				</svg>
+			</a>
+		}
+	</div>
+}
+
+templ feedFallbackForms(p PageProps, item model.FeedItem) {
+	<div class="feed-action-fallback-forms" style="display:none;">
+		<form method="post" action={ templ.SafeURL("/actions/feed/" + item.TweetID + "/like") } class="action-form" data-feed-action-form="like">
+			<input type="hidden" name="source_handle" value={ item.SourceHandle }/>
+			<input type="hidden" name="author_handle" value={ item.AuthorHandle }/>
+			<input type="hidden" name="body_text" value={ item.BodyText }/>
+			<button type="submit" data-feed-action-button="like">
+				if item.IsLiked {
+					{ L(p, "action_unlike", "Unlike") }
+				} else {
+					{ L(p, "action_like", "Like") }
+				}
+			</button>
+		</form>
+		<form method="post" action={ templ.SafeURL("/actions/feed/" + item.TweetID + "/bookmark") } class="action-form" data-feed-action-form="bookmark">
+			<button type="submit" data-feed-action-button="bookmark">
+				if item.IsBookmarked {
+					{ L(p, "action_unbookmark", "Unbookmark") }
+				} else {
+					{ L(p, "action_bookmark", "Bookmark") }
+				}
+			</button>
+		</form>
+	</div>
+}

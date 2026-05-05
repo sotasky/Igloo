@@ -1,0 +1,390 @@
+/* Base card — shared between hover and hero variants. */
+.profile-card {
+	--profile-card-surface: rgb(var(--surface-soft-rgb));
+	background: var(--profile-card-surface);
+	color: var(--text-primary);
+	border: 1px solid var(--border-color);
+	border-radius: 14px;
+	overflow: visible;
+	position: relative;
+	box-shadow: var(--shadow);
+}
+.profile-card.profile-card-menu-open {
+	z-index: 45000;
+}
+.profile-card-banner {
+	aspect-ratio: 3 / 1;
+	background: linear-gradient(135deg, rgba(var(--accent-primary-rgb), 0.22), rgba(var(--surface-strong-rgb), 0.54));
+	overflow: hidden;
+	border-radius: 13px 13px 0 0;
+}
+.profile-card--youtube .profile-card-banner {
+	aspect-ratio: 1546 / 423;
+}
+.profile-card-banner img {
+	width: 100%;
+	height: 100%;
+	object-fit: cover;
+	display: block;
+}
+.profile-card-body {
+	padding: 0 16px 16px;
+	position: relative;
+}
+.profile-card-body-inner {
+	width: 100%;
+}
+.profile-card-top {
+	display: flex;
+	align-items: flex-end;
+	gap: 12px;
+	margin-top: -36px;
+	margin-bottom: 8px;
+	position: relative;
+	z-index: 1;
+}
+.profile-card-avatar-wrap {
+	position: relative;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	flex: 0 0 auto;
+}
+.profile-card-avatar-wrap[role="button"] {
+	cursor: pointer;
+}
+.profile-card-avatar-wrap.has-story::after {
+	content: "";
+	position: absolute;
+	inset: -3px;
+	border-radius: 50%;
+	pointer-events: none;
+	z-index: 1;
+}
+.profile-card-avatar-wrap.story-new::after {
+	box-shadow: 0 0 0 3px var(--accent-primary), 0 2px 9px rgba(0, 0, 0, 0.38);
+}
+.profile-card-avatar-wrap.story-seen::after {
+	box-shadow: 0 0 0 3px var(--text-muted), 0 2px 9px rgba(0, 0, 0, 0.3);
+}
+.profile-card-identity {
+	flex: 1 1 auto;
+	min-width: 0;
+	display: flex;
+	flex-direction: column;
+	justify-content: flex-end;
+	padding-bottom: 6px;
+}
+.profile-card-top-actions {
+	margin-left: auto;
+	display: flex;
+	align-items: center;
+	justify-content: flex-end;
+	gap: 0.45rem;
+	flex-wrap: nowrap;
+	position: relative;
+	z-index: 2;
+	align-self: flex-end;
+	padding-bottom: 6px;
+}
+.profile-card--hover .profile-card-top-actions {
+	transform: translateY(3px);
+}
+.profile-card-top-actions .feed-follow-btn {
+	flex: 0 0 auto;
+	display: inline-flex !important;
+	align-items: center;
+	visibility: visible !important;
+	opacity: 1 !important;
+}
+.profile-card-action-btn {
+	width: 28px;
+	height: 28px;
+	border-radius: 999px;
+	border: 1px solid var(--border-color);
+	background: transparent;
+	color: var(--text-secondary);
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	cursor: pointer;
+	transition: background 140ms ease, border-color 140ms ease, color 140ms ease;
+	visibility: visible !important;
+	opacity: 1 !important;
+	padding: 0;
+	flex: 0 0 auto;
+}
+.profile-card-action-btn:hover {
+	border-color: var(--accent-secondary);
+	color: var(--accent-secondary);
+	background: rgba(var(--accent-primary-rgb), 0.08);
+}
+.profile-card-action-btn.active {
+	color: var(--accent-secondary);
+	border-color: rgba(var(--accent-primary-rgb), 0.45);
+	background: rgba(var(--accent-primary-rgb), 0.12);
+}
+.profile-card-action-btn svg {
+	width: 13px;
+	height: 13px;
+}
+.profile-card-avatar {
+	width: 72px;
+	height: 72px;
+	border-radius: 50%;
+	border: 3px solid var(--profile-card-surface);
+	object-fit: cover;
+	background: var(--bg-tertiary);
+}
+.profile-card-avatar-fallback {
+	width: 100%;
+	height: 100%;
+	border-radius: 50%;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	background: rgba(var(--accent-primary-rgb), 0.16);
+	color: var(--text-secondary);
+	font-weight: 700;
+}
+.profile-card-name-row {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	font-weight: 700;
+	font-size: 16px;
+	min-width: 0;
+}
+.profile-card-name {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.profile-card-name-link {
+	color: inherit;
+	text-decoration: none;
+}
+.profile-card-name-link:hover,
+.profile-card-name-link:focus {
+	color: inherit;
+	text-decoration: none;
+}
+.profile-card-verified {
+	display: inline-block;
+	width: 16px;
+	height: 16px;
+	line-height: 16px;
+	text-align: center;
+	font-size: 11px;
+	border-radius: 50%;
+	color: #000;
+}
+.profile-card-verified--blue { background: #1d9bf0; color: #fff; }
+.profile-card-verified--gold { background: #dcaf18; color: #000; }
+.profile-card-verified--grey { background: #888; color: #fff; }
+.profile-card-handle {
+	color: var(--text-handle, var(--text-secondary));
+	font-size: 14px;
+	margin-bottom: 8px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.profile-card-identity .profile-card-handle {
+	margin-bottom: 0;
+}
+.profile-card-bio {
+	font-size: 14px;
+	line-height: 1.4;
+	margin-bottom: 10px;
+}
+.profile-card--hover .profile-card-bio {
+	display: -webkit-box;
+	-webkit-line-clamp: 3;
+	-webkit-box-orient: vertical;
+	overflow: hidden;
+}
+.profile-card-stats {
+	display: flex;
+	gap: 16px;
+	font-size: 14px;
+	color: var(--text-secondary);
+}
+.profile-card-stats strong { color: var(--text-primary); }
+.profile-card-protected {
+	font-size: 14px;
+	color: var(--text-secondary);
+	padding: 6px 0;
+}
+
+/* Hover variant: floating card, fixed width. */
+.profile-card--hover {
+	width: 320px;
+	position: absolute;
+	z-index: 1000;
+	animation: pc-fade-in 120ms ease-out;
+}
+@keyframes pc-fade-in {
+	from { opacity: 0; transform: translateY(-4px); }
+	to   { opacity: 1; transform: translateY(0); }
+}
+
+/* Hero variant: full-width shell with constrained content column. */
+.profile-card--hero {
+	width: 100%;
+	margin: 0 0 1.25rem;
+}
+.profile-card--hero .profile-card-banner {
+	max-width: 920px;
+	width: calc(100% - 2rem);
+	margin: 0 auto;
+}
+.profile-card--hero.profile-card--youtube .profile-card-banner,
+.profile-card--hero.profile-card--tiktok .profile-card-banner,
+.profile-card--hero.profile-card--instagram .profile-card-banner {
+	margin: 0 auto 0 0;
+}
+.profile-card--hero .profile-card-avatar { width: 128px; height: 128px; }
+.profile-card--hero .profile-card-avatar-fallback { font-size: 2rem; }
+.profile-card--hero .profile-card-top { margin-top: -64px; }
+.profile-card--hero .profile-card-body { padding: 0; }
+.profile-card--hero .profile-card-body-inner {
+	max-width: 920px;
+	width: calc(100% - 2rem);
+	padding: 0 20px 20px;
+}
+.profile-card--hero .profile-card-body-inner--hero-center {
+	margin: 0 auto;
+}
+.profile-card--hero .profile-card-body-inner--hero-left {
+	margin: 0 auto 0 0;
+}
+.profile-card--hero .profile-card-top-actions {
+	display: flex !important;
+	visibility: visible !important;
+	opacity: 1 !important;
+}
+.profile-card--hero .profile-card-top-actions > * {
+	display: inline-flex !important;
+	visibility: visible !important;
+	opacity: 1 !important;
+}
+
+/* Hero only: avatar + banner are click-to-enlarge. */
+.profile-card--hero .profile-card-avatar,
+.profile-card--hero .profile-card-banner img { cursor: zoom-in; }
+.profile-card--hero .profile-card-avatar-wrap.has-story .profile-card-avatar {
+	cursor: pointer;
+}
+
+/* Fullscreen image overlay (avatar/banner click). */
+.profile-image-overlay {
+	position: fixed;
+	inset: 0;
+	background: rgba(0, 0, 0, 0.85);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	z-index: 10000;
+	cursor: zoom-out;
+	animation: pc-fade-in 120ms ease-out;
+}
+.profile-image-overlay img {
+	max-width: 92vw;
+	max-height: 92vh;
+	object-fit: contain;
+	border-radius: 8px;
+	box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6);
+}
+
+/* No-banner variant (TikTok): no negative overhang. */
+.profile-card--no-banner .profile-card-banner {
+	display: none;
+}
+.profile-card--no-banner .profile-card-body {
+	padding-top: 14px;
+}
+.profile-card--no-banner .profile-card-top {
+	margin-top: 0;
+	align-items: center;
+}
+.profile-card--no-banner .profile-card-identity,
+.profile-card--no-banner .profile-card-top-actions {
+	padding-bottom: 0;
+}
+.profile-card--no-banner .profile-card-avatar {
+	width: 56px;
+	height: 56px;
+	border-width: 0;
+}
+
+.profile-card-menu-btn svg {
+	width: 12px;
+	height: 12px;
+	transform: rotate(90deg);
+	transform-origin: center;
+}
+
+.profile-card-menu {
+	z-index: 1;
+}
+
+.profile-card-menu.open {
+	z-index: 45001;
+}
+
+.profile-card-menu-list {
+	z-index: 45001;
+	min-width: 190px;
+}
+
+@media (max-width: 768px) {
+	.profile-card--hero {
+		margin-bottom: 1rem;
+	}
+	.profile-card--hero .profile-card-banner {
+		height: 160px;
+		width: calc(100% - 1rem);
+		margin: 0 auto;
+	}
+	.profile-card--hero .profile-card-body-inner {
+		width: calc(100% - 1rem);
+		padding: 0 16px 18px;
+	}
+	.profile-card--hero .profile-card-body-inner--hero-left,
+	.profile-card--hero .profile-card-body-inner--hero-center {
+		margin: 0 auto;
+	}
+	.profile-card--hero .profile-card-avatar {
+		width: 104px;
+		height: 104px;
+	}
+	.profile-card--hero .profile-card-avatar-fallback {
+		font-size: 1.6rem;
+	}
+	.profile-card--hero .profile-card-top {
+		margin-top: -52px;
+		align-items: flex-end;
+	}
+	.profile-card-top-actions {
+		gap: 0.4rem;
+	}
+}
+
+/* Grey checkmark for non-Twitter verified badges (YouTube, TikTok). */
+.profile-card-verified--plain {
+	color: #b0b0b0;
+}
+
+/* Website link in card body — matches .feed-inline-link for visual consistency. */
+.profile-card-website {
+	margin-top: 4px;
+	font-size: 13px;
+}
+.profile-card-website a {
+	color: var(--warning);
+	text-decoration: none;
+}
+.profile-card-website a:hover {
+	text-decoration: underline;
+}

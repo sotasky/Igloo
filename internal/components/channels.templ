@@ -1,0 +1,179 @@
+package components
+
+import (
+	"fmt"
+	"strings"
+	"github.com/screwys/igloo/internal/model"
+)
+
+// ChannelsPage renders the channels overview with per-channel video grids.
+templ ChannelsPage(p PageProps, sections []ChannelWithVideos, query string, hasMore bool, nextOffset int) {
+	@Base(p) {
+		<div class="channel-search-bar">
+			<input
+				class="input"
+				type="search"
+				id="channel-tab-search"
+				name="q"
+				placeholder={ L(p, "channels_search_placeholder", "Search channels...") }
+				autocomplete="off"
+				value={ query }
+				hx-get="/channels"
+				hx-trigger="input changed delay:300ms, search"
+				hx-target="#channels-list"
+				hx-swap="innerHTML"
+				hx-push-url="true"
+				hx-include="this"
+			/>
+		</div>
+		<div id="shorts-grid-shell">
+			<div id="channels-list" class="channels-overview">
+				@ChannelSections(p, sections)
+				if hasMore {
+					@ChannelLoadMore(nextOffset)
+				}
+			</div>
+		</div>
+		<div
+			id="shorts-layout"
+			class="shorts-layout hidden"
+			data-auto-open="0"
+			data-persist-history="0"
+			data-source-container-selector="#channels-list"
+			data-source-card-selector="a.video-card"
+			tabindex="-1"
+		>
+			<button id="close-shorts-btn" class="shorts-close-btn" title={ L(p, "action_back_to_grid", "Back to Grid") }>&#x2715;</button>
+			<div id="shorts-container" class="shorts-container"></div>
+			<div id="shorts-uptodate-overlay" class="shorts-uptodate-overlay hidden">
+				<div class="uptodate-content"><span>{ L(p, "status_up_to_date", "You're up to date!") }</span></div>
+			</div>
+		</div>
+	}
+}
+
+// ChannelSections renders all channel sections with video grids.
+// Used for both initial render and HTMX partial responses.
+templ ChannelSections(p PageProps, sections []ChannelWithVideos) {
+	if len(sections) > 0 {
+		for _, sec := range sections {
+			@ChannelSection(p, sec)
+		}
+	} else {
+		<div class="empty-state"><h3>{ L(p, "channels_empty", "No channels") }</h3></div>
+	}
+}
+
+// ChannelLoadMore renders a scroll-triggered sentinel that loads more channel sections.
+templ ChannelLoadMore(offset int) {
+	<div
+		hx-get={ fmt.Sprintf("/channels?offset=%d", offset) }
+		hx-trigger="revealed"
+		hx-swap="outerHTML"
+	></div>
+}
+
+// ChannelSection renders a single channel with its header and video grid.
+templ ChannelSection(p PageProps, sec ChannelWithVideos) {
+	<div class="channel-section" data-channel-id={ sec.Channel.ChannelID } data-channel-name={ sec.Channel.Name } data-channel-platform={ sec.Channel.Platform }>
+		<div class="channel-section-header">
+			<img class="channel-avatar-img" src={ sec.Channel.AvatarURL } alt="" loading="lazy" onload="window.MpaSiteBase&&window.MpaSiteBase.avatarLoad(this)" onerror="if(window.MpaSiteBase&&window.MpaSiteBase.avatarError(this))return;this.style.display='none';this.nextElementSibling.style.display='flex'"/>
+			<div class="channel-avatar" style="display:none; width:32px; height:32px; font-size:0.9rem;">{ strings.ToUpper(FirstChar(sec.Channel.Name)) }</div>
+			<h3 class="channel-section-name">
+				<a href={ templ.SafeURL("/channels/" + sec.Channel.ChannelID) }>{ sec.Channel.Name }</a>
+			</h3>
+			<div class="channel-actions">
+				@ChannelStarButton(p, sec.Channel.ChannelID, sec.Channel.IsStarred)
+				<button class="channel-action-btn" type="button" title={ L(p, "action_refresh_channel", "Update/Refresh") }
+					hx-post={ "/api/channels/" + sec.Channel.ChannelID + "/refresh" }
+					hx-swap="none"
+					hx-on::before-request="this.textContent='⏳';this.disabled=true"
+					hx-on::after-request="var b=this;b.textContent=event.detail.successful?'✓':'!';setTimeout(function(){b.textContent='↻';b.disabled=false},1200)"
+				>&#x21BB;</button>
+				<button class="channel-action-btn" type="button" data-action="settings" data-id={ sec.Channel.ChannelID } title={ L(p, "action_channel_settings_short", "Settings") }>&#x2699;</button>
+				<button class="channel-action-btn" type="button" title={ L(p, "action_remove_channel_and_files", "Remove Channel & Files") }
+					hx-delete={ "/api/unsubscribe/" + sec.Channel.ChannelID + "?delete_files=true" }
+					hx-target="closest .channel-section"
+					hx-swap="outerHTML"
+					hx-confirm={ fmt.Sprintf(L(p, "confirm_remove_channel_and_files", "Remove channel and files for %q?"), sec.Channel.Name) }
+				>&#x2715;</button>
+			</div>
+		</div>
+		if len(sec.Videos) > 0 {
+			<div class={ channelGridClass(sec) }>
+				for _, v := range sec.Videos {
+					@VideoCard(p, v)
+				}
+			</div>
+		}
+	</div>
+}
+
+func channelGridClass(sec ChannelWithVideos) string {
+	if sec.IsShortsPlatform() {
+		return "video-grid shorts-grid"
+	}
+	return "video-grid"
+}
+
+
+// ChannelStarButton renders a star/unstar button with HTMX.
+templ ChannelStarButton(p PageProps, channelID string, isStarred bool) {
+	if isStarred {
+		<button
+			class="channel-action-btn"
+			type="button"
+			title={ L(p, "action_unstar_channel", "Unstar channel") }
+			hx-post={ fmt.Sprintf("/api/channels/%s/star", channelID) }
+			hx-swap="outerHTML"
+		>&#x2605;</button>
+	} else {
+		<button
+			class="channel-action-btn"
+			type="button"
+			title={ L(p, "action_star_channel", "Star channel") }
+			hx-post={ fmt.Sprintf("/api/channels/%s/star", channelID) }
+			hx-swap="outerHTML"
+		>&#x2606;</button>
+	}
+}
+
+// ChannelsList is kept for backward compatibility (used by sidebar channel actions).
+templ ChannelsList(p PageProps, channels []model.Channel) {
+	if len(channels) > 0 {
+		for _, ch := range channels {
+			@ChannelListItem(p, ch)
+		}
+	} else {
+		<div class="empty-state"><h3>{ L(p, "channels_empty", "No channels") }</h3></div>
+	}
+}
+
+templ ChannelListItem(p PageProps, ch model.Channel) {
+	<div class="channel-row" data-channel-id={ ch.ChannelID } data-channel-name={ ch.Name } data-channel-platform={ ch.Platform } style="position:relative; margin-bottom:1rem;">
+		<div class="channel-row-header" style="display:flex; align-items:center; gap:0.5rem;">
+			<img class="channel-avatar-img" src={ ch.AvatarURL } alt="" loading="lazy" onload="window.MpaSiteBase&&window.MpaSiteBase.avatarLoad(this)" onerror="if(window.MpaSiteBase&&window.MpaSiteBase.avatarError(this))return;this.style.display='none';this.nextElementSibling.style.display='flex'"/>
+			<div class="channel-avatar" style="display:none; width:32px; height:32px; font-size:0.9rem;">{ strings.ToUpper(FirstChar(ch.Name)) }</div>
+			<h3 style="margin:0;">
+				<a href={ templ.SafeURL("/channels/" + ch.ChannelID) } style="text-decoration:none; color:inherit;">{ ch.Name }</a>
+			</h3>
+			<span class="badge">{ LF(p, "channel_videos_count", "%1$d videos", ch.VideoCount) }</span>
+			<div class="channel-actions" style="margin-left:auto; opacity:1;">
+				@ChannelStarButton(p, ch.ChannelID, ch.IsStarred)
+				<button class="channel-action-btn" type="button" title={ L(p, "action_refresh_channel", "Update/Refresh") }
+					hx-post={ "/api/channels/" + ch.ChannelID + "/refresh" }
+					hx-swap="none"
+					hx-on::before-request="this.textContent='⏳';this.disabled=true"
+					hx-on::after-request="var b=this;b.textContent=event.detail.successful?'✓':'!';setTimeout(function(){b.textContent='↻';b.disabled=false},1200)"
+				>&#x21BB;</button>
+				<button class="channel-action-btn" type="button" data-action="settings" data-id={ ch.ChannelID } title={ L(p, "action_channel_settings_short", "Settings") }>&#x2699;</button>
+				<button class="channel-action-btn" type="button" title={ L(p, "action_remove_channel_and_files", "Remove Channel & Files") }
+					hx-delete={ "/api/unsubscribe/" + ch.ChannelID + "?delete_files=true" }
+					hx-target="closest .channel-row"
+					hx-swap="outerHTML"
+					hx-confirm={ fmt.Sprintf(L(p, "confirm_remove_channel_and_files", "Remove channel and files for %q?"), ch.Name) }
+				>&#x2715;</button>
+			</div>
+		</div>
+	</div>
+}

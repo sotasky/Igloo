@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="bg_primary">#151414</color>
+    <color name="bg_secondary">#232222</color>
+    <color name="bg_tertiary">#0D0C0C</color>
+    <color name="text_primary">#CAD3F5</color>
+    <color name="accent_red">#EB7072</color>
+
+    <!-- Launcher-icon palette (aligns with ic_launcher_background) -->
+    <color name="ic_launcher_concrete">#585B70</color>
+    <color name="ic_launcher_surface">#45475A</color>
+    <color name="ic_launcher_light">#CDD6F4</color>
+    <color name="ic_launcher_accent">#F38BA8</color>
+</resources>

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!-- Igloo is commonly self-hosted on trusted LANs like Jellyfin-style media
+         servers. Keep plain HTTP usable for user-entered LAN/VPN endpoints; the
+         app gates bearer tokens to the configured Igloo origin. -->
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+            <certificates src="user" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

@@ -1,0 +1,87 @@
+package components
+
+import (
+	"fmt"
+	"strconv"
+	"github.com/screwys/igloo/internal/db"
+	"github.com/screwys/igloo/internal/model"
+)
+
+// BookmarksPage renders the full bookmarks page with category filter pills and shorts overlay.
+templ BookmarksPage(p PageProps, bookmarks []model.Video, categories []db.BookmarkCategoryRow, selectedCategoryID int64, pager model.Pager) {
+	@Base(p) {
+		<div class="bookmarks-filter-bar" style="display:flex; gap:0.5rem; flex-wrap:wrap; margin-bottom:1rem;">
+			<a class={ "bookmark-filter-pill", templ.KV("active", selectedCategoryID == 0) } href="/bookmarks">{ L(p, "logs_filter_all", "All") }</a>
+			for _, cat := range categories {
+				<a
+					class={ "bookmark-filter-pill", templ.KV("active", selectedCategoryID == cat.ID) }
+					href={ templ.SafeURL(fmt.Sprintf("/bookmarks?category_id=%d", cat.ID)) }
+				>{ cat.Name }</a>
+			}
+		</div>
+		<div id="shorts-grid-shell">
+			<div id="video-grid" class="video-grid shorts-grid bookmarks-grid">
+				if len(bookmarks) > 0 {
+					for _, v := range bookmarks {
+						@VideoCard(p, v)
+					}
+				} else {
+					<div class="empty-state"><h3>{ L(p, "bookmarks_empty", "No bookmarks") }</h3></div>
+				}
+			</div>
+			if pager.HasNext() {
+				@VideoGridInfiniteScrollTrigger(bookmarksNextURL(pager, selectedCategoryID))
+			}
+		</div>
+		<div
+			id="shorts-layout"
+			class="shorts-layout hidden"
+			data-auto-open="0"
+			data-persist-history="0"
+			data-initial-page={ strconv.Itoa(bookmarksInitialPage(pager)) }
+			data-page-size={ strconv.Itoa(bookmarksPageSize(pager)) }
+			tabindex="-1"
+		>
+			<button id="close-shorts-btn" class="shorts-close-btn" title={ L(p, "action_close_shorts_mode", "Close Shorts mode") }>&#x2715;</button>
+			<div id="shorts-container" class="shorts-container"></div>
+			<div id="shorts-uptodate-overlay" class="shorts-uptodate-overlay hidden">
+				<div class="uptodate-content"><span>{ L(p, "status_up_to_date", "You're up to date!") }</span></div>
+			</div>
+		</div>
+	}
+}
+
+// BookmarksPartial renders just the bookmark cards and next trigger for HTMX infinite scroll responses.
+templ BookmarksPartial(p PageProps, bookmarks []model.Video, pager model.Pager, selectedCategoryID int64) {
+	for _, v := range bookmarks {
+		@VideoCard(p, v)
+	}
+	if pager.HasNext() {
+		@VideoGridInfiniteScrollTrigger(bookmarksNextURL(pager, selectedCategoryID))
+	}
+}
+
+func bookmarksNextURL(pager model.Pager, categoryID int64) string {
+	url := fmt.Sprintf("/bookmarks?page=%d", pager.Page+1)
+	if categoryID > 0 {
+		url += fmt.Sprintf("&category_id=%d", categoryID)
+	}
+	return url
+}
+
+func bookmarksInitialPage(pager model.Pager) int {
+	if pager.Page > 0 {
+		return pager.Page
+	}
+	return 1
+}
+
+func bookmarksPageSize(pager model.Pager) int {
+	if pager.PerPage > 0 {
+		return pager.PerPage
+	}
+	return 200
+}
+
+// Unused import guards.
+var _ = strconv.Itoa

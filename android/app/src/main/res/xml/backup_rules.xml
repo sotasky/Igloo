@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<full-backup-content>
+    <include domain="sharedpref" path="."/>
+    <exclude domain="sharedpref" path="secure_prefs.xml"/>
+    <exclude domain="sharedpref" path="igloo-auth-keystore.xml"/>
+    <exclude domain="sharedpref" path="igloo-auth.xml"/>
+</full-backup-content>

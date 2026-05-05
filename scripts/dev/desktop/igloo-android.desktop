@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=Igloo Android Build
+Comment=Build Go + build/install Android APK
+Icon=phone
+Type=Application
+Exec=sh -c "cd \\$(dirname \\$1)/../.. && exec scripts/dev/desktop_launch.sh android" sh %k
+Categories=Development;
+Terminal=false

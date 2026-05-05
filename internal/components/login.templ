@@ -1,0 +1,206 @@
+package components
+
+templ LoginPage(p PageProps, csrfToken string, errorMsg string, next string) {
+	<!DOCTYPE html>
+	<html lang={ p.Lang() }>
+		<head>
+			<meta charset="utf-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1"/>
+			<title>{ L(p, "login_title", "Igloo Login") }</title>
+			<link rel="stylesheet" href="/static/theme.css"/>
+			@authPageStyles()
+		</head>
+		<body>
+			<div class="card">
+				<h1>{ L(p, "app_name", "Igloo") }</h1>
+				<p>{ L(p, "login_subtitle", "Sign in to access the desktop dashboard.") }</p>
+				<form method="POST" action="/login">
+					if next != "" {
+						<input type="hidden" name="next" value={ next }/>
+					} else {
+						<input type="hidden" name="next" value="/"/>
+					}
+					@templ.Raw(CsrfInputHTML(csrfToken))
+					<label for="username">{ L(p, "field_username", "Username") }</label>
+					<input id="username" name="username" autocomplete="username" required/>
+					<label for="password">{ L(p, "field_password", "Password") }</label>
+					<input id="password" type="password" name="password" autocomplete="current-password" required/>
+					<button type="submit">{ L(p, "action_sign_in", "Sign In") }</button>
+				</form>
+				if errorMsg != "" {
+					<div class="error">{ errorMsg }</div>
+				}
+			</div>
+		</body>
+	</html>
+}
+
+templ SetupPage(p PageProps, csrfToken string, errorMsg string, platforms []PlatformChoice, selectedPlatforms []string, rssHubBase string) {
+	<!DOCTYPE html>
+	<html lang={ p.Lang() }>
+		<head>
+			<meta charset="utf-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1"/>
+			<title>{ L(p, "setup_title", "Create First Admin") }</title>
+			<link rel="stylesheet" href="/static/theme.css"/>
+			@authPageStyles()
+		</head>
+		<body>
+			<div class="card">
+				<h1>{ L(p, "setup_title", "Create First Admin") }</h1>
+				<p>{ L(p, "setup_subtitle", "Create the admin account for this Igloo instance.") }</p>
+				<form method="POST" action="/setup">
+					@templ.Raw(CsrfInputHTML(csrfToken))
+					<label for="username">{ L(p, "field_username", "Username") }</label>
+					<input id="username" name="username" autocomplete="username" required/>
+					<label for="password">{ L(p, "field_password", "Password") }</label>
+					<input id="password" type="password" name="password" autocomplete="new-password" required/>
+					<label for="password_confirm">{ L(p, "field_confirm_new_password", "Confirm New Password") }</label>
+					<input id="password_confirm" type="password" name="password_confirm" autocomplete="new-password" required/>
+					<div class="setup-section">
+						<h2>{ L(p, "setup_platforms_title", "Enable platforms") }</h2>
+						<p>{ L(p, "setup_platforms_help", "Choose the platforms this instance should fetch from. You can change user access later.") }</p>
+						<div class="setup-platform-list">
+							for _, plat := range platforms {
+								<label class="setup-platform-row">
+									if hasPlat(selectedPlatforms, plat.Value) {
+										<input type="checkbox" name="platforms" value={ plat.Value } checked data-platform={ plat.Value }/>
+									} else {
+										<input type="checkbox" name="platforms" value={ plat.Value } data-platform={ plat.Value }/>
+									}
+									<span>{ plat.Label }</span>
+								</label>
+							}
+						</div>
+					</div>
+					<div class="setup-section setup-rsshub-section" data-rsshub-section>
+						<label for="rsshub_base">{ L(p, "setup_rsshub_base_label", "RSSHub URL for X") }</label>
+						<input id="rsshub_base" type="url" name="rsshub_base" value={ rssHubBase } placeholder="http://rsshub:1200"/>
+						<p>
+							{ L(p, "setup_rsshub_help_prefix", "X ingest uses") }
+							<a href="https://github.com/DIYgod/RSSHub" target="_blank" rel="noopener">RSSHub</a>.
+						</p>
+					</div>
+					<button type="submit">{ L(p, "action_create_admin", "Create Admin") }</button>
+				</form>
+				if errorMsg != "" {
+					<div class="error">{ errorMsg }</div>
+				}
+			</div>
+			<script>
+				const rsshubSection = document.querySelector("[data-rsshub-section]");
+				const xCheckbox = document.querySelector('input[name="platforms"][value="twitter"]');
+				function syncRSSHubSection() {
+					if (!rsshubSection || !xCheckbox) return;
+					rsshubSection.hidden = !xCheckbox.checked;
+				}
+				if (xCheckbox) {
+					xCheckbox.addEventListener("change", syncRSSHubSection);
+					syncRSSHubSection();
+				}
+			</script>
+		</body>
+	</html>
+}
+
+templ authPageStyles() {
+	<style>
+		* { box-sizing: border-box; }
+		body {
+			margin: 0;
+			font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+			background: radial-gradient(circle at 20% 10%, var(--bg-primary), var(--bg-tertiary) 60%);
+			color: var(--text-primary);
+			min-height: 100vh;
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			padding: 24px;
+		}
+		.card {
+			width: 100%;
+			max-width: 420px;
+			background: var(--bg-primary);
+			border: 1px solid var(--bg-secondary);
+			border-radius: 16px;
+			padding: 28px;
+			box-shadow: var(--shadow);
+		}
+		h1 {
+			margin: 0 0 8px;
+			font-size: 1.4rem;
+			color: var(--accent-primary);
+		}
+		p {
+			margin: 0 0 18px;
+			color: var(--text-muted);
+			font-size: 0.95rem;
+		}
+		label {
+			display: block;
+			font-size: 0.85rem;
+			color: var(--text-muted);
+			margin-bottom: 6px;
+		}
+		input {
+			width: 100%;
+			padding: 12px;
+			border-radius: 10px;
+			border: 1px solid var(--bg-secondary);
+			background: var(--bg-tertiary);
+			color: var(--text-primary);
+			margin-bottom: 14px;
+			outline: none;
+		}
+		.setup-section {
+			margin: 4px 0 14px;
+		}
+		h2 {
+			margin: 0 0 8px;
+			font-size: 1rem;
+			color: var(--text-primary);
+		}
+		.setup-platform-list {
+			display: grid;
+			gap: 8px;
+			margin: 10px 0 14px;
+		}
+		.setup-platform-row {
+			display: flex;
+			align-items: center;
+			gap: 10px;
+			padding: 10px 12px;
+			border: 1px solid var(--bg-secondary);
+			border-radius: 8px;
+			background: var(--bg-tertiary);
+			color: var(--text-primary);
+			margin: 0;
+			cursor: pointer;
+		}
+		.setup-platform-row input {
+			width: auto;
+			margin: 0;
+		}
+		.setup-rsshub-section[hidden] {
+			display: none;
+		}
+		.setup-rsshub-section a {
+			color: var(--accent-primary);
+		}
+		button {
+			width: 100%;
+			padding: 12px;
+			border: none;
+			border-radius: 10px;
+			background: var(--accent-gradient);
+			color: var(--on-accent);
+			font-weight: 700;
+			cursor: pointer;
+		}
+		.error {
+			color: var(--error);
+			margin-top: 12px;
+			font-size: 0.9rem;
+		}
+	</style>
+}

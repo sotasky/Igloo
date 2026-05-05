@@ -1,0 +1,17 @@
+[Unit]
+Description=RSSHub feed service
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+Environment=PORT={{PORT}}
+EnvironmentFile=-{{RSSHUB_ENV_FILE}}
+ExecStartPre=-{{PODMAN_BIN}} rm -f {{CONTAINER_NAME}}
+ExecStart={{PODMAN_BIN}} run --name {{CONTAINER_NAME}} --replace --pull=always --env-file {{RSSHUB_ENV_FILE}} -p 127.0.0.1:{{PORT}}:1200 {{IMAGE}}
+ExecStop={{PODMAN_BIN}} stop -t 10 {{CONTAINER_NAME}}
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,108 @@
+package components
+
+import (
+	"fmt"
+	"strings"
+
+	"github.com/screwys/igloo/internal/model"
+)
+
+// SearchPage renders the full search results page.
+templ SearchPage(p PageProps, q string, ytChannels []model.Channel, ytVideos []model.Video, tiktokChannels []model.Channel, tiktokVideos []model.Video, xChannels []model.Channel, xPosts []model.FeedItem) {
+	@Base(p) {
+		if q != "" {
+			{{ ytCount := len(ytChannels) + len(ytVideos) }}
+			{{ tikCount := len(tiktokChannels) + len(tiktokVideos) }}
+			{{ xCount := len(xChannels) + len(xPosts) }}
+			<div class="search-results-page">
+				<div class="search-platform-filters">
+					<button class="platform-filter active" data-platform="all" type="button">{ L(p, "logs_filter_all", "All") }</button>
+					if hasPlat(p.UserPlatforms, "youtube") {
+						<button class="platform-filter" data-platform="youtube" type="button">{ L(p, "platform_youtube", "YouTube") } <span class="badge">{ fmt.Sprintf("%d", ytCount) }</span></button>
+					}
+					if hasPlat(p.UserPlatforms, "tiktok") {
+						<button class="platform-filter" data-platform="tiktok" type="button">{ L(p, "platform_tiktok", "TikTok") } <span class="badge">{ fmt.Sprintf("%d", tikCount) }</span></button>
+					}
+					if hasPlat(p.UserPlatforms, "twitter") {
+						<button class="platform-filter" data-platform="x" type="button">{ L(p, "platform_x", "X") } <span class="badge">{ fmt.Sprintf("%d", xCount) }</span></button>
+					}
+				</div>
+				if hasPlat(p.UserPlatforms, "youtube") && (len(ytChannels) > 0 || len(ytVideos) > 0) {
+					<div class="search-section" data-platform="youtube">
+						<h3>{ L(p, "platform_youtube", "YouTube") } <span class="badge">{ fmt.Sprintf("%d", ytCount) }</span></h3>
+						if len(ytChannels) > 0 {
+							<div class="search-channels-row">
+								for _, ch := range ytChannels {
+									@SearchChannelPill(ch)
+								}
+							</div>
+						}
+						if len(ytVideos) > 0 {
+							<div class="video-grid">
+								for _, v := range ytVideos {
+									@VideoCard(p, v)
+								}
+							</div>
+						}
+					</div>
+				}
+				if hasPlat(p.UserPlatforms, "tiktok") && (len(tiktokChannels) > 0 || len(tiktokVideos) > 0) {
+					<div class="search-section" data-platform="tiktok">
+						<h3>{ L(p, "platform_tiktok", "TikTok") } <span class="badge">{ fmt.Sprintf("%d", tikCount) }</span></h3>
+						if len(tiktokChannels) > 0 {
+							<div class="search-channels-row">
+								for _, ch := range tiktokChannels {
+									@SearchChannelPill(ch)
+								}
+							</div>
+						}
+						if len(tiktokVideos) > 0 {
+							<div class="video-grid shorts-grid">
+								for _, v := range tiktokVideos {
+									@VideoCard(p, v)
+								}
+							</div>
+						}
+					</div>
+				}
+				if hasPlat(p.UserPlatforms, "twitter") && (len(xChannels) > 0 || len(xPosts) > 0) {
+					<div class="search-section" data-platform="x">
+						<h3>{ L(p, "platform_x", "X") } <span class="badge">{ fmt.Sprintf("%d", xCount) }</span></h3>
+						if len(xChannels) > 0 {
+							<div class="search-channels-row">
+								for _, ch := range xChannels {
+									@SearchChannelPill(ch)
+								}
+							</div>
+						}
+						if len(xPosts) > 0 {
+							<div class="feed-list">
+								for _, item := range xPosts {
+									@FeedItem(p, item)
+								}
+							</div>
+						}
+					</div>
+				}
+				if len(ytChannels) == 0 && len(ytVideos) == 0 && len(tiktokChannels) == 0 && len(tiktokVideos) == 0 && len(xChannels) == 0 && len(xPosts) == 0 {
+					<div class="empty-state"><h3>{ L(p, "search_no_results", "No results") }</h3><p>{ fmt.Sprintf(L(p, "search_nothing_found_for", "Nothing found for %q"), q) }</p></div>
+				}
+			</div>
+		} else {
+			<div class="empty-state"><h3>{ L(p, "search_title", "Search") }</h3><p>{ L(p, "search_empty_prompt", "Enter a query to search.") }</p></div>
+		}
+		@RetweetersDialog(p)
+	}
+}
+
+// SearchChannelPill renders a compact channel link for search results.
+templ SearchChannelPill(ch model.Channel) {
+	<a href={ templ.SafeURL("/channels/" + ch.ChannelID) } class="search-channel-pill">
+		if ch.AvatarURL != "" && ch.AvatarURL != "/static/default_thumb.png" {
+			<img src={ ch.AvatarURL } class="scp-avatar" alt="" onerror="this.style.display='none'"/>
+		} else {
+			<div class="scp-avatar-fallback">{ strings.ToUpper(FirstChar(ch.Name)) }</div>
+		}
+		<span class="scp-name">{ ch.Name }</span>
+	</a>
+}

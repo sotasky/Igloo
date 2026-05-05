@@ -1,0 +1,19 @@
+# Default ignored files
+/shelf/
+/workspace.xml
+/.idea/
+*.iml
+.gradle/
+build/
+local.properties
+*.apk
+*.aab
+*.log
+# Keystores are never committed — local debug uses AGP's ~/.android/debug.keystore,
+# release signing reads credentials from outside the repo.
+*.keystore
+*.jks
+.DS_Store
+captures/
+.externalNativeBuild/
+.cxx/

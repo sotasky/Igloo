@@ -1,0 +1,2007 @@
+package components
+
+import (
+	"fmt"
+	"strconv"
+
+	"github.com/screwys/igloo/internal/webtheme"
+)
+
+func prefsAfterRequestHandler(p PageProps) templ.ComponentScript {
+	saved := strconv.Quote(L(p, "status_preferences_saved", "Preferences saved"))
+	failed := strconv.Quote(L(p, "status_preferences_save_failed", "Failed to save preferences"))
+	return templ.JSUnsafeFuncCall("if(window.IglooI18n&&window.IglooI18n.handlePrefsAfterRequest){window.IglooI18n.handlePrefsAfterRequest.call(this,event," + saved + "," + failed + ")}")
+}
+
+func prefsUILanguagePreviewHandler() templ.ComponentScript {
+	return templ.JSUnsafeFuncCall("if(window.IglooI18n&&window.IglooI18n.previewLanguage){window.IglooI18n.previewLanguage(this.value)}")
+}
+
+func prefsPersistedUILanguage(p PageProps, prefs PrefsData) string {
+	if persisted := prefs.Str("_persisted_ui_language", ""); persisted != "" {
+		return persisted
+	}
+	return prefs.Str("ui_language", p.Lang())
+}
+
+func webThemeSettings(prefs PrefsData) webtheme.Settings {
+	return webtheme.NormalizeSettings(webtheme.Settings{
+		ThemeID:   prefs.Str("web_theme_id", webtheme.DefaultThemeID),
+		AccentHex: prefs.Str("web_theme_accent", webtheme.DefaultAccentHex),
+		CustomCSS: prefs.Str("web_custom_css", ""),
+	})
+}
+
+func webThemeChoices() []webtheme.Theme {
+	return webtheme.AllThemes()
+}
+
+func webThemeIsCatppuccin(themeID string) bool {
+	theme, ok := webtheme.Lookup(themeID)
+	return ok && theme.Catppuccin
+}
+
+func webThemeCatppuccinStyle(themeID string) string {
+	if webThemeIsCatppuccin(themeID) {
+		return ""
+	}
+	return "display:none;"
+}
+
+func startingPageChoices(p PageProps) []struct{ Key, Label string } {
+	return []struct{ Key, Label string }{
+		{"feed", L(p, "nav_feed", "Feed")},
+		{"videos", L(p, "nav_videos", "Videos")},
+		{"shorts", L(p, "nav_moments", "Moments")},
+		{"liked", L(p, "nav_liked", "Liked")},
+		{"bookmarks", L(p, "nav_bookmarks", "Bookmarks")},
+		{"channels", L(p, "nav_channels", "Channels")},
+	}
+}
+
+// ChannelSettingsPopover renders the per-channel settings flyout shell.
+// Content is loaded via HTMX when a channel settings button is clicked.
+templ ChannelSettingsPopover(p PageProps) {
+	<div id="channel-settings-popover" class="channel-settings-popover hidden">
+		<div class="channel-settings-popover-header">
+			<span id="settings-channel-name">{ L(p, "action_channel_settings", "Channel settings") }</span>
+			<button id="channel-settings-close" type="button">&times;</button>
+		</div>
+		<div id="channel-settings-body" class="channel-settings-popover-body">
+			<div style="padding:1rem; color:var(--text-secondary);">{ L(p, "status_loading_ellipsis", "Loading...") }</div>
+		</div>
+	</div>
+}
+
+// ChannelSettingsForm renders the per-channel settings form pre-filled from DB.
+templ ChannelSettingsForm(p PageProps, channelID string, platform string, cs ChannelSettingsData) {
+	<form
+		hx-post={ "/api/channels/" + channelID + "/settings" }
+		hx-swap="innerHTML"
+		hx-target="#channel-settings-body"
+		hx-on::after-request="if(event.detail.successful&&window._csToast)window._csToast()"
+	>
+		if !isXPlatform(platform) {
+				<div class="form-group">
+					<label for="setting-quality">{ L(p, "settings_video_quality", "Video Quality") }</label>
+					<select id="setting-quality" name="quality" class="input">
+						<option value="" selected?={ cs.Quality == "" }>{ L(p, "settings_quality_global_default", "Global (default)") }</option>
+						<option value="best" selected?={ cs.Quality == "best" }>{ L(p, "settings_quality_best_available", "Best Available") }</option>
+						<option value="1080p" selected?={ cs.Quality == "1080p" }>1080p</option>
+						<option value="720p" selected?={ cs.Quality == "720p" }>720p</option>
+						<option value="480p" selected?={ cs.Quality == "480p" }>480p</option>
+					</select>
+				</div>
+				<div class="form-group">
+					<label for="setting-interval">{ L(p, "settings_check_interval_hours", "Check Interval (hours)") }</label>
+					<input type="number" id="setting-interval" name="check_interval" class="input" min="1" max="168" value={ intOrEmpty(cs.CheckInterval) }/>
+				</div>
+				<div class="form-group">
+					<label for="setting-max-videos">{ L(p, "settings_max_videos_to_download", "Max Videos to Download") }</label>
+					<input type="number" id="setting-max-videos" name="max_videos" class="input" min="1" max="300" value={ intOrEmpty(cs.MaxVideos) }/>
+				</div>
+			}
+		if isYouTubePlatform(platform) {
+			<div class="form-group checkbox-group">
+				<label>
+					if cs.DownloadSubtitles {
+						<input type="checkbox" name="download_subtitles" value="true" checked/>
+					} else {
+						<input type="checkbox" name="download_subtitles" value="true"/>
+					}
+						{ L(p, "settings_download_english_subtitles", "Download English Subtitles") }
+					</label>
+				</div>
+			}
+		if isXPlatform(platform) {
+			<div class="form-group checkbox-group">
+				<label>
+					if cs.MediaOnly {
+						<input type="checkbox" name="media_only" value="true" checked/>
+					} else {
+						<input type="checkbox" name="media_only" value="true"/>
+					}
+						{ L(p, "settings_media_only_feed", "Media-only feed") }
+					</label>
+				</div>
+				<div class="form-group">
+					<label for="setting-x-media-limit">{ L(p, "settings_media_download_limit", "Media Download Limit") }</label>
+					<input type="number" id="setting-x-media-limit" name="media_download_limit" class="input" min="1" max="300" value={ intOrEmpty(cs.MediaDownloadLimit) }/>
+				</div>
+			}
+			<div id="settings-status" class="status-msg"></div>
+			<div class="channel-settings-popover-actions">
+				<button class="btn btn-primary" type="submit">{ L(p, "action_save", "Save") }</button>
+			</div>
+		</form>
+}
+
+// ChannelSettingsSaved renders a success message that replaces the form after save.
+templ ChannelSettingsSaved(p PageProps, channelID string, platform string, cs ChannelSettingsData) {
+	@ChannelSettingsForm(p, channelID, platform, cs)
+}
+
+// MutedAccountsList renders the muted accounts list fragment for HTMX swap.
+templ MutedAccountsList(p PageProps, handles []string) {
+	if len(handles) == 0 {
+		<div style="color: var(--text-muted); font-size: 0.8rem;">{ L(p, "settings_no_muted_accounts", "No muted accounts") }</div>
+	} else {
+		<div style="max-height: 280px; overflow-y: auto; border: 1px solid var(--border-color); padding: 0.6rem; border-radius: 4px; margin-bottom: 0.5rem;">
+			for _, handle := range handles {
+				<div style="display:flex; align-items:center; justify-content:space-between; padding:0.45rem 0.35rem; border-bottom:1px solid var(--border-color);">
+					<span style="font-size:0.9rem;">{ "@" + handle }</span>
+					<button
+						class="btn btn-secondary"
+						type="button"
+						style="padding:0.2rem 0.6rem; font-size:0.75rem; width:auto; margin:0;"
+						hx-delete={ "/api/feed/mute/" + handle }
+						hx-target="#muted-accounts-container"
+						hx-swap="innerHTML"
+						>{ L(p, "action_unmute", "Unmute") }</button>
+				</div>
+			}
+		</div>
+	}
+}
+
+// AddSubModal renders the "Add Channel" subscription modal.
+templ AddSubModal(p PageProps) {
+	<div id="add-sub-modal" class="modal hidden" aria-hidden="true">
+		<div class="modal-backdrop"></div>
+		<div class="modal-content modal-small">
+			<button class="modal-close" type="button">&times;</button>
+			<h2>{ L(p, "action_add_channel", "Add Channel") }</h2>
+			<p class="modal-description">{ L(p, "subscribe_modal_description", "Paste any video URL (YouTube, TikTok, Instagram) to subscribe to that channel") }</p>
+			<form
+				hx-post="/api/subscribe"
+				hx-target="#add-sub-status"
+				hx-swap="innerHTML"
+				hx-indicator="#add-sub-submit"
+				hx-disabled-elt="#add-sub-submit"
+			>
+					<input type="text" name="url" id="sub-input" class="input" autocomplete="off" placeholder={ L(p, "subscribe_modal_url_example", "e.g., https://tiktok.com/@user/video/123") }/>
+				<div class="modal-actions">
+					<button id="add-sub-submit" class="btn btn-primary" type="submit">
+							<span class="btn-text">{ L(p, "action_add_channel", "Add Channel") }</span>
+							<span class="htmx-indicator btn-text">{ L(p, "status_adding_ellipsis", "Adding...") }</span>
+					</button>
+				</div>
+			</form>
+			<div id="add-sub-status"></div>
+		</div>
+	</div>
+}
+
+// PrefsModal renders the preferences modal shell. Content is lazy-loaded via HTMX on open.
+templ PrefsModal(p PageProps) {
+	<div id="prefs-modal" class="modal hidden">
+		<div class="modal-backdrop"></div>
+		<div class="modal-content prefs-modal-content">
+			<div class="modal-header">
+				<h3 id="prefs-modal-title" data-i18n="settings_title">{ L(p, "settings_title", "Preferences") }</h3>
+				<button class="modal-close" type="button">&times;</button>
+			</div>
+			<div id="prefs-body"
+				hx-get="/api/settings/form"
+				hx-trigger="intersect once"
+				hx-swap="innerHTML"
+			>
+				<div style="padding:2rem; text-align:center; color:var(--text-secondary);" data-i18n="status_loading_preferences">{ L(p, "status_loading_preferences", "Loading preferences...") }</div>
+			</div>
+		</div>
+	</div>
+}
+
+// PrefsBody renders the full preferences body (tabs + form + actions).
+// Loaded via HTMX into #prefs-body when the modal opens.
+templ PrefsBody(p PageProps, prefs PrefsData) {
+	<h3 id="prefs-modal-title" hx-swap-oob="innerHTML" data-i18n="settings_title">{ L(p, "settings_title", "Preferences") }</h3>
+	<form id="prefs-form" hx-post="/api/settings" hx-swap="none"
+		data-i18n-scope="prefs"
+		data-persisted-ui-language={ prefsPersistedUILanguage(p, prefs) }
+		hx-on::after-request={ prefsAfterRequestHandler(p) }
+	>
+		<div class="modal-body">
+			<div class="prefs-tabs-layout">
+				<nav class="prefs-tabs-nav">
+					<button class="prefs-tab active" data-prefs-tab="general" type="button">{ L(p, "settings_tab_general", "General") }</button>
+					<button class="prefs-tab" data-prefs-tab="appearance" type="button">{ L(p, "settings_appearance", "Appearance") }</button>
+					<button class="prefs-tab" data-prefs-tab="feed" type="button">{ L(p, "settings_tab_platform_settings", "Platform Settings") }</button>
+					<button class="prefs-tab" data-prefs-tab="sponsorblock" type="button">{ L(p, "settings_tab_sponsorblock", "SponsorBlock") }</button>
+					<button class="prefs-tab" data-prefs-tab="account" type="button">{ L(p, "settings_tab_account", "Account") }</button>
+					<button class="prefs-tab" data-prefs-tab="shortcuts" type="button">{ L(p, "settings_tab_shortcuts", "Shortcuts") }</button>
+					<div class="prefs-tab-subcats" id="shortcuts-subcats" style="display:none;">
+						<button class="prefs-subtab active" data-shortcuts-sub="general" type="button">{ L(p, "settings_tab_general", "General") }</button>
+						<button class="prefs-subtab" data-shortcuts-sub="feed-shorts" type="button">{ L(p, "settings_tab_feed", "Feed") }</button>
+						<button class="prefs-subtab" data-shortcuts-sub="videos" type="button">{ L(p, "nav_videos", "Videos") }</button>
+					</div>
+					if p.UserRole == "admin" {
+						<button class="prefs-tab" data-prefs-tab="users" type="button">{ L(p, "settings_tab_users", "Users") }</button>
+					}
+				</nav>
+				<div class="prefs-tabs-content">
+					@prefsGeneralTab(p, prefs)
+					@prefsAppearanceTab(p, prefs)
+					@prefsFeedTab(p, prefs)
+					@prefsSponsorBlockTab(p, prefs)
+					@prefsAccountTab(p)
+					@prefsShortcutsTab(p)
+						if p.UserRole == "admin" {
+							@prefsUsersTab(p)
+						}
+				</div>
+			</div>
+		</div>
+		<div class="prefs-modal-actions">
+			if p.UserRole == "admin" {
+				<div class="prefs-actions-secondary">
+					<button type="button" class="btn btn-secondary btn-sm" data-config-export-url="/api/config/export">{ L(p, "action_export", "Export") }</button>
+					<button type="button" class="btn btn-secondary btn-sm" data-config-export-url="/api/config/export-full">{ L(p, "action_full_export", "Full Export") }</button>
+					<button id="import-config-btn" class="btn btn-secondary btn-sm" type="button">{ L(p, "action_import", "Import") }</button>
+				</div>
+			}
+			<div class="prefs-save-primary">
+				<span id="prefs-unsaved-reminder" class="prefs-unsaved-reminder hidden" data-i18n="status_save_preferences_to_apply" aria-hidden="true">{ L(p, "status_save_preferences_to_apply", "Save your preferences to apply") }</span>
+				<button class="btn btn-primary btn-sm" type="submit" data-i18n="action_save_preferences">{ L(p, "action_save_preferences", "Save Preferences") }</button>
+			</div>
+		</div>
+		<div id="prefs-status" class="status-msg" style="margin-top:0.5rem; min-height:1.2em; text-align:right;"></div>
+	</form>
+}
+
+// prefsAppearanceTab renders the web-only theme controls.
+templ prefsAppearanceTab(p PageProps, prefs PrefsData) {
+	{{ themeSettings := webThemeSettings(prefs) }}
+	<div class="prefs-tab-panel" data-prefs-panel="appearance" style="display:none;">
+		<div class="theme-settings-panel">
+			<div class="form-group">
+				<label for="global-setting-web-theme">{ L(p, "label_theme", "Theme") }</label>
+				<select id="global-setting-web-theme" name="web_theme_id" class="input" data-web-theme-select>
+					for _, theme := range webThemeChoices() {
+						<option
+							value={ theme.ID }
+							selected?={ theme.ID == themeSettings.ThemeID }
+							data-default-accent={ theme.DefaultAccent }
+							data-catppuccin={ fmt.Sprint(theme.Catppuccin) }
+						>{ theme.Label }</option>
+					}
+				</select>
+			</div>
+			<div class="form-group theme-accent-preset-group" data-catppuccin-accent-row style={ webThemeCatppuccinStyle(themeSettings.ThemeID) }>
+				<label>{ L(p, "settings_theme_catppuccin_accents", "Catppuccin accents") }</label>
+				<div class="theme-accent-pills" data-catppuccin-accent-pills>
+					for _, accent := range webtheme.CatppuccinAccentChoices(themeSettings.ThemeID) {
+						<button
+							type="button"
+							class="theme-accent-pill"
+							data-catppuccin-accent={ accent.ID }
+							data-accent-hex={ accent.Hex }
+							aria-label={ accent.Label }
+							title={ accent.Label }
+							style={ "--swatch:" + accent.Hex + ";" }
+						>
+							<span class="theme-accent-pill-swatch"></span>
+							<span>{ accent.Label }</span>
+						</button>
+					}
+				</div>
+			</div>
+			<div class="form-group">
+				<label for="global-setting-web-theme-accent">{ L(p, "settings_theme_accent", "Accent") }</label>
+				<div class="theme-accent-inputs">
+					<input type="color" id="global-setting-web-theme-accent-picker" class="theme-color-input" value={ themeSettings.AccentHex } data-web-theme-accent-picker/>
+					<input type="text" id="global-setting-web-theme-accent" name="web_theme_accent" class="input" value={ themeSettings.AccentHex } inputmode="text" autocomplete="off" spellcheck="false" data-web-theme-accent-input/>
+				</div>
+				<small id="web-theme-accent-error" class="theme-settings-error" data-web-theme-accent-error></small>
+			</div>
+			<div class="form-group">
+				<label for="global-setting-web-custom-css">{ L(p, "settings_theme_custom_css", "Custom CSS") }</label>
+				<textarea id="global-setting-web-custom-css" name="web_custom_css" class="input theme-custom-css" spellcheck="false" data-web-theme-custom-css>{ themeSettings.CustomCSS }</textarea>
+			</div>
+		</div>
+	</div>
+}
+
+// prefsGeneralTab renders the General tab content.
+templ prefsGeneralTab(p PageProps, prefs PrefsData) {
+	<div class="prefs-tab-panel" data-prefs-panel="general">
+		<div class="account-tab-grid">
+			<div>
+				<h4 style="margin:0 0 1rem; color: var(--accent-primary); font-size: 0.9rem;">{ L(p, "settings_section_defaults", "Defaults") }</h4>
+				<div class="form-group">
+					<label for="global-setting-ui-language">{ L(p, "settings_ui_language", "Interface Language") }</label>
+					<select id="global-setting-ui-language" name="ui_language" class="input" onchange={ prefsUILanguagePreviewHandler() }>
+						for _, lang := range p.SupportedLanguages {
+							<option value={ lang.Code } selected?={ prefs.Str("ui_language", p.Lang()) == lang.Code }>{ lang.Name }</option>
+						}
+					</select>
+					<small style="display:block; margin-top:0.35rem; color:var(--text-secondary); font-size:0.75rem;">{ L(p, "settings_ui_language_help", "Translations are loaded from the local Weblate catalog.") }</small>
+				</div>
+				<div class="form-group">
+					<label for="global-setting-starting-page">{ L(p, "settings_starting_page", "Starting Page") }</label>
+					<select id="global-setting-starting-page" name="starting_page" class="input">
+						for _, page := range startingPageChoices(p) {
+							<option value={ page.Key } selected?={ prefs.Str("starting_page", "feed") == page.Key }>{ page.Label }</option>
+						}
+					</select>
+					</div>
+					<div class="form-group">
+						<label for="global-setting-quality">{ L(p, "settings_quality_default", "Default Quality") }</label>
+						<select id="global-setting-quality" name="quality" class="input">
+							<option value="best" selected?={ prefs.Str("quality","best") == "best" }>{ L(p, "settings_quality_best_available", "Best Available") }</option>
+							<option value="1080p" selected?={ prefs.Str("quality","best") == "1080p" }>1080p</option>
+							<option value="720p" selected?={ prefs.Str("quality","best") == "720p" }>720p</option>
+							<option value="480p" selected?={ prefs.Str("quality","best") == "480p" }>480p</option>
+						</select>
+					</div>
+					<h4 style="margin:1.25rem 0 1rem; color: var(--accent-primary); font-size: 0.9rem;">{ L(p, "settings_section_embeds", "Embeds") }</h4>
+					<div class="form-group checkbox-group">
+						<label>
+							if prefs.Bool("share_embed_friendly_links") {
+								<input type="checkbox" name="share_embed_friendly_links" value="true" checked/>
+							} else {
+								<input type="checkbox" name="share_embed_friendly_links" value="true"/>
+							}
+							{ L(p, "settings_share_embed_friendly_links", "Use embed-friendly sites for sharing links") }
+						</label>
+					</div>
+					<h4 style="margin:1.25rem 0 1rem; color: var(--accent-primary); font-size: 0.9rem;">{ L(p, "settings_section_backups", "Backups") }</h4>
+					<div class="form-group checkbox-group">
+						<label>
+							if prefs.Bool("backup_enabled") {
+								<input type="checkbox" name="backup_enabled" value="true" checked onchange="this.closest('.account-tab-grid').querySelector('#global-setting-backup-dir').disabled=!this.checked"/>
+							} else {
+								<input type="checkbox" name="backup_enabled" value="true" onchange="this.closest('.account-tab-grid').querySelector('#global-setting-backup-dir').disabled=!this.checked"/>
+							}
+							{ L(p, "settings_backup_enabled", "Enable automatic backups") }
+						</label>
+					</div>
+					<div class="form-group">
+						<label for="global-setting-backup-dir">{ L(p, "settings_backup_folder", "Backup Folder") }</label>
+						<input type="text" id="global-setting-backup-dir" name="backup_dir" class="input" placeholder={ L(p, "settings_backup_dir_placeholder", "/path/to/igloo-backups") } value={ prefs.Str("backup_dir", "") } disabled?={ !prefs.Bool("backup_enabled") }/>
+						<small style="display:block; margin-top:0.35rem; color:var(--text-secondary); font-size:0.75rem;">{ L(p, "settings_backup_help", "Please use a dedicated folder, older backups are automatically deleted (5 kept). Daily backups of database & config.") }</small>
+					</div>
+				</div>
+				<div>
+					<h4 style="margin:0 0 1rem; color: var(--accent-primary); font-size: 0.9rem;">{ L(p, "settings_section_bookmarks", "Bookmarks") }</h4>
+					<div class="form-group checkbox-group">
+						<label>
+							if prefs.Bool("archive_bookmarks") {
+								<input type="checkbox" name="archive_bookmarks" value="true" checked onchange="this.closest('.account-tab-grid').querySelector('#global-setting-archive-path').disabled=!this.checked"/>
+							} else {
+								<input type="checkbox" name="archive_bookmarks" value="true" onchange="this.closest('.account-tab-grid').querySelector('#global-setting-archive-path').disabled=!this.checked"/>
+							}
+							{ L(p, "settings_archive_bookmarks", "Save bookmarks to folder") }
+						</label>
+					</div>
+					<div class="form-group" style="margin-top:0.75rem;">
+						<label>{ L(p, "settings_bookmark_per_category", "Per-Category Settings") }</label>
+						<div id="bookmark-category-paths-container"
+							hx-get="/api/bookmark-categories"
+							hx-trigger="intersect once"
+							hx-swap="innerHTML"
+						>
+							<div style="color: var(--text-secondary); font-size: 0.85rem; padding: 0.75rem;">{ L(p, "status_loading_categories", "Loading categories...") }</div>
+						</div>
+					</div>
+				</div>
+			</div>
+		</div>
+	}
+
+// prefsFeedTab renders the Platform Settings tab content.
+templ prefsFeedTab(p PageProps, prefs PrefsData) {
+	<div class="prefs-tab-panel" data-prefs-panel="feed" style="display:none;">
+		<div class="account-tab-grid feed-settings-grid">
+			<div>
+				<h4 style="margin:0 0 1rem; color: var(--accent-primary); font-size: 0.9rem;">{ L(p, "platform_youtube", "YouTube") }</h4>
+				<div class="form-group">
+					<label for="global-setting-youtube-check-interval">{ L(p, "settings_youtube_check_interval_hours", "Default YouTube Check Interval (hours)") }</label>
+					<input type="number" id="global-setting-youtube-check-interval" name="youtube_check_interval" class="input" min="1" max="168" value={ prefs.Str("youtube_check_interval", "6") }/>
+				</div>
+				<div class="form-group">
+					<label for="global-setting-youtube-max-videos">{ L(p, "settings_youtube_max_videos", "Default YouTube Max Videos") }</label>
+					<input type="number" id="global-setting-youtube-max-videos" name="youtube_max_videos" class="input" min="1" max="300" value={ prefs.Str("youtube_max_videos", "12") }/>
+				</div>
+				<div class="form-group checkbox-group">
+					<label>
+						if prefs.Bool("download_subtitles") {
+							<input type="checkbox" name="download_subtitles" value="true" checked/>
+						} else {
+							<input type="checkbox" name="download_subtitles" value="true"/>
+						}
+						{ L(p, "settings_download_english_subtitles", "Download English Subtitles") }
+					</label>
+				</div>
+				<div class="form-group">
+					<label for="global-setting-youtube-playback-speed">{ L(p, "settings_youtube_playback_speed", "Default YouTube Playback Speed") }</label>
+					<select id="global-setting-youtube-playback-speed" name="youtube_default_playback_speed" class="input">
+						for _, spd := range []string{"0.5", "0.75", "1", "1.25", "1.5", "1.75", "2", "2.5", "3"} {
+							<option value={ spd } selected?={ prefs.Str("youtube_default_playback_speed", "1") == spd }>{ spd + "x" }</option>
+						}
+					</select>
+				</div>
+				<h4 style="margin:1.25rem 0 1rem; color: var(--accent-primary); font-size: 0.9rem;">{ L(p, "settings_section_x_feed", "X Feed") }</h4>
+				<div class="form-group checkbox-group">
+					<label>
+						if prefs.Bool("media_only_default") {
+							<input type="checkbox" name="media_only_default" value="true" checked/>
+						} else {
+							<input type="checkbox" name="media_only_default" value="true"/>
+						}
+						{ L(p, "settings_media_only_default", "Media-only by default") }
+					</label>
+				</div>
+				<div class="form-group">
+					<label for="global-setting-x-media-limit">{ L(p, "settings_media_download_limit", "Media Download Limit") }</label>
+					<input type="number" id="global-setting-x-media-limit" name="media_download_limit_default" class="input" min="1" max="300" value={ prefs.Str("media_download_limit_default", "20") }/>
+				</div>
+				<div class="form-group">
+					<label for="global-setting-x-feed-fetch-delay">{ L(p, "settings_fetch_delay_seconds", "Fetch Delay (seconds)") }</label>
+					<input type="number" id="global-setting-x-feed-fetch-delay" name="x_feed_fetch_delay" class="input" min="10" max="300" value={ prefs.Str("x_feed_fetch_delay", "10") }/>
+				</div>
+				<h4 style="margin:1.25rem 0 1rem; color: var(--accent-primary); font-size: 0.9rem;">{ L(p, "settings_section_ranking", "Ranking") }</h4>
+				<div class="form-group checkbox-group">
+					<label>
+						if prefs.Bool("algorithmic_feed_enabled") {
+							<input type="checkbox" name="algorithmic_feed_enabled" value="true" checked/>
+						} else {
+							<input type="checkbox" name="algorithmic_feed_enabled" value="true"/>
+						}
+						{ L(p, "settings_algorithmic_feed_enabled", "Enable algorithmic feed") }
+					</label>
+					<small style="display:block; margin-top:0.35rem; color:var(--text-secondary); font-size:0.75rem;">{ L(p, "settings_algorithmic_feed_help", "Ranks posts by interest and affinity. When off, posts are shown chronologically.") }</small>
+				</div>
+				<h4 style="margin:1.25rem 0 1rem; color: var(--accent-primary); font-size: 0.9rem;">{ L(p, "settings_section_muted_accounts", "Muted Accounts") }</h4>
+				<p style="color: var(--text-secondary); font-size: 0.8rem; margin: 0 0 0.75rem;">{ L(p, "settings_muted_accounts_help", "Muted accounts are hidden from the feed. Mute from the post menu on retweets.") }</p>
+				<div id="muted-accounts-container"
+					hx-get="/api/feed/muted"
+					hx-trigger="intersect once"
+					hx-swap="innerHTML"
+				></div>
+			</div>
+			<div>
+				<h4 style="margin:0 0 1rem; color: var(--accent-primary); font-size: 0.9rem;">{ L(p, "settings_section_translation", "Translation") }</h4>
+				<div class="form-group">
+					<label for="global-setting-translate-auto-mode">{ L(p, "settings_auto_translate", "Auto Translate") }</label>
+					<select id="global-setting-translate-auto-mode" name="translate_auto_mode" class="input">
+						<option value="off" selected?={ prefs.Str("translate_auto_mode", "lazy") == "off" }>{ L(p, "settings_translate_manual_only", "Manual only") }</option>
+						<option value="lazy" selected?={ prefs.Str("translate_auto_mode", "lazy") == "lazy" }>{ L(p, "settings_translate_lazy", "Lazy, before posts enter view") }</option>
+						<option value="background" selected?={ prefs.Str("translate_auto_mode", "lazy") == "background" }>{ L(p, "settings_translate_background", "Translate feed continuously in background") }</option>
+					</select>
+				</div>
+				<div class="form-group" id="translate-lookahead-config" style={ translateLookaheadStyle(prefs.Str("translate_auto_mode", "lazy")) }>
+					<label for="global-setting-translate-lookahead">{ L(p, "settings_translate_lookahead", "Lazy Lookahead (posts)") }</label>
+					<input type="number" id="global-setting-translate-lookahead" name="translate_auto_lookahead" class="input" min="1" max="100" value={ prefs.Str("translate_auto_lookahead", "20") }/>
+				</div>
+				<div class="form-group">
+					<label for="global-setting-translate-target">{ L(p, "settings_target_language", "Target Language") }</label>
+					<select id="global-setting-translate-target" name="translate_target_lang" class="input">
+						for _, code := range prefs.TargetLangOptions() {
+							<option value={ code } selected?={ prefs.Str("translate_target_lang", "en") == code }>{ code }</option>
+						}
+					</select>
+					<small style="display:block; margin-top:0.35rem; color:var(--text-secondary); font-size:0.75rem;">{ L(p, "settings_target_language_help", "Defaults to English. Options are drawn from your \"Don't auto-translate\" list below.") }</small>
+				</div>
+				<div class="form-group" id="translate-skip-langs-widget">
+					<label style="margin-bottom:0.5rem; display:block;">{ L(p, "settings_dont_auto_translate", "Don't auto-translate") }</label>
+					<div style="display:flex; gap:0.5rem; margin-bottom:0.5rem; position:relative;">
+						<div style="flex:1; position:relative;">
+							<input type="text" class="input skip-lang-input" placeholder={ L(p, "settings_skip_language_placeholder", "Type a language or code, e.g. Turkish or tr") } autocomplete="off" style="width:100%;"/>
+							<ul class="skip-lang-suggestions hidden" style="position:absolute; top:100%; left:0; right:0; margin:0.25rem 0 0; padding:0.25rem 0; background:var(--bg-secondary); border:1px solid var(--border-color); border-radius:6px; max-height:220px; overflow-y:auto; list-style:none; z-index:5; box-shadow:0 6px 16px rgba(0,0,0,0.25);"></ul>
+						</div>
+						<button type="button" class="btn btn-secondary btn-sm skip-lang-add">{ L(p, "action_add", "Add") }</button>
+					</div>
+					<div class="skip-lang-pills" style="display:flex; flex-wrap:wrap; gap:0.4rem;">
+						for _, code := range prefs.SkipLangs() {
+							<span class="skip-lang-pill" data-code={ code } style="display:inline-flex; align-items:center; gap:0.35rem; padding:0.2rem 0.55rem; background:var(--bg-tertiary); border-radius:12px; font-size:0.8rem;">
+								{ code }
+									<button type="button" class="skip-lang-remove" aria-label={ L(p, "action_remove", "Remove") } style="background:none; border:0; color:var(--text-secondary); cursor:pointer; padding:0; line-height:1;">&times;</button>
+							</span>
+						}
+					</div>
+					<input type="hidden" name="translate_skip_langs" class="skip-lang-hidden" value={ prefs.Str("translate_skip_langs", "") }/>
+					<small style="display:block; margin-top:0.4rem; color:var(--text-secondary); font-size:0.75rem;">{ L(p, "settings_dont_auto_translate_help", "Posts in these languages won't be auto-translated. Empty list translates everything except your target language.") }</small>
+				</div>
+				<div class="form-group">
+						<label>{ L(p, "settings_translation_backend", "Translation Backend") }</label>
+						<select id="global-setting-translate-backend" name="translate_backend" class="input">
+							<option value="none" selected?={ prefs.Str("translate_backend", "none") == "none" }>{ L(p, "settings_disabled", "Disabled") }</option>
+							<option value="google" selected?={ prefs.Str("translate_backend", "none") == "google" }>{ L(p, "settings_translation_backend_google_cloud", "Google Cloud Translation") }</option>
+							<option value="deepl" selected?={ prefs.Str("translate_backend", "none") == "deepl" }>{ L(p, "settings_translation_backend_deepl_api", "DeepL API") }</option>
+							<option value="kagi_cli" selected?={ prefs.Str("translate_backend", "none") == "kagi_cli" }>{ L(p, "settings_translation_backend_kagi_cli", "Kagi CLI") }</option>
+							<option value="openai_compat" selected?={ prefs.Str("translate_backend", "none") == "openai_compat" }>{ L(p, "settings_translation_backend_openai_compat", "OpenAI-compatible") }</option>
+						</select>
+						<small id="translate-api-key-hint" style={ "display:block; margin-top:0.35rem; color:var(--text-secondary); font-size:0.75rem; " + translateAPIKeyHintStyle(prefs.Str("translate_backend", "none")) }>
+							{ L(p, "settings_translation_api_key_help_prefix", "Get a") } <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener">{ L(p, "settings_translation_google_api_key", "Google API key") }</a> { L(p, "settings_translation_api_key_help_or", "or") } <a href="https://developers.deepl.com/docs/getting-started/managing-api-keys" target="_blank" rel="noopener">{ L(p, "settings_translation_deepl_api_key", "DeepL API key") }</a>.
+						</small>
+					</div>
+				<div id="translate-api-config" style={ translateAPIConfigStyle(prefs.Str("translate_backend", "none")) }>
+					<div class="form-group">
+						<label for="global-setting-translate-api-site">{ L(p, "settings_endpoint_override", "Endpoint Override") }</label>
+						<input type="url" id="global-setting-translate-api-site" name="translate_api_site" class="input" placeholder={ L(p, "settings_endpoint_override_placeholder", "optional; defaults by provider") } value={ prefs.Str("translate_api_site", "") }/>
+						<small style="display:block; margin-top:0.35rem; color:var(--text-secondary); font-size:0.75rem;">{ L(p, "settings_endpoint_override_help", "Leave blank for Google Basic or DeepL defaults. OpenAI-compatible defaults to local Ollama at http://127.0.0.1:11434.") }</small>
+					</div>
+					<div id="translate-model-config" class="form-group" style={ translateModelConfigStyle(prefs.Str("translate_backend", "none")) }>
+						<label for="global-setting-translate-model">{ L(p, "settings_translation_model", "Model") }</label>
+						<input type="text" id="global-setting-translate-model" name="translate_model" class="input" placeholder={ L(p, "settings_translation_model_placeholder", "qwen2.5:7b") } value={ prefs.Str("translate_model", "") }/>
+					</div>
+					<div class="form-group">
+						<label for="global-setting-translate-api-key">{ L(p, "settings_api_key", "API Key") }</label>
+						<input type="password" id="global-setting-translate-api-key" name="translate_api_key" class="input" placeholder={ L(p, "settings_api_key_placeholder", "Enter API key") } value={ prefs.Str("translate_api_key", "") }/>
+					</div>
+				</div>
+				<h4 style="margin:1.25rem 0 1rem; color: var(--accent-primary); font-size: 0.9rem;">{ L(p, "platform_instagram", "Instagram") }</h4>
+				<div class="form-group">
+					<label for="global-setting-instagram-interval">{ L(p, "settings_check_interval_hours", "Check Interval (hours)") }</label>
+					<input type="number" id="global-setting-instagram-interval" name="instagram_check_interval" class="input" min="1" max="168" value={ prefs.Str("instagram_check_interval", "3") }/>
+				</div>
+				<div class="form-group">
+					<label for="global-setting-instagram-max-videos">{ L(p, "settings_max_videos", "Max Videos") }</label>
+					<input type="number" id="global-setting-instagram-max-videos" name="instagram_max_videos" class="input" min="1" max="300" value={ prefs.Str("instagram_max_videos", "20") }/>
+				</div>
+				<div class="form-group checkbox-group">
+					<label>
+						if prefs.Bool("instagram_include_tagged_default") {
+							<input type="checkbox" name="instagram_include_tagged_default" value="true" checked/>
+						} else {
+							<input type="checkbox" name="instagram_include_tagged_default" value="true"/>
+						}
+						{ L(p, "settings_moments_include_instagram_tagged", "Include Instagram tagged posts in Moments") }
+					</label>
+				</div>
+				<h4 style="margin:1.25rem 0 1rem; color: var(--accent-primary); font-size: 0.9rem;">{ L(p, "settings_section_tiktok", "TikTok") }</h4>
+				<div class="form-group">
+					<label for="global-setting-shorts-interval">{ L(p, "settings_check_interval_hours", "Check Interval (hours)") }</label>
+					<input type="number" id="global-setting-shorts-interval" name="shorts_check_interval" class="input" min="1" max="168" value={ prefs.Str("shorts_check_interval", "3") }/>
+				</div>
+				<div class="form-group">
+					<label for="global-setting-shorts-max-videos">{ L(p, "settings_max_videos", "Max Videos") }</label>
+					<input type="number" id="global-setting-shorts-max-videos" name="shorts_max_videos" class="input" min="1" max="300" value={ prefs.Str("shorts_max_videos", "20") }/>
+				</div>
+				<div class="form-group">
+					<label for="global-setting-moments-default-tab">{ L(p, "settings_moments_default_tab", "Moments default tab") }</label>
+					<select id="global-setting-moments-default-tab" name="moments_default_tab" class="input">
+						<option value="all" selected?={ prefs.Str("moments_default_tab", "all") == "all" }>{ L(p, "settings_moments_default_tab_all", "All") }</option>
+						<option value="following" selected?={ prefs.Str("moments_default_tab", "all") == "following" }>{ L(p, "settings_moments_default_tab_following", "Following") }</option>
+						<option value="stories" selected?={ prefs.Str("moments_default_tab", "all") == "stories" }>{ L(p, "shorts_tab_stories", "Stories") }</option>
+					</select>
+				</div>
+				<div class="form-group">
+					<label for="global-setting-stories-window-hours">{ L(p, "settings_stories_window_hours", "Stories window (hours)") }</label>
+					<input type="number" id="global-setting-stories-window-hours" name="stories_window_hours" class="input" min="1" max="168" value={ prefs.Str("stories_window_hours", "48") }/>
+				</div>
+				<div class="form-group checkbox-group">
+					<label>
+						if prefs.Bool("moments_include_reposts_default") {
+							<input type="checkbox" name="moments_include_reposts_default" value="true" checked/>
+						} else {
+							<input type="checkbox" name="moments_include_reposts_default" value="true"/>
+						}
+						{ L(p, "settings_moments_include_tiktok_reposts", "Include TikTok reposts in Moments") }
+					</label>
+				</div>
+			</div>
+		</div>
+	</div>
+}
+
+// prefsSponsorBlockTab renders the SponsorBlock tab content.
+templ prefsSponsorBlockTab(p PageProps, prefs PrefsData) {
+	<div class="prefs-tab-panel" data-prefs-panel="sponsorblock" style="display:none;">
+		<p style="color: var(--text-secondary); font-size: 0.85em; margin: 0 0 1.25rem;">
+			{ L(p, "settings_sponsorblock_help_prefix", "Community-powered helpers from") } <a href="https://sponsor.ajay.app" target="_blank" rel="noopener" style="color: var(--accent-primary);">SponsorBlock</a> { L(p, "settings_sponsorblock_help_middle", "and") } <a href="https://dearrow.ajay.app" target="_blank" rel="noopener" style="color: var(--accent-primary);">DeArrow</a>. { L(p, "settings_youtube_only", "YouTube only.") }
+		</p>
+		<h4 style="margin: 0 0 0.75rem; color: var(--accent-primary); font-size: 0.9rem;">{ L(p, "settings_segment_skipping", "Segment skipping") }</h4>
+		<div class="account-tab-grid">
+			<div>
+				<div class="sb-category-grid">
+					for _, cat := range []struct{ Key, Label string }{{"sponsor",L(p, "settings_sb_sponsors", "Sponsors")},{"selfpromo",L(p, "settings_sb_selfpromo", "Self-promotion")},{"interaction",L(p, "settings_sb_interaction", "Interaction reminders")},{"intro",L(p, "settings_sb_intro", "Intros")}} {
+						<label for={ "global-setting-sb-" + cat.Key }>{ cat.Label }</label>
+						@sbSelect(p, cat.Key, prefs.SBVal(cat.Key))
+					}
+				</div>
+			</div>
+			<div>
+				<div class="sb-category-grid">
+					for _, cat := range []struct{ Key, Label string }{{"outro",L(p, "settings_sb_outro", "Outros / Endcards")},{"preview",L(p, "settings_sb_preview", "Preview / Recap")},{"filler",L(p, "settings_sb_filler", "Filler")},{"music_offtopic",L(p, "settings_sb_music_offtopic", "Non-music (music videos)")}} {
+						<label for={ "global-setting-sb-" + cat.Key }>{ cat.Label }</label>
+						@sbSelect(p, cat.Key, prefs.SBVal(cat.Key))
+					}
+				</div>
+			</div>
+		</div>
+		<div class="dearrow-section">
+			<div class="dearrow-section-text">
+				<h4 style="margin: 0 0 0.5rem; color: var(--accent-primary); font-size: 0.9rem;">{ L(p, "settings_dearrow_title", "DeArrow: non-clickbait titles & thumbnails") }</h4>
+				<p style="color: var(--text-secondary); font-size: 0.85em; margin: 0;">
+					{ L(p, "settings_dearrow_help_prefix", "Replace YouTube titles and thumbnails with community-voted alternatives from") } <a href="https://dearrow.ajay.app" target="_blank" rel="noopener" style="color: var(--accent-primary);">DeArrow</a>. { L(p, "settings_youtube_only", "YouTube only.") }
+				</p>
+			</div>
+			<div class="dearrow-mode-pills">
+				for _, mode := range []struct{ Val, Label string }{{"off", L(p, "settings_mode_off", "Off")}, {"default", L(p, "settings_mode_community", "Community")}, {"casual", L(p, "settings_mode_casual", "Casual")}} {
+					<label class={ "dearrow-pill", templ.KV("active", prefs.DearrowMode() == mode.Val) }>
+						<input type="radio" name="dearrow_mode" value={ mode.Val } checked?={ prefs.DearrowMode() == mode.Val }/>
+						<span>{ mode.Label }</span>
+					</label>
+				}
+			</div>
+		</div>
+	</div>
+}
+
+// sbSelect renders a SponsorBlock category select with the correct value pre-selected.
+templ sbSelect(p PageProps, category string, current string) {
+	<select id={ "global-setting-sb-" + category } name={ "sb_" + category } class="input">
+		<option value="off" selected?={ current == "off" }>{ L(p, "settings_sb_do_not_skip", "Do not skip") }</option>
+		<option value="silent" selected?={ current == "silent" }>{ L(p, "settings_sb_silent_skip", "Silent skip") }</option>
+		<option value="ask" selected?={ current == "ask" }>{ L(p, "settings_sb_ask_to_skip", "Ask to skip") }</option>
+	</select>
+}
+
+// prefsAccountTab renders the Account tab content.
+// This tab has its own sub-form for credentials (separate from the main prefs form).
+templ prefsAccountTab(p PageProps) {
+	<div class="prefs-tab-panel" data-prefs-panel="account" style="display:none;">
+		<div class="account-tab-grid">
+			<div class="account-col">
+				<h4 style="margin:0 0 1rem; color: var(--accent-primary); font-size: 0.9rem;">{ L(p, "settings_account_credentials", "Credentials") }</h4>
+				<div id="admin-cred-form"
+					hx-post="/api/auth/change-credentials"
+					hx-target="#admin-status"
+					hx-swap="innerHTML"
+				>
+					if p.UserRole == "admin" {
+						<div class="form-group">
+							<label>{ L(p, "field_username", "Username") }</label>
+							<input type="text" name="new_username" class="input" value={ p.Username }/>
+						</div>
+					}
+					<div class="form-group">
+						<label>{ L(p, "field_current_password", "Current Password") }</label>
+						<input type="password" name="current_password" class="input" placeholder={ L(p, "placeholder_current_password_required_for_changes", "Required to make changes") }/>
+					</div>
+					<div class="form-group">
+						<label>{ L(p, "field_new_password", "New Password") }</label>
+						<input type="password" name="new_password" class="input" placeholder={ L(p, "placeholder_new_password_leave_empty_keep_current", "Leave empty to keep current") }/>
+					</div>
+					<div class="form-group">
+						<label>{ L(p, "field_confirm_new_password", "Confirm New Password") }</label>
+						<input type="password" name="new_password_confirm" class="input" placeholder={ L(p, "placeholder_confirm_new_password", "Confirm new password") }/>
+					</div>
+					<div id="admin-status" class="status-msg"></div>
+					<button class="btn btn-secondary" style="width:100%;" type="submit"
+						hx-post="/api/auth/change-credentials"
+						hx-include="#admin-cred-form"
+						hx-target="#admin-status"
+						hx-swap="innerHTML"
+					>{ L(p, "action_update_credentials", "Update Credentials") }</button>
+				</div>
+			</div>
+			if p.UserRole == "admin" {
+				<div class="account-col">
+					<h4 style="margin:0 0 1rem; color: var(--accent-primary); font-size: 0.9rem;">{ L(p, "settings_cookie_files", "Cookie Files") }</h4>
+					<p style="color: var(--text-secondary); font-size: 0.8rem; margin: 0 0 1rem;">
+						{ L(p, "settings_cookie_files_help", "Upload Netscape-format cookie files for platforms that require authentication.") }
+					</p>
+					<div id="cookie-rows-container"
+						hx-get="/api/cookies"
+						hx-trigger="intersect once"
+						hx-swap="innerHTML"
+					>
+						<div style="color: var(--text-secondary); font-size: 0.85rem;">{ L(p, "status_loading_ellipsis", "Loading...") }</div>
+					</div>
+				</div>
+			}
+		</div>
+	</div>
+}
+
+// CookieRowsPanel renders all cookie platform rows with current status.
+templ CookieRowsPanel(p PageProps, rows []CookieRowData) {
+	for _, row := range rows {
+		<div class="cookie-row">
+			<div class="cookie-row-header">
+				<span class="cookie-platform-name">{ row.Name }</span>
+				if row.Exists && row.Enabled {
+					<span class="cookie-status active">{ L(p, "cookie_status_file_active", "File active") }</span>
+				} else if row.Exists {
+					<span class="cookie-status uploaded">{ L(p, "cookie_status_file_disabled", "File (disabled)") }</span>
+				} else if row.Browser != "" {
+					<span class="cookie-status active">{ row.Browser }</span>
+				} else {
+					<span class="cookie-status inactive">{ L(p, "status_not_set", "Not set") }</span>
+				}
+			</div>
+			<div class="cookie-row-actions">
+				<form style="display:contents;"
+					hx-post={ "/api/cookies/" + row.Platform }
+					hx-target="#cookie-rows-container"
+					hx-swap="innerHTML"
+					hx-encoding="multipart/form-data"
+				>
+					<input type="file" name="file" accept=".txt" style="display:none;"
+						onchange="if(this.files.length)this.closest('form').requestSubmit()"
+					/>
+					<button class="btn btn-secondary" type="button" style="padding:0.3rem 0.6rem; font-size:0.75rem;"
+						onclick="this.previousElementSibling.click()"
+					>{ L(p, "action_upload_file", "Upload File") }</button>
+				</form>
+				<form style="display:contents;"
+					hx-post={ "/api/cookies/" + row.Platform + "/browser" }
+					hx-target="#cookie-rows-container"
+					hx-swap="innerHTML"
+				>
+					<select name="browser" class="input cookie-browser-select"
+						hx-post={ "/api/cookies/" + row.Platform + "/browser" }
+						hx-target="#cookie-rows-container"
+						hx-swap="innerHTML"
+						hx-trigger="change"
+						>
+							<option value="">{ L(p, "cookie_browser_source", "Browser Cookies") }</option>
+							<option value="firefox" selected?={ row.Browser == "firefox" }>{ L(p, "cookie_browser_firefox", "Firefox") }</option>
+							<option value="chrome" selected?={ row.Browser == "chrome" }>{ L(p, "cookie_browser_chrome", "Chrome") }</option>
+							<option value="chromium" selected?={ row.Browser == "chromium" }>{ L(p, "cookie_browser_chromium", "Chromium") }</option>
+							<option value="brave" selected?={ row.Browser == "brave" }>{ L(p, "cookie_browser_brave", "Brave") }</option>
+							<option value="edge" selected?={ row.Browser == "edge" }>{ L(p, "cookie_browser_edge", "Edge") }</option>
+						</select>
+					</form>
+					if row.Exists {
+						<button class="btn btn-secondary" type="button"
+							hx-post={ "/api/cookies/" + row.Platform + "/toggle" }
+							hx-target="#cookie-rows-container"
+							hx-swap="innerHTML"
+						>
+							if row.Enabled {
+								{ L(p, "action_disable", "Disable") }
+							} else {
+								{ L(p, "action_enable", "Enable") }
+							}
+						</button>
+						<button class="btn btn-secondary" type="button" style="padding:0.3rem 0.6rem; font-size:0.75rem;"
+							hx-delete={ "/api/cookies/" + row.Platform }
+							hx-target="#cookie-rows-container"
+							hx-swap="innerHTML"
+						>{ L(p, "action_remove", "Remove") }</button>
+					}
+				</div>
+			</div>
+	}
+}
+
+// BookmarkCategoryPathsPanel renders the editable bookmark category list.
+templ BookmarkCategoryPathsPanel(p PageProps, cats []BookmarkCategoryDisplay) {
+	<form
+		hx-post="/api/bookmark-categories/batch"
+		hx-target="#bookmark-category-paths-container"
+		hx-swap="innerHTML"
+		style="max-height: 420px; overflow-y: auto; border: 1px solid var(--border-color); padding: 0.5rem; border-radius: 4px; margin-bottom: 0.5rem;"
+	>
+		if len(cats) == 0 {
+			<div style="color: var(--text-muted); font-size: 0.8rem; padding: 0.5rem;">{ L(p, "bookmark_no_categories_yet", "No categories yet.") }</div>
+		}
+		for _, cat := range cats {
+			<div style="display:grid; grid-template-columns:minmax(160px, 1fr) minmax(220px, 2fr) auto; gap:0.5rem; align-items:center; margin-bottom:0.45rem;">
+				<input type="hidden" name="id" value={ int64Str(cat.ID) }/>
+				<input class="input" type="text" name="name" value={ cat.Name }/>
+				<input class="input" type="text" name="archive_path" value={ cat.ArchivePath } placeholder={ LF(p, "bookmark_archive_path_for_category_placeholder", "/path/for/%1$s/", cat.Slug) }/>
+				<button type="button" style="background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:1rem;padding:0 0.25rem;line-height:1;"
+					hx-delete={ "/api/bookmark-categories/" + int64Str(cat.ID) }
+					hx-target="#bookmark-category-paths-container"
+					hx-swap="innerHTML"
+					hx-confirm={ fmt.Sprintf(L(p, "bookmark_confirm_delete_category_move_default", "Delete category %q? Bookmarks in it will be moved to the default category."), cat.Name) }
+				>&times;</button>
+			</div>
+		}
+			<div style="display:grid; grid-template-columns:minmax(160px, 1fr) minmax(220px, 2fr); gap:0.5rem; margin-top:0.6rem; padding-top:0.6rem; border-top:1px dashed var(--border-color);">
+				<input type="hidden" name="id" value="0"/>
+				<input class="input" type="text" name="name" value="" placeholder={ L(p, "bookmark_new_category_name_placeholder", "New category name") }/>
+				<input class="input" type="text" name="archive_path" value="" placeholder={ L(p, "bookmark_archive_path_optional_placeholder", "/archive/path/ (optional)") }/>
+			</div>
+			<div style="display:flex; justify-content:flex-end; margin-top:0.75rem;">
+				<button class="btn btn-secondary" type="submit">{ L(p, "bookmark_save_category_settings", "Save Category Settings") }</button>
+			</div>
+		</form>
+}
+
+// prefsShortcutsTab renders the Shortcuts tab content.
+templ prefsShortcutsTab(p PageProps) {
+	<div class="prefs-tab-panel" data-prefs-panel="shortcuts" style="display:none;">
+		<!-- General -->
+		<div class="shortcuts-sub-panel" data-shortcuts-panel="general">
+			<h4 class="shortcuts-section-title">{ L(p, "shortcuts_section_navigation", "Navigation") }</h4>
+			<p class="shortcuts-hint">{ L(p, "shortcuts_navigation_hint", "Numbers match sidebar position. Pages vary by account.") }</p>
+			<div class="shortcuts-list" id="shortcuts-nav-list">
+				<!-- filled by JS from sidebar nav items -->
+			</div>
+			<div class="shortcuts-list" style="margin-top:1rem;">
+					<div class="shortcut-row" data-sc="global.search"><kbd></kbd><span data-i18n="shortcuts_open_search_overlay">{ L(p, "shortcuts_open_search_overlay", "Open search overlay") }</span></div>
+					<div class="shortcut-row" data-sc="global.logs"><kbd></kbd><span data-i18n="shortcuts_open_logs_modal">{ L(p, "shortcuts_open_logs_modal", "Open logs modal") }</span></div>
+					<div class="shortcut-row"><kbd>{ L(p, "shortcuts_key_escape", "Esc") }</kbd><span data-i18n="shortcuts_close_any_modal_overlay">{ L(p, "shortcuts_close_any_modal_overlay", "Close any modal or overlay") }</span></div>
+					<div class="shortcut-row"><kbd>&larr;</kbd> <kbd>&rarr;</kbd><span data-i18n="shortcuts_switch_logs_modal_tabs">{ L(p, "shortcuts_switch_logs_modal_tabs", "Switch tabs in logs modal") }</span></div>
+			</div>
+		</div>
+		<!-- Feed / Moments -->
+		<div class="shortcuts-sub-panel" data-shortcuts-panel="feed-shorts" style="display:none;">
+			<div class="account-tab-grid">
+				<div>
+					<h4 class="shortcuts-section-title">{ L(p, "nav_feed", "Feed") }</h4>
+					<div class="shortcuts-list">
+						<div class="shortcut-row" data-sc="feed.like"><kbd></kbd><span>{ L(p, "shortcuts_feed_like_focused_post", "Like / heart focused post") }</span></div>
+						<div class="shortcut-row" data-sc="feed.bookmark"><kbd></kbd><span>{ L(p, "shortcuts_open_bookmark_menu", "Open bookmark menu") }</span></div>
+						<div class="shortcut-row" data-sc="feed.share"><kbd></kbd><span>{ L(p, "shortcuts_copy_share_link", "Copy share link") }</span></div>
+						<div class="shortcut-row" data-sc="feed.translate"><kbd></kbd><span>{ L(p, "shortcuts_translate_post", "Translate post") }</span></div>
+						<div class="shortcut-row" data-sc="feed.media"><kbd></kbd><span>{ L(p, "shortcuts_open_close_media_overlay", "Open / close media overlay") }</span></div>
+						<div class="shortcut-row"><kbd>&larr;</kbd> <kbd>&rarr;</kbd><span>{ L(p, "shortcuts_navigate_media_overlay", "Navigate media overlay") }</span></div>
+						<div class="shortcut-row"><kbd>{ L(p, "shortcuts_key_tab", "Tab") }</kbd><span>{ L(p, "shortcuts_cycle_bookmark_category", "Cycle bookmark category") }</span></div>
+						<div class="shortcut-row"><kbd>1</kbd>&ndash;<kbd>9</kbd><span>{ L(p, "shortcuts_toggle_account_in_bookmark_menu", "Toggle account in bookmark menu") }</span></div>
+						<div class="shortcut-row"><kbd>{ L(p, "shortcuts_key_escape", "Esc") }</kbd><span>{ L(p, "shortcuts_close_media_overlay", "Close media overlay") }</span></div>
+					</div>
+				</div>
+				<div>
+					<h4 class="shortcuts-section-title">{ L(p, "nav_moments", "Moments") }</h4>
+					<div class="shortcuts-list">
+						<div class="shortcut-row"><kbd>&darr;</kbd> <kbd>&uarr;</kbd><span>{ L(p, "shortcuts_next_previous_video", "Next / previous video") }</span></div>
+						<div class="shortcut-row"><kbd>&larr;</kbd> <kbd>&rarr;</kbd><span>{ L(p, "shortcuts_scrub_three_seconds", "Scrub ±3 seconds") }</span></div>
+						<div class="shortcut-row" data-sc="shorts.autoplay"><kbd></kbd><span>{ L(p, "shortcuts_toggle_auto_play_next", "Toggle auto-play next") }</span></div>
+						<div class="shortcut-row" data-sc="shorts.bookmark"><kbd></kbd><span>{ L(p, "shortcuts_open_bookmark_menu", "Open bookmark menu") }</span></div>
+						<div class="shortcut-row" data-sc="shorts.share"><kbd></kbd><span>{ L(p, "shortcuts_share_video", "Share video") }</span></div>
+						<div class="shortcut-row" data-sc="shorts.grid"><kbd></kbd><span>{ L(p, "shortcuts_show_grid_view", "Show grid view") }</span></div>
+						<div class="shortcut-row"><kbd>{ L(p, "shortcuts_key_tab", "Tab") }</kbd><span>{ L(p, "shortcuts_cycle_bookmark_category", "Cycle bookmark category") }</span></div>
+						<div class="shortcut-row"><kbd>{ L(p, "shortcuts_key_escape", "Esc") }</kbd><span>{ L(p, "shortcuts_close_overlay", "Close overlay") }</span></div>
+					</div>
+				</div>
+			</div>
+		</div>
+		<!-- Videos -->
+		<div class="shortcuts-sub-panel" data-shortcuts-panel="videos" style="display:none;">
+			<div class="account-tab-grid">
+				<div>
+					<h4 class="shortcuts-section-title">{ L(p, "shortcuts_section_video_player", "Video Player") }</h4>
+					<div class="shortcuts-list">
+						<div class="shortcut-row" data-sc="player.fullscreen"><kbd></kbd><span>{ L(p, "action_toggle_fullscreen", "Toggle fullscreen") }</span></div>
+						<div class="shortcut-row" data-sc="player.bookmark"><kbd></kbd><span>{ L(p, "shortcuts_bookmark_video", "Bookmark video") }</span></div>
+						<div class="shortcut-row" data-sc="player.share"><kbd></kbd><span>{ L(p, "shortcuts_copy_share_link", "Copy share link") }</span></div>
+						<div class="shortcut-row" data-sc="player.autoplay"><kbd></kbd><span>{ L(p, "shortcuts_toggle_auto_play_next", "Toggle auto-play next") }</span></div>
+						<div class="shortcut-row"><kbd>{ L(p, "shortcuts_key_escape", "Esc") }</kbd><span>{ L(p, "shortcuts_close_menus", "Close menus") }</span></div>
+					</div>
+				</div>
+			</div>
+		</div>
+		<div class="shortcuts-reset-row">
+			<button id="shortcuts-reset-btn" class="btn btn-secondary btn-sm" type="button">{ L(p, "shortcuts_reset_all_to_defaults", "Reset All to Defaults") }</button>
+		</div>
+	</div>
+}
+
+// prefsUsersTab renders the Users tab content (admin only).
+templ prefsUsersTab(p PageProps) {
+	<div class="prefs-tab-panel" data-prefs-panel="users" style="display:none;">
+		<div id="users-panel"
+			hx-get="/api/users"
+			hx-trigger="intersect once"
+			hx-swap="innerHTML"
+		>
+			<div style="color: var(--text-secondary); font-size: 0.85rem;">{ L(p, "status_loading_ellipsis", "Loading...") }</div>
+		</div>
+	</div>
+}
+
+// UsersPanel renders the full user management panel (table + add button + form).
+templ UsersPanel(p PageProps, users []UserDisplay) {
+	<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem;">
+		<h4 style="margin:0; color: var(--accent-primary); font-size: 0.9rem;">{ L(p, "users_management_title", "User Management") }</h4>
+		<button class="btn btn-secondary btn-sm" type="button"
+			hx-get="/api/users?form=create"
+			hx-target="#user-form-area"
+			hx-swap="innerHTML"
+		>{ "+ " + L(p, "action_add_user", "Add User") }</button>
+	</div>
+	if len(users) == 0 {
+		<div style="color: var(--text-secondary); font-size: 0.85rem;">{ L(p, "users_none", "No users") }</div>
+	} else {
+		<table style="width:100%;border-collapse:collapse;font-size:0.85rem;">
+			<tr>
+				<th style="text-align:left;padding:6px;border-bottom:1px solid var(--border-color);">{ L(p, "field_user", "User") }</th>
+				<th style="text-align:left;padding:6px;border-bottom:1px solid var(--border-color);">{ L(p, "field_role", "Role") }</th>
+				<th style="text-align:left;padding:6px;border-bottom:1px solid var(--border-color);">{ L(p, "field_platforms", "Platforms") }</th>
+				<th style="text-align:right;padding:6px;border-bottom:1px solid var(--border-color);"></th>
+			</tr>
+			for _, u := range users {
+				<tr style="border-bottom:1px solid var(--border-color);">
+					<td style="padding:6px;">{ u.Username }</td>
+					<td style="padding:6px;">{ u.Role }</td>
+					<td style="padding:6px;">
+							if u.Role == "admin" {
+								<span style="background:var(--accent-primary);color:var(--on-accent);padding:2px 6px;border-radius:4px;font-size:0.75rem;">{ L(p, "label_all", "All") }</span>
+						} else {
+							for _, p := range u.Platforms {
+								<span style="background:var(--bg-tertiary);padding:2px 6px;border-radius:4px;font-size:0.75rem;margin-right:4px;">{ platformLabel(p) }</span>
+							}
+						}
+					</td>
+					<td style="padding:6px;text-align:right;">
+						if u.Role != "admin" {
+							<button class="btn btn-secondary btn-sm" style="padding:2px 8px;margin-right:4px;" type="button"
+								hx-get={ "/api/users?form=edit&user=" + u.Username }
+								hx-target="#user-form-area"
+								hx-swap="innerHTML"
+								>{ L(p, "action_edit", "Edit") }</button>
+							<button class="btn btn-secondary btn-sm" style="padding:2px 8px;color:var(--danger);" type="button"
+								hx-delete={ "/api/users/" + u.Username }
+								hx-target="#users-panel"
+								hx-swap="innerHTML"
+									hx-confirm={ fmt.Sprintf(L(p, "users_confirm_delete_user", "Delete user %q? All their data will be removed."), u.Username) }
+								>{ L(p, "action_delete", "Delete") }</button>
+						}
+					</td>
+				</tr>
+			}
+		</table>
+	}
+	<div id="user-form-area"></div>
+}
+
+// UserForm renders the create or edit user form.
+templ UserForm(p PageProps, mode string, editUser *UserDisplay, platforms []PlatformChoice) {
+	<form style="margin-top:1rem; padding:1rem; border:1px solid var(--border-color); border-radius:8px;"
+		hx-post="/api/users"
+		hx-target="#users-panel"
+		hx-swap="innerHTML"
+	>
+		if mode == "edit" && editUser != nil {
+			<input type="hidden" name="_method" value="PUT"/>
+			<input type="hidden" name="_edit_user" value={ editUser.Username }/>
+			<h4 style="margin:0 0 0.75rem; color: var(--accent-primary); font-size: 0.9rem;">{ fmt.Sprintf(L(p, "users_edit_prefix", "Edit: %s"), editUser.Username) }</h4>
+		} else {
+			<input type="hidden" name="_method" value="POST"/>
+			<h4 style="margin:0 0 0.75rem; color: var(--accent-primary); font-size: 0.9rem;">{ L(p, "action_add_user", "Add User") }</h4>
+		}
+		<div class="form-group" style="margin-bottom:0.5rem;">
+			<label>{ L(p, "field_username", "Username") }</label>
+			if mode == "edit" && editUser != nil {
+				<input type="text" name="username" class="input" value={ editUser.Username } disabled/>
+			} else {
+					<input type="text" name="username" class="input" placeholder={ L(p, "placeholder_min_3_characters", "min 3 characters") }/>
+			}
+		</div>
+		<div class="form-group" style="margin-bottom:0.5rem;">
+			<label>
+					if mode == "edit" {
+						{ L(p, "field_new_password_leave_empty_keep", "New Password (leave empty to keep)") }
+					} else {
+						{ L(p, "field_password", "Password") }
+					}
+				</label>
+				<input type="password" name="password" class="input"
+					if mode == "edit" {
+						placeholder={ L(p, "placeholder_new_password_leave_empty_keep_current", "Leave empty to keep current") }
+					} else {
+						placeholder={ L(p, "placeholder_min_6_characters", "min 6 characters") }
+					}
+				/>
+			</div>
+			<div class="form-group" style="margin-bottom:0.5rem;">
+				<label>{ L(p, "field_platform_access", "Platform Access") }</label>
+			<div style="display:flex; gap:1rem; flex-wrap:wrap;">
+				for _, plat := range platforms {
+					<label style="display:flex; align-items:center; gap:4px; cursor:pointer; font-size:0.85rem;">
+						if mode == "edit" && editUser != nil && hasPlat(editUser.Platforms, plat.Value) {
+							<input type="checkbox" name="platforms" value={ plat.Value } checked/>
+						} else {
+							<input type="checkbox" name="platforms" value={ plat.Value }/>
+						}
+						{ plat.Label }
+					</label>
+				}
+			</div>
+		</div>
+		if mode != "edit" {
+			<div class="form-group" style="margin-bottom:0.75rem;">
+					<label>{ L(p, "users_copy_my_subscriptions", "Copy My Subscriptions") }</label>
+				<div style="display:flex; gap:1rem; flex-wrap:wrap;">
+					for _, plat := range platforms {
+						<label style="display:flex; align-items:center; gap:4px; cursor:pointer; font-size:0.85rem;">
+							<input type="checkbox" name="copy_subs" value={ plat.Value }/> { plat.Label }
+						</label>
+					}
+				</div>
+			</div>
+		}
+			<div style="display:flex; gap:0.5rem;">
+				<button class="btn btn-primary btn-sm" type="submit">
+					if mode == "edit" {
+						{ L(p, "action_save_changes", "Save Changes") }
+					} else {
+						{ L(p, "action_create_user", "Create User") }
+					}
+				</button>
+				<button class="btn btn-secondary btn-sm" type="button" onclick="this.closest('#user-form-area').innerHTML=''">{ L(p, "action_cancel", "Cancel") }</button>
+			</div>
+		</form>
+}
+
+
+// ImportConfigModal renders the import config mode dialog.
+templ ImportConfigModal(p PageProps) {
+	<div id="import-config-modal" class="modal hidden">
+		<div class="modal-backdrop"></div>
+		<div class="modal-content" style="max-width:420px;">
+			<div class="modal-header">
+				<h3>{ L(p, "import_config_title", "Import Config") }</h3>
+				<button class="modal-close" type="button">&times;</button>
+			</div>
+			<div class="modal-body">
+				<form id="import-config-form"
+					hx-post="/api/config/import"
+					hx-target="#import-config-status"
+					hx-swap="innerHTML"
+					hx-encoding="multipart/form-data"
+				>
+					<input type="file" name="file" id="import-config-file" accept=".json,.opml,.xml,.tar.gz,.tgz,application/gzip,application/json,application/xml,text/xml" style="display:none;"/>
+					<input type="hidden" name="mode" id="import-config-mode" value="merge"/>
+					<p id="import-config-filename" style="margin:0 0 1rem; color:var(--text-secondary); font-size:0.9em;"></p>
+					<p style="margin:0 0 1rem;">{ L(p, "import_config_mode_prompt", "How should existing data be handled?") }</p>
+					<div style="display:flex; flex-direction:column; gap:0.75rem;">
+						<button class="btn btn-primary" type="submit" style="text-align:left; padding:0.75rem 1rem;"
+							onclick="document.getElementById('import-config-mode').value='merge'"
+						>
+							<strong>{ L(p, "action_merge", "Merge") }</strong><br/>
+							<span style="font-size:0.85em; opacity:0.8;">{ L(p, "import_config_merge_description", "Add new items, keep existing data") }</span>
+						</button>
+						<button class="btn btn-secondary" type="submit" style="text-align:left; padding:0.75rem 1rem;"
+							onclick="document.getElementById('import-config-mode').value='replace'"
+						>
+							<strong>{ L(p, "action_replace", "Replace") }</strong><br/>
+							<span style="font-size:0.85em; opacity:0.8;">{ L(p, "import_config_replace_description", "Clear existing data, then restore from file") }</span>
+						</button>
+					</div>
+				</form>
+				<div id="import-config-status" class="status-msg" style="margin-top:0.75rem;"></div>
+			</div>
+		</div>
+	</div>
+}
+
+// LogsModal renders the full logs/dashboard modal with all four tabs.
+templ LogsModal(p PageProps) {
+	<div id="logs-modal" class="modal hidden">
+		<div class="modal-backdrop"></div>
+		<div class="logs-ambient">
+			<div class="logs-orb b1"></div>
+			<div class="logs-orb b2"></div>
+			<div class="logs-orb b3"></div>
+			<div class="logs-orb b4"></div>
+		</div>
+		<div class="logs-noise"></div>
+		<div class="modal-content modal-wide logs-glass">
+			<button class="modal-close" type="button">&times;</button>
+			<div class="logs-modal-header">
+				<div class="logs-tabs" id="logs-tabs">
+					<button class="logs-tab active" data-logs-tab="server" type="button">{ L(p, "logs_tab_server", "Server") }</button>
+					<button class="logs-tab" data-logs-tab="android" type="button">{ L(p, "logs_tab_android", "Android") }</button>
+					<button class="logs-tab" data-logs-tab="downloads" type="button">{ L(p, "logs_tab_downloads", "Downloads") }</button>
+					<button class="logs-tab" data-logs-tab="twitter" type="button">{ L(p, "logs_tab_feed", "Feed") }</button>
+				</div>
+			</div>
+			@logsServerPanel(p)
+			@logsDownloadsPanel(p)
+			@logsAndroidPanel(p)
+			@logsFeedPanel(p)
+		</div>
+	</div>
+}
+
+// logsServerPanel renders the Server tab shell. Content is HTMX-polled.
+templ logsServerPanel(p PageProps) {
+	<div class="logs-tab-panel active" data-logs-panel="server">
+		<div id="sv-panel-content"
+			hx-get="/api/server/status?fmt=html"
+			hx-trigger="logs-poll"
+			hx-swap="innerHTML"
+		>
+			<div style="padding:2rem; text-align:center; color:var(--text-secondary);">{ L(p, "status_loading", "Loading...") }</div>
+		</div>
+	</div>
+}
+
+// ServerDashboard renders the full server dashboard content (HTMX fragment).
+templ ServerDashboard(p PageProps, d ServerDashboardData) {
+	<!-- Stat strip (7 cards) -->
+	<div class="stat-strip">
+		<div class="glass stat-card">
+			<div class="sc-label">{ L(p, "logs_stat_uptime", "Uptime") }</div>
+			<div class="sc-value"><span class="g">{ d.UptimeText }</span></div>
+			<div class="sc-detail">{ fmt.Sprintf(L(p, "logs_since_timestamp", "since %s"), d.UptimeStarted) }</div>
+		</div>
+		<div class="glass stat-card">
+			<div class="sc-label">{ L(p, "logs_stat_errors_24h", "Errors (24h)") }</div>
+			<div class="sc-value"><span class="r">{ fmt.Sprintf("%d", d.Errors24h) }</span></div>
+			<div class="sc-detail">{ fmt.Sprintf(L(p, "logs_delta_vs_yesterday", "%s%d vs yesterday"), ErrorsDeltaArrow(d.ErrorsDelta), Abs(d.ErrorsDelta)) }</div>
+		</div>
+		<div class="glass stat-card">
+			<div class="sc-label">{ L(p, "logs_stat_memory", "Memory") }</div>
+			<div class="sc-value">{ fmt.Sprintf("%.1f", d.MemoryMB) }<span class="u">MB</span></div>
+			<div class="spark">
+				for _, bar := range SparklineBars(d.MemoryHistory) {
+					<i style={ fmt.Sprintf("height:%dpx;background:%s", bar.HeightPx, bar.Color) }></i>
+				}
+			</div>
+		</div>
+		<div class="glass stat-card">
+			<div class="sc-label">{ L(p, "logs_stat_database", "Database") }</div>
+			<div class="sc-value"><span class="bl">{ fmt.Sprintf("%.1f", d.DBSizeMB) }</span><span class="u">MB</span></div>
+			<div class="sc-detail">{ fmt.Sprintf(L(p, "logs_wal_tables_detail", "WAL %s MB \u00b7 %d tables"), fmt.Sprintf("%.1f", d.WALSizeMB), d.TableCount) }</div>
+		</div>
+		<div class="glass stat-card">
+			<div class="sc-label">{ L(p, "logs_stat_storage", "Storage") }</div>
+			<div class="sc-value">{ fmt.Sprintf("%.1f", d.StorageGB) }<span class="u">GB</span></div>
+			<div class="sc-detail">{ fmt.Sprintf(L(p, "logs_video_rows_size_gb", "video rows %s GB"), fmt.Sprintf("%.1f", d.VideoStorageGB)) }</div>
+		</div>
+		<div class="glass stat-card">
+			<div class="sc-label">{ L(p, "nav_videos", "Videos") }</div>
+			<div class="ring-wrap">
+				@miniRing(BuildRingSegments([]RingSegment{
+					{Value: videoWatchedPct(d.VideosWatched, d.VideosTotal), Color: "var(--status-info)", Count: d.VideosWatched, Label: L(p, "logs_ring_watched", "watched")},
+				}), fmt.Sprintf("%.0f%%", videoWatchedPct(d.VideosWatched, d.VideosTotal)))
+			</div>
+		</div>
+		<div class="glass stat-card">
+			<div class="sc-label">{ L(p, "logs_stat_sources", "Sources") }</div>
+			<div class="ring-wrap">
+				@miniRing(BuildRingSegments([]RingSegment{
+					{Value: sourcePct(d.SourcesOK, d.SourcesOK+d.SourcesCool+d.SourcesFail), Color: "var(--status-success)", Count: d.SourcesOK, Label: L(p, "logs_ring_ok", "ok")},
+					{Value: sourcePct(d.SourcesCool, d.SourcesOK+d.SourcesCool+d.SourcesFail), Color: "var(--status-warning)", Count: d.SourcesCool, Label: L(p, "logs_ring_cooling", "cool")},
+					{Value: sourcePct(d.SourcesFail, d.SourcesOK+d.SourcesCool+d.SourcesFail), Color: "var(--status-error)", Count: d.SourcesFail, Label: L(p, "logs_ring_fail", "fail")},
+				}), FmtNum(d.SourcesOK + d.SourcesCool + d.SourcesFail))
+			</div>
+		</div>
+	</div>
+	<!-- 3-column body -->
+	<div class="sv-body">
+		<!-- Left: Database -->
+		<div class="glass glass-col">
+			<div class="glass-col-header"><div class="glass-col-title">{ L(p, "logs_stat_database", "Database") }</div></div>
+			<div class="glass-col-body">
+				<div class="db-sec">
+					<div class="db-sec-title">{ L(p, "settings_section_content", "Content") }</div>
+					@dbRow(L(p, "nav_channels", "Channels"), FmtNum(d.ChannelsTotal))
+					@dbRowSub(L(p, "platform_youtube", "YouTube"), FmtNum(d.ChannelsByPlat["youtube"]))
+					@dbRowSub(L(p, "platform_tiktok", "TikTok"), FmtNum(d.ChannelsByPlat["tiktok"]))
+					@dbRowSub(L(p, "platform_instagram", "Instagram"), FmtNum(d.ChannelsByPlat["instagram"]))
+					@dbRowSub(L(p, "platform_x", "X"), FmtNum(d.ChannelsByPlat["twitter"]))
+					@dbRow(L(p, "nav_videos", "Videos"), FmtNum(d.VideosTotal))
+					@dbRow(L(p, "cache_feed_items", "Feed items"), FmtNum(d.FeedItemsCount))
+					@dbRow(L(p, "logs_local_feed", "Local feed"), FmtNum(d.LocalFeedCount))
+					@dbRow(L(p, "nav_bookmarks", "Bookmarks"), FmtNum(d.BookmarksCount))
+					@dbRow(L(p, "logs_comments", "Comments"), FmtNum(d.CommentsCount))
+					@dbRow(L(p, "cache_avatars", "Avatars"), FmtNum(d.AvatarCount))
+				</div>
+				<div class="db-sec">
+					<div class="db-sec-title">{ L(p, "logs_media_pipeline", "Media Pipeline") }</div>
+					@dbRowDot("ok", L(p, "logs_status_ready", "Ready"), "g", FmtNum(d.MediaReady))
+					@dbRowDot("wn", L(p, "logs_status_queued", "Queued"), "w", FmtNum(d.MediaQueued))
+					@dbRowDot("er", L(p, "logs_status_failed", "Failed"), "r", FmtNum(d.MediaFailed))
+				</div>
+				<div class="db-sec">
+					<div class="db-sec-title">{ L(p, "logs_source_health", "Source Health") }</div>
+					@dbRowDot("ok", L(p, "logs_status_healthy", "Healthy"), "", FmtNum(d.SourceHealthOK))
+					@dbRowDot("wn", L(p, "logs_status_cooling", "Cooling"), "", FmtNum(d.SourceHealthCooling))
+					@dbRowDot("er", L(p, "logs_status_failed", "Failed"), "", FmtNum(d.SourceHealthFailed))
+					@dbRow(L(p, "logs_avg_latency", "Avg latency"), fmt.Sprintf("%d ms", d.SourceAvgLatencyMs))
+				</div>
+				<div class="db-sec">
+					<div class="db-sec-title">{ L(p, "logs_preview_queue", "Preview Queue") }</div>
+					@dbRow(L(p, "logs_status_ready", "Ready"), FmtNum(d.PreviewReady))
+					@dbRow(L(p, "logs_status_pending", "Pending"), FmtNum(d.PreviewPending))
+					@dbRow(L(p, "logs_status_unsupported", "Unsupported"), FmtNum(d.PreviewUnsupported))
+				</div>
+				<div class="db-sec">
+					<div class="db-sec-title">{ L(p, "logs_analytics", "Analytics") }</div>
+					@dbRow(L(p, "logs_events", "Events"), FmtNum(d.AnalyticsTotal))
+					@dbRow(L(p, "logs_app_starts", "App starts"), FmtNum(d.AnalyticsAppStarts))
+					@dbRow(L(p, "logs_video_opens", "Video opens"), FmtNum(d.AnalyticsVideoOpens))
+					@dbRow(L(p, "logs_syncs", "Syncs"), FmtNum(d.AnalyticsSyncs))
+				</div>
+			</div>
+		</div>
+		<!-- Center: Activity Log + Raw Server Log -->
+		<div class="glass glass-col">
+			<div class="glass-col-header">
+				<div class="glass-col-title">{ L(p, "logs_activity", "Activity") }</div>
+				<div class="sv-log-filters" style="margin-left:auto;">
+					for _, f := range []struct{ Key, Label string }{{"all",L(p, "logs_filter_all", "All")},{"errors",L(p, "logs_filter_errors", "Errors")},{"warnings",L(p, "logs_filter_warnings", "Warnings")},{"info",L(p, "logs_filter_info", "Info")}} {
+						<button
+							class={ "sv-log-filter" + dlFilterActiveClass(d.LogFilter, f.Key) }
+							type="button"
+							hx-get={ "/api/server/status?fmt=html&log_filter=" + f.Key }
+							hx-target="#sv-panel-content"
+							hx-swap="innerHTML"
+						>{ fmt.Sprintf("%s (%d)", f.Label, ServerLogFilterCount(d.Activity, f.Key)) }</button>
+					}
+				</div>
+				<button class="copy-log" type="button" onclick="var el=this.closest('.glass-col').querySelector('#sv-log-console');if(el&&window.MpaSiteBase)MpaSiteBase.copyText(el.innerText).then(function(){MpaSiteBase.showToast(window.IglooI18n&&window.IglooI18n.t?window.IglooI18n.t('toast_log_copied','Log copied'):'Log copied')})">{ L(p, "action_copy", "Copy") }</button>
+			</div>
+			<div class="glass-col-body sv-log-split" id="sv-log-console" style="padding:6px 12px;">
+				if ServerLogFilterCount(d.Activity, d.LogFilter) == 0 {
+					<div class="log-line log-empty">{ L(p, "logs_no_events", "No events.") }</div>
+				}
+				for _, e := range d.Activity {
+					if ServerLogFilterMatch(e, d.LogFilter) {
+						<div class="log-line">
+							<span class="log-ts">{ e.Time }</span>
+							{ " " }
+							<span class={ serverLevelClass(e.Status) }>{ serverLevelText(e.Status) }</span>
+							{ " " }
+							<span class="log-source">{ "[" + e.Source + "]" }</span>
+							{ " " }
+							<span class="log-msg">{ e.Message }</span>
+						</div>
+					}
+				}
+			</div>
+			<!-- Raw log: separate HTMX endpoint -->
+			<div id="sv-raw-log-section"
+				hx-get="/api/logs/server/read?type=server&lines=80&filter_noise=1&fmt=html"
+				hx-trigger="load, logs-poll"
+				hx-swap="innerHTML"
+			></div>
+		</div>
+		<!-- Right: Processes + Errors -->
+		<div class="glass glass-col">
+			<div class="glass-col-header"><div class="glass-col-title">{ L(p, "logs_workers_errors", "Workers & Errors") }</div></div>
+			<div class="glass-col-body">
+				<div class="db-sec">
+					<div class="db-sec-title">{ L(p, "logs_processes", "Processes") }</div>
+					if len(d.Processes) == 0 {
+						<div class="db-row"><span class="l">{ L(p, "logs_no_processes", "No processes") }</span></div>
+					}
+					for _, proc := range d.Processes {
+						<div class="wk-card">
+							<div class="wk-top">
+								<span class="wk-name">{ proc.Name }</span>
+								<span class={ "wk-badge " + ServerProcessStatusClass(proc.Status) }>{ proc.Status }</span>
+							</div>
+							if proc.Detail != "" {
+								<div class="wk-stats">
+									<div class="wk-stat"><span class="wl">{ L(p, "logs_detail", "Detail") }</span><span class="wv">{ proc.Detail }</span></div>
+								</div>
+							}
+						</div>
+					}
+				</div>
+				<div class="db-sec">
+					<div class="db-sec-title">{ L(p, "logs_filter_errors", "Errors") }</div>
+					if len(d.Errors) == 0 {
+						<div class="db-row"><span class="l log-empty">{ L(p, "logs_no_errors_session", "No errors this session") }</span></div>
+					}
+					for _, e := range d.Errors {
+						<div class="err-item">
+							<span class="err-time">{ e.Time }</span>
+							<span class="err-msg error">
+								{ e.Message }
+								if e.Count > 1 {
+									{ fmt.Sprintf(" \u00d7%d", e.Count) }
+								}
+							</span>
+						</div>
+					}
+				</div>
+				<div class="db-sec">
+					<div class="db-sec-title">{ L(p, "logs_filter_warnings", "Warnings") }</div>
+					if len(d.Warnings) == 0 {
+						<div class="db-row"><span class="l log-empty">{ L(p, "logs_no_warnings", "No warnings") }</span></div>
+					}
+					for i, w := range d.Warnings {
+						if i < 10 {
+							<div class="err-item">
+								<span class="err-time">{ w.Time }</span>
+								<span class="err-msg warning">{ w.Message }</span>
+							</div>
+						}
+					}
+					if len(d.Warnings) > 10 {
+						<div class="err-item"><span class="err-msg log-empty">{ fmt.Sprintf(L(p, "logs_more_count", "+%d more"), len(d.Warnings)-10) }</span></div>
+					}
+				</div>
+				<div class="db-sec">
+					<div class="db-sec-title">{ L(p, "logs_download_queue", "Download Queue") }</div>
+					@dbRow(L(p, "logs_status_pending", "Pending"), FmtNum(d.DownloadQueuePending))
+					<div class="db-row"><span class="l">{ L(p, "logs_status_failed", "Failed") }</span><span class="v"><span class="r">{ FmtNum(d.DownloadQueueFailed) }</span></span></div>
+				</div>
+					<div class="db-sec">
+						<div class="db-sec-title">{ L(p, "logs_sponsorblock", "SponsorBlock") }</div>
+						@dbRow(L(p, "logs_checked", "Checked"), FmtNum(d.SponsorBlockChecked))
+						@dbRow(L(p, "logs_segments", "Segments"), FmtNum(d.SponsorBlockSegments))
+					</div>
+				</div>
+			</div>
+		</div>
+}
+
+// ServerRawLog renders the raw server log section (HTMX fragment).
+templ ServerRawLog(p PageProps, d ServerRawLogData) {
+	<div class="glass-col-header sv-raw-log-header">
+		<div class="glass-col-title">{ L(p, "logs_server_log", "Server Log") }</div>
+		<div class="sv-log-filters" style="margin-left:auto;">
+			for _, f := range []struct{ Key, Label string }{
+				{"all", L(p, "logs_filter_all", "All")},
+				{"errors", L(p, "logs_filter_errors", "Errors")},
+				{"warnings", L(p, "logs_filter_warnings", "Warnings")},
+				{"info", L(p, "logs_filter_info", "Info")},
+			} {
+				<button
+					class={ "sv-log-filter" + dlFilterActiveClass(d.Filter, f.Key) }
+					type="button"
+					hx-get={ "/api/logs/server/read?type=server&lines=80&filter_noise=1&fmt=html&raw_filter=" + f.Key }
+					hx-target="#sv-raw-log-section"
+					hx-swap="innerHTML"
+				>{ fmt.Sprintf("%s (%d)", f.Label, ServerRawLogFilterCount(d.Lines, f.Key)) }</button>
+			}
+		</div>
+		<button class="copy-log" type="button" onclick="var el=this.closest('.glass-col').querySelector('#sv-raw-log-console');if(el&&window.MpaSiteBase)MpaSiteBase.copyText(el.innerText).then(function(){MpaSiteBase.showToast(window.IglooI18n&&window.IglooI18n.t?window.IglooI18n.t('toast_server_log_copied','Server log copied'):'Server log copied')})">{ L(p, "action_copy", "Copy") }</button>
+	</div>
+	<div class="glass-col-body sv-log-split" id="sv-raw-log-console" style="padding:6px 12px;">
+		for _, line := range d.Lines {
+			if ServerRawLogFilterMatch(line, d.Filter) {
+				<div class="log-line">{ line.Text }</div>
+			}
+		}
+	</div>
+}
+
+// miniRing renders an SVG mini ring chart with segments and legend.
+templ miniRing(segments []RingSegment, centerText string) {
+	<div class="ring">
+		<svg viewBox="0 0 40 40">
+			<circle class="bg" cx="20" cy="20" r="16"></circle>
+			for _, seg := range segments {
+				if seg.DashOffset != "" {
+					<circle class="fg" cx="20" cy="20" r="16" stroke={ seg.Color } stroke-dasharray={ seg.DashArray } stroke-dashoffset={ seg.DashOffset }></circle>
+				} else {
+					<circle class="fg" cx="20" cy="20" r="16" stroke={ seg.Color } stroke-dasharray={ seg.DashArray }></circle>
+				}
+			}
+		</svg>
+		<div class="ring-pct">{ centerText }</div>
+	</div>
+	<div class="ring-leg">
+		for _, seg := range segments {
+			<div>
+				<span class="n" style={ "color:" + seg.Color }>{ FmtNum(seg.Count) }</span>
+				{ " " }
+				<span class="l">{ seg.Label }</span>
+			</div>
+		}
+	</div>
+}
+
+// dbRow renders a simple label/value row.
+templ dbRow(label, value string) {
+	<div class="db-row"><span class="l">{ label }</span><span class="v">{ value }</span></div>
+}
+
+// dbRowSub renders an indented label/value row.
+templ dbRowSub(label, value string) {
+	<div class="db-row db-row-sub"><span class="l">{ label }</span><span class="v">{ value }</span></div>
+}
+
+// dbRowDot renders a db-row with a colored dot before the label.
+templ dbRowDot(dotClass, label, valueClass, value string) {
+	<div class="db-row">
+		<span class="l"><span class={ "dot " + dotClass }></span>{ label }</span>
+		if valueClass != "" {
+			<span class="v"><span class={ valueClass }>{ value }</span></span>
+		} else {
+			<span class="v">{ value }</span>
+		}
+	</div>
+}
+
+// logsDownloadsPanel renders the Downloads tab shell. Content is HTMX-polled.
+templ logsDownloadsPanel(p PageProps) {
+	<div class="logs-tab-panel" data-logs-panel="downloads">
+		<div id="dl-panel-content"
+			hx-get="/api/downloads/status?fmt=html"
+			hx-trigger="logs-poll"
+			hx-swap="innerHTML"
+		>
+			<div style="padding:2rem; text-align:center; color:var(--text-secondary);">{ L(p, "status_loading", "Loading...") }</div>
+		</div>
+	</div>
+}
+
+// DownloadsDashboard renders the full downloads dashboard content (HTMX fragment).
+templ DownloadsDashboard(p PageProps, d DownloadsStatusData) {
+	<!-- Stat strip (3 glass cards) -->
+	<div class="stat-strip" style="grid-template-columns: repeat(3, 1fr);">
+		<div class="glass stat-card">
+			<div class="sc-label">{ L(p, "logs_stat_queue", "Queue") }</div>
+			<div class="sc-value">
+				{ fmt.Sprintf("%d", d.QueueActive) }
+				<span class="u">/{ fmt.Sprintf("%d", d.QueueTotal) }</span>
+			</div>
+			<div class="sc-detail">
+				if d.QueueActive > 0 {
+					<span class="g">{ fmt.Sprintf(L(p, "logs_status_downloading_count", "%d downloading"), d.QueueActive) }</span>
+				}
+				if d.QueueActive > 0 && d.QueueQueued > 0 {
+					{ " \u00b7 " }
+				}
+				if d.QueueQueued > 0 {
+					{ fmt.Sprintf(L(p, "logs_status_queued_count", "%d queued"), d.QueueQueued) }
+				}
+				if d.QueueActive == 0 && d.QueueQueued == 0 {
+					idle
+				}
+			</div>
+		</div>
+		<div class="glass stat-card">
+			<div class="sc-label">{ L(p, "logs_stat_session", "Session") }</div>
+			<div class="sc-value">{ fmt.Sprintf("%d", d.SessionDone + d.SessionFail) }</div>
+			<div class="sc-detail">
+				if d.SessionDone > 0 {
+					<span class="g">{ fmt.Sprintf(L(p, "logs_status_ok_count", "%d ok"), d.SessionDone) }</span>
+				}
+				if d.SessionDone > 0 && d.SessionFail > 0 {
+					{ " \u00b7 " }
+				}
+				if d.SessionFail > 0 {
+					<span class="r">{ fmt.Sprintf(L(p, "logs_status_fail_count", "%d fail"), d.SessionFail) }</span>
+				}
+				if d.SessionDone == 0 && d.SessionFail == 0 {
+					&mdash;
+				}
+			</div>
+		</div>
+		<div class="glass stat-card">
+			<div class="sc-label">{ L(p, "logs_stat_last_download", "Last Download") }</div>
+			<div class="sc-value">
+				if d.LastElapsed != "" {
+					{ d.LastElapsed }
+				} else {
+					&mdash;
+				}
+			</div>
+			<div class="sc-detail">
+				if d.LastChannel != "" {
+					{ "@" + d.LastChannel + " \u00b7 " + d.LastPlatform }
+				}
+			</div>
+		</div>
+	</div>
+	<!-- 2-row body -->
+	<div class="dl-body">
+		<!-- Activity log panel -->
+		<div class="glass glass-col">
+			<div class="glass-col-header">
+				<div class="glass-col-title">{ L(p, "logs_activity", "Activity") }</div>
+				<button class="copy-log" type="button" onclick="var el=this.closest('.glass-col').querySelector('.glass-col-body');if(el&&window.MpaSiteBase)MpaSiteBase.copyText(el.innerText).then(function(){MpaSiteBase.showToast(window.IglooI18n&&window.IglooI18n.t?window.IglooI18n.t('toast_activity_copied','Activity copied'):'Activity copied')})">{ L(p, "action_copy", "Copy") }</button>
+			</div>
+			<div class="glass-col-body" style="padding:6px 12px;">
+				for _, e := range d.Activity {
+					<div class="log-line">
+						<span class="log-ts">{ FormatHMS(e.Timestamp, d.TzOffsetSec) }</span>
+						{ " " }
+						<span class={ DlLogClass(e) }>{ e.Message }</span>
+					</div>
+				}
+			</div>
+		</div>
+		<!-- Recent downloads table panel -->
+		<div class="glass glass-col">
+			<div class="glass-col-header">
+				<div class="glass-col-title">{ L(p, "logs_recent_downloads", "Recent Downloads") }</div>
+				<div style="margin-left:auto;">
+					for _, f := range []struct{ Key, Label string }{{"all",L(p, "logs_filter_all", "All")},{"active",L(p, "logs_filter_active", "Active")},{"failed",L(p, "logs_status_failed", "Failed")},{"completed",L(p, "logs_filter_completed", "Completed")}} {
+						<button
+							class={ "log-filter" + dlFilterActiveClass(d.Filter, f.Key) }
+							type="button"
+							hx-get={ "/api/downloads/status?fmt=html&filter=" + f.Key }
+							hx-target="#dl-panel-content"
+							hx-swap="innerHTML"
+						>{ f.Label + " (" + fmt.Sprintf("%d", dlFilterCount(d.Recent, f.Key)) + ")" }</button>
+					}
+				</div>
+			</div>
+			<div class="glass-col-body">
+				if len(d.Recent) > 0 {
+					<table class="feed-source-table">
+						<thead>
+							<tr>
+								<th>{ L(p, "logs_table_channel", "Channel") }</th>
+								<th>{ L(p, "logs_table_title", "Title") }</th>
+								<th>{ L(p, "logs_table_status", "Status") }</th>
+								<th>{ L(p, "logs_table_platform", "Platform") }</th>
+								<th>{ L(p, "logs_table_time", "Time") }</th>
+							</tr>
+						</thead>
+						<tbody>
+							for _, e := range d.Recent {
+								if DlFilterMatch(e, d.Filter) {
+									<tr>
+										<td class="download-channel-id">{ "@" + e.ChannelID }</td>
+										<td class="download-title">{ DlTitleFromMessage(e.Message) }</td>
+										<td><span class={ "dot " + DlStatusBadgeClass(e.Status) }></span>{ DlStatusLabel(e.Status) }</td>
+										<td class="download-platform">{ e.Platform }</td>
+										<td class="download-time">{ FormatHM(e.Timestamp, d.TzOffsetSec) }</td>
+									</tr>
+								}
+							}
+						</tbody>
+					</table>
+				} else {
+					<div class="feed-source-empty">{ L(p, "logs_no_download_activity", "No download activity yet.") }</div>
+				}
+			</div>
+		</div>
+	</div>
+}
+
+// logsAndroidPanel renders the Android tab shell. Content is HTMX-polled.
+templ logsAndroidPanel(p PageProps) {
+	<div class="logs-tab-panel" data-logs-panel="android">
+		<div id="an-panel-content"
+			hx-get="/api/logs/android/status?fmt=html"
+			hx-trigger="logs-poll"
+			hx-swap="innerHTML"
+		>
+			<div style="padding:2rem; text-align:center; color:var(--text-secondary);">{ L(p, "status_loading", "Loading...") }</div>
+		</div>
+	</div>
+}
+
+// AndroidDashboard renders the full Android dashboard content (HTMX fragment).
+templ AndroidDashboard(p PageProps, d AndroidDashboardData) {
+	<!-- Stat strip -->
+	<div class="stat-strip" style="grid-template-columns: repeat(5, 1fr);">
+		<div class="glass stat-card">
+			<div class="sc-label">{ L(p, "logs_stat_last_sync", "Last Sync") }</div>
+			<div class="sc-value">
+				if d.SyncAgo != "" {
+					{ d.SyncAgo }
+				} else {
+					{ L(p, "logs_no_sync_report", "No report") }
+				}
+			</div>
+			<div class="sc-detail">{ d.SyncCompletedHMS }</div>
+		</div>
+		<div class="glass stat-card">
+			<div class="sc-label">{ L(p, "logs_stat_sync_duration", "Sync Duration") }</div>
+			<div class="sc-value">
+				if d.SyncDuration != "" {
+					{ d.SyncDuration }
+				} else {
+					&mdash;
+				}
+			</div>
+			<div class="sc-detail">{ fmt.Sprintf(L(p, "logs_steps_completed", "%d/%d steps completed"), d.StepsCompleted, d.StepsTotal) }</div>
+		</div>
+		<div class="glass stat-card">
+			<div class="sc-label">{ L(p, "logs_android_generation", "Generation") }</div>
+			<div class="sc-value">{ fmt.Sprintf("%d", d.GenerationItems) }</div>
+			<div class="sc-detail">
+				if d.GenerationAssets > 0 {
+					if d.GenerationMissing > 0 {
+						{ fmt.Sprintf(L(p, "logs_android_generation_assets_missing", "%d assets · %d ready · %d missing"), d.GenerationAssets, d.GenerationReady, d.GenerationMissing) }
+					} else {
+						{ fmt.Sprintf(L(p, "logs_android_generation_assets", "%d assets · %d ready"), d.GenerationAssets, d.GenerationReady) }
+					}
+				} else if d.GenerationItems > 0 {
+					{ L(p, "logs_android_generation_items", "content items") }
+				} else {
+					{ L(p, "logs_no_sync_data", "no sync data") }
+				}
+			</div>
+		</div>
+		<div class="glass stat-card">
+			<div class="sc-label">{ L(p, "logs_android_device_assets", "Device assets") }</div>
+			<div class="sc-value">
+				if d.DeviceTotal > 0 {
+					{ fmt.Sprintf("%d%%", d.DevicePercent) }
+				} else {
+					&mdash;
+				}
+			</div>
+			<div class="sc-detail">
+				if d.DeviceTotal > 0 {
+					if d.DeviceFailed > 0 || d.DeviceMissing > 0 {
+						{ fmt.Sprintf(L(p, "logs_android_device_assets_problem_detail", "%d/%d verified · %d pending · %d failed · %d missing"), d.DeviceVerified, d.DeviceTotal, d.DevicePending, d.DeviceFailed, d.DeviceMissing) }
+					} else if d.DeviceBytes != "" {
+						{ fmt.Sprintf(L(p, "logs_android_device_assets_bytes_detail", "%d/%d verified · %s"), d.DeviceVerified, d.DeviceTotal, d.DeviceBytes) }
+					} else {
+						{ fmt.Sprintf(L(p, "logs_android_device_assets_detail", "%d/%d verified · %d pending"), d.DeviceVerified, d.DeviceTotal, d.DevicePending) }
+					}
+				} else {
+					{ L(p, "logs_no_health_report", "no health report") }
+				}
+			</div>
+		</div>
+		<div class="glass stat-card">
+			<div class="sc-label">{ L(p, "logs_filter_errors", "Errors") }</div>
+			<div class={ "sc-value", anErrorClass(d.ErrorCount) }>{ fmt.Sprintf("%d", d.ErrorCount) }</div>
+			<div class="sc-detail">{ fmt.Sprintf(L(p, "logs_warnings_count", "%d warnings"), d.WarningCount) }</div>
+		</div>
+	</div>
+	<!-- 3-column body -->
+	<div class="an-body">
+		<!-- Pipeline + Cache Health -->
+		<div class="glass glass-col an-col-pipeline">
+			<div class="glass-col-header"><div class="glass-col-title">{ L(p, "logs_last_sync_pipeline", "Last Sync Pipeline") }</div></div>
+			<div class="glass-col-body an-pipeline-scroll">
+				for _, s := range d.Pipeline {
+					<div class="an-pipeline-step">
+						<span class={ "an-dot an-dot-" + s.Status }></span>
+						<span class="an-step-name">{ s.Name }</span>
+						if s.Duration != "" {
+							<span class="an-step-duration">{ s.Duration }</span>
+						}
+					</div>
+				}
+				if d.PipelineFooter != "" {
+					<div class="an-pipeline-footer">{ d.PipelineFooter }</div>
+				}
+				if len(d.CacheHealth) > 0 {
+					<div class="an-cache-health">
+						<div class="an-cache-title">{ L(p, "logs_android_asset_health", "Asset Health") }</div>
+						for _, c := range d.CacheHealth {
+							<div class="an-cache-row">
+								<span class="an-cache-label">{ c.Label }</span>
+								<span class="an-cache-pct">{ fmt.Sprintf("%d%%", c.Percent) }</span>
+								<div class="an-cache-bar-wrap"><div class={ "an-cache-bar " + c.BarCSS } style={ fmt.Sprintf("width:%d%%", c.Percent) }></div></div>
+								<span class="an-cache-stat">
+									if c.Retention != "" {
+										{ fmt.Sprintf("%d/%d · %s", c.Cached, c.Total, c.Retention) }
+									} else {
+										{ fmt.Sprintf("%d/%d", c.Cached, c.Total) }
+									}
+								</span>
+							</div>
+						}
+					</div>
+				}
+			</div>
+		</div>
+		<!-- Log Stream -->
+		<div class="glass glass-col an-col-log">
+			<div class="glass-col-header">
+				<div style="display:flex;gap:2px;">
+					for _, f := range []struct{ Key, Label string }{{"all",L(p, "logs_filter_all", "All")},{"errors",L(p, "logs_filter_errors", "Errors")},{"warnings",L(p, "logs_filter_warnings", "Warnings")}} {
+						<button
+							class={ "log-filter" + dlFilterActiveClass(d.LogFilter, f.Key) }
+							type="button"
+							hx-get={ "/api/logs/android/status?fmt=html&filter=" + f.Key }
+							hx-target="#an-panel-content"
+							hx-swap="innerHTML"
+						>{ f.Label + " (" + fmt.Sprintf("%d", AndroidLogFilterCount(d.Activity, f.Key)) + ")" }</button>
+					}
+				</div>
+				<div style="display:flex;gap:4px;margin-left:auto;">
+					<button class="glass-btn" type="button" style="color:var(--accent-primary);"
+						hx-post="/api/logs/android/force-sync"
+						hx-swap="none"
+						hx-on::before-request="this.textContent=(window.IglooI18n&&window.IglooI18n.t?window.IglooI18n.t('settings_syncing','Syncing…'):'Syncing…');this.disabled=true"
+						disabled?={ d.ForceSyncPending }
+					>
+						if d.ForceSyncPending {
+							{ L(p, "settings_syncing", "Syncing…") }
+						} else {
+							{ L(p, "logs_force_sync", "Force Sync") }
+						}
+					</button>
+						<button class="copy-log" type="button" onclick="var el=this.closest('.glass-col').querySelector('.glass-col-body');if(el&&window.MpaSiteBase)MpaSiteBase.copyText(el.innerText).then(function(){MpaSiteBase.showToast(window.IglooI18n&&window.IglooI18n.t?window.IglooI18n.t('toast_log_copied','Log copied'):'Log copied')})">{ L(p, "action_copy", "Copy") }</button>
+				</div>
+			</div>
+			<div class="glass-col-body" style="padding:6px 12px;">
+				if len(d.Activity) == 0 {
+					<div class="an-empty-state">{ L(p, "logs_no_sync_activity", "No sync activity yet.") }</div>
+				}
+				for _, e := range d.Activity {
+					if AndroidLogFilterMatch(e, d.LogFilter) {
+						<div class={ "log-line " + e.LevelCSS }>
+							<span class="log-ts">{ e.Timestamp }</span>
+							{ " [" + e.Tag + "] " + e.Message }
+						</div>
+					}
+				}
+			</div>
+		</div>
+		<!-- Errors & Warnings -->
+		<div class="glass glass-col an-col-errors">
+			<div class="glass-col-header"><div class="glass-col-title">{ L(p, "logs_errors_warnings", "Errors & Warnings") }</div></div>
+			<div class="glass-col-body">
+				<div>
+					if len(d.Errors) == 0 {
+						<div class="an-empty-state">{ L(p, "logs_no_errors_session_period", "No errors this session.") }</div>
+					}
+					for _, e := range d.Errors {
+						<div class="err-item" style="flex-direction:column;align-items:stretch;">
+							<div style="display:flex;justify-content:space-between;align-items:center;">
+								<span class="err-msg error" style="font-weight:700;font-size:0.68rem;">{ e.Tag }</span>
+								if e.Count > 1 {
+									<span class="logs-error-count">{ fmt.Sprintf("\u00d7%d", e.Count) }</span>
+								}
+							</div>
+							<div class="err-msg error" style="font-family:'SF Mono','JetBrains Mono',monospace;word-break:break-word;margin-top:2px;">{ e.Message }</div>
+							<div class="err-time" style="margin-top:3px;">
+								if e.FirstSeen != "" {
+									{ fmt.Sprintf(L(p, "logs_last_seen_first_seen", "last seen %s \u00b7 first seen %s"), e.Timestamp, e.FirstSeen) }
+								} else {
+									{ e.Timestamp }
+								}
+							</div>
+						</div>
+					}
+				</div>
+				if len(d.Warnings) > 0 {
+					<div class="logs-warning-group">
+						for i, w := range d.Warnings {
+							if i < 10 {
+								<div class="err-item"><span class="err-time">{ w.Tag }</span> { " " } <span class="err-msg warning">{ w.Message }</span></div>
+							}
+						}
+						if len(d.Warnings) > 10 {
+							<div class="err-item log-empty">{ fmt.Sprintf(L(p, "logs_more_count", "+%d more"), len(d.Warnings)-10) }</div>
+						}
+					</div>
+				}
+			</div>
+		</div>
+	</div>
+}
+
+// logsFeedPanel renders the Feed (Twitter) tab shell. Content is HTMX-polled.
+templ logsFeedPanel(p PageProps) {
+	<div class="logs-tab-panel" data-logs-panel="twitter">
+		<div id="feed-panel-content"
+			hx-get="/api/feed/status?fmt=html"
+			hx-trigger="logs-poll"
+			hx-swap="innerHTML"
+		>
+			<div style="padding:2rem; text-align:center; color:var(--text-secondary);">{ L(p, "status_loading", "Loading...") }</div>
+		</div>
+	</div>
+}
+
+// FeedDashboard renders the full feed dashboard content (HTMX fragment).
+templ FeedDashboard(p PageProps, d FeedDashboardData) {
+	if d.RSSHubStatus != "" && d.RSSHubStatus != "healthy" {
+		<div class="glass feed-warning">{ fmt.Sprintf(L(p, "logs_rsshub_status", "RSSHub: %s"), d.RSSHubStatus) }</div>
+	}
+	<!-- Stat strip -->
+	<div class="stat-strip" style="grid-template-columns: repeat(3, 1fr);">
+		<div class="glass stat-card">
+			<div class="sc-label">{ L(p, "logs_ingest_label", "Ingest") } <span class="sc-meta">{ d.IngestMeta }</span></div>
+			<div class="sc-value">
+				{ fmt.Sprintf("%d", d.IngestDone) }
+				<span class="u">/{ fmt.Sprintf("%d", d.IngestTotal) }</span>
+			</div>
+			<div class="sc-detail">
+				if d.IngestFailures > 0 {
+					<span class="status-error-text">{ fmt.Sprintf(L(p, "logs_status_failed_count", "%d failed"), d.IngestFailures) }</span>
+				}
+				if d.IngestFailures > 0 && d.IngestCooling > 0 {
+					{ " \u00b7 " }
+				}
+				if d.IngestCooling > 0 {
+					<span class="status-muted-text">{ fmt.Sprintf(L(p, "logs_status_cooling_count", "%d cooling"), d.IngestCooling) }</span>
+				}
+				if d.IngestNotDue > 0 {
+					if d.IngestFailures > 0 || d.IngestCooling > 0 {
+						{ " \u00b7 " }
+					}
+					<span class="status-muted-text">{ fmt.Sprintf(L(p, "logs_status_waiting_count", "%d waiting"), d.IngestNotDue) }</span>
+				}
+				if d.IngestPaused {
+					if d.IngestFailures > 0 || d.IngestCooling > 0 || d.IngestNotDue > 0 {
+						{ " \u00b7 " }
+					}
+					<span class="status-error-text">{ L(p, "logs_status_paused", "paused") }</span>
+				}
+				if !d.IngestEnabled {
+					<span class="status-muted-text">{ L(p, "logs_status_disabled", "disabled") }</span>
+				}
+				if d.IngestFailures == 0 && d.IngestCooling == 0 && d.IngestNotDue == 0 && !d.IngestPaused && d.IngestEnabled && !d.IngestRunning {
+					{ L(p, "logs_status_idle", "idle") }
+				}
+			</div>
+		</div>
+		<div class="glass stat-card">
+			<div class="sc-label">{ L(p, "logs_stat_parsed", "Parsed") }</div>
+			<div class="sc-value">{ fmt.Sprintf("%d", d.ParsedTotal) }</div>
+			<div class="sc-detail">{ fmt.Sprintf(L(p, "logs_parsed_detail", "%d with media \u00b7 %d text"), d.ParsedMedia, d.ParsedText) }</div>
+		</div>
+		<div class="glass stat-card">
+			<div class="sc-label">{ L(p, "logs_filter_media", "Media") }</div>
+			<div class="sc-value">
+				{ fmt.Sprintf("%d", d.MediaReady) }
+				<span class="u">/{ fmt.Sprintf("%d", d.MediaTotal) }</span>
+			</div>
+			<div class="sc-detail">
+				if d.MediaPending > 0 {
+					<span class="status-info-text">{ fmt.Sprintf(L(p, "logs_status_downloading_count", "%d downloading"), d.MediaPending) }</span>
+				}
+				if d.MediaPending > 0 && d.MediaFailed > 0 {
+					{ " \u00b7 " }
+				}
+				if d.MediaFailed > 0 {
+					<span class="status-error-text">{ fmt.Sprintf(L(p, "logs_status_failed_count", "%d failed"), d.MediaFailed) }</span>
+				}
+				if d.MediaPending == 0 && d.MediaFailed == 0 {
+					{ L(p, "logs_status_all_done", "all done") }
+				}
+			</div>
+		</div>
+	</div>
+	<!-- Body -->
+	<div class="feed-body">
+		<!-- Activity -->
+		<div class="glass glass-col">
+			<div class="glass-col-header">
+				<div class="glass-col-title">{ L(p, "logs_activity", "Activity") }</div>
+				<button class="glass-btn" type="button"
+					hx-post="/api/feed/ingest/pause"
+					hx-swap="none"
+					hx-on::after-request="htmx.trigger(document.getElementById('feed-panel-content'),'logs-poll')"
+					if d.IngestPaused {
+						disabled?={ !d.IngestEnabled }
+					} else {
+						disabled?={ !d.IngestEnabled }
+					}
+				>
+					if d.IngestPaused {
+						{ L(p, "action_resume", "Resume") }
+					} else {
+						{ L(p, "action_pause", "Pause") }
+					}
+				</button>
+				<button class="glass-btn" type="button"
+					hx-post="/api/feed/ingest/trigger"
+					hx-swap="none"
+					hx-on::after-request="if(event.detail.successful&&window.MpaSiteBase)MpaSiteBase.showToast(window.IglooI18n&&window.IglooI18n.t?window.IglooI18n.t('toast_ingest_cycle_triggered','Ingest cycle triggered'):'Ingest cycle triggered')"
+					disabled?={ d.IngestPaused || !d.IngestEnabled }
+				>{ L(p, "logs_force_cycle", "Force Cycle") }</button>
+				<button class="glass-btn" type="button"
+					hx-post="/api/feed/media/retry"
+					hx-swap="none"
+						hx-on::after-request="if(event.detail.successful&&window.MpaSiteBase)MpaSiteBase.showToast(window.IglooI18n&&window.IglooI18n.t?window.IglooI18n.t('toast_retrying_failed_jobs','Retrying failed jobs'):'Retrying failed jobs')"
+					disabled?={ d.MediaFailed == 0 }
+				>{ L(p, "action_retry_failed", "Retry Failed") }</button>
+				<button class="copy-log" type="button" onclick="var el=this.closest('.glass-col').querySelector('.glass-col-body');if(el&&window.MpaSiteBase)MpaSiteBase.copyText(el.innerText).then(function(){MpaSiteBase.showToast(window.IglooI18n&&window.IglooI18n.t?window.IglooI18n.t('toast_activity_copied','Activity copied'):'Activity copied')})">{ L(p, "action_copy", "Copy") }</button>
+			</div>
+			<div class="glass-col-body" style="padding:6px 12px;">
+				if len(d.Activity) == 0 {
+					<div class="log-line log-empty">{ L(p, "logs_no_feed_activity", "No activity yet — waiting for first feed cycle") }</div>
+				}
+				for _, e := range d.Activity {
+					<div class="log-line">
+						<span class="log-ts">{ FormatHMS(e.Timestamp, d.TzOffsetSec) }</span>
+						{ " " }
+						<span class={ FeedLogClass(e.Kind) }>{ e.Message }</span>
+					</div>
+				}
+			</div>
+		</div>
+		<!-- Sources table -->
+		<div class="glass glass-col">
+			<div class="glass-col-header">
+				<div class="glass-col-title">{ L(p, "logs_stat_sources", "Sources") }</div>
+				<input id="feed-source-search" class="feed-source-search" type="search" placeholder={ L(p, "action_filter", "Filter...") } autocomplete="off"/>
+				<div style="margin-left:auto;">
+					for _, f := range []struct{ Key, Label string }{{"all",L(p, "logs_filter_all", "All")},{"failed",L(p, "logs_status_failed", "Failed")},{"cooling",L(p, "logs_status_cooling", "Cooling")},{"ok",L(p, "logs_status_ok", "OK")}} {
+						<button
+							class={ "log-filter" + dlFilterActiveClass(d.Filter, f.Key) }
+							type="button"
+							hx-get={ "/api/feed/status?fmt=html&filter=" + f.Key }
+							hx-target="#feed-panel-content"
+							hx-swap="innerHTML"
+						>{ f.Label + " (" + fmt.Sprintf("%d", FeedSourceFilterCount(d.Sources, f.Key)) + ")" }</button>
+					}
+				</div>
+			</div>
+			<div class="glass-col-body" id="feed-sources-body">
+				if len(d.Sources) > 0 {
+					<table class="feed-source-table">
+						<thead>
+							<tr>
+								<th>{ L(p, "logs_table_handle", "Handle") }</th>
+								<th>{ L(p, "logs_table_status", "Status") }</th>
+								<th>{ L(p, "logs_table_last_ok", "Last OK") }</th>
+								<th>{ L(p, "logs_table_items", "Items") }</th>
+								<th>{ L(p, "logs_table_action", "Action") }</th>
+							</tr>
+						</thead>
+						<tbody>
+							for _, s := range d.Sources {
+								if FeedSourceFilterMatch(s, d.Filter) {
+									<tr class={ "feed-row-" + s.DisplayStatus }>
+										<!-- Link to X profile (not internal /channels/) so we can verify whether a failing handle has actually been deleted/suspended on X. -->
+										<td><a href={ templ.SafeURL("https://x.com/" + s.Handle) } target="_blank" rel="noopener noreferrer" class="feed-handle-link">{ "@" + s.Handle }</a></td>
+										<td>
+											<span class={ "dot " + FeedSourceDotClass(s.DisplayStatus) }></span>
+											{ s.DisplayStatus }
+											if FeedSourceShortError(s) != "" {
+												{ " " }
+												<span class="feed-source-error">{ FeedSourceShortError(s) }</span>
+											}
+										</td>
+										<td class={ LastOkClass(s.LastSuccessAt) }>{ TimeAgoText(p, s.LastSuccessAt) }</td>
+										<td>{ fmt.Sprintf("%d", s.ItemCount) }</td>
+										<td>
+											if s.DisplayStatus != "ok" {
+												<button class="feed-probe-link" type="button"
+													hx-get={ "/api/rsshub/probe?handle=" + s.Handle }
+													hx-swap="none"
+													hx-on::before-request="this.textContent='...';this.disabled=true"
+													hx-on::after-request="this.textContent=(window.IglooI18n&&window.IglooI18n.t?window.IglooI18n.t('action_probe','Probe'):'Probe');this.disabled=false;if(event.detail.successful&&window.MpaSiteBase)MpaSiteBase.showToast(window.IglooI18n&&window.IglooI18n.t?window.IglooI18n.t('toast_probe_done','Probe done'):'Probe done')"
+												>{ L(p, "action_probe", "Probe") }</button>
+												{ " " }
+												<button class="feed-unfollow-link" type="button"
+													hx-delete={ "/api/unsubscribe/twitter_" + s.Handle + "?delete_files=true" }
+													hx-target="closest tr"
+													hx-swap="outerHTML"
+													hx-confirm={ LF(p, "confirm_unfollow_channel_delete_media_body", "Unfollow \"%1$s\" and delete local media? This cannot be undone.", "@" + s.Handle) }
+													hx-on::before-request="this.textContent='...';this.disabled=true"
+													hx-on::after-request="this.textContent=(window.IglooI18n&&window.IglooI18n.t?window.IglooI18n.t('action_unfollow','Unfollow'):'Unfollow');this.disabled=false;if(event.detail.successful&&window.MpaSiteBase)MpaSiteBase.showToast(window.IglooI18n&&window.IglooI18n.t?window.IglooI18n.t('toast_unfollowed','Unfollowed'):'Unfollowed')"
+												>{ L(p, "action_unfollow", "Unfollow") }</button>
+											}
+										</td>
+									</tr>
+								}
+							}
+						</tbody>
+					</table>
+				} else {
+					<div class="feed-source-empty">{ L(p, "logs_no_x_sources", "No X sources configured.") }</div>
+				}
+			</div>
+		</div>
+	</div>
+}
+
+// ConfirmModal renders the generic confirmation modal.
+templ ConfirmModal(p PageProps) {
+	<div id="confirm-modal" class="modal hidden" aria-hidden="true">
+		<div class="modal-backdrop"></div>
+		<div class="modal-content modal-confirm-compact">
+			<button class="modal-close" type="button">&times;</button>
+			<h2 id="confirm-title" data-i18n="action_confirm">{ L(p, "action_confirm", "Confirm") }</h2>
+			<p id="confirm-body" class="modal-description"></p>
+			<div id="confirm-actions" class="modal-actions"></div>
+		</div>
+	</div>
+}
+
+// SearchOverlay renders the zen-style centered search overlay.
+templ SearchOverlay(p PageProps) {
+	<div id="search-overlay" class="search-overlay hidden">
+		<div class="search-overlay-box">
+			<div class="search-overlay-input-wrap">
+				<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+				<input type="text" id="search-overlay-input" class="search-overlay-input" placeholder={ L(p, "search_overlay_placeholder", "Search channels, videos...") } data-i18n-placeholder="search_overlay_placeholder" autocomplete="off"/>
+				<button type="button" id="search-overlay-clear" class="input-clear-btn hidden" aria-label={ L(p, "action_clear", "Clear") } data-i18n-aria-label="action_clear">&times;</button>
+			</div>
+			<div id="search-overlay-results" class="search-overlay-results"></div>
+		</div>
+	</div>
+}

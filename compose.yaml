@@ -1,0 +1,26 @@
+services:
+  igloo:
+    image: ghcr.io/screwys/igloo:latest
+    build:
+      context: .
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${IGLOO_PORT:-5001}:5001"
+    environment:
+      IGLOO_ENABLED_PLATFORMS: ${IGLOO_ENABLED_PLATFORMS:-}
+      RSSHUB_BASE: ${RSSHUB_BASE:-}
+      RSSHUB_TIMEOUT: ${RSSHUB_TIMEOUT:-15s}
+    volumes:
+      - ./igloo/data:/data
+      - ./igloo/config:/config
+
+  rsshub:
+    image: ghcr.io/diygod/rsshub:chromium-bundled
+    profiles:
+      - rsshub
+    restart: unless-stopped
+    environment:
+      PORT: "1200"
+      NODE_ENV: production
+    expose:
+      - "1200"

@@ -1,0 +1,43 @@
+rules:
+  - id: igloo.shell-wrapper-command
+    languages: [go]
+    severity: ERROR
+    message: Do not pass user-controlled data through sh -c or bash -c. Use argv-style exec.Command/CommandContext with validated arguments.
+    pattern-either:
+      - pattern: exec.Command("sh", "-c", ...)
+      - pattern: exec.Command("bash", "-c", ...)
+      - pattern: exec.Command("/bin/sh", "-c", ...)
+      - pattern: exec.Command("/bin/bash", "-c", ...)
+      - pattern: exec.CommandContext($CTX, "sh", "-c", ...)
+      - pattern: exec.CommandContext($CTX, "bash", "-c", ...)
+      - pattern: exec.CommandContext($CTX, "/bin/sh", "-c", ...)
+      - pattern: exec.CommandContext($CTX, "/bin/bash", "-c", ...)
+
+  - id: igloo.ffmpeg-without-context
+    languages: [go]
+    severity: WARNING
+    message: ffmpeg should run with exec.CommandContext, a timeout/cancel path, and -nostdin.
+    pattern: exec.Command("ffmpeg", ...)
+
+  - id: igloo.url-host-substring-routing
+    languages: [go]
+    severity: WARNING
+    message: Do not detect platform or trust CDN hosts with substring checks. Parse the URL and allowlist the hostname.
+    paths:
+      exclude:
+        - "**/*_test.go"
+    pattern-either:
+      - pattern: strings.Contains($URL, "youtube.com")
+      - pattern: strings.Contains($URL, "youtu.be")
+      - pattern: strings.Contains($URL, "tiktok.com")
+      - pattern: strings.Contains($URL, "tnktok.com")
+      - pattern: strings.Contains($URL, "twitter.com")
+      - pattern: strings.Contains($URL, "x.com")
+      - pattern: strings.Contains($URL, "pbs.twimg.com")
+      - pattern: strings.Contains($URL, "video.twimg.com")
+
+  - id: igloo.network-copy-without-cap
+    languages: [go]
+    severity: WARNING
+    message: Copying an HTTP response body to disk should use an explicit byte cap.
+    pattern: io.Copy($DST, $RESP.Body)

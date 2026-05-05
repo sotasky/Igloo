@@ -1,0 +1,705 @@
+package worker
+
+import (
+	"context"
+	"errors"
+	"log"
+	"math"
+	"net"
+	"net/netip"
+	"net/url"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/screwys/igloo/internal/fetchprofile"
+	"github.com/screwys/igloo/internal/model"
+)
+
+type storedMediaHostLookup func(host string) ([]netip.Addr, error)
+
+var lookupStoredMediaHost storedMediaHostLookup = func(host string) ([]netip.Addr, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return net.DefaultResolver.LookupNetIP(ctx, "ip", host)
+}
+
+const (
+	profileActiveTick        = 5 * time.Second
+	profileIdleTick          = 5 * time.Minute
+	profileTTL               = 24 * time.Hour
+	instagramProfileBackoff  = 15 * time.Minute
+	profileMaxBackoff        = 6 * time.Hour
+	profileBatchPerTick      = 5
+	feedProfileBatchPerTick  = 10
+	feedAvatarSeedMinSpacing = time.Minute
+)
+
+// fetchFn is fetchprofile.Fetch, overridable by tests.
+type fetchFn func(ctx context.Context, channelID string) (*fetchprofile.Profile, error)
+
+type instagramProfileFetchFn func(ctx context.Context, channelID, handle string) (*model.ChannelProfile, error)
+
+// runProfileRefreshLoop owns every profile + avatar + banner refresh across
+// all platforms. Two-phase cadence: 5 s between refresh batches while work is
+// pending, 5 min idle tick when everything is fresh.
+//
+// Also drains m.avatarRequest for on-demand fetches of non-subscribed
+// channels (used for feed author enrichment).
+func (m *Manager) runProfileRefreshLoop(ctx context.Context) {
+	log.Printf("[profile] refresh worker started")
+	avDir := filepath.Join(m.cfg.DataDir, "thumbnails", "avatars")
+	bnDir := filepath.Join(m.cfg.DataDir, "thumbnails", "banners")
+	if err := os.MkdirAll(avDir, 0o755); err != nil {
+		log.Printf("[profile] mkdir %s: %v", avDir, err)
+	}
+	if err := os.MkdirAll(bnDir, 0o755); err != nil {
+		log.Printf("[profile] mkdir %s: %v", bnDir, err)
+	}
+	interval := profileActiveTick
+	lastFeedAvatarSeed := time.Time{}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case channelID := <-m.avatarRequest:
+			m.refreshRequestedAvatar(ctx, fetchprofile.Fetch, channelID, avDir, bnDir)
+		case <-ticker.C:
+			m.drainOnDemandProfileRequests(ctx, avDir, bnDir)
+			if time.Since(lastFeedAvatarSeed) >= feedAvatarSeedMinSpacing {
+				if n, err := m.db.SeedChannelProfileRows(); err != nil {
+					log.Printf("[profile] SeedChannelProfileRows: %v", err)
+				} else if n > 0 {
+					log.Printf("[profile] seeded/updated %d profile rows", n)
+				}
+				if n, err := m.db.SeedSyntheticTwitterAvatarProfiles(); err != nil {
+					log.Printf("[profile] SeedSyntheticTwitterAvatarProfiles: %v", err)
+				} else if n > 0 {
+					log.Printf("[profile] seeded %d synthetic twitter avatar profile rows", n)
+				}
+				if n, err := m.db.SeedYouTubeCommentAuthorProfiles(); err != nil {
+					log.Printf("[profile] SeedYouTubeCommentAuthorProfiles: %v", err)
+				} else if n > 0 {
+					log.Printf("[profile] seeded %d youtube comment author profile rows", n)
+				}
+				lastFeedAvatarSeed = time.Now()
+			}
+			feedWorked := m.refreshFeedProfileCompletenessBatch(ctx, fetchprofile.Fetch, avDir, bnDir, feedProfileBatchPerTick)
+			staleWorked := m.refreshStaleProfilesBatch(ctx, fetchprofile.Fetch, avDir, bnDir, profileBatchPerTick)
+			worked := feedWorked || staleWorked
+			if !worked {
+				if n, err := m.db.SeedChannelProfileRows(); err == nil && n > 0 {
+					log.Printf("[profile] seeded/updated %d profile rows", n)
+					worked = m.refreshFeedProfileCompletenessBatch(ctx, fetchprofile.Fetch, avDir, bnDir, feedProfileBatchPerTick)
+					if !worked {
+						worked = m.refreshStaleProfilesBatch(ctx, fetchprofile.Fetch, avDir, bnDir, profileBatchPerTick)
+					}
+					if !worked {
+						worked = true
+					}
+				}
+			}
+			want := profileIdleTick
+			if worked {
+				want = profileActiveTick
+			}
+			if want != interval {
+				interval = want
+				ticker.Reset(interval)
+			}
+		}
+	}
+}
+
+// refreshFeedProfileCompletenessBatch backfills recently visible identities
+// before the generic stale sweep: full profile rows first, then missing avatars.
+func (m *Manager) refreshFeedProfileCompletenessBatch(ctx context.Context, fetch fetchFn, avDir, bnDir string, limit int) bool {
+	if limit <= 0 {
+		limit = 1
+	}
+	channelIDs, err := m.db.ListFeedAvatarProfileIDs()
+	if err != nil {
+		log.Printf("[profile] ListFeedAvatarProfileIDs: %v", err)
+		return false
+	}
+	worked := false
+	attempts := 0
+	now := time.Now()
+	for _, channelID := range channelIDs {
+		if ctx.Err() != nil || attempts >= limit {
+			break
+		}
+		existing, err := m.db.GetChannelProfile(channelID)
+		if err != nil {
+			log.Printf("[profile] GetChannelProfile %s: %v", channelID, err)
+			continue
+		}
+		if existing == nil || existing.Tombstone || !profileRetryDue(existing, now) {
+			continue
+		}
+		if shouldRefreshFullProfile(channelID, existing, now) {
+			m.refreshProfile(ctx, fetch, channelID, avDir, bnDir)
+			m.downloadStoredProfileMedia(ctx, channelID, existing, avDir, bnDir)
+			worked = true
+			attempts++
+			continue
+		}
+
+		downloaded, attempted := m.downloadStoredProfileMedia(ctx, channelID, existing, avDir, bnDir)
+		if downloaded {
+			worked = true
+			attempts++
+			continue
+		}
+		if attempted || profileFetchDue(existing, now) {
+			m.refreshProfile(ctx, fetch, channelID, avDir, bnDir)
+		} else {
+			continue
+		}
+		worked = true
+		attempts++
+	}
+	return worked
+}
+
+func profileRetryDue(p *model.ChannelProfile, now time.Time) bool {
+	return p.NextRetryAt == nil || !p.NextRetryAt.After(now)
+}
+
+func profileFetchDue(p *model.ChannelProfile, now time.Time) bool {
+	return p.FetchedAt == nil || p.FetchedAt.IsZero() || p.FetchedAt.Before(now.Add(-profileTTL))
+}
+
+func shouldRefreshFullProfile(channelID string, p *model.ChannelProfile, now time.Time) bool {
+	if p == nil || !profileFetchDue(p, now) || model.IsSyntheticTwitterAvatarChannelID(channelID) {
+		return false
+	}
+	return strings.HasPrefix(channelID, "twitter_") ||
+		strings.HasPrefix(channelID, "youtube_") ||
+		strings.HasPrefix(channelID, "tiktok_")
+}
+
+func (m *Manager) downloadStoredProfileMedia(ctx context.Context, channelID string, p *model.ChannelProfile, avDir, bnDir string) (downloaded bool, attempted bool) {
+	if p == nil {
+		return false, false
+	}
+	if !hasConventionalMediaFile(avDir, channelID) && canDownloadStoredAvatar(channelID, p.AvatarURL) {
+		attempted = true
+		if m.downloadProfileMedia(ctx, channelID, "avatar", p.AvatarURL, avDir) {
+			downloaded = true
+		}
+	}
+	if !hasConventionalMediaFile(bnDir, channelID) && canDownloadStoredBanner(p.BannerURL) {
+		attempted = true
+		if m.downloadProfileMedia(ctx, channelID, "banner", p.BannerURL, bnDir) {
+			downloaded = true
+		}
+	}
+	return downloaded, attempted
+}
+
+func canDownloadStoredAvatar(channelID, avatarURL string) bool {
+	avatarURL = strings.TrimSpace(avatarURL)
+	if avatarURL == "" {
+		return false
+	}
+	if strings.HasPrefix(channelID, "twitter_") {
+		return model.IsRawTwitterProfileAvatar(avatarURL)
+	}
+	return isSafeStoredMediaURL(avatarURL)
+}
+
+func canDownloadStoredBanner(bannerURL string) bool {
+	bannerURL = strings.TrimSpace(bannerURL)
+	if bannerURL == "" || strings.HasPrefix(bannerURL, "synth:") {
+		return false
+	}
+	lower := strings.ToLower(bannerURL)
+	return strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://")
+}
+
+func isSafeStoredMediaURL(rawURL string) bool {
+	return isSafeStoredMediaURLWithLookup(rawURL, lookupStoredMediaHost)
+}
+
+func isSafeStoredMediaURLWithLookup(rawURL string, lookup storedMediaHostLookup) bool {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return false
+	}
+	host := strings.ToLower(strings.TrimSpace(u.Hostname()))
+	host = strings.TrimRight(host, ".")
+	if host == "" || host == "localhost" || strings.HasSuffix(host, ".localhost") {
+		return false
+	}
+	if ip, err := netip.ParseAddr(host); err == nil {
+		return isSafeStoredMediaAddr(ip)
+	}
+	if lookup == nil {
+		return false
+	}
+	addrs, err := lookup(host)
+	if err != nil || len(addrs) == 0 {
+		return false
+	}
+	for _, addr := range addrs {
+		if !isSafeStoredMediaAddr(addr) {
+			return false
+		}
+	}
+	return true
+}
+
+func isSafeStoredMediaAddr(addr netip.Addr) bool {
+	addr = addr.Unmap()
+	return addr.IsValid() &&
+		addr.IsGlobalUnicast() &&
+		!addr.IsLoopback() &&
+		!addr.IsPrivate() &&
+		!addr.IsLinkLocalUnicast() &&
+		!addr.IsUnspecified()
+}
+
+func (m *Manager) refreshStaleProfilesBatch(ctx context.Context, fetch fetchFn, avDir, bnDir string, limit int) bool {
+	if limit <= 0 {
+		limit = 1
+	}
+	worked := false
+	for i := 0; i < limit; i++ {
+		if !m.refreshOneStaleProfile(ctx, fetch, avDir, bnDir) {
+			break
+		}
+		worked = true
+	}
+	return worked
+}
+
+func (m *Manager) drainOnDemandProfileRequests(ctx context.Context, avDir, bnDir string) {
+	for {
+		select {
+		case channelID := <-m.avatarRequest:
+			m.refreshRequestedAvatar(ctx, fetchprofile.Fetch, channelID, avDir, bnDir)
+		default:
+			return
+		}
+	}
+}
+
+func (m *Manager) refreshRequestedAvatar(ctx context.Context, fetch fetchFn, channelID, avDir, bnDir string) {
+	existing, err := m.db.GetChannelProfile(channelID)
+	if err != nil {
+		log.Printf("[profile] GetChannelProfile %s: %v", channelID, err)
+	}
+	attemptedFullRefresh := false
+	now := time.Now()
+	if existing != nil && !existing.Tombstone && profileRetryDue(existing, now) && shouldRefreshFullProfile(channelID, existing, now) {
+		m.refreshProfile(ctx, fetch, channelID, avDir, bnDir)
+		attemptedFullRefresh = true
+		m.downloadStoredProfileMedia(ctx, channelID, existing, avDir, bnDir)
+		if hasConventionalMediaFile(avDir, channelID) {
+			return
+		}
+	}
+	if existing != nil && !attemptedFullRefresh {
+		m.downloadStoredProfileMedia(ctx, channelID, existing, avDir, bnDir)
+		if hasConventionalMediaFile(avDir, channelID) {
+			return
+		}
+	}
+	if attemptedFullRefresh {
+		return
+	}
+	m.refreshProfile(ctx, fetch, channelID, avDir, bnDir)
+}
+
+// refreshOneStaleProfile picks the oldest-stale row and refreshes it.
+// Returns true iff it attempted a fetch.
+func (m *Manager) refreshOneStaleProfile(ctx context.Context, fetch fetchFn, avDir, bnDir string) bool {
+	channelID, err := m.db.NextChannelProfileRefreshCandidate(profileTTL)
+	if err != nil {
+		log.Printf("[profile] NextChannelProfileRefreshCandidate: %v", err)
+		return false
+	}
+	if channelID == "" {
+		return false
+	}
+	m.refreshProfile(ctx, fetch, channelID, avDir, bnDir)
+	return true
+}
+
+// refreshProfile fetches a single channel's profile, updates the row, and
+// downloads avatar/banner if the source URLs changed or files are missing.
+// Errors are recorded as backoff/tombstone; never returned.
+func (m *Manager) refreshProfile(ctx context.Context, fetch fetchFn, channelID, avDir, bnDir string) {
+	existing, _ := m.db.GetChannelProfile(channelID)
+	if existing != nil && model.IsSyntheticTwitterAvatarChannelID(channelID) && existing.AvatarURL != "" {
+		now := time.Now().UTC()
+		if !hasConventionalMediaFile(avDir, channelID) {
+			m.downloadProfileMedia(ctx, channelID, "avatar", existing.AvatarURL, avDir)
+		}
+		row := *existing
+		row.Platform = "twitter"
+		row.FetchedAt = &now
+		row.FailCount = 0
+		row.NextRetryAt = nil
+		row.Tombstone = false
+		if err := m.db.UpsertChannelProfile(row); err != nil {
+			log.Printf("[profile] upsert synthetic %s: %v", channelID, err)
+		}
+		return
+	}
+	if strings.HasPrefix(channelID, "instagram_") {
+		m.refreshInstagramStoredProfile(ctx, channelID, avDir, bnDir, existing)
+		return
+	}
+	p, err := m.fetchProfile(ctx, fetch, channelID)
+	now := time.Now().UTC()
+	if err != nil {
+		m.recordProfileFetchError(channelID, existing, err, now)
+		return
+	}
+
+	// TikTok/Instagram have no native profile banner; synthesize one from the newest
+	// downloaded video's cover so the channel header matches Twitter/YouTube.
+	if (p.Platform == "tiktok" || p.Platform == "instagram") && p.BannerURL == "" {
+		p.BannerURL = m.refreshStoredShortsBanner(channelID, bnDir, existing, p.BannerURL)
+	}
+
+	row := model.ChannelProfile{
+		ChannelID:    p.ChannelID,
+		Platform:     p.Platform,
+		Handle:       p.Handle,
+		DisplayName:  p.DisplayName,
+		Bio:          p.Bio,
+		Website:      p.Website,
+		Followers:    p.Followers,
+		Following:    p.Following,
+		Verified:     p.Verified,
+		VerifiedType: p.VerifiedType,
+		Protected:    p.Protected,
+		AvatarURL:    p.AvatarURL,
+		BannerURL:    p.BannerURL,
+		FetchedAt:    &now,
+		FailCount:    0,
+	}
+	if err := m.db.UpsertChannelProfile(row); err != nil {
+		log.Printf("[profile] upsert %s: %v", channelID, err)
+		return
+	}
+
+	// Avatar: download if URL changed or file missing.
+	avChanged := existing == nil || existing.AvatarURL != p.AvatarURL
+	if p.AvatarURL != "" && (avChanged || !hasConventionalMediaFile(avDir, channelID)) {
+		m.downloadProfileMedia(ctx, channelID, "avatar", p.AvatarURL, avDir)
+	}
+
+	// Banner: same, skipped when platform has no banner (empty URL).
+	// synth:* URLs are server-synthesized; the file is already placed on disk
+	// by synthesizeShortsBanner, no HTTP fetch needed.
+	bnChanged := existing == nil || existing.BannerURL != p.BannerURL
+	if p.BannerURL != "" && !strings.HasPrefix(p.BannerURL, "synth:") &&
+		(bnChanged || !hasConventionalMediaFile(bnDir, channelID)) {
+		m.downloadProfileMedia(ctx, channelID, "banner", p.BannerURL, bnDir)
+	}
+
+	// TikTok display-name promotion: if channels.name still equals the raw
+	// handle, promote to nickname.
+	if p.Platform == "tiktok" && p.DisplayName != "" {
+		m.maybePromoteChannelName(channelID, p.DisplayName)
+	}
+}
+
+func (m *Manager) fetchProfile(ctx context.Context, fetch fetchFn, channelID string) (*fetchprofile.Profile, error) {
+	return fetch(ctx, channelID)
+}
+
+func (m *Manager) refreshInstagramStoredProfile(ctx context.Context, channelID, avDir, bnDir string, existing *model.ChannelProfile) {
+	now := time.Now().UTC()
+	handle := strings.TrimPrefix(channelID, "instagram_")
+	row := model.ChannelProfile{
+		ChannelID:   channelID,
+		Platform:    "instagram",
+		Handle:      handle,
+		DisplayName: handle,
+		FetchedAt:   &now,
+		FailCount:   0,
+	}
+	if existing != nil {
+		row.Handle = existing.Handle
+		if row.Handle == "" {
+			row.Handle = handle
+		}
+		row.DisplayName = existing.DisplayName
+		if row.DisplayName == "" {
+			row.DisplayName = row.Handle
+		}
+		row.Bio = existing.Bio
+		row.Website = existing.Website
+		row.Followers = existing.Followers
+		row.Following = existing.Following
+		row.Verified = existing.Verified
+		row.VerifiedType = existing.VerifiedType
+		row.Protected = existing.Protected
+		row.AvatarURL = existing.AvatarURL
+		row.BannerURL = existing.BannerURL
+	}
+	row.BannerURL = m.refreshStoredShortsBanner(channelID, bnDir, existing, row.BannerURL)
+	// Avoid competing with the Instagram source/download backlog when we already
+	// have an avatar URL to use, but do not starve blank avatar rows forever.
+	if m.instagramSourceBacklogExists() && row.AvatarURL != "" {
+		next := now.Add(instagramProfileBackoff)
+		row.FetchedAt = nil
+		if existing != nil {
+			row.FetchedAt = existing.FetchedAt
+		}
+		row.NextRetryAt = &next
+		if err := m.db.UpsertChannelProfile(row); err != nil {
+			log.Printf("[profile] defer instagram profile %s: %v", channelID, err)
+		}
+		if row.AvatarURL != "" && !hasConventionalMediaFile(avDir, channelID) {
+			m.downloadProfileMedia(ctx, channelID, "avatar", row.AvatarURL, avDir)
+		}
+		return
+	}
+	if existing != nil && row.BannerURL != "" && existing.BannerURL != row.BannerURL &&
+		(row.AvatarURL != "" || !profileRetryDue(existing, now) || !profileFetchDue(existing, now)) {
+		next := now.Add(instagramProfileBackoff)
+		if existing.NextRetryAt != nil && existing.NextRetryAt.After(next) {
+			next = *existing.NextRetryAt
+		}
+		row.FetchedAt = existing.FetchedAt
+		row.FailCount = existing.FailCount
+		row.NextRetryAt = &next
+		row.Tombstone = existing.Tombstone
+		if err := m.db.UpsertChannelProfile(row); err != nil {
+			log.Printf("[profile] defer instagram profile after banner %s: %v", channelID, err)
+		}
+		return
+	}
+	errorBase := m.persistInstagramBannerSnapshot(row, existing)
+	if profile, err := m.fetchInstagramProfile(ctx, channelID, handle); err != nil {
+		m.recordProfileFetchError(channelID, errorBase, err, now)
+		return
+	} else if profile != nil {
+		row.Handle = profile.Handle
+		if row.Handle == "" {
+			row.Handle = handle
+		}
+		row.DisplayName = profile.DisplayName
+		if row.DisplayName == "" {
+			row.DisplayName = row.Handle
+		}
+		row.Bio = profile.Bio
+		row.Website = profile.Website
+		row.Followers = profile.Followers
+		row.Following = profile.Following
+		row.Verified = profile.Verified
+		row.AvatarURL = profile.AvatarURL
+	}
+	row.BannerURL = m.refreshStoredShortsBanner(channelID, bnDir, existing, row.BannerURL)
+	if err := m.db.UpsertChannelProfile(row); err != nil {
+		log.Printf("[profile] upsert instagram stored %s: %v", channelID, err)
+		return
+	}
+	if row.AvatarURL != "" && !hasConventionalMediaFile(avDir, channelID) {
+		m.downloadProfileMedia(ctx, channelID, "avatar", row.AvatarURL, avDir)
+	}
+}
+
+func (m *Manager) persistInstagramBannerSnapshot(row model.ChannelProfile, existing *model.ChannelProfile) *model.ChannelProfile {
+	if row.BannerURL == "" || !strings.HasPrefix(row.BannerURL, shortsBannerSentinelPrefix) {
+		return existing
+	}
+	if existing != nil && existing.BannerURL == row.BannerURL {
+		return existing
+	}
+	snapshot := row
+	if existing != nil {
+		snapshot.FetchedAt = existing.FetchedAt
+		snapshot.FailCount = existing.FailCount
+		snapshot.NextRetryAt = existing.NextRetryAt
+		snapshot.Tombstone = existing.Tombstone
+	} else {
+		snapshot.FetchedAt = nil
+		snapshot.FailCount = 0
+		snapshot.NextRetryAt = nil
+		snapshot.Tombstone = false
+	}
+	if err := m.db.UpsertChannelProfile(snapshot); err != nil {
+		log.Printf("[profile] persist instagram banner %s: %v", row.ChannelID, err)
+		return existing
+	}
+	return &snapshot
+}
+
+func (m *Manager) fetchInstagramProfile(ctx context.Context, channelID, handle string) (*model.ChannelProfile, error) {
+	if m != nil && m.instagramProfileFetch != nil {
+		return m.instagramProfileFetch(ctx, channelID, handle)
+	}
+	if m == nil || m.downloader == nil || m.downloader.GalleryDL == nil {
+		return nil, nil
+	}
+	cookiesFile, _ := m.cookiesFor("instagram")
+	profile, err := m.downloader.GalleryDL.InstagramProfile(ctx, handle, cookiesFile)
+	if err != nil {
+		return nil, err
+	}
+	if profile == nil {
+		return nil, fetchprofile.ErrNotFound
+	}
+	return &model.ChannelProfile{
+		ChannelID:   channelID,
+		Platform:    "instagram",
+		Handle:      profile.Handle,
+		DisplayName: profile.DisplayName,
+		Bio:         profile.Bio,
+		Website:     profile.Website,
+		Followers:   profile.Followers,
+		Following:   profile.Following,
+		Verified:    profile.Verified,
+		AvatarURL:   profile.AvatarURL,
+	}, nil
+}
+
+func (m *Manager) instagramSourceBacklogExists() bool {
+	if m == nil || m.db == nil {
+		return false
+	}
+	channels, err := m.db.GetSubscribedChannels()
+	if err != nil {
+		log.Printf("[profile] GetSubscribedChannels for instagram backlog: %v", err)
+		return true
+	}
+	for _, ch := range channels {
+		if ch.Platform != "instagram" {
+			continue
+		}
+		if ch.LastChecked == nil || ch.LastChecked.IsZero() {
+			return true
+		}
+		queued, err := m.db.GetQueuedVideoCount(ch.ChannelID)
+		if err != nil {
+			log.Printf("[profile] GetQueuedVideoCount for instagram backlog %s: %v", ch.ChannelID, err)
+			return true
+		}
+		if queued > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *Manager) downloadProfileMedia(ctx context.Context, channelID, kind, url, dir string) bool {
+	if m == nil || m.downloader == nil || m.downloader.HTTP == nil {
+		return false
+	}
+	dlURL := url
+	// Twitter avatar URLs from fxtwitter use the _normal 48x48 variant;
+	// upgrade to 400x400 so the downloaded file exceeds the placeholder
+	// size threshold.
+	if kind == "avatar" && strings.HasPrefix(channelID, "twitter_") {
+		dlURL = upgradeTwimgURL(url)
+	}
+	tempName := channelID + ".download"
+	tmpPath, err := m.downloader.HTTP.DownloadFile(ctx, dlURL, dir, tempName)
+	if err != nil {
+		if dlURL != url {
+			tmpPath, err = m.downloader.HTTP.DownloadFile(ctx, url, dir, tempName)
+		}
+		if err != nil {
+			log.Printf("[profile] %s download %s: %v", kind, channelID, err)
+			return false
+		}
+	}
+	if _, err := normalizeDownloadedImage(tmpPath, dir, channelID); err != nil {
+		log.Printf("[profile] %s normalize %s: %v", kind, channelID, err)
+		return false
+	}
+	// No media_files bookkeeping — the file lives at the conventional disk
+	// path and resolveAvatarPath/resolveBannerPath find it there.
+	return true
+}
+
+// maybePromoteChannelName updates channels.name to displayName when the
+// existing name is still the raw @handle form — i.e., TikTok channels added
+// before the profile worker filled in nicknames.
+func (m *Manager) maybePromoteChannelName(channelID, displayName string) {
+	ch, err := m.db.GetChannelByID(channelID)
+	if err != nil {
+		return
+	}
+	handle := strings.TrimPrefix(channelID, "tiktok_")
+	looksLikeHandle := strings.EqualFold(ch.Name, handle) ||
+		strings.EqualFold(ch.Name, "@"+handle) ||
+		ch.Name == ""
+	if !looksLikeHandle || strings.EqualFold(ch.Name, displayName) {
+		return
+	}
+	if err := m.db.UpdateChannelName(channelID, displayName); err != nil {
+		log.Printf("[profile] promote channel name %s: %v", channelID, err)
+	}
+}
+
+func (m *Manager) recordProfileFetchError(channelID string, existing *model.ChannelProfile, err error, now time.Time) {
+	tombstone := errors.Is(err, fetchprofile.ErrNotFound)
+	failCount := 1
+	if existing != nil {
+		failCount = existing.FailCount + 1
+	}
+	retryDelay := time.Duration(math.Min(
+		float64(time.Minute)*math.Pow(2, float64(failCount)),
+		float64(profileMaxBackoff),
+	))
+	next := now.Add(retryDelay)
+	row := model.ChannelProfile{
+		ChannelID:   channelID,
+		Platform:    platformForChannelID(channelID),
+		FailCount:   failCount,
+		NextRetryAt: &next,
+		Tombstone:   tombstone,
+	}
+	if existing != nil {
+		row.Platform = existing.Platform
+		row.Handle = existing.Handle
+		row.DisplayName = existing.DisplayName
+		row.Bio = existing.Bio
+		row.Website = existing.Website
+		row.Followers = existing.Followers
+		row.Following = existing.Following
+		row.Verified = existing.Verified
+		row.VerifiedType = existing.VerifiedType
+		row.Protected = existing.Protected
+		row.AvatarURL = existing.AvatarURL
+		row.BannerURL = existing.BannerURL
+		row.FetchedAt = existing.FetchedAt
+	}
+	if e := m.db.UpsertChannelProfile(row); e != nil {
+		log.Printf("[profile] upsert on error %s: %v", channelID, e)
+	}
+	if tombstone {
+		log.Printf("[profile] tombstoned %s: %v", channelID, err)
+	} else {
+		log.Printf("[profile] transient error %s (backoff %s): %v", channelID, retryDelay, err)
+	}
+}
+
+func platformForChannelID(channelID string) string {
+	switch {
+	case strings.HasPrefix(channelID, "twitter_"):
+		return "twitter"
+	case strings.HasPrefix(channelID, "youtube_"):
+		return "youtube"
+	case strings.HasPrefix(channelID, "tiktok_"):
+		return "tiktok"
+	case strings.HasPrefix(channelID, "instagram_"):
+		return "instagram"
+	default:
+		return ""
+	}
+}

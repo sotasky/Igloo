@@ -1,0 +1,130 @@
+package components
+
+import (
+	"github.com/screwys/igloo/internal/model"
+)
+
+// FeedPage renders the full feed page (used for /feed and individual Twitter channel pages).
+templ FeedPage(p PageProps, items []model.FeedItem, hasMore bool, nextPageURL string, showControls bool, serverReranked bool, xChannel *XChannelInfo) {
+	@Base(p) {
+		if showControls {
+			<div id="feed-toolbar" class="feed-toolbar"></div>
+			@FeedNewPostsBar(p, false, nil)
+		}
+		if xChannel != nil && xChannel.Profile != nil {
+			@ProfileCard(p, xChannel.Profile, "hero", xChannel.IsFollowing, xChannel.IsStarred)
+		}
+		<div
+			id="feed-list"
+			class="feed-list"
+			style="display:flex; flex-direction:column; padding:1rem;"
+			if serverReranked {
+				data-server-reranked="1"
+			}
+			if showControls {
+				data-seen-tracked="1"
+			}
+		>
+			if len(items) > 0 {
+				for _, item := range items {
+					@FeedItem(p, item)
+				}
+			} else {
+				<div class="empty-state"><h3>{ L(p, "feed_empty_title", "No posts") }</h3><p>{ L(p, "feed_empty_items", "No feed items available.") }</p></div>
+			}
+			@FeedScrollSentinel(nextPageURL)
+		</div>
+		@RetweetersDialog(p)
+	}
+}
+
+// LikedPage renders the liked posts page.
+templ LikedPage(p PageProps, items []model.FeedItem, hasMore bool, nextPageURL string) {
+	@Base(p) {
+		<div
+			id="feed-list"
+			class="feed-list"
+			style="display:flex; flex-direction:column; padding:1rem;"
+		>
+			if len(items) > 0 {
+				for _, item := range items {
+					@FeedItem(p, item)
+				}
+			} else {
+				<div class="empty-state"><h3>{ L(p, "feed_empty_title", "No posts") }</h3><p>{ L(p, "feed_empty_items", "No feed items available.") }</p></div>
+			}
+			@FeedScrollSentinel(nextPageURL)
+		</div>
+		@RetweetersDialog(p)
+	}
+}
+
+// FeedScrollSentinel renders the HTMX infinite scroll trigger.
+// When scrolled into view, it loads the next page and replaces itself.
+templ FeedScrollSentinel(nextPageURL string) {
+	if nextPageURL != "" {
+		<div
+			class="feed-scroll-sentinel"
+			hx-get={ nextPageURL }
+			hx-trigger="feed-preload"
+			hx-swap="outerHTML"
+		></div>
+	}
+}
+
+// FeedItemsPartial renders just feed items for HTMX infinite scroll responses.
+templ FeedItemsPartial(p PageProps, items []model.FeedItem) {
+	for _, item := range items {
+		@FeedItem(p, item)
+	}
+}
+
+// RetweetersDialog renders the shared retweeters popup dialog.
+templ RetweetersDialog(p PageProps) {
+	<dialog id="retweeters-dialog" class="retweeters-dialog">
+		<div class="retweeters-dialog-header">
+			<h3>{ L(p, "feed_reposted_by", "Reposted by") }</h3>
+			<button class="retweeters-dialog-close" type="button">&times;</button>
+		</div>
+		<ul class="retweeters-list"></ul>
+	</dialog>
+}
+
+// FeedNewPostsBar polls /api/feed/head and shows when a new head tweet is detected.
+// Server compares `known_head` (sent each poll from DOM) against the current head;
+// a visible bar is returned only when they differ. When visible, it shows up to
+// three overlapping avatars of the highest-ranked new posters, X-style.
+templ FeedNewPostsBar(p PageProps, hasNew bool, avatars []model.NewPosterAvatar) {
+	<button
+		id="feed-new-posts-bar"
+		class={ "feed-new-posts-bar", templ.KV("hidden", !hasNew) }
+		type="button"
+		aria-label={ L(p, "action_show_new_posts", "Show new posts") }
+		data-i18n-aria-label="action_show_new_posts"
+		hx-get="/api/feed/head?fmt=html"
+		hx-trigger="every 9s [!document.hidden]"
+		hx-swap="outerHTML"
+		hx-vals={ `js:{known_head: (document.querySelector("#feed-list [data-feed-item][data-tweet-id]")?.getAttribute("data-tweet-id") || "")}` }
+		onclick="window.location.assign('/feed')"
+	>
+		<svg class="feed-new-posts-arrow" viewBox="0 0 24 24" aria-hidden="true">
+			<path d="M12 4 L12 20 M5 11 L12 4 L19 11" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+		</svg>
+		if len(avatars) > 0 {
+			<span class="feed-new-posts-avatars">
+				for _, a := range avatars {
+					<img
+						class="feed-new-posts-avatar"
+						src={ a.AuthorAvatarURL }
+						alt={ a.AuthorHandle }
+						loading="lazy"
+						onerror="this.style.visibility='hidden'"
+					/>
+				}
+			</span>
+			<span class="feed-new-posts-label">{ L(p, "feed_new_posts_posted", "posted") }</span>
+		} else {
+			<span class="feed-new-posts-label">{ L(p, "feed_new_posts", "New posts") }</span>
+		}
+	</button>
+}

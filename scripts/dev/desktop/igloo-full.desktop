@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=Igloo Full Restart
+Comment=Build Go + daemon-reload + rsshub + restart
+Icon=system-restart
+Type=Application
+Exec=sh -c "cd \\$(dirname \\$1)/../.. && exec scripts/dev/desktop_launch.sh full" sh %k
+Categories=Development;
+Terminal=false

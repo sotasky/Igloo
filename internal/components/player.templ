@@ -1,0 +1,415 @@
+package components
+
+import "github.com/screwys/igloo/internal/model"
+
+// PlayerPage renders the full video player page wrapped in the Base layout.
+templ PlayerPage(p PageProps, video model.Video, comments []model.Comment, moreFromChannel []model.Video, nextVideo *model.Video, sbCategories string) {
+	@Base(p) {
+		{{ taggedAccounts := videoTaggedAccounts(video) }}
+		<div
+			class="player-layout"
+			id="player-root"
+			data-video-id={ video.VideoID }
+			data-next-url={ nextVideoURL(nextVideo) }
+			data-bookmarked={ boolDataAttr(video.BookmarkCategoryID != nil) }
+			data-bookmark-category-id={ bookmarkCategoryIDStr(video.BookmarkCategoryID) }
+			data-channel-id={ video.ChannelID }
+			data-author-handle={ videoAuthorHandle(video) }
+			data-channel-platform={ playerPlatform(video.Platform) }
+			data-channel-starred={ boolDataAttr(video.IsStarred) }
+			data-is-temp={ boolDataAttr(video.IsTemp) }
+			data-is-pinned={ boolDataAttr(video.IsPinned) }
+			data-channel-subscribed={ boolDataAttr(video.IsSubscribed) }
+			data-watched={ boolDataAttr(video.Watched) }
+			data-original-url={ videoWebpageURL(video) }
+			data-resume-position={ resumePosition(video) }
+			data-sponsorblock-categories={ sbCategories }
+			if len(taggedAccounts) > 0 {
+				data-tagged-accounts={ toJSONAttr(taggedAccounts) }
+			}
+		>
+			<section class="player-main">
+				<div class="player-wrapper" style="background:#000; border-radius:12px; overflow:hidden;">
+					<media-controller id="main-media-controller" class="dashboard-media-controller">
+						<video
+							id="mpa-player"
+							slot="media"
+							class="video-js vjs-big-play-centered"
+							preload="metadata"
+							style="width:100%; height:100%;"
+							poster={ p.Prefs.VideoThumbURL(video) }
+							if video.Platform == "youtube" {
+								autoplay
+							}
+							playsinline
+						>
+							<source src={ "/api/media/stream/" + video.VideoID } type="video/mp4"/>
+						</video>
+						<media-loading-indicator noautohide></media-loading-indicator>
+						<media-control-bar class="vjs-control-bar dashboard-media-control-bar">
+							<media-play-button></media-play-button>
+							@playerSeekBackButton(p)
+							@playerSeekForwardButton(p)
+							<span class="mc-separator" aria-hidden="true"></span>
+							<media-time-range id="main-player-time-range"></media-time-range>
+							<media-time-display show-duration></media-time-display>
+							<span class="mc-separator" aria-hidden="true"></span>
+							<button
+								id="player-cc-btn"
+								class="mc-custom-btn hidden"
+								type="button"
+								title={ L(p, "player_subtitles", "Subtitles") }
+								aria-label={ L(p, "player_subtitles", "Subtitles") }
+								style="font-size:0.72rem;font-weight:700;letter-spacing:0.03em;"
+								>{ L(p, "player_subtitles_abbrev", "CC") }</button>
+							<div id="player-speed-menu-wrap" class="mc-speed-menu-wrap">
+								<button id="player-speed-menu-btn" class="mc-custom-btn mc-speed-btn" type="button" title={ L(p, "player_playback_speed", "Playback speed") } aria-label={ L(p, "player_playback_speed", "Playback speed") } aria-haspopup="menu" aria-expanded="false">1x</button>
+								<div id="player-speed-menu" class="mc-speed-menu hidden" role="menu" aria-label={ L(p, "player_playback_speed_menu", "Playback speed menu") }></div>
+							</div>
+						<media-mute-button></media-mute-button>
+						<media-volume-range></media-volume-range>
+						<button
+							id="player-fullscreen-btn"
+							class="mc-custom-btn vjs-fullscreen-control"
+							type="button"
+							title={ L(p, "action_toggle_fullscreen", "Toggle fullscreen") }
+							aria-label={ L(p, "action_toggle_fullscreen", "Toggle fullscreen") }
+						>&#x2922;</button>
+						</media-control-bar>
+					</media-controller>
+				</div>
+
+				<div class="player-controls-custom">
+					<div class="player-meta-inline">
+						<h2 id="player-title" style="margin:0 0 0.2rem;">{ p.Prefs.VideoTitle(video) }</h2>
+						<div class="channel-name">
+							<span class="player-channel-avatar-wrap" aria-hidden="true">
+								<img class="player-channel-avatar" src={ videoAvatarURL(video) } alt="" onload="window.MpaSiteBase&&window.MpaSiteBase.avatarLoad(this)" onerror="if(window.MpaSiteBase&&window.MpaSiteBase.avatarError(this))return; this.style.display='none'; this.nextElementSibling.style.display='inline-flex';"/>
+								<span class="player-channel-avatar-fallback" style="display:none;">{ channelInitial(video) }</span>
+							</span>
+							<a class="channel-link" href={ templ.SafeURL("/channels/" + video.ChannelID) }>{ videoChannelName(video) }</a>
+							if video.ChannelID != "" {
+								<div class="player-channel-inline-actions" data-channel-inline-actions>
+									@PlayerStarButton(p, video.ChannelID, video.IsStarred)
+									if video.IsTemp && !video.IsSubscribed {
+										@playerSubButton(p)
+									} else {
+										@playerUnsubButton(p)
+									}
+								</div>
+							}
+							if video.PublishedAt != nil {
+								<span class="badge" id="player-video-date" data-video-date={ publishedAtStr(video.PublishedAt) }>{ RelativeTimeText(p, video.PublishedAt) }</span>
+							}
+						</div>
+					</div>
+
+					<div class="player-side-controls">
+						<div class="player-actions">
+								@playerPinButton(p, video)
+							@playerShareButton(p)
+							@playerBookmarkButton(p, video.BookmarkCategoryID != nil)
+							@playerAutoplayButton(p)
+							@playerDeleteButton(p)
+						</div>
+						if video.Metadata != nil {
+							<div class="player-stats">
+								if video.Metadata.LikeCount > 0 {
+									<span class="player-stat" id="player-stat-likes" data-count={ int64Str(video.Metadata.LikeCount) }>
+										@templ.Raw(`<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg>`)
+										<span class="player-stat-value"></span>
+									</span>
+								}
+								if video.Metadata.ViewCount > 0 {
+									<span class="player-stat" id="player-stat-views" data-count={ int64Str(video.Metadata.ViewCount) }>
+										@templ.Raw(`<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>`)
+										<span class="player-stat-value"></span>
+									</span>
+								}
+							</div>
+						}
+					</div>
+				</div>
+
+				<div
+					id="player-description-card"
+					class={ playerDescriptionClass(video.Description) }
+				>
+					<div id="player-description-text" class="player-description-text" data-richtext>{ video.Description }</div>
+					<div id="player-description-fade" class="player-description-fade"></div>
+					<button id="player-description-toggle" class="player-description-toggle" type="button">{ L(p, "action_show_more", "Show more") }</button>
+				</div>
+
+				<section id="player-comments-section" data-video-id={ video.VideoID } style="margin-top:1rem;">
+					<div class="player-comments-header-inline" style="display:flex; align-items:center; gap:0.75rem;">
+						<h3 style="margin:0; font-size:1rem;">{ L(p, "player_comments_heading", "Comments") }</h3>
+						<button
+							id="player-comments-refresh-btn"
+							type="button"
+							style="margin-left:auto; padding:0.15rem 0.5rem; font-size:0.72rem; line-height:1.4; background:rgba(20,22,30,0.78); color:var(--text-muted); border:1px solid var(--border-color); border-radius:var(--border-radius-sm); cursor:pointer; flex-shrink:0; font-family:inherit; font-weight:600;"
+							hx-post={ "/api/videos/" + video.VideoID + "/comments/refresh?fmt=html" }
+							hx-target="#player-comments-list"
+							hx-swap="innerHTML"
+							hx-indicator="this"
+							hx-disabled-elt="this"
+							>{ L(p, "action_refresh", "Refresh") }</button>
+					</div>
+					<div
+						id="player-comments-list"
+						style="display:flex; flex-direction:column; gap:0.5rem; margin-top:0.75rem;"
+						hx-get={ "/api/videos/" + video.VideoID + "/comments?fmt=html&all=1" }
+						hx-trigger="load"
+						hx-swap="innerHTML"
+					>
+						<div class="video-card" style="display:block; padding:0.75rem;">{ L(p, "status_loading_comments", "Loading comments...") }</div>
+					</div>
+					<noscript>
+						if len(comments) > 0 {
+							<div style="display:flex; flex-direction:column; gap:0.5rem; margin-top:0.75rem;">
+								for _, c := range comments {
+									<div class="video-card" style="display:block; padding:0.75rem;">
+											<strong>{ commentAuthorName(p, c) }</strong>
+										<div style="white-space:pre-wrap;">{ c.Text }</div>
+									</div>
+								}
+							</div>
+						}
+					</noscript>
+				</section>
+			</section>
+
+			<aside class="player-sidebar">
+				if nextVideo != nil {
+						<h3>{ L(p, "player_next_in_line", "Next in line") }</h3>
+					<div class="more-videos-list">
+						@VideoCard(p, *nextVideo)
+					</div>
+				}
+				if len(moreFromChannel) > 0 {
+						<h3>{ L(p, "player_more_from_channel", "More videos from this channel") }</h3>
+					<div class="more-videos-list">
+						for _, v := range moreFromChannel {
+							@VideoCard(p, v)
+						}
+					</div>
+				}
+			</aside>
+		</div>
+		<script type="module" src={ p.StaticV("js/media-chrome-loader.js") }></script>
+	}
+}
+
+func nextVideoURL(v *model.Video) string {
+	if v == nil {
+		return ""
+	}
+	return "/player/" + v.VideoID + "?autoplay=1"
+}
+
+// playerPlatform returns the platform or "youtube" as default.
+func playerPlatform(platform string) string {
+	if platform == "" {
+		return "youtube"
+	}
+	return platform
+}
+
+// playerDescriptionClass returns the CSS class for the description card.
+func playerDescriptionClass(description string) string {
+	if description != "" {
+		return "player-description-card has-toggle"
+	}
+	return "player-description-card is-empty"
+}
+
+// commentAuthorName returns the author name or a localized fallback.
+func commentAuthorName(p PageProps, c model.Comment) string {
+	if c.AuthorName != "" {
+		return c.AuthorName
+	}
+	return L(p, "player_comment_author_unknown", "User")
+}
+
+// playerSeekBackButton renders the seek-back-10-seconds button with SVG.
+templ playerSeekBackButton(p PageProps) {
+	<button id="player-seek-back-10-btn" class="mc-custom-btn mc-seek-btn" type="button" title={ L(p, "player_back_10_seconds", "Back 10 seconds") } aria-label={ L(p, "player_seek_backward_10_seconds", "Seek backward 10 seconds") }>
+		@templ.Raw(`<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 2v6h6"/><path d="M2.5 8a10 10 0 1 1 1.28 5"/><text x="12" y="15.5" fill="currentColor" stroke="none" font-size="7.5" font-weight="700" text-anchor="middle" font-family="system-ui">10</text></svg>`)
+	</button>
+}
+
+// playerSeekForwardButton renders the seek-forward-10-seconds button with SVG.
+templ playerSeekForwardButton(p PageProps) {
+	<button id="player-seek-forward-10-btn" class="mc-custom-btn mc-seek-btn" type="button" title={ L(p, "player_forward_10_seconds", "Forward 10 seconds") } aria-label={ L(p, "player_seek_forward_10_seconds", "Seek forward 10 seconds") }>
+		@templ.Raw(`<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 2v6h-6"/><path d="M21.5 8A10 10 0 1 0 20.22 13"/><text x="12" y="15.5" fill="currentColor" stroke="none" font-size="7.5" font-weight="700" text-anchor="middle" font-family="system-ui">10</text></svg>`)
+	</button>
+}
+
+// PlayerStarButton renders the channel star toggle button. HTMX-driven:
+// POSTs to /api/channel/{id}/star?ctx=player and swaps itself with the
+// refreshed button. Exposed for the channel_api handler's ctx=player case.
+templ PlayerStarButton(p PageProps, channelID string, isStarred bool) {
+	<button
+		id="player-channel-star-btn"
+		class={ playerStarBtnClass(isStarred) }
+		type="button"
+		title={ playerStarTitle(p, isStarred) }
+		aria-label={ playerStarTitle(p, isStarred) }
+		hx-post={ "/api/channels/" + channelID + "/star?ctx=player" }
+		hx-swap="outerHTML"
+		hx-disabled-elt="this"
+	>
+		if isStarred {
+			@templ.Raw(`<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>`)
+		} else {
+			@templ.Raw(`<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>`)
+		}
+	</button>
+}
+
+func playerStarBtnClass(isStarred bool) string {
+	if isStarred {
+		return "player-channel-inline-btn active"
+	}
+	return "player-channel-inline-btn"
+}
+
+func playerStarTitle(p PageProps, isStarred bool) string {
+	if isStarred {
+		return L(p, "action_unstar_channel", "Unstar channel")
+	}
+	return L(p, "action_star_channel", "Star channel")
+}
+
+// playerSubButton renders the subscribe button for temp/unsubscribed channels.
+templ playerSubButton(p PageProps) {
+	<button
+		id="player-channel-sub-btn"
+		class="player-channel-inline-btn"
+		type="button"
+		title={ L(p, "action_subscribe_channel", "Subscribe to channel") }
+		aria-label={ L(p, "action_subscribe_channel", "Subscribe to channel") }
+	>
+		@templ.Raw(`<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>`)
+	</button>
+}
+
+// playerUnsubButton renders the unsubscribe button.
+templ playerUnsubButton(p PageProps) {
+	<button
+		id="player-channel-unsub-btn"
+		class="player-channel-inline-btn"
+		type="button"
+		title={ L(p, "action_unsubscribe_channel", "Unsubscribe channel") }
+		aria-label={ L(p, "action_unsubscribe_channel", "Unsubscribe channel") }
+	>
+		@templ.Raw(`<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>`)
+	</button>
+}
+
+// playerPinButton wraps PlayerPinButton for initial render.
+templ playerPinButton(p PageProps, video model.Video) {
+	@PlayerPinButton(p, video.VideoID, video.IsPinned, video.IsTemp)
+}
+
+// PlayerPinButton renders the pin/unpin button for temp videos.
+// HTMX-driven: POSTs to /api/video/{id}/pin?ctx=player and swaps itself.
+// Exposed for the video_api handler's ctx=player case.
+templ PlayerPinButton(p PageProps, videoID string, isPinned, isTemp bool) {
+	<button
+		id="player-pin-btn"
+		class={ playerPinBtnClass(isPinned, isTemp) }
+		type="button"
+		title={ playerPinTitle(p, isPinned) }
+		aria-label={ playerPinTitle(p, isPinned) }
+		hx-post={ "/api/videos/" + videoID + "/pin?ctx=player" }
+		hx-swap="outerHTML"
+		hx-disabled-elt="this"
+	>
+		if isPinned {
+			@templ.Raw(`<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5"></path><path d="M8 3h8l-1 6 3 3v2H6v-2l3-3-1-6z"></path></svg>`)
+		} else {
+			@templ.Raw(`<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5"></path><path d="M8 3h8l-1 6 3 3v2H6v-2l3-3-1-6z"></path></svg>`)
+		}
+	</button>
+}
+
+func playerPinBtnClass(isPinned, isTemp bool) string {
+	cls := "player-btn pin-btn"
+	if isPinned {
+		cls += " active"
+	}
+	if !isTemp {
+		cls += " hidden"
+	}
+	return cls
+}
+
+func playerPinTitle(p PageProps, isPinned bool) string {
+	if isPinned {
+		return L(p, "action_unpin_temp_video", "Unpin temp video")
+	}
+	return L(p, "action_pin_temp_video", "Pin temp video")
+}
+
+// playerShareButton renders the share/copy-link button.
+templ playerShareButton(p PageProps) {
+	<button
+		id="player-share-btn"
+		class="player-btn"
+		type="button"
+		title={ L(p, "action_copy_link", "Copy link") }
+		aria-label={ L(p, "action_copy_link", "Copy link") }
+	>
+		@templ.Raw(`<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/></svg>`)
+	</button>
+}
+
+// playerBookmarkButton renders the bookmark toggle button.
+templ playerBookmarkButton(p PageProps, bookmarked bool) {
+	<button
+		id="player-bookmark-btn"
+		class={ playerBookmarkBtnClass(bookmarked) }
+		type="button"
+		title={ L(p, "action_bookmark", "Bookmark") }
+		aria-label={ L(p, "action_bookmark", "Bookmark") }
+	>
+		if bookmarked {
+			@templ.Raw(`<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>`)
+		} else {
+			@templ.Raw(`<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>`)
+		}
+	</button>
+}
+
+func playerBookmarkBtnClass(bookmarked bool) string {
+	if bookmarked {
+		return "player-btn toggle-btn active"
+	}
+	return "player-btn toggle-btn"
+}
+
+// playerAutoplayButton renders the autoplay-next toggle button.
+templ playerAutoplayButton(p PageProps) {
+	<button
+		id="player-autoplay-next-btn"
+		class="player-btn toggle-btn"
+		type="button"
+		title={ L(p, "player_autoplay_next", "Auto-play next") }
+		aria-label={ L(p, "player_autoplay_next", "Auto-play next") }
+	>
+		@templ.Raw(`<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polygon points="10 8 16 12 10 16" fill="currentColor" stroke="none"></polygon></svg>`)
+	</button>
+}
+
+// playerDeleteButton renders the delete video button.
+templ playerDeleteButton(p PageProps) {
+	<button
+		id="player-delete-btn"
+		class="player-btn player-btn-danger"
+		type="button"
+		title={ L(p, "player_delete_video_title", "Delete video") }
+		aria-label={ L(p, "player_delete_video_title", "Delete video") }
+	>
+		@templ.Raw(`<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path><path d="M10 11v6"></path><path d="M14 11v6"></path><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"></path></svg>`)
+	</button>
+}

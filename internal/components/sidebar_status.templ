@@ -1,0 +1,54 @@
+package components
+
+// StopPlayButton renders the stop/play download toggle button.
+templ StopPlayButton(p PageProps, stopped bool) {
+	if stopped {
+		<button id="stop-play-btn" class="btn-prefs btn-stop-play is-stopped" title={ L(p, "action_resume_downloads", "Resume downloads") } data-i18n-title="action_resume_downloads" type="button"
+			hx-post="/api/resume"
+			hx-target="#stop-play-container"
+			hx-swap="innerHTML"
+		>
+			<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+				<polygon points="5,3 19,12 5,21"></polygon>
+			</svg>
+		</button>
+	} else {
+		<button id="stop-play-btn" class="btn-prefs btn-stop-play" title={ L(p, "action_stop_downloads", "Stop downloads") } data-i18n-title="action_stop_downloads" type="button"
+			hx-post="/api/stop"
+			hx-target="#stop-play-container"
+			hx-swap="innerHTML"
+		>
+			<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+				<line x1="8" y1="5" x2="8" y2="19"></line>
+				<line x1="16" y1="5" x2="16" y2="19"></line>
+			</svg>
+		</button>
+	}
+}
+
+// SidebarStatusFragment renders the sidebar status area content.
+templ SidebarStatusFragment(p PageProps, d SidebarStatusData) {
+	<div class="status-activity">
+		if d.IsDownloading {
+			<div class="status-dot active"></div>
+		} else if d.QueueTotal > 0 {
+			<div class="status-dot syncing"></div>
+		} else {
+			<div class="status-dot"></div>
+		}
+		<div class="status-activity-lines">
+				if d.ActivityMsg != "" {
+					{ d.ActivityMsg }
+				} else {
+					<span class="status-secondary-text" data-i18n="status_no_recent_activity">{ L(p, "status_no_recent_activity", "No recent activity") }</span>
+				}
+			</div>
+			<button class="status-log-btn" type="button" aria-label={ L(p, "action_view_logs", "View logs") } data-i18n-aria-label="action_view_logs"
+				onclick="if(window.MpaSiteBase&&MpaSiteBase._toggleLogsModal)MpaSiteBase._toggleLogsModal()"
+			>
+			<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+				<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+			</svg>
+		</button>
+	</div>
+}

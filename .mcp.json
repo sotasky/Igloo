@@ -1,0 +1,7 @@
+{
+  "mcpServers": {
+    "igloo": {
+      "command": "./bin/igloo-mcp"
+    }
+  }
+}

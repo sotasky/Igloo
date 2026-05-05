@@ -1,0 +1,295 @@
+package components
+
+import (
+	"fmt"
+	"strings"
+
+	"github.com/screwys/igloo/internal/model"
+)
+
+// ProfileCard renders the hover + channel-header card for any platform.
+// Size: "hover" for feed/shorts hover card, "hero" for channel page header.
+templ ProfileCard(props PageProps, p *model.ChannelProfile, size string, isFollowing bool, isStarred bool) {
+	{{ noBanner := p.BannerURL == "" }}
+	{{ hasStats := p.Followers > 0 || p.Following > 0 }}
+	{{ showProfileActions := isFollowing }}
+	<div class={ profileCardClasses(p, size, noBanner) } data-channel-id={ p.ChannelID } data-platform={ p.Platform }>
+		if !noBanner {
+			<div class="profile-card-banner">
+				<img src={ "/api/media/banner/" + p.ChannelID } onload="window.MpaSiteBase&&window.MpaSiteBase.avatarLoad(this)" onerror="if(window.MpaSiteBase&&window.MpaSiteBase.avatarError(this))return; this.style.display='none'" alt=""/>
+			</div>
+		}
+		<div class="profile-card-body">
+			<div class={ profileCardBodyInnerClasses(p, size) }>
+				@ProfileCardTop(props, p, size, isFollowing, isStarred, showProfileActions)
+				if size != "hero" {
+					<div class="profile-card-name-row">
+						<a class="profile-card-name profile-card-name-link" href={ templ.SafeURL(profileCardHref(p)) }>{ profileLabel(p) }</a>
+						if p.Verified {
+							<span class={ "profile-card-verified", "profile-card-verified--" + verifiedClass(p.Platform, p.VerifiedType) } title={ L(props, "status_verified", "Verified") }>&#10004;</span>
+						}
+					</div>
+					if p.Handle != "" {
+						<div class="profile-card-handle">{ "@" + strings.TrimPrefix(p.Handle, "@") }</div>
+					}
+				}
+				if p.Protected {
+					<div class="profile-card-protected">{ L(props, "profile_protected_account", "Protected account") }</div>
+				}
+				if !p.Protected {
+					if p.Bio != "" {
+						<div class="profile-card-bio">@templ.Raw(Linkify(p.Bio))</div>
+					}
+					if p.Website != "" {
+						<div class="profile-card-website"><a href={ templ.SafeURL(p.Website) } target="_blank" rel="noopener noreferrer">{ p.Website }</a></div>
+					}
+					if hasStats {
+						@ProfileCardStats(props, p)
+					}
+				}
+			</div>
+		</div>
+	</div>
+}
+
+templ ProfileCardTop(props PageProps, p *model.ChannelProfile, size string, isFollowing bool, isStarred bool, showHeroActions bool) {
+	<div class="profile-card-top">
+		<div
+			class={ storyRingClass("profile-card-avatar-wrap", p.StoryState) }
+			data-story-state={ storyStateAttr(p.StoryState) }
+			if p.StoryFirstVideoID != "" {
+				role="button"
+				tabindex="0"
+				data-story-channel-id={ p.ChannelID }
+				data-story-first-video-id={ p.StoryFirstVideoID }
+			}
+		>
+			<img class="profile-card-avatar" src={ "/api/media/avatar/" + p.ChannelID } alt="" onload="window.MpaSiteBase&&window.MpaSiteBase.avatarLoad(this)" onerror="if(window.MpaSiteBase&&window.MpaSiteBase.avatarError(this))return; this.style.display='none'"/>
+			<span class="profile-card-avatar-fallback" style="display:none;">{ strings.ToUpper(FirstChar(profileLabel(p))) }</span>
+		</div>
+		if size == "hero" {
+			<div class="profile-card-identity">
+				<div class="profile-card-name-row">
+					<a class="profile-card-name profile-card-name-link" href={ templ.SafeURL(profileCardHref(p)) }>{ profileLabel(p) }</a>
+					if p.Verified {
+						<span class={ "profile-card-verified", "profile-card-verified--" + verifiedClass(p.Platform, p.VerifiedType) } title={ L(props, "status_verified", "Verified") }>&#10004;</span>
+					}
+				</div>
+				if p.Handle != "" {
+					<div class="profile-card-handle">{ "@" + strings.TrimPrefix(p.Handle, "@") }</div>
+				}
+			</div>
+		}
+		<div class="profile-card-top-actions">
+			@FollowButton(props, p.ChannelID, p.Handle, profileLabel(p), isFollowing)
+			if showHeroActions {
+				@ProfileCardStarButton(props, p.ChannelID, isStarred)
+				@ProfileCardMenu(props, p, isFollowing)
+			}
+		</div>
+	</div>
+}
+
+templ ProfileCardStats(props PageProps, p *model.ChannelProfile) {
+	<div class="profile-card-stats">
+		if p.Following > 0 {
+			<span><strong>{ formatCount(p.Following) }</strong> { L(props, "profile_following", "Following") }</span>
+		}
+		if p.Followers > 0 {
+			<span><strong>{ formatCount(p.Followers) }</strong> { profileFollowersLabel(props, p.Platform) }</span>
+		}
+	</div>
+}
+
+func profileCardClasses(p *model.ChannelProfile, size string, noBanner bool) string {
+	classes := []string{"profile-card", "profile-card--" + size, "profile-card--" + p.Platform}
+	if noBanner {
+		classes = append(classes, "profile-card--no-banner")
+	}
+	return strings.Join(classes, " ")
+}
+
+func profileCardBodyInnerClasses(p *model.ChannelProfile, size string) string {
+	classes := []string{"profile-card-body-inner"}
+	if size == "hero" {
+		classes = append(classes, "profile-card-body-inner--hero")
+		if p.Platform == "youtube" || p.Platform == "tiktok" || p.Platform == "instagram" {
+			classes = append(classes, "profile-card-body-inner--hero-left")
+		} else {
+			classes = append(classes, "profile-card-body-inner--hero-center")
+		}
+	}
+	return strings.Join(classes, " ")
+}
+
+func profileLabel(p *model.ChannelProfile) string {
+	if p.DisplayName != "" {
+		return p.DisplayName
+	}
+	return p.Handle
+}
+
+func profileFollowersLabel(props PageProps, platform string) string {
+	if platform == "youtube" {
+		return L(props, "profile_subscribers", "Subscribers")
+	}
+	return L(props, "profile_followers", "Followers")
+}
+
+templ ProfileCardStarButton(props PageProps, channelID string, isStarred bool) {
+	<button
+		class={ "profile-card-action-btn", templ.KV("active", isStarred) }
+		type="button"
+		hx-post={ "/api/channels/" + channelID + "/star?ctx=profile" }
+		hx-swap="outerHTML"
+		hx-disabled-elt="this"
+		if isStarred {
+			title={ L(props, "action_unstar_channel", "Unstar channel") }
+			aria-label={ L(props, "action_unstar_channel", "Unstar channel") }
+		} else {
+			title={ L(props, "action_star_channel", "Star channel") }
+			aria-label={ L(props, "action_star_channel", "Star channel") }
+		}
+	>
+		if isStarred {
+			<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" aria-hidden="true">
+				<polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon>
+			</svg>
+		} else {
+			<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" aria-hidden="true">
+				<polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon>
+			</svg>
+		}
+	</button>
+}
+
+templ ProfileCardMenu(props PageProps, p *model.ChannelProfile, isFollowing bool) {
+	<div class="feed-card-menu profile-card-menu" data-profile-card-menu>
+		<button
+			class="profile-card-action-btn profile-card-menu-btn"
+			type="button"
+			title={ L(props, "action_more", "More") }
+			aria-label={ L(props, "action_more", "More") }
+			data-profile-card-menu-toggle
+		>
+			<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+				<circle cx="5" cy="12" r="1.1" fill="currentColor" stroke="none"></circle>
+				<circle cx="12" cy="12" r="1.1" fill="currentColor" stroke="none"></circle>
+				<circle cx="19" cy="12" r="1.1" fill="currentColor" stroke="none"></circle>
+			</svg>
+		</button>
+		<div class="feed-card-menu-list profile-card-menu-list">
+			if profileSupportsRepostToggle(p.Platform) {
+				<button
+					class="feed-card-menu-item"
+					type="button"
+					data-profile-card-menu-action="retweets_off"
+					data-profile-card-channel-id={ p.ChannelID }
+					data-profile-card-label={ profileLabel(p) }
+					data-profile-card-platform={ p.Platform }
+					data-profile-card-repost-off-label={ profileRepostOffLabel(props, p.Platform) }
+					data-profile-card-repost-on-label={ profileRepostOnLabel(props, p.Platform) }
+				>{ profileRepostOffLabel(props, p.Platform) }</button>
+			}
+			<button
+				class="feed-card-menu-item"
+				type="button"
+				data-profile-card-menu-action="settings"
+				data-profile-card-channel-id={ p.ChannelID }
+				data-profile-card-label={ profileLabel(p) }
+				data-profile-card-platform={ p.Platform }
+			>{ L(props, "action_channel_settings", "Channel settings") }&#x2026;</button>
+			if isFollowing {
+				<button
+					class="feed-card-menu-item danger"
+					type="button"
+					data-profile-card-menu-action="unfollow"
+					data-profile-card-channel-id={ p.ChannelID }
+					data-profile-card-label={ profileLabel(p) }
+					data-profile-card-handle={ p.Handle }
+				>{ L(props, "action_unfollow", "Unfollow") }&#x2026;</button>
+			}
+		</div>
+	</div>
+}
+
+func profileCardHref(p *model.ChannelProfile) string {
+	if p == nil || strings.TrimSpace(p.ChannelID) == "" {
+		return "#"
+	}
+	return "/channels/" + p.ChannelID
+}
+
+func profileSupportsRepostToggle(platform string) bool {
+	switch strings.ToLower(strings.TrimSpace(platform)) {
+	case "twitter", "x", "tiktok", "instagram":
+		return true
+	default:
+		return false
+	}
+}
+
+func profileRepostOffLabel(props PageProps, platform string) string {
+	if isXPlatform(platform) {
+		return L(props, "feed_turn_off_retweets", "Turn off retweets")
+	}
+	return L(props, "feed_turn_off_reposts", "Turn off reposts")
+}
+
+func profileRepostOnLabel(props PageProps, platform string) string {
+	if isXPlatform(platform) {
+		return L(props, "feed_turn_on_retweets", "Turn on retweets")
+	}
+	return L(props, "feed_turn_on_reposts", "Turn on reposts")
+}
+
+// verifiedClass maps (platform, verifiedType) to a CSS modifier class.
+func verifiedClass(platform, t string) string {
+	if platform == "twitter" {
+		switch t {
+		case "business":
+			return "gold"
+		case "government":
+			return "grey"
+		default:
+			return "blue"
+		}
+	}
+	return "plain"
+}
+
+// formatCount renders numbers like Twitter: 237.9M, 24.8K, 2,203.
+func formatCount(n int) string {
+	switch {
+	case n >= 1_000_000:
+		return fmt.Sprintf("%.1fM", float64(n)/1_000_000)
+	case n >= 10_000:
+		return fmt.Sprintf("%.1fK", float64(n)/1_000)
+	case n >= 1_000:
+		return addThousandsSep(n)
+	default:
+		return fmt.Sprintf("%d", n)
+	}
+}
+
+func addThousandsSep(n int) string {
+	s := fmt.Sprintf("%d", n)
+	if len(s) <= 3 {
+		return s
+	}
+	var b strings.Builder
+	first := len(s) % 3
+	if first > 0 {
+		b.WriteString(s[:first])
+		if len(s) > first {
+			b.WriteByte(',')
+		}
+	}
+	for i := first; i < len(s); i += 3 {
+		b.WriteString(s[i : i+3])
+		if i+3 < len(s) {
+			b.WriteByte(',')
+		}
+	}
+	return b.String()
+}

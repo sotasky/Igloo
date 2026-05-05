@@ -1,0 +1,72 @@
+package components
+
+// FollowButton renders the follow/unfollow button. Handled by feed.js
+// handleFeedFollowToggle → followChannel/unfollowChannel, which uses the
+// custom askConfirm dialog and keeps all sibling buttons in sync.
+templ FollowButton(p PageProps, channelID string, handle string, label string, isFollowing bool) {
+	<button
+		class={ "feed-follow-btn", templ.KV("following", isFollowing) }
+		type="button"
+		data-feed-follow-toggle
+		data-feed-channel-id={ channelID }
+		data-feed-handle={ handle }
+		data-feed-label={ label }
+		if isFollowing {
+			data-following="1"
+		} else {
+			data-following="0"
+		}
+	>
+		if isFollowing {
+			{ L(p, "action_following", "Following") }
+		} else {
+			{ L(p, "action_follow", "Follow") }
+		}
+	</button>
+}
+
+// FeedStarButton renders the star/unstar button for HTMX swap in feed cards.
+templ FeedStarButton(p PageProps, channelID string, isStarred bool) {
+	<button
+		class={ "feed-star-btn channel-action-btn", templ.KV("active", isStarred) }
+		type="button"
+		data-action="star"
+		data-id={ channelID }
+		hx-post={ "/api/channels/" + channelID + "/star?ctx=feed" }
+		hx-swap="outerHTML"
+		if isStarred {
+			title={ L(p, "action_unfavourite_account", "Unfavourite account") }
+		} else {
+			title={ L(p, "action_favourite_account", "Favourite account") }
+		}
+	>
+		if isStarred {
+			&#x2605;
+		} else {
+			&#x2606;
+		}
+	</button>
+}
+
+// LikeButton renders the like/unlike heart button for HTMX swap.
+templ LikeButton(p PageProps, tweetID string, isLiked bool) {
+	<button
+		class={ "feed-action-btn", templ.KV("active", isLiked) }
+		type="button"
+		data-feed-action="heart"
+		if isLiked {
+			hx-delete={ "/api/feed/like/" + tweetID }
+			title={ L(p, "action_unlike", "Unlike") }
+			aria-label={ L(p, "action_unlike", "Unlike") }
+		} else {
+			hx-post={ "/api/feed/like/" + tweetID }
+			title={ L(p, "action_like", "Like") }
+			aria-label={ L(p, "action_like", "Like") }
+		}
+		hx-swap="outerHTML"
+	>
+		<svg width="20" height="20" viewBox="0 0 24 24" fill={ heartFill(isLiked) } stroke="currentColor" stroke-width="2">
+			<path d="M12 21s-6.7-4.35-9.2-8.14C.69 9.63 1.22 5.5 4.56 4.02 6.8 3.03 9.2 3.69 10.72 5.55L12 7.12l1.28-1.57c1.52-1.86 3.92-2.52 6.16-1.53 3.34 1.48 3.87 5.61 1.76 8.84C18.7 16.65 12 21 12 21z"></path>
+		</svg>
+	</button>
+}

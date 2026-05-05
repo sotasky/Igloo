@@ -1,0 +1,74 @@
+package subtitlemeta
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+func TestTrackLang(t *testing.T) {
+	tests := []struct {
+		name     string
+		stem     string
+		filename string
+		want     string
+	}{
+		{name: "explicit english", stem: "video", filename: "video.en.vtt", want: "en"},
+		{name: "bare vtt defaults to english", stem: "video", filename: "video.vtt", want: "en"},
+		{name: "regional language", stem: "video", filename: "video.eng-US.vtt", want: "eng-US"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := TrackLang(tt.stem, tt.filename); got != tt.want {
+				t.Fatalf("TrackLang(%q, %q) = %q, want %q", tt.stem, tt.filename, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestManualLangsAndIsAuto(t *testing.T) {
+	dir := t.TempDir()
+	infoPath := filepath.Join(dir, "video.info.json")
+	body := `{"subtitles":{"en":[{"url":"https://example.test/manual.vtt"}],"fr":[]},"automatic_captions":{"fr":[{"url":"https://example.test/auto.vtt"}]}}`
+	if err := os.WriteFile(infoPath, []byte(body), 0o644); err != nil {
+		t.Fatalf("write info: %v", err)
+	}
+
+	langs := ManualLangs(infoPath)
+	if !langs["en"] {
+		t.Fatal("expected en to be manual")
+	}
+	if langs["fr"] {
+		t.Fatal("expected empty fr subtitles to be non-manual")
+	}
+	if IsAuto(infoPath, "en") {
+		t.Fatal("manual en subtitles should not be auto")
+	}
+	if !IsAuto(infoPath, "fr") {
+		t.Fatal("empty manual subtitles should fall back to auto")
+	}
+	if !IsAuto(filepath.Join(dir, "missing.info.json"), "en") {
+		t.Fatal("missing info.json should be treated as auto")
+	}
+}
+
+func TestLanguage(t *testing.T) {
+	dir := t.TempDir()
+	infoPath := filepath.Join(dir, "video.info.json")
+	if err := os.WriteFile(infoPath, []byte(`{"language":"tr"}`), 0o644); err != nil {
+		t.Fatalf("write info: %v", err)
+	}
+	if got := Language(infoPath); got != "tr" {
+		t.Fatalf("Language = %q, want %q", got, "tr")
+	}
+	if got := Language(filepath.Join(dir, "missing.info.json")); got != "" {
+		t.Fatalf("Language(missing) = %q, want empty", got)
+	}
+	noLangPath := filepath.Join(dir, "nolang.info.json")
+	if err := os.WriteFile(noLangPath, []byte(`{"id":"abc"}`), 0o644); err != nil {
+		t.Fatalf("write nolang: %v", err)
+	}
+	if got := Language(noLangPath); got != "" {
+		t.Fatalf("Language(no-language) = %q, want empty", got)
+	}
+}

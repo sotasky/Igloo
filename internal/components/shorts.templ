@@ -1,0 +1,166 @@
+package components
+
+import (
+	"fmt"
+	"strconv"
+	"github.com/screwys/igloo/internal/model"
+)
+
+// ShortsPage renders the shorts page wrapped in the Base layout.
+templ ShortsPage(p PageProps, videos []model.Video, storyChannels []model.StoryChannel, hasUnseenStories bool, pager model.Pager, videoHint string, tab string, hydratedCount int, hydrateBatchSize int) {
+	@Base(p) {
+		<div id="shorts-grid-shell" class="hidden">
+			@ShortsTabs(p, tab, hasUnseenStories)
+			<div id="video-grid" class="video-grid shorts-grid">
+				if tab == "stories" {
+					@StoryChannelList(p, storyChannels)
+				} else {
+					if len(videos) > 0 {
+						for i, v := range videos {
+							if shortsShouldHydrateCard(v, videoHint, i, hydratedCount) {
+								@VideoCard(p, v)
+							} else {
+								@ShortsSkeletonCard(v, i)
+							}
+						}
+					} else {
+						<div class="empty-state"><h3>{ L(p, "moments_empty", "No moments") }</h3></div>
+					}
+				}
+			</div>
+		</div>
+
+		<div
+			id="shorts-layout"
+			class="shorts-layout hidden"
+			data-video-hint={ videoHint }
+			data-initial-page={ strconv.Itoa(shortsInitialPage(pager)) }
+			data-page-size={ strconv.Itoa(shortsPageSize(pager)) }
+			data-current-tab={ tab }
+			data-hydrate-batch-size={ strconv.Itoa(shortsHydrateBatchSize(hydrateBatchSize)) }
+			tabindex="-1"
+		>
+			<button id="close-shorts-btn" class="shorts-close-btn" title={ L(p, "action_close_shorts_mode", "Close Shorts mode") }>&#x2715;</button>
+			<div id="shorts-container" class="shorts-container"></div>
+			<div id="shorts-uptodate-overlay" class="shorts-uptodate-overlay hidden">
+				<div class="uptodate-content"><span>{ L(p, "status_up_to_date", "You're up to date!") }</span></div>
+			</div>
+		</div>
+	}
+}
+
+templ StoryChannelList(p PageProps, stories []model.StoryChannel) {
+	if len(stories) == 0 {
+		<div class="empty-state"><h3>{ L(p, "stories_empty", "No stories") }</h3></div>
+	} else {
+		<div class="stories-list" role="list">
+			for _, story := range stories {
+				<button
+					type="button"
+					class="story-channel-row"
+					data-story-channel-id={ story.ChannelID }
+					data-story-first-video-id={ storyChannelFirstVideoID(story) }
+					data-story-state={ storyStateAttr(story.State) }
+					role="listitem"
+				>
+					<span class={ storyRingClass("story-channel-avatar", story.State) }>
+						<img src={ story.AvatarURL } alt="" loading="lazy" onerror="this.style.display='none'"/>
+					</span>
+					<span class="story-channel-copy">
+						<span class="story-channel-name">{ story.DisplayName }</span>
+						if story.Handle != "" {
+							<span class="story-channel-handle">{ "@" + story.Handle }</span>
+						}
+					</span>
+					<span class="story-channel-meta">{ storyChannelMeta(p, story) }</span>
+				</button>
+			}
+		</div>
+	}
+}
+
+// ShortsCardsPartial renders fully hydrated cards for background grid hydration.
+templ ShortsCardsPartial(p PageProps, videos []model.Video) {
+	for _, v := range videos {
+		@VideoCard(p, v)
+	}
+}
+
+// ShortsSkeletonCard preserves the full grid shape without shipping every
+// thumbnail/title/avatar on first paint.
+templ ShortsSkeletonCard(v model.Video, index int) {
+	<a
+		href={ templ.SafeURL("/player/" + v.VideoID) }
+		class="video-card shorts-card-skeleton"
+		data-video-id={ v.VideoID }
+		data-shorts-card-skeleton="1"
+		data-card-hydrated="0"
+		data-card-index={ strconv.Itoa(index) }
+		aria-busy="true"
+	>
+		<div class="video-thumbnail shorts-card-skeleton-thumb"></div>
+		<div class="video-info">
+			<div class="video-title shorts-card-skeleton-line"></div>
+			<div class="video-meta">
+				<span class="shorts-card-skeleton-avatar"></span>
+				<span class="shorts-card-skeleton-line shorts-card-skeleton-line-short"></span>
+			</div>
+		</div>
+	</a>
+}
+
+templ ShortsTabs(p PageProps, active string, hasUnseenStories bool) {
+	<div class="shorts-tabs" role="tablist" aria-label={ L(p, "shorts_timeline_tabs_aria", "Moments timeline") }>
+		<a class={ shortsTabClass(active, "all") } href="/shorts?tab=all" role="tab" aria-selected={ boolDataAttr(active == "all") }>{ L(p, "shorts_tab_all", "All") }</a>
+		<a class={ shortsTabClass(active, "following") } href="/shorts?tab=following" role="tab" aria-selected={ boolDataAttr(active == "following") }>{ L(p, "shorts_tab_following", "Following") }</a>
+	</div>
+}
+
+func shortsTabClass(active, tab string) string {
+	if active == tab {
+		return "shorts-tab active"
+	}
+	return "shorts-tab"
+}
+
+func shortsPageURL(page int, tab string) string {
+	u := "?page=" + strconv.Itoa(page)
+	if tab != "" {
+		u += "&tab=" + tab
+	}
+	return u
+}
+
+func shortsShouldHydrateCard(v model.Video, videoHint string, index int, hydratedCount int) bool {
+	if hydratedCount < 1 {
+		hydratedCount = 1
+	}
+	return index < hydratedCount || (videoHint != "" && v.VideoID == videoHint)
+}
+
+// shortsInitialPage returns the initial page number, defaulting to 1.
+func shortsInitialPage(pager model.Pager) int {
+	if pager.Page > 0 {
+		return pager.Page
+	}
+	return 1
+}
+
+// shortsPageSize returns the page size, defaulting to 200.
+func shortsPageSize(pager model.Pager) int {
+	if pager.PerPage > 0 {
+		return pager.PerPage
+	}
+	return 10000
+}
+
+func shortsHydrateBatchSize(size int) int {
+	if size > 0 {
+		return size
+	}
+	return 96
+}
+
+// Unused import guards.
+var _ = fmt.Sprintf
+var _ = strconv.Itoa

@@ -1,0 +1,18 @@
+package components
+
+// Header renders the floating header bar with search, stop/play, refresh, and preferences buttons.
+templ Header(p PageProps) {
+	<div class="floating-header">
+		<div class="header-search" id="header-search">
+			<input type="text" id="global-search-input" class="input" placeholder={ L(p, "search_global_placeholder", "Search") } data-i18n-placeholder="search_global_placeholder" autocomplete="off" value=""/>
+			<button type="button" id="global-search-clear" class="input-clear-btn hidden" aria-label={ L(p, "action_clear", "Clear") } data-i18n-aria-label="action_clear">&times;</button>
+			<div id="search-dropdown" class="search-dropdown hidden"></div>
+		</div>
+		<div id="stop-play-container"
+			hx-get="/api/stop-play-btn"
+			hx-trigger="load"
+			hx-swap="innerHTML"
+		></div>
+		<button id="prefs-btn" class="btn-prefs" title={ L(p, "action_preferences", "Preferences") } data-i18n-title="action_preferences" type="button">&#x2699;</button>
+	</div>
+}

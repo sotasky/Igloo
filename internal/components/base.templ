@@ -1,0 +1,76 @@
+package components
+
+import "strings"
+
+// translateTargetOrDefault returns the target lang, defaulting to "en".
+func translateTargetOrDefault(s string) string {
+	if s == "" {
+		return "en"
+	}
+	return s
+}
+
+// Base renders the complete HTML page layout wrapping page-specific content.
+templ Base(p PageProps) {
+	<!DOCTYPE html>
+	<html lang={ p.Lang() }>
+	<head>
+		<meta charset="UTF-8"/>
+		<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+		<meta name="csrf-token" content={ p.CSRFToken }/>
+		<meta name="user-role" content={ p.UserRole }/>
+		<meta name="user-platforms" content={ strings.Join(p.UserPlatforms, ",") }/>
+		<meta name="translate-target" content={ translateTargetOrDefault(p.TranslateTargetLang) }/>
+		<meta name="translate-skip-langs" content={ p.TranslateSkipLangs }/>
+		<meta name="translate-backend" content={ p.TranslateBackend }/>
+		<meta name="translate-auto-mode" content={ p.TranslateAutoMode }/>
+		<meta name="translate-lookahead" content={ p.TranslateLookahead }/>
+		<title>{ p.PageTitle }</title>
+		<link rel="icon" type="image/svg+xml" href={ p.StaticV("favicon.svg") }/>
+		<link rel="stylesheet" href={ p.StaticV("theme.css") }/>
+		<link rel="stylesheet" href={ p.StaticV("style.css") }/>
+		<link rel="stylesheet" href={ p.StaticV("css/profile-card.css") }/>
+		<link id="igloo-theme-css" rel="stylesheet" href="/api/theme.css"/>
+		<style>#page-title-actions:empty{display:none}</style>
+	</head>
+	<body hx-headers={ `{"X-CSRF-Token":"` + p.CSRFToken + `"}` }>
+		<div class="app">
+			<div id="sidebar-overlay" class="sidebar-overlay"></div>
+			@Sidebar(p)
+			<main class="main" id="main-content">
+				<button id="sidebar-toggle" class="sidebar-toggle" aria-label={ L(p, "action_toggle_sidebar", "Toggle sidebar") }>
+					<span></span>
+					<span></span>
+					<span></span>
+				</button>
+				@Header(p)
+				{ children... }
+			</main>
+		</div>
+		@ChannelSettingsPopover(p)
+		@AddSubModal(p)
+		@PrefsModal(p)
+		@ImportConfigModal(p)
+		@LogsModal(p)
+		@ConfirmModal(p)
+		@SearchOverlay(p)
+		<div id="modal-container"></div>
+		<script src={ p.StaticV("js/htmx.min.js") }></script>
+		@templ.Raw("<script>" + p.I18nConfigJSON() + "</script>")
+		@templ.Raw("<script>" + p.ShortcutConfigJSON() + "</script>")
+		@templ.Raw("<script>" + p.PreferencesConfigJSON() + "</script>")
+		<script src={ p.StaticV("js/web_theme.js") }></script>
+		<script src={ p.StaticV("js/site_base.js") }></script>
+		<script src={ p.StaticV("js/sync_poller.js") }></script>
+		<script src={ p.StaticV("js/video_cards.js") }></script>
+		<script type="module" src={ p.StaticV("js/profile-hover.js") }></script>
+		<script type="module" src={ p.StaticV("js/profile-image-overlay.js") }></script>
+		for _, script := range p.PageScripts {
+			<script src={ p.StaticV(script) }></script>
+		}
+		if p.ESBundle != "" {
+			<script defer src={ p.StaticV(p.ESBundle) }></script>
+		}
+	</body>
+	</html>
+}

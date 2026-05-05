@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=Igloo Restart
+Comment=Build Go + restart server
+Icon=system-restart
+Type=Application
+Exec=sh -c "cd \\$(dirname \\$1)/../.. && exec scripts/dev/desktop_launch.sh restart" sh %k
+Categories=Development;
+Terminal=false
