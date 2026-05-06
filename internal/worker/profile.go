@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/screwys/igloo/internal/fetchprofile"
@@ -35,6 +36,8 @@ const (
 	feedProfileBatchPerTick  = 10
 	feedAvatarSeedMinSpacing = time.Minute
 )
+
+var profileRefreshPlatforms = []string{"twitter", "youtube", "tiktok", "instagram"}
 
 // fetchFn is fetchprofile.Fetch, overridable by tests.
 type fetchFn func(ctx context.Context, channelID string) (*fetchprofile.Profile, error)
@@ -125,6 +128,41 @@ func (m *Manager) refreshFeedProfileCompletenessBatch(ctx context.Context, fetch
 		log.Printf("[profile] ListFeedAvatarProfileIDs: %v", err)
 		return false
 	}
+	byPlatform := make(map[string][]string)
+	for _, channelID := range channelIDs {
+		platform := platformForChannelID(channelID)
+		if platform == "" {
+			platform = "other"
+		}
+		byPlatform[platform] = append(byPlatform[platform], channelID)
+	}
+	if len(byPlatform) == 0 {
+		return false
+	}
+
+	var wg sync.WaitGroup
+	workedCh := make(chan bool, len(byPlatform))
+	for _, ids := range byPlatform {
+		ids := ids
+		if len(ids) == 0 {
+			continue
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			workedCh <- m.refreshFeedProfileCompletenessIDs(ctx, fetch, avDir, bnDir, ids, limit)
+		}()
+	}
+	wg.Wait()
+	close(workedCh)
+	worked := false
+	for platformWorked := range workedCh {
+		worked = worked || platformWorked
+	}
+	return worked
+}
+
+func (m *Manager) refreshFeedProfileCompletenessIDs(ctx context.Context, fetch fetchFn, avDir, bnDir string, channelIDs []string, limit int) bool {
 	worked := false
 	attempts := 0
 	now := time.Now()
@@ -270,12 +308,31 @@ func (m *Manager) refreshStaleProfilesBatch(ctx context.Context, fetch fetchFn, 
 	if limit <= 0 {
 		limit = 1
 	}
+	var wg sync.WaitGroup
+	workedCh := make(chan bool, len(profileRefreshPlatforms))
+	for _, platform := range profileRefreshPlatforms {
+		platform := platform
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			platformWorked := false
+			for i := 0; i < limit; i++ {
+				if ctx.Err() != nil {
+					break
+				}
+				if !m.refreshOneStaleProfileForPlatform(ctx, fetch, avDir, bnDir, platform) {
+					break
+				}
+				platformWorked = true
+			}
+			workedCh <- platformWorked
+		}()
+	}
+	wg.Wait()
+	close(workedCh)
 	worked := false
-	for i := 0; i < limit; i++ {
-		if !m.refreshOneStaleProfile(ctx, fetch, avDir, bnDir) {
-			break
-		}
-		worked = true
+	for platformWorked := range workedCh {
+		worked = worked || platformWorked
 	}
 	return worked
 }
@@ -321,7 +378,19 @@ func (m *Manager) refreshRequestedAvatar(ctx context.Context, fetch fetchFn, cha
 // refreshOneStaleProfile picks the oldest-stale row and refreshes it.
 // Returns true iff it attempted a fetch.
 func (m *Manager) refreshOneStaleProfile(ctx context.Context, fetch fetchFn, avDir, bnDir string) bool {
-	channelID, err := m.db.NextChannelProfileRefreshCandidate(profileTTL)
+	return m.refreshOneStaleProfileForPlatform(ctx, fetch, avDir, bnDir, "")
+}
+
+func (m *Manager) refreshOneStaleProfileForPlatform(ctx context.Context, fetch fetchFn, avDir, bnDir, platform string) bool {
+	var (
+		channelID string
+		err       error
+	)
+	if platform == "" {
+		channelID, err = m.db.NextChannelProfileRefreshCandidate(profileTTL)
+	} else {
+		channelID, err = m.db.NextChannelProfileRefreshCandidateForPlatform(profileTTL, platform)
+	}
 	if err != nil {
 		log.Printf("[profile] NextChannelProfileRefreshCandidate: %v", err)
 		return false

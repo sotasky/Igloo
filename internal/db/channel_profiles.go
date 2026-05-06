@@ -253,12 +253,22 @@ func (db *DB) GetTwitterChannelProfilesByHandles(handles []string) (map[string]m
 // are treated as immediately due so synthesized banners are backfilled without
 // waiting for a hover/profile-page request.
 func (db *DB) NextChannelProfileRefreshCandidate(ttl time.Duration) (string, error) {
-	cutoffMs := time.Now().Add(-ttl).UnixMilli()
-	nowMs := time.Now().UnixMilli()
+	return db.nextChannelProfileRefreshCandidate(ttl, "")
+}
+
+func (db *DB) NextChannelProfileRefreshCandidateForPlatform(ttl time.Duration, platform string) (string, error) {
+	return db.nextChannelProfileRefreshCandidate(ttl, strings.ToLower(strings.TrimSpace(platform)))
+}
+
+func (db *DB) nextChannelProfileRefreshCandidate(ttl time.Duration, platform string) (string, error) {
+	now := time.Now()
+	cutoffMs := now.Add(-ttl).UnixMilli()
+	nowMs := now.UnixMilli()
 	var channelID string
 	err := db.conn.QueryRow(`
 			SELECT channel_id FROM channel_profiles
 			WHERE tombstone = 0
+			  AND (? = '' OR platform = ?)
 			  AND (
 			       (
 			           (next_retry_at = 0 OR next_retry_at < ?)
@@ -296,7 +306,7 @@ func (db *DB) NextChannelProfileRefreshCandidate(ttl time.Duration) (string, err
 				END,
 				fetched_at ASC
 			LIMIT 1
-		`, nowMs, cutoffMs, nowMs).Scan(&channelID)
+		`, platform, platform, nowMs, cutoffMs, nowMs).Scan(&channelID)
 	if err == sql.ErrNoRows {
 		return "", nil
 	}
@@ -413,6 +423,32 @@ func (db *DB) ListFeedAvatarProfileIDs() ([]string, error) {
 			FROM video_comments
 			WHERE COALESCE(platform, 'youtube') = 'youtube'
 			  AND COALESCE(author_id, '') != ''
+
+			UNION
+
+			SELECT v.channel_id,
+			       MAX(COALESCE(v.published_at, 0), COALESCE(v.downloaded_at, 0)) AS seen_at
+			FROM videos v
+			WHERE (v.channel_id LIKE 'tiktok_%' OR v.channel_id LIKE 'instagram_%')
+			  AND COALESCE(v.channel_id, '') != ''
+
+			UNION
+
+			SELECT v.channel_id,
+			       MAX(COALESCE(vrs.reposted_at_ms, 0), COALESCE(vrs.first_seen_at_ms, 0),
+			           COALESCE(v.published_at, 0), COALESCE(v.downloaded_at, 0)) AS seen_at
+			FROM video_repost_sources vrs
+			INNER JOIN videos v ON v.video_id = vrs.video_id
+			WHERE (v.channel_id LIKE 'tiktok_%' OR v.channel_id LIKE 'instagram_%')
+			  AND COALESCE(v.channel_id, '') != ''
+
+			UNION
+
+			SELECT dq.channel_id,
+			       MAX(COALESCE(dq.published_at_ms, 0), COALESCE(dq.added_at, 0)) AS seen_at
+			FROM download_queue dq
+			WHERE (dq.channel_id LIKE 'tiktok_%' OR dq.channel_id LIKE 'instagram_%')
+			  AND COALESCE(dq.status, 'pending') IN ('pending', 'processing')
 		),
 		feed_profiles AS (
 			SELECT channel_id, MAX(seen_at) AS last_seen_at
@@ -784,6 +820,11 @@ func (db *DB) SeedChannelProfileRows() (int, error) {
 		}
 		n, _ := res.RowsAffected()
 		inserted = int(n)
+		shortOwnerRows, err := seedShortVideoOwnerProfileRows(tx)
+		if err != nil {
+			return err
+		}
+		inserted += shortOwnerRows
 		mentionRows, err := seedShortDescriptionMentionProfileRows(tx)
 		if err != nil {
 			return err
@@ -802,6 +843,60 @@ func (db *DB) SeedChannelProfileRows() (int, error) {
 type mentionSeedRow struct {
 	platform string
 	handle   string
+}
+
+func seedShortVideoOwnerProfileRows(tx *sql.Tx) (int, error) {
+	rows, err := tx.Query(`
+		SELECT channel_id
+		FROM videos
+		WHERE channel_id LIKE 'tiktok_%' OR channel_id LIKE 'instagram_%'
+
+		UNION
+
+		SELECT channel_id
+		FROM download_queue
+		WHERE channel_id LIKE 'tiktok_%' OR channel_id LIKE 'instagram_%'
+	`)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+
+	byChannelID := map[string]mentionSeedRow{}
+	for rows.Next() {
+		var rawChannelID string
+		if err := rows.Scan(&rawChannelID); err != nil {
+			return 0, err
+		}
+		channelID, platform, handle := shortOwnerProfileSeedFromChannelID(rawChannelID)
+		if channelID == "" {
+			continue
+		}
+		byChannelID[channelID] = mentionSeedRow{platform: platform, handle: handle}
+	}
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	if len(byChannelID) == 0 {
+		return 0, nil
+	}
+	return upsertMentionSeedRows(tx, byChannelID)
+}
+
+func shortOwnerProfileSeedFromChannelID(raw string) (channelID, platform, handle string) {
+	if handle := model.TikTokHandleFromChannelID(raw); handle != "" {
+		channelID := model.TikTokChannelIDFromHandle(handle)
+		if channelID != "" {
+			return channelID, "tiktok", handle
+		}
+	}
+	if handle := model.InstagramHandleFromChannelID(raw); handle != "" {
+		channelID := model.InstagramChannelIDFromHandle(handle)
+		if channelID != "" {
+			return channelID, "instagram", handle
+		}
+	}
+	return "", "", ""
 }
 
 func seedShortDescriptionMentionProfileRows(tx *sql.Tx) (int, error) {

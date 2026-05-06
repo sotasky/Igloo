@@ -841,6 +841,156 @@ func TestRefreshStaleProfilesBatchHonorsLimit(t *testing.T) {
 	}
 }
 
+type gatedProfileFetcher struct {
+	started chan string
+	release chan struct{}
+	results map[string]*fetchprofile.Profile
+}
+
+func newGatedProfileFetcher(results map[string]*fetchprofile.Profile) *gatedProfileFetcher {
+	return &gatedProfileFetcher{
+		started: make(chan string, len(results)),
+		release: make(chan struct{}),
+		results: results,
+	}
+}
+
+func (f *gatedProfileFetcher) Fetch(ctx context.Context, channelID string) (*fetchprofile.Profile, error) {
+	select {
+	case f.started <- channelID:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	select {
+	case <-f.release:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	if p, ok := f.results[channelID]; ok {
+		return p, nil
+	}
+	return &fetchprofile.Profile{
+		ChannelID:   channelID,
+		Platform:    platformForChannelID(channelID),
+		Handle:      strings.TrimPrefix(channelID, platformForChannelID(channelID)+"_"),
+		DisplayName: channelID,
+	}, nil
+}
+
+func waitForProfileStarts(t *testing.T, started <-chan string, want int, release chan struct{}) []string {
+	t.Helper()
+	ids := make([]string, 0, want)
+	for len(ids) < want {
+		select {
+		case id := <-started:
+			ids = append(ids, id)
+		case <-time.After(500 * time.Millisecond):
+			close(release)
+			t.Fatalf("profile fetch starts = %v, want %d concurrent platform starts", ids, want)
+		}
+	}
+	return ids
+}
+
+func TestRefreshStaleProfilesBatchRunsPlatformsInParallel(t *testing.T) {
+	d := newTestWorkerDB(t)
+	dir := t.TempDir()
+	for _, channelID := range []string{"twitter_parallel", "tiktok_parallel"} {
+		if err := d.UpsertChannelProfile(model.ChannelProfile{
+			ChannelID: channelID,
+			Platform:  platformForChannelID(channelID),
+		}); err != nil {
+			t.Fatalf("seed %s: %v", channelID, err)
+		}
+	}
+
+	f := newGatedProfileFetcher(map[string]*fetchprofile.Profile{
+		"twitter_parallel": {ChannelID: "twitter_parallel", Platform: "twitter", Handle: "parallel"},
+		"tiktok_parallel":  {ChannelID: "tiktok_parallel", Platform: "tiktok", Handle: "parallel"},
+	})
+	m := &Manager{db: d, cfg: testCfg(dir)}
+	avDir, bnDir := filepath.Join(dir, "avatars"), filepath.Join(dir, "banners")
+	_ = os.MkdirAll(avDir, 0o755)
+	_ = os.MkdirAll(bnDir, 0o755)
+
+	done := make(chan bool, 1)
+	go func() {
+		done <- m.refreshStaleProfilesBatch(context.Background(), f.Fetch, avDir, bnDir, 1)
+	}()
+	started := waitForProfileStarts(t, f.started, 2, f.release)
+	close(f.release)
+
+	got := map[string]bool{}
+	for _, id := range started {
+		got[id] = true
+	}
+	if !got["twitter_parallel"] || !got["tiktok_parallel"] {
+		t.Fatalf("started profile fetches = %v, want twitter and tiktok", started)
+	}
+	select {
+	case worked := <-done:
+		if !worked {
+			t.Fatal("expected stale profile batch to do work")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("refreshStaleProfilesBatch did not finish after release")
+	}
+}
+
+func TestRefreshFeedProfileCompletenessBatchRunsPlatformsInParallel(t *testing.T) {
+	d := newTestWorkerDB(t)
+	dir := t.TempDir()
+	if err := d.ExecRaw(`
+		INSERT INTO feed_items (
+			tweet_id, author_handle, published_at, fetched_at
+		) VALUES ('tweet_parallel', 'profile_parallel', 100, 100)
+	`); err != nil {
+		t.Fatalf("seed feed item: %v", err)
+	}
+	if err := d.InsertVideo(
+		"tiktok_parallel_video", "tiktok_profile_parallel", "clip", "",
+		0, "", "media/tiktok/profile/video.mp4", 0,
+		200, "", "video", 0, false,
+	); err != nil {
+		t.Fatalf("insert tiktok video: %v", err)
+	}
+	if _, err := d.SeedChannelProfileRows(); err != nil {
+		t.Fatalf("SeedChannelProfileRows: %v", err)
+	}
+
+	f := newGatedProfileFetcher(map[string]*fetchprofile.Profile{
+		"twitter_profile_parallel": {ChannelID: "twitter_profile_parallel", Platform: "twitter", Handle: "profile_parallel"},
+		"tiktok_profile_parallel":  {ChannelID: "tiktok_profile_parallel", Platform: "tiktok", Handle: "profile_parallel"},
+	})
+	m := &Manager{db: d, cfg: testCfg(dir)}
+	avDir, bnDir := filepath.Join(dir, "avatars"), filepath.Join(dir, "banners")
+	_ = os.MkdirAll(avDir, 0o755)
+	_ = os.MkdirAll(bnDir, 0o755)
+
+	done := make(chan bool, 1)
+	go func() {
+		done <- m.refreshFeedProfileCompletenessBatch(context.Background(), f.Fetch, avDir, bnDir, 1)
+	}()
+	started := waitForProfileStarts(t, f.started, 2, f.release)
+	close(f.release)
+
+	got := map[string]bool{}
+	for _, id := range started {
+		got[id] = true
+	}
+	if !got["twitter_profile_parallel"] || !got["tiktok_profile_parallel"] {
+		t.Fatalf("started profile fetches = %v, want twitter and tiktok", started)
+	}
+	select {
+	case worked := <-done:
+		if !worked {
+			t.Fatal("expected feed profile completeness batch to do work")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("refreshFeedProfileCompletenessBatch did not finish after release")
+	}
+}
+
 func TestRefreshFeedProfileCompletenessFetchesReplyParent(t *testing.T) {
 	d := newTestWorkerDB(t)
 	dir := t.TempDir()
