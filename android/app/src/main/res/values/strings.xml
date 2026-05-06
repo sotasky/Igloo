@@ -278,6 +278,15 @@
     <string name="login_title">Igloo Login</string>
     <string name="logs_activity">Activity</string>
     <string name="logs_analytics">Analytics</string>
+    <string name="logs_android_asset_health">Asset Health</string>
+    <string name="logs_android_device_assets">Device assets</string>
+    <string name="logs_android_device_assets_bytes_detail">%1$d/%2$d verified · %3$s</string>
+    <string name="logs_android_device_assets_detail">%1$d/%2$d verified · %3$d pending</string>
+    <string name="logs_android_device_assets_problem_detail">%1$d/%2$d verified · %3$d pending · %4$d failed · %5$d missing</string>
+    <string name="logs_android_generation">Generation</string>
+    <string name="logs_android_generation_assets">%1$d assets · %2$d ready</string>
+    <string name="logs_android_generation_assets_missing">%1$d assets · %2$d ready · %3$d missing</string>
+    <string name="logs_android_generation_items">content items</string>
     <string name="logs_app_starts">App starts</string>
     <string name="logs_avg_latency">Avg latency</string>
     <string name="logs_cache_health">Cache Health</string>
@@ -316,9 +325,11 @@
     <string name="logs_no_errors_session_period">No errors this session.</string>
     <string name="logs_no_events">No events.</string>
     <string name="logs_no_feed_activity">No activity yet — waiting for first feed cycle</string>
+    <string name="logs_no_health_report">no health report</string>
     <string name="logs_no_processes">No processes</string>
     <string name="logs_no_sync_activity">No sync activity yet.</string>
     <string name="logs_no_sync_data">no sync data</string>
+    <string name="logs_no_sync_report">No report</string>
     <string name="logs_no_warnings">No warnings</string>
     <string name="logs_no_x_sources">No X sources configured.</string>
     <string name="logs_parsed_detail">%1$d with media · %2$d text</string>
