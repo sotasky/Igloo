@@ -160,7 +160,7 @@ RSSHub is optional. Set `RSSHUB_BASE` only if you want X integration:
 ## Browser Userscript
 
 The supported
-[userscript](scripts/tampermonkey/igloo-site-sync.user.js) adds Igloo save/sync actions on X, TikTok, Instagram, and YouTube.
+[userscript](https://github.com/screwys/Igloo/raw/refs/heads/main/scripts/tampermonkey/igloo-site-sync.user.js) adds Igloo save/sync actions on X, TikTok, Instagram, and YouTube.
 
 ![Tampermonkey import button](static/screenshots/tampermonkey.png)
 
@@ -216,12 +216,12 @@ See [PRIVACY.md](PRIVACY.md).
 
 ## Tech Stack
 
-- Server: [Go](https://go.dev/) and SQLite.
+- Server: Go and SQLite.
 - Web: templ, HTMX, CSS, and bundled ES modules.
 - Android: Kotlin, Jetpack Compose, Room, WorkManager, ExoPlayer, and Ktor.
 - Media downloaders: RSSHub when configured, plus
-  [yt-dlp](https://github.com/yt-dlp/yt-dlp),
-  [gallery-dl](https://github.com/mikf/gallery-dl), and `ffmpeg`.
+  [yt-dlp](https://github.com/yt-dlp/yt-dlp) and
+  [gallery-dl](https://github.com/mikf/gallery-dl).
 
 ## License
 
