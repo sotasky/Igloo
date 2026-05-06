@@ -11,10 +11,10 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-export JAVA_HOME="${JAVA_HOME:-/usr/lib/jvm/java-17-openjdk}"
+export JAVA_HOME="${JAVA_HOME:-/usr/lib/jvm/java-26-openjdk}"
 if [ ! -x "$JAVA_HOME/bin/java" ]; then
     echo "❌ Java not found at $JAVA_HOME"
-    echo "   Set JAVA_HOME or install OpenJDK 17: sudo pacman -S jdk17-openjdk"
+    echo "   Set JAVA_HOME or install OpenJDK 26: sudo pacman -S jdk-openjdk"
     exit 1
 fi
 

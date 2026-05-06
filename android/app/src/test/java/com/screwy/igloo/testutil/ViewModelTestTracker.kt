@@ -15,8 +15,13 @@ class ViewModelTestTracker {
 }
 
 fun clearViewModel(viewModel: ViewModel) {
-    ViewModel::class.java
-        .getDeclaredMethod("clear\$lifecycle_viewmodel_release")
+    val clearMethod = listOf(
+        "clear\$lifecycle_viewmodel",
+        "clear\$lifecycle_viewmodel_release",
+    ).firstNotNullOf { methodName ->
+        runCatching { ViewModel::class.java.getDeclaredMethod(methodName) }.getOrNull()
+    }
+    clearMethod
         .apply { isAccessible = true }
         .invoke(viewModel)
 }

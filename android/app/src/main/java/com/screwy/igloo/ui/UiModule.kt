@@ -1,6 +1,7 @@
 package com.screwy.igloo.ui
 
 import coil3.ImageLoader
+import coil3.annotation.ExperimentalCoilApi
 import coil3.memory.MemoryCache
 import coil3.network.ktor3.KtorNetworkFetcherFactory
 import coil3.request.CachePolicy
@@ -11,6 +12,7 @@ import org.koin.android.ext.koin.androidContext
 import org.koin.dsl.module
 
 /** Koin wiring for the `ui/` package's non-composable plumbing. */
+@OptIn(ExperimentalCoilApi::class)
 val iglooUiModule = module {
     single { UiEffects() }
     single { AppLanguageStore(androidContext()) }
