@@ -905,6 +905,13 @@ func seedShortDescriptionMentionProfileRows(tx *sql.Tx) (int, error) {
 		FROM videos
 		WHERE (channel_id LIKE 'tiktok_%' OR channel_id LIKE 'instagram_%')
 		  AND (title LIKE '%@%' OR description LIKE '%@%')
+
+		UNION ALL
+
+		SELECT channel_id, COALESCE(title, ''), ''
+		FROM download_queue
+		WHERE (channel_id LIKE 'tiktok_%' OR channel_id LIKE 'instagram_%')
+		  AND title LIKE '%@%'
 	`)
 	if err != nil {
 		return 0, err
@@ -921,13 +928,7 @@ func seedShortDescriptionMentionProfileRows(tx *sql.Tx) (int, error) {
 		if platform == "" {
 			continue
 		}
-		for _, handle := range shortDescriptionMentionHandles(title+"\n"+description, platform) {
-			channelID := shortMentionChannelID(platform, handle)
-			if channelID == "" {
-				continue
-			}
-			byChannelID[channelID] = mentionSeedRow{platform: platform, handle: handle}
-		}
+		addShortFormMentionSeedRows(byChannelID, platform, title, description)
 	}
 	if err := rows.Err(); err != nil {
 		return 0, err
@@ -940,6 +941,31 @@ func seedShortDescriptionMentionProfileRows(tx *sql.Tx) (int, error) {
 	}
 
 	return upsertMentionSeedRows(tx, byChannelID)
+}
+
+func (db *DB) SeedShortFormMentionProfileRowsForTexts(platform string, texts []string) (int, error) {
+	platform = strings.ToLower(strings.TrimSpace(platform))
+	if platform != "tiktok" && platform != "instagram" {
+		return 0, nil
+	}
+	byChannelID := map[string]mentionSeedRow{}
+	addShortFormMentionSeedRows(byChannelID, platform, texts...)
+	if len(byChannelID) == 0 {
+		return 0, nil
+	}
+	return db.seedMentionProfileRows(byChannelID)
+}
+
+func addShortFormMentionSeedRows(byChannelID map[string]mentionSeedRow, platform string, texts ...string) {
+	for _, text := range texts {
+		for _, handle := range shortDescriptionMentionHandles(text, platform) {
+			channelID := shortMentionChannelID(platform, handle)
+			if channelID == "" {
+				continue
+			}
+			byChannelID[channelID] = mentionSeedRow{platform: platform, handle: handle}
+		}
+	}
 }
 
 func seedTwitterTextMentionProfileRows(tx *sql.Tx) (int, error) {
@@ -978,6 +1004,16 @@ func seedTwitterTextMentionProfileRows(tx *sql.Tx) (int, error) {
 	}
 
 	return upsertMentionSeedRows(tx, byChannelID)
+}
+
+func (db *DB) seedMentionProfileRows(byChannelID map[string]mentionSeedRow) (int, error) {
+	inserted := 0
+	err := db.WithWrite(func(tx *sql.Tx) error {
+		n, err := upsertMentionSeedRows(tx, byChannelID)
+		inserted = n
+		return err
+	})
+	return inserted, err
 }
 
 func upsertMentionSeedRows(tx *sql.Tx, byChannelID map[string]mentionSeedRow) (int, error) {

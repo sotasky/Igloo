@@ -39,6 +39,24 @@ func TestMergeVideoRefsSortsRepostsIntoSourceWindow(t *testing.T) {
 	}
 }
 
+func TestPrimeShortFormMentionProfilesSeedsRefTitles(t *testing.T) {
+	d := newTestWorkerDB(t)
+	m := &Manager{db: d, cfg: testCfg(t.TempDir())}
+
+	m.primeShortFormMentionProfiles("instagram", []download.VideoRef{{
+		VideoID: "instagram_reel_sample",
+		Title:   "new reel with @sample.artist",
+	}})
+
+	got, err := d.GetChannelProfile("instagram_sample.artist")
+	if err != nil || got == nil {
+		t.Fatalf("GetChannelProfile: %v / %+v", err, got)
+	}
+	if got.Platform != "instagram" || got.Handle != "sample.artist" {
+		t.Fatalf("profile row mismatch: %+v", got)
+	}
+}
+
 func TestInstagramUsesOwnGlobalSchedulerSettings(t *testing.T) {
 	d := newTestWorkerDB(t)
 	if err := d.SetSetting("", "shorts_check_interval", "3"); err != nil {

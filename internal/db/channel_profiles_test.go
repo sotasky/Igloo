@@ -410,6 +410,41 @@ func TestSeedChannelProfileRowsSeedsShortVideoOwners(t *testing.T) {
 	}
 }
 
+func TestSeedChannelProfileRowsSeedsShortQueueTitleMentions(t *testing.T) {
+	d := openWritableTestDB(t)
+	now := time.Now().UnixMilli()
+
+	if err := d.AddToDownloadQueueWithPublishedAt(
+		"queued_mention", "instagram_owner", "new reel with @sample.artist and @other_creator",
+		now,
+	); err != nil {
+		t.Fatalf("queue instagram mention: %v", err)
+	}
+
+	n, err := d.SeedChannelProfileRows()
+	if err != nil {
+		t.Fatalf("SeedChannelProfileRows: %v", err)
+	}
+	if n != 3 {
+		t.Fatalf("seeded rows = %d, want owner plus two mentions", n)
+	}
+	for _, tc := range []struct {
+		channelID string
+		handle    string
+	}{
+		{channelID: "instagram_sample.artist", handle: "sample.artist"},
+		{channelID: "instagram_other_creator", handle: "other_creator"},
+	} {
+		got, err := d.GetChannelProfile(tc.channelID)
+		if err != nil || got == nil {
+			t.Fatalf("GetChannelProfile(%s): %v / %+v", tc.channelID, err, got)
+		}
+		if got.Platform != "instagram" || got.Handle != tc.handle {
+			t.Fatalf("profile row mismatch for %s: %+v", tc.channelID, got)
+		}
+	}
+}
+
 func TestSeedChannelProfileRowsSeedsShortDescriptionMentions(t *testing.T) {
 	d := openWritableTestDB(t)
 	now := time.Now().UnixMilli()

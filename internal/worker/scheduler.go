@@ -468,6 +468,7 @@ func (m *Manager) reconcileSourceWindow(ch model.Channel, refs []download.VideoR
 	if len(refs) == 0 {
 		return 0
 	}
+	m.primeShortFormMentionProfiles(ch.Platform, refs)
 
 	allowedIDs := make([]string, 0, len(refs))
 	var ownerAllowedIDs []string
@@ -518,6 +519,30 @@ func (m *Manager) reconcileSourceWindow(ch model.Channel, refs []download.VideoR
 		added++
 	}
 	return added
+}
+
+func (m *Manager) primeShortFormMentionProfiles(platform string, refs []download.VideoRef) {
+	if m == nil || m.db == nil || len(refs) == 0 {
+		return
+	}
+	platform = strings.ToLower(strings.TrimSpace(platform))
+	if platform != "tiktok" && platform != "instagram" {
+		return
+	}
+	texts := make([]string, 0, len(refs))
+	for _, ref := range refs {
+		if text := strings.TrimSpace(ref.Title); text != "" && strings.Contains(text, "@") {
+			texts = append(texts, text)
+		}
+	}
+	if len(texts) == 0 {
+		return
+	}
+	if n, err := m.db.SeedShortFormMentionProfileRowsForTexts(platform, texts); err != nil {
+		log.Printf("[scheduler] seed %s mention profiles: %v", platform, err)
+	} else if n > 0 {
+		log.Printf("[scheduler] seeded %d %s mention profile rows", n, platform)
+	}
 }
 
 func (m *Manager) syncIntroducedSourceWindow(ch model.Channel, refs []download.VideoRef, allowedIDs []string) {
