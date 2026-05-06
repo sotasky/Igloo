@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   bumpSemver,
+  planAutomaticRelease,
   renderReleaseNotes,
   updateAndroidBuildGradle,
   updatePackageJsonText,
@@ -17,6 +18,46 @@ test("bumps patch and minor versions", () => {
 test("rejects unsupported version bumps", () => {
   assert.throws(() => bumpSemver("1.0.0", "major"), /unsupported bump/);
   assert.throws(() => bumpSemver("1.0", "patch"), /invalid semver/);
+});
+
+test("plans automatic releases every 10 commits", () => {
+  const commits = Array.from({ length: 9 }, (_, index) => ({
+    sha: `${index}`.repeat(40).slice(0, 40),
+    subject: `change ${index}`,
+    body: "",
+  }));
+
+  assert.deepEqual(planAutomaticRelease(commits, 10), {
+    shouldRelease: false,
+    bump: "patch",
+    commitCount: 9,
+  });
+
+  commits.push({
+    sha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    subject: "change 9",
+    body: "",
+  });
+
+  assert.deepEqual(planAutomaticRelease(commits, 10), {
+    shouldRelease: true,
+    bump: "patch",
+    commitCount: 10,
+  });
+});
+
+test("uses a release minor marker for automatic minor releases", () => {
+  const commits = Array.from({ length: 10 }, (_, index) => ({
+    sha: `${index}`.repeat(40).slice(0, 40),
+    subject: `change ${index}`,
+    body: index === 4 ? "release: minor" : "",
+  }));
+
+  assert.deepEqual(planAutomaticRelease(commits, 10), {
+    shouldRelease: true,
+    bump: "minor",
+    commitCount: 10,
+  });
 });
 
 test("updates package metadata versions", () => {

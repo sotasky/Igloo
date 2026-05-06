@@ -45,27 +45,20 @@ jobs:
       - name: Test release helper
         run: node --test scripts/dev/release.test.mjs
 
-      - name: Choose release bump
-        id: bump
+      - name: Prepare release
+        id: release
         env:
           EVENT_NAME: ${{ github.event_name }}
           INPUT_BUMP: ${{ inputs.bump }}
-          HEAD_MESSAGE: ${{ github.event.head_commit.message }}
         run: |
-          bump="${INPUT_BUMP:-patch}"
-          if [ "$EVENT_NAME" = "push" ]; then
-            bump="patch"
-            if printf '%s\n' "$HEAD_MESSAGE" | grep -Eiq '^release:[[:space:]]*minor$'; then
-              bump="minor"
-            fi
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            node scripts/dev/release.mjs prepare "${INPUT_BUMP:-patch}" --notes release-notes.md
+          else
+            node scripts/dev/release.mjs prepare-auto --threshold 10 --notes release-notes.md
           fi
-          echo "bump=$bump" >> "$GITHUB_OUTPUT"
-
-      - name: Prepare release
-        id: release
-        run: node scripts/dev/release.mjs prepare "${{ steps.bump.outputs.bump }}" --notes release-notes.md
 
       - name: Commit and tag release
+        if: steps.release.outputs.should_release == 'true'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -75,14 +68,17 @@ jobs:
           git tag -a "${{ steps.release.outputs.tag }}" -m "release ${{ steps.release.outputs.version }}"
 
       - name: Push release commit and tag
+        if: steps.release.outputs.should_release == 'true'
         run: git push --atomic origin HEAD:main "refs/tags/${{ steps.release.outputs.tag }}"
 
       - name: Create GitHub release
+        if: steps.release.outputs.should_release == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release create "${{ steps.release.outputs.tag }}" --title "${{ steps.release.outputs.tag }}" --notes-file release-notes.md --verify-tag
 
       - name: Build release artifacts
+        if: steps.release.outputs.should_release == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

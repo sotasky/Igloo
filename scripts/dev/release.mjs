@@ -23,6 +23,21 @@ export function bumpSemver(version, bump) {
   }
 }
 
+export function planAutomaticRelease(commits, threshold = 10) {
+  const commitCount = commits.length;
+  const shouldRelease = commitCount >= threshold;
+  const hasMinorMarker = commits.some((commit) => {
+    const message = `${commit.subject || ""}\n${commit.body || ""}`;
+    return /^release:\s*minor\s*$/im.test(message);
+  });
+
+  return {
+    shouldRelease,
+    bump: hasMinorMarker ? "minor" : "patch",
+    commitCount,
+  };
+}
+
 export function updatePackageJsonText(text, version) {
   const pkg = JSON.parse(text);
   pkg.version = version;
@@ -114,13 +129,14 @@ function commitsSince(previousTag) {
   const raw = git([
     "log",
     "--reverse",
-    "--format=%H%x00%s",
+    "--format=%x1e%H%x00%s%x00%b",
     ...range,
   ]);
   if (!raw) return [];
-  return raw.split("\n").map((line) => {
-    const [sha, subject] = line.split("\0");
-    return { sha, subject };
+  return raw.split("\x1e").filter(Boolean).map((record) => {
+    const clean = record.replace(/^\n+/, "").replace(/\n+$/, "");
+    const [sha, subject, body = ""] = clean.split("\0");
+    return { sha, subject, body };
   });
 }
 
@@ -129,12 +145,21 @@ function parseArgs(argv) {
     command: argv[0],
     bump: argv[1],
     notesPath: "release-notes.md",
+    threshold: 10,
   };
 
-  for (let i = 2; i < argv.length; i += 1) {
+  const optionStart = out.command === "prepare" ? 2 : 1;
+  for (let i = optionStart; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === "--notes") {
       out.notesPath = argv[++i];
+      continue;
+    }
+    if (arg === "--threshold") {
+      out.threshold = Number.parseInt(argv[++i], 10);
+      if (!Number.isFinite(out.threshold) || out.threshold < 1) {
+        throw new Error("threshold must be a positive integer");
+      }
       continue;
     }
     throw new Error(`unknown argument: ${arg}`);
@@ -153,8 +178,10 @@ function writeGithubOutput(values) {
 
 function prepareRelease(argv) {
   const args = parseArgs(argv);
-  if (args.command !== "prepare") {
-    throw new Error("usage: release.mjs prepare <patch|minor> [--notes path]");
+  if (args.command !== "prepare" && args.command !== "prepare-auto") {
+    throw new Error(
+      "usage: release.mjs prepare <patch|minor> [--notes path] | prepare-auto [--threshold n] [--notes path]",
+    );
   }
 
   const packagePath = resolve("package.json");
@@ -173,12 +200,6 @@ function prepareRelease(argv) {
     );
   }
 
-  const nextVersion = bumpSemver(currentVersion, args.bump);
-  const nextTag = `v${nextVersion}`;
-  if (gitMaybe(["rev-parse", "-q", "--verify", `refs/tags/${nextTag}`])) {
-    throw new Error(`tag already exists: ${nextTag}`);
-  }
-
   const previousTag = gitMaybe([
     "describe",
     "--tags",
@@ -189,6 +210,33 @@ function prepareRelease(argv) {
   const commits = commitsSince(previousTag);
   if (commits.length === 0) {
     throw new Error("no commits found since previous release tag");
+  }
+
+  let bump = args.bump;
+  let shouldRelease = true;
+  if (args.command === "prepare-auto") {
+    const plan = planAutomaticRelease(commits, args.threshold);
+    bump = plan.bump;
+    shouldRelease = plan.shouldRelease;
+    if (!shouldRelease) {
+      const outputs = {
+        should_release: "false",
+        commit_count: String(plan.commitCount),
+        bump,
+        previous_tag: previousTag,
+      };
+      writeGithubOutput(outputs);
+      for (const [key, value] of Object.entries(outputs)) {
+        console.log(`${key}=${value}`);
+      }
+      return;
+    }
+  }
+
+  const nextVersion = bumpSemver(currentVersion, bump);
+  const nextTag = `v${nextVersion}`;
+  if (gitMaybe(["rev-parse", "-q", "--verify", `refs/tags/${nextTag}`])) {
+    throw new Error(`tag already exists: ${nextTag}`);
   }
 
   writeFileSync(packagePath, updatePackageJsonText(packageText, nextVersion));
@@ -215,9 +263,12 @@ function prepareRelease(argv) {
   );
 
   const outputs = {
+    should_release: String(shouldRelease),
     version: nextVersion,
     tag: nextTag,
     previous_tag: previousTag,
+    commit_count: String(commits.length),
+    bump,
   };
   writeGithubOutput(outputs);
   for (const [key, value] of Object.entries(outputs)) {
