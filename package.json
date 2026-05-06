@@ -1,7 +1,7 @@
 {
   "name": "igloo",
   "version": "1.0.2",
-  "description": "Personal video aggregation platform for YouTube, TikTok, and X/Twitter feeds.",
+  "description": "Personal social inbox platform for YouTube, TikTok, and X/Twitter feeds.",
   "main": "index.js",
   "directories": {
     "doc": "docs"
