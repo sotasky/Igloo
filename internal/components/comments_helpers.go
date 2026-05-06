@@ -63,6 +63,18 @@ func CommentAuthorInitialText(p PageProps, c model.Comment) string {
 	return "U"
 }
 
+// CommentAuthorAvatarURL resolves YouTube commenter avatars through the local
+// profile media endpoint when yt-dlp provided a canonical channel ID.
+func CommentAuthorAvatarURL(c model.Comment) string {
+	platform := strings.ToLower(strings.TrimSpace(c.Platform))
+	if platform == "" || platform == "youtube" {
+		if channelID := model.YouTubeCommentAuthorChannelID(c.AuthorID); channelID != "" {
+			return "/api/media/avatar/" + channelID
+		}
+	}
+	return strings.TrimSpace(c.AuthorThumbnail)
+}
+
 // CommentIndentPx returns the left indent for a reply depth.
 func CommentIndentPx(depth int) int {
 	if depth <= 0 {

@@ -90,7 +90,7 @@ func playerCommentCard(p PageProps, node *CommentNode, depth int, creatorAuthorI
 		}
 		ctx = templ.ClearChildren(ctx)
 		c := node.Comment
-		avatarURL := c.AuthorThumbnail
+		avatarURL := CommentAuthorAvatarURL(c)
 		hasChildren := len(node.Children) > 0
 		isReply := depth > 0
 		metaText := CommentMetaText(p, c)

@@ -21,7 +21,7 @@ templ PlayerComments(p PageProps, comments []model.Comment, creatorAuthorID stri
 // playerCommentCard recursively renders a comment and its replies.
 templ playerCommentCard(p PageProps, node *CommentNode, depth int, creatorAuthorID string) {
 	{{ c := node.Comment }}
-	{{ avatarURL := c.AuthorThumbnail }}
+	{{ avatarURL := CommentAuthorAvatarURL(c) }}
 	{{ hasChildren := len(node.Children) > 0 }}
 	{{ isReply := depth > 0 }}
 	{{ metaText := CommentMetaText(p, c) }}
