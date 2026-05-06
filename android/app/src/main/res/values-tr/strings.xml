@@ -26,7 +26,7 @@
     <string name="action_create_admin">Yönetici oluştur</string>
     <string name="action_create_user">Kullanıcı oluştur</string>
     <string name="action_delete">Sil</string>
-    <string name="action_delete_local_media">Yerel medyayı sil</string>
+    <string name="action_delete_local_media">Cihazdaki medyayı sil</string>
     <string name="action_disable">Devre dışı bırak</string>
     <string name="action_download">İndir</string>
     <string name="action_edit">Düzenle</string>
@@ -54,7 +54,7 @@
     <string name="action_next_slide">Sonraki slayt</string>
     <string name="action_ok">Tamam</string>
     <string name="action_open_drawer">Menüyü aç</string>
-    <string name="action_open_externally">Dış bağlantıda aç</string>
+    <string name="action_open_externally">Harici uygulamada aç</string>
     <string name="action_open_in">%1$s içinde aç</string>
     <string name="action_open_media">Medyayı aç</string>
     <string name="action_open_on_x">X\'de aç</string>
@@ -93,8 +93,8 @@
     <string name="action_stop_downloads">İndirmeleri durdur</string>
     <string name="action_subscribe_channel">Kanalı ekle</string>
     <string name="action_sync_now">Şimdi eşitle</string>
-    <string name="action_toggle_fullscreen">Tam ekranı aç/kapat</string>
-    <string name="action_toggle_sidebar">Yan menüyü aç/kapat</string>
+    <string name="action_toggle_fullscreen">Tam ekranı aç veya kapat</string>
+    <string name="action_toggle_sidebar">Yan menüyü aç veya kapat</string>
     <string name="action_translate">Çevir</string>
     <string name="action_unbookmark">Kaydedilenlerden çıkar</string>
     <string name="action_unfavourite_account">Favorilerden çıkar</string>
@@ -136,8 +136,8 @@
     <string name="bookmark_new_category">Yeni kategori</string>
     <string name="bookmark_new_category_name_placeholder">Yeni kategori adı</string>
     <string name="bookmark_no_categories_yet">Henüz kategori yok.</string>
-    <string name="bookmark_pick_media_to_download">İndirilecek medyaları seç</string>
-    <string name="bookmark_pick_media_to_download_count">İndirilecek medyaları seç (%1$d/%2$d)</string>
+    <string name="bookmark_pick_media_to_download">İndirilecek medyayı seç</string>
+    <string name="bookmark_pick_media_to_download_count">İndirilecek medyayı seç (%1$d/%2$d)</string>
     <string name="bookmark_platform_tiktok_post">TikTok gönderisi</string>
     <string name="bookmark_platform_x_post">X gönderisi</string>
     <string name="bookmark_platform_youtube_video">YouTube videosu</string>
@@ -149,7 +149,7 @@
     <string name="bookmark_save_to">Şuraya kaydet…</string>
     <string name="bookmark_saved">Kaydedildi</string>
     <string name="bookmark_saved_to">%1$s kategorisine kaydedildi</string>
-    <string name="bookmark_waiting_for_category_sync_before_saving">Kaydetmeden önce kategori eşitlemesi bekleniyor.</string>
+    <string name="bookmark_waiting_for_category_sync_before_saving">Kaydetmeden önce kategori eşitlemesinin bitmesi bekleniyor.</string>
     <string name="bookmarks_all_with_count">Tümü (%1$d)</string>
     <string name="bookmarks_empty">Henüz kaydedilen yok</string>
     <string name="cache_avatars">Avatarlar</string>
@@ -165,13 +165,13 @@
     <string name="common_unknown">Bilinmiyor</string>
     <string name="common_untitled">Başlıksız</string>
     <string name="confirm_default_title">Onayla</string>
-    <string name="confirm_delete_local_media_body">Bu videonun cihazdaki dosyaları silinsin mi?</string>
+    <string name="confirm_delete_local_media_body">Bu videonun cihazdaki indirilen medyası silinsin mi? Saklama süresindeyse eşitleme tekrar indirebilir.</string>
     <string name="confirm_remove_channel_and_files">%1$s kanalı ve dosyaları kaldırılsın mı?</string>
     <string name="confirm_unfollow_account_body">Sunucuda bu hesabı takipten çıkarır ve takip edilenler listenizden kaldırır. Eşitlenen videolar daha sonra Android\'den temizlenebilir.</string>
     <string name="confirm_unfollow_account_title">Hesap takipten çıkarılsın mı?</string>
     <string name="confirm_unfollow_channel_body">%1$s takipten çıkarılsın mı?</string>
     <string name="confirm_unfollow_channel_default_name">bu kanal</string>
-    <string name="confirm_unfollow_channel_delete_media_body">\"%1$s\" takipten çıkarılsın ve cihazdaki medya silinsin mi? Bu işlem geri alınamaz.</string>
+    <string name="confirm_unfollow_channel_delete_media_body">\"%1$s\" takipten çıkarılsın ve cihazdaki medyası silinsin mi? Bu işlem geri alınamaz.</string>
     <string name="confirm_unfollow_channel_title">Kanal takipten çıkarılsın mı?</string>
     <string name="content_description_channel_avatar">Kanal avatarı</string>
     <string name="content_description_channel_banner">Kanal kapak görseli</string>
@@ -236,7 +236,7 @@
     <string name="feed_reposted_someone">Biri yeniden paylaştı</string>
     <string name="feed_show_translation">Çeviriyi göster</string>
     <string name="feed_tagged_in_this_post">Bu gönderide etiketlendi</string>
-    <string name="feed_toggle_translation">Çeviriyi aç/kapat</string>
+    <string name="feed_toggle_translation">Çeviriyi göster/gizle</string>
     <string name="feed_translate_icon_letter">A</string>
     <string name="feed_turn_off_reposts">Yeniden paylaşımları kapat</string>
     <string name="feed_turn_off_retweets">Yeniden paylaşımları kapat</string>
@@ -449,7 +449,7 @@
     <string name="player_previous_video">Önceki video</string>
     <string name="player_seek_backward_10_seconds">10 saniye geri sar</string>
     <string name="player_seek_forward_10_seconds">10 saniye ileri sar</string>
-    <string name="player_seek_video">Videoda gezin</string>
+    <string name="player_seek_video">Videoda ileri geri sar</string>
     <string name="player_show_subtitles">Altyazıları göster</string>
     <string name="player_speed_set_to">Hız %1$s</string>
     <string name="player_subscribe_failed">Takip edilemedi</string>
@@ -458,7 +458,7 @@
     <string name="player_subtitles_abbrev">CC</string>
     <string name="player_subtitles_off">Altyazılar (Kapalı)</string>
     <string name="player_subtitles_on">Altyazılar (Açık)</string>
-    <string name="player_unsubscribe_channel_confirm_body">%1$s kanalı ve dosyaları silinsin mi?</string>
+    <string name="player_unsubscribe_channel_confirm_body">%1$s kanalı ve dosyaları kaldırılsın mı?</string>
     <string name="player_unsubscribe_failed">Takipten çıkarılamadı</string>
     <string name="player_video_deleted">Video silindi</string>
     <string name="player_volume">Ses</string>
@@ -646,7 +646,7 @@
     <string name="setup_subtitle">Bu Igloo kurulumu için yönetici hesabını oluşturun.</string>
     <string name="setup_title">İlk yöneticiyi oluştur</string>
     <string name="shortcuts_bookmark_video">Videoyu kaydet</string>
-    <string name="shortcuts_close_any_modal_overlay">Açık pencereyi veya katmanı kapat</string>
+    <string name="shortcuts_close_any_modal_overlay">Açık pencereyi kapat</string>
     <string name="shortcuts_close_media_overlay">Medya penceresini kapat</string>
     <string name="shortcuts_close_menus">Menüleri kapat</string>
     <string name="shortcuts_close_overlay">Pencereyi kapat</string>
@@ -657,12 +657,12 @@
     <string name="shortcuts_key_escape">Esc</string>
     <string name="shortcuts_key_space">Boşluk</string>
     <string name="shortcuts_key_tab">Tab</string>
-    <string name="shortcuts_navigate_media_overlay">Medya penceresinde gezin</string>
+    <string name="shortcuts_navigate_media_overlay">Medya penceresinde ileri geri git</string>
     <string name="shortcuts_navigation_hint">Sayılar yan menü sırasıyla eşleşir. Sayfalar hesaba göre değişebilir.</string>
     <string name="shortcuts_next_previous_video">Sonraki / önceki video</string>
     <string name="shortcuts_open_bookmark_menu">Kaydetme menüsünü aç</string>
-    <string name="shortcuts_open_close_media_overlay">Medya penceresini aç / kapat</string>
-    <string name="shortcuts_open_logs_modal">Günlükleri aç</string>
+    <string name="shortcuts_open_close_media_overlay">Medya penceresini aç veya kapat</string>
+    <string name="shortcuts_open_logs_modal">Kayıt penceresini aç</string>
     <string name="shortcuts_open_search_overlay">Arama panelini aç</string>
     <string name="shortcuts_reset_all_to_defaults">Tümünü varsayılana döndür</string>
     <string name="shortcuts_scrub_three_seconds">3 saniye ileri / geri sar</string>
@@ -670,7 +670,7 @@
     <string name="shortcuts_section_video_player">Video oynatıcı</string>
     <string name="shortcuts_share_video">Videoyu paylaş</string>
     <string name="shortcuts_show_grid_view">Izgara görünümünü göster</string>
-    <string name="shortcuts_switch_logs_modal_tabs">Günlükler modalındaki sekmeler arasında geçiş yap</string>
+    <string name="shortcuts_switch_logs_modal_tabs">Kayıt penceresinde sekme değiştir</string>
     <string name="shortcuts_toggle_account_in_bookmark_menu">Kaydetme menüsünde hesabı seç/kaldır</string>
     <string name="shortcuts_toggle_auto_play_next">Sonrakini otomatik oynatmayı aç/kapat</string>
     <string name="shortcuts_translate_post">Gönderiyi çevir</string>
