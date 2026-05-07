@@ -185,6 +185,10 @@ if [ "$SKIP_BUILD" = false ]; then
     go build -o bin/igloo-mcp ./cmd/igloo-mcp/
     ok "bin/igloo-mcp"
 
+    info "go build bin/igloo-import..."
+    go build -o bin/igloo-import ./cmd/import/
+    ok "bin/igloo-import"
+
     info "running tests..."
     if go test ./... >/dev/null 2>&1; then
         ok "go test ./..."

@@ -13,6 +13,7 @@ import (
 	"github.com/gorilla/sessions"
 	"github.com/screwys/igloo/internal/auth"
 	"github.com/screwys/igloo/internal/config"
+	"github.com/screwys/igloo/internal/db"
 )
 
 func newFirstInstallTestHandler(t *testing.T) (http.Handler, string) {
@@ -130,6 +131,78 @@ func TestFirstInstallSetupCreatesAdminAndLogsIn(t *testing.T) {
 	handler.ServeHTTP(loginRec, loginReq)
 	if loginRec.Code != http.StatusSeeOther || loginRec.Header().Get("Location") != "/" {
 		t.Fatalf("logged-in /login = %d Location %q", loginRec.Code, loginRec.Header().Get("Location"))
+	}
+}
+
+func TestFirstInstallSetupClaimsBootstrapImportedUserData(t *testing.T) {
+	srv := newTestServer(t)
+	authPath := filepath.Join(t.TempDir(), "auth_users.json")
+	platforms, err := config.ParseEnabledPlatforms("none")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv.cfg.AuthUsersPath = authPath
+	srv.cfg.RuntimeConfigPath = filepath.Join(filepath.Dir(authPath), "config.json")
+	srv.cfg.EnabledPlatforms = platforms
+	srv.cfg.EnabledPlatformSet = map[string]bool{}
+	auth.InitCache(authPath)
+	handler := NewServer(srv.db, srv.cfg, srv.workers, func(path string) string {
+		return "/static/" + path
+	})
+
+	if _, err := srv.db.ImportConfig(db.ConfigExport{
+		Version: 1,
+		BookmarkCategories: []db.BookmarkCatExport{{
+			Name: "Watch Later",
+		}},
+		Bookmarks: []db.BookmarkExport{{
+			VideoID:      "booked_video",
+			CategoryName: "Watch Later",
+		}},
+		LikedPosts: []db.LikedPostExport{{
+			TweetID:      "liked_post",
+			AuthorHandle: "author",
+			BodyText:     "liked text",
+		}},
+	}, "", true); err != nil {
+		t.Fatalf("seed bootstrap import: %v", err)
+	}
+
+	setupRec := httptest.NewRecorder()
+	handler.ServeHTTP(setupRec, newLocalRequest("GET", "/setup", nil))
+	csrfToken := setupCSRFToken(t, setupRec.Body.String())
+
+	form := url.Values{
+		"_csrf_token":      {csrfToken},
+		"username":         {"alice"},
+		"password":         {"correct-horse-battery-staple"},
+		"password_confirm": {"correct-horse-battery-staple"},
+		"platforms":        {"youtube"},
+	}
+	req := newLocalRequest("POST", "/setup", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	for _, cookie := range setupRec.Result().Cookies() {
+		req.AddCookie(cookie)
+	}
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("POST /setup status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+
+	var categoryUser, bookmarkUser, likeUser string
+	if err := srv.db.QueryRow(`SELECT user_id FROM bookmark_categories WHERE name='Watch Later'`).Scan(&categoryUser); err != nil {
+		t.Fatalf("category missing: %v", err)
+	}
+	if err := srv.db.QueryRow(`SELECT user_id FROM bookmarks WHERE video_id='booked_video'`).Scan(&bookmarkUser); err != nil {
+		t.Fatalf("bookmark missing: %v", err)
+	}
+	if err := srv.db.QueryRow(`SELECT username FROM feed_likes WHERE tweet_id='liked_post'`).Scan(&likeUser); err != nil {
+		t.Fatalf("like missing: %v", err)
+	}
+	if categoryUser != "alice" || bookmarkUser != "alice" || likeUser != "alice" {
+		t.Fatalf("claimed users = category %q bookmark %q like %q, want alice", categoryUser, bookmarkUser, likeUser)
 	}
 }
 

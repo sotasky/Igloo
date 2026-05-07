@@ -185,6 +185,20 @@ Default folders in case installed natively:
 | `~/.local/share/igloo/` | Database, media, thumbnails, logs |
 | `~/.config/igloo/` | Auth files, config, platform session files |
 
+For a native fresh install, a full export zip can be imported before the first
+browser login:
+
+```bash
+IGLOO_DATA_DIR="$HOME/.local/share/igloo" \
+IGLOO_CONFIG_DIR="$HOME/.config/igloo" \
+IGLOO_REPO_DIR="$PWD" \
+./bin/igloo-import --replace "$HOME"/Downloads/igloo-full-*.zip
+```
+
+If no admin exists yet, user-owned rows are imported into bootstrap ownership
+and claimed by the first admin created in setup. If exactly one user exists,
+the import uses that user. If multiple users exist, pass `--user`.
+
 ## Android
 
 Commands for build & testing:

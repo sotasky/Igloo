@@ -359,6 +359,11 @@ func (s *Server) handleSetupSubmit(w http.ResponseWriter, r *http.Request) {
 		s.renderSetupError(w, r, sess, "setup_error_save_failed", "Could not create the admin user.")
 		return
 	}
+	if err := s.db.ClaimBootstrapUserData(username); err != nil {
+		slog.Error("setup ClaimBootstrapUserData", "err", err)
+		s.renderSetupError(w, r, sess, "setup_error_save_failed", "Could not create the admin user.")
+		return
+	}
 	users[username] = auth.UserRecord{
 		Password:  auth.HashPassword(password),
 		Role:      "admin",

@@ -8,7 +8,7 @@ import (
 
 // --- Settings batch operations ---
 
-// GetAllSettings returns all global settings (user_id='') as a key->value map.
+// GetAllSettings returns all global settings (user_id=”) as a key->value map.
 func (db *DB) GetAllSettings() (map[string]string, error) {
 	rows, err := db.conn.Query(
 		"SELECT key, value FROM settings WHERE user_id = ''",
@@ -29,7 +29,7 @@ func (db *DB) GetAllSettings() (map[string]string, error) {
 	return out, rows.Err()
 }
 
-// UpdateSettings upserts all entries in the provided map as global settings (user_id='').
+// UpdateSettings upserts all entries in the provided map as global settings (user_id=”).
 // All upserts occur in a single transaction.
 func (db *DB) UpdateSettings(settings map[string]string) error {
 	if len(settings) == 0 {
@@ -185,8 +185,8 @@ type ConfigExport struct {
 }
 
 // resolveUserID returns the first user_id that has data, checking the given
-// userID first, then '' (legacy). This handles the mismatch between old
-// exports that used user_id='' and new data that uses the login username.
+// userID first, then ” (legacy). This handles the mismatch between old
+// exports that used user_id=” and new data that uses the login username.
 func (db *DB) resolveBookmarkUserID(preferredUserID string) string {
 	for _, uid := range []string{preferredUserID, ""} {
 		var count int
@@ -383,6 +383,50 @@ type ImportResult struct {
 	AddedCategories int
 	UpdatedSettings int
 	Skipped         int
+}
+
+// ClaimBootstrapUserData moves user-owned rows imported before the first login
+// from the legacy blank owner to the first real admin username.
+func (db *DB) ClaimBootstrapUserData(userID string) error {
+	if userID == "" {
+		return nil
+	}
+	return db.WithWrite(func(tx *sql.Tx) error {
+		if _, err := tx.Exec(`
+			UPDATE bookmark_categories
+			SET user_id = ?
+			WHERE user_id = ''
+		`, userID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`
+			INSERT OR IGNORE INTO bookmarks
+				(user_id, video_id, category_id, custom_title, account_handles, media_indices, bookmarked_at)
+			SELECT ?, video_id, category_id, custom_title, account_handles, media_indices, bookmarked_at
+			FROM bookmarks
+			WHERE user_id = ''
+		`, userID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`DELETE FROM bookmarks WHERE user_id = ''`); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`
+			INSERT OR IGNORE INTO feed_likes
+				(username, tweet_id, source_handle, author_handle, author_display_name,
+				 body_text, link, canonical_x_link, published_at, media_url, avatar_url,
+				 media_json, platform, quote_payload_json, liked_at, updated_at)
+			SELECT ?, tweet_id, source_handle, author_handle, author_display_name,
+			       body_text, link, canonical_x_link, published_at, media_url, avatar_url,
+			       media_json, platform, quote_payload_json, liked_at, updated_at
+			FROM feed_likes
+			WHERE username = ''
+		`, userID); err != nil {
+			return err
+		}
+		_, err := tx.Exec(`DELETE FROM feed_likes WHERE username = ''`)
+		return err
+	})
 }
 
 // ImportConfig performs a config import. When replace is true, existing settings,
