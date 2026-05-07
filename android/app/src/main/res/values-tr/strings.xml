@@ -64,7 +64,7 @@
     <string name="action_preferences">Ayarlar</string>
     <string name="action_previous">Önceki</string>
     <string name="action_previous_slide">Önceki slayt</string>
-    <string name="action_probe">Kontrol et</string>
+    <string name="action_probe">Test et</string>
     <string name="action_read_more">Devamını oku</string>
     <string name="action_refresh">Yenile</string>
     <string name="action_refresh_channel">Güncelle</string>
@@ -756,7 +756,7 @@
     <string name="toast_log_copied">Günlük kopyalandı</string>
     <string name="toast_muted">Sessize alındı</string>
     <string name="toast_muted_account">@%1$s sessize alındı</string>
-    <string name="toast_probe_done">Kontrol tamamlandı</string>
+    <string name="toast_probe_done">Test tamamlandı</string>
     <string name="toast_refreshed_channel">%1$s güncellendi</string>
     <string name="toast_reposts_disabled_for_account">Bu hesap için yeniden paylaşımlar kapatıldı</string>
     <string name="toast_reposts_enabled_for_account">Bu hesap için yeniden paylaşımlar açıldı</string>
