@@ -153,7 +153,7 @@
     <string name="bookmarks_all_with_count">Tümü (%1$d)</string>
     <string name="bookmarks_empty">Henüz kaydedilen yok</string>
     <string name="cache_avatars">Avatarlar</string>
-    <string name="cache_banners">Afişler</string>
+    <string name="cache_banners">Kapak görselleri</string>
     <string name="cache_feed_items">Akış içerikleri</string>
     <string name="cache_subtitles">Altyazılar</string>
     <string name="cache_x_media">X medyası</string>
