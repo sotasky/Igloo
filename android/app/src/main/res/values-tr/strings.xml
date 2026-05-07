@@ -173,7 +173,7 @@
     <string name="confirm_unfollow_channel_body">%1$s artık takip edilmesin mi?</string>
     <string name="confirm_unfollow_channel_default_name">bu kanal</string>
     <string name="confirm_unfollow_channel_delete_media_body">\"%1$s\" takibi bırakılsın ve cihazdaki medyası silinsin mi? Bu işlem geri alınamaz.</string>
-    <string name="confirm_unfollow_channel_title">Kanal takibi bırakılsın mı?</string>
+    <string name="confirm_unfollow_channel_title">Takibi bırak</string>
     <string name="content_description_channel_avatar">Kanal avatarı</string>
     <string name="content_description_channel_banner">Kanal kapak görseli</string>
     <string name="content_description_missing_media">Eksik medya</string>
