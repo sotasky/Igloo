@@ -534,7 +534,7 @@
     <string name="settings_moments_include_reposts">Yeniden paylaşılanları Moments\'a dahil et</string>
     <string name="settings_moments_include_tiktok_reposts">TikTok\'ta yeniden paylaşılanları Moments\'a dahil et</string>
     <string name="settings_mute_by_default">Varsayılan olarak sessize al</string>
-    <string name="settings_muted_accounts_help">Sessize alınan hesaplar akışta gizlenir. Yeniden paylaşımlarda gönderi menüsünden sessize alın.</string>
+    <string name="settings_muted_accounts_help">Sessize alınan hesapların gönderileri akışta gizlenir. Yeniden paylaşımlarda hesabı gönderi menüsünden sessize alabilirsiniz.</string>
     <string name="settings_no_cached_media">Henüz önbelleğe alınmış medya yok.</string>
     <string name="settings_no_muted_accounts">Sessize alınan hesap yok</string>
     <string name="settings_outbox">Bekleyen işlemler</string>
