@@ -522,8 +522,8 @@
     <string name="settings_max_videos_to_download">İndirilecek en fazla video</string>
     <string name="settings_media_download_limit">İndirilecek medya sınırı</string>
     <string name="settings_media_only_default">Varsayılan olarak sadece medyalı gönderiler</string>
-    <string name="settings_media_only_feed">Yalnızca medya akışı</string>
-    <string name="settings_media_only_x">Yalnızca medya (X)</string>
+    <string name="settings_media_only_feed">Yalnızca medyalı gönderiler</string>
+    <string name="settings_media_only_x">Yalnızca medyalı gönderiler (X)</string>
     <string name="settings_mode_casual">Hafif</string>
     <string name="settings_mode_community">Topluluk</string>
     <string name="settings_mode_off">Kapalı</string>
