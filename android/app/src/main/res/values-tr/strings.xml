@@ -331,7 +331,7 @@
     <string name="logs_no_sync_data">eşitleme verisi yok</string>
     <string name="logs_no_sync_report">Rapor yok</string>
     <string name="logs_no_warnings">Uyarı yok</string>
-    <string name="logs_no_x_sources">X kaynağı eklenmemiş.</string>
+    <string name="logs_no_x_sources">X hesabı eklenmemiş.</string>
     <string name="logs_parsed_detail">%1$d medyalı · %2$d metin</string>
     <string name="logs_preview_queue">Önizleme kuyruğu</string>
     <string name="logs_processes">İşlemler</string>
@@ -345,7 +345,7 @@
     <string name="logs_segments">Bölümler</string>
     <string name="logs_server_log">Sunucu günlüğü</string>
     <string name="logs_since_timestamp">%s tarihinden beri</string>
-    <string name="logs_source_health">Kaynak durumu</string>
+    <string name="logs_source_health">Kaynak sağlığı</string>
     <string name="logs_sponsorblock">SponsorBlock</string>
     <string name="logs_stat_database">Veritabanı</string>
     <string name="logs_stat_errors_24h">Hatalar (24 saat)</string>
