@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/screwys/igloo/internal/auth"
 	"github.com/screwys/igloo/internal/config"
@@ -86,7 +87,9 @@ func main() {
 		<-sig
 		slog.Info("shutting down")
 		cancelApp()
-		workers.Shutdown()
+		if !workers.ShutdownTimeout(3 * time.Second) {
+			slog.Warn("worker shutdown timed out; continuing server shutdown")
+		}
 		_ = srv.Shutdown(context.Background())
 	}()
 

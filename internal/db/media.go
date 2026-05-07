@@ -152,6 +152,21 @@ func (db *DB) GetMediaFilesByOwnerType(ownerType string) ([]model.MediaFile, err
 	return files, rows.Err()
 }
 
+// HasLegacyFeedMediaPaths reports whether any feed media rows still point at
+// the old flat feed_media/ directory and need relocation.
+func (db *DB) HasLegacyFeedMediaPaths() (bool, error) {
+	var exists int
+	err := db.conn.QueryRow(`
+		SELECT EXISTS (
+			SELECT 1 FROM media_files
+			WHERE owner_type = 'feed_media'
+			  AND file_path LIKE 'feed_media/%'
+			LIMIT 1
+		)
+	`).Scan(&exists)
+	return exists != 0, err
+}
+
 // MediaFilePathUpdate holds a new file_path for a media_files row identified by
 // (owner_type, owner_id, media_index).
 type MediaFilePathUpdate struct {

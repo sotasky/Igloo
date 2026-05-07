@@ -24,6 +24,15 @@ func (m *Manager) migrateMediaPaths() {
 	// --- 1. Relocate feed_media/ files to media/twitter/{handle}/ ---
 	movedCount := m.migrateFeedMediaToTwitterDirs()
 
+	hasLegacyRows, err := m.db.HasLegacyFeedMediaPaths()
+	if err != nil {
+		log.Printf("[migrate] legacy feed media check: %v", err)
+	} else if !hasLegacyRows && !m.hasLegacyFeedMediaFiles() {
+		log.Printf("[migrate] media path migration done: %d feed media records inserted, %d feed media files relocated",
+			total, movedCount)
+		return
+	}
+
 	// --- 2. Re-index feed media files from disk (both legacy and new locations) ---
 	feedMediaCount := m.migrateFeedMediaDir()
 	total += feedMediaCount
@@ -70,6 +79,26 @@ func (m *Manager) migrateFeedMediaDir() int {
 		return 0
 	}
 	return len(files)
+}
+
+func (m *Manager) hasLegacyFeedMediaFiles() bool {
+	legacyDir := filepath.Join(m.cfg.DataDir, "feed_media")
+	entries, err := os.ReadDir(legacyDir)
+	if err != nil {
+		return false
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		ext := filepath.Ext(entry.Name())
+		stem := strings.TrimSuffix(entry.Name(), ext)
+		tweetID, _, _ := parseFeedMediaFilename(stem, ext)
+		if tweetID != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // collectFeedMediaFiles walks dir and appends model.MediaFile entries to files,

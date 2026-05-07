@@ -72,6 +72,32 @@ func TestManagerStartAndShutdown(t *testing.T) {
 	}
 }
 
+func TestManagerShutdownTimeoutReturnsWhenWorkerIgnoresCancel(t *testing.T) {
+	cfg := &config.Config{}
+	m := NewManager(nil, cfg)
+	m.downloader = nil
+
+	blocked := make(chan struct{})
+	release := make(chan struct{})
+	m.launch("stubborn_worker", func(ctx context.Context) {
+		close(blocked)
+		<-release
+	})
+
+	select {
+	case <-blocked:
+	case <-time.After(2 * time.Second):
+		t.Fatal("worker did not start within 2s")
+	}
+
+	if stopped := m.ShutdownTimeout(10 * time.Millisecond); stopped {
+		t.Fatal("expected ShutdownTimeout to report an unclean shutdown")
+	}
+
+	close(release)
+	m.Shutdown()
+}
+
 // TestManagerFeedMediaKick verifies that KickFeedMedia is non-blocking and
 // that multiple kicks coalesce into a single buffered signal.
 func TestManagerFeedMediaKick(t *testing.T) {

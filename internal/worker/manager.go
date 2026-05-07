@@ -205,6 +205,24 @@ func (m *Manager) Shutdown() {
 	m.wg.Wait()
 }
 
+// ShutdownTimeout cancels workers and waits up to timeout for them to exit.
+// It returns false when a worker ignored cancellation long enough that the
+// caller should continue process shutdown instead of waiting indefinitely.
+func (m *Manager) ShutdownTimeout(timeout time.Duration) bool {
+	m.cancel()
+	done := make(chan struct{})
+	go func() {
+		m.wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return true
+	case <-time.After(timeout):
+		return false
+	}
+}
+
 // KickFeedMedia sends a non-blocking signal to wake the feed media worker immediately.
 func (m *Manager) KickFeedMedia() {
 	select {
