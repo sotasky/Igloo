@@ -494,7 +494,7 @@
     <string name="settings_backup_folder">Yedekleme klasörü</string>
     <string name="settings_backup_help">Ayrı bir klasör seçin. Veritabanı ve ayarlar her gün yedeklenir; yalnızca son 5 yedek saklanır.</string>
     <string name="settings_bookmark_per_category">Kategoriye göre ayarlar</string>
-    <string name="settings_check_interval_hours">Kontrol sıklığı (saat)</string>
+    <string name="settings_check_interval_hours">Kontrol aralığı (saat)</string>
     <string name="settings_clear_muted_help">Sessize alınan tüm hesaplar sessizden çıkarılır. Bu hesapların gönderileri eşitlemeden sonra akışınızda tekrar görünebilir.</string>
     <string name="settings_clear_muted_title">Tüm hesaplar sessizden çıkarılsın mı?</string>
     <string name="settings_cookie_files">Çerez dosyaları</string>
@@ -517,7 +517,7 @@
     <string name="settings_export_help">Takip edilen hesaplar, beğeniler, kaydedilenler ve avatarlar.</string>
     <string name="settings_export_unavailable">Dışa aktarma henüz hazır değil</string>
     <string name="settings_feed_include_reposts">Yeniden paylaşılanları dahil et</string>
-    <string name="settings_fetch_delay_seconds">Getirme aralığı (saniye)</string>
+    <string name="settings_fetch_delay_seconds">Hesaplar arası bekleme (saniye)</string>
     <string name="settings_max_videos">En fazla video</string>
     <string name="settings_max_videos_to_download">İndirilecek en fazla video</string>
     <string name="settings_media_download_limit">İndirilecek medya sınırı</string>
@@ -589,7 +589,7 @@
     <string name="settings_stories_window_hours">Hikâye süresi (saat)</string>
     <string name="settings_sync_description">Sunucudan yeni gönderileri, hesap değişikliklerini ve medya dosyalarını alır. Yalnızca Wi-Fi açıksa mobil veri kullanılmaz; aralıklar otomatik eşitleme içindir.</string>
     <string name="settings_sync_hours">%1$dh</string>
-    <string name="settings_sync_interval">Yenileme aralığı</string>
+    <string name="settings_sync_interval">Eşitleme aralığı</string>
     <string name="settings_sync_minutes">%1$dm</string>
     <string name="settings_syncing">Eşitleniyor...</string>
     <string name="settings_tab_account">Hesap</string>
