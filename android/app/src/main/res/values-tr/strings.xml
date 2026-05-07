@@ -387,7 +387,7 @@
     <string name="logs_table_action">İşlem</string>
     <string name="logs_table_channel">Kanal</string>
     <string name="logs_table_handle">Kullanıcı adı</string>
-    <string name="logs_table_items">İçerik</string>
+    <string name="logs_table_items">Gönderi</string>
     <string name="logs_table_last_ok">Son başarılı</string>
     <string name="logs_table_platform">Platform</string>
     <string name="logs_table_status">Durum</string>
