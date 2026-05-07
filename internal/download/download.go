@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"log"
-	"net/http"
 	"net/url"
 	"path"
 	"strings"
@@ -34,7 +33,7 @@ func NewDownloader(cookiesDir string) *Downloader {
 	return &Downloader{
 		YtDlp:     &YtDlpWrapper{CookiesDir: cookiesDir},
 		GalleryDL: &GalleryDLWrapper{},
-		HTTP:      &HTTPDownloader{Client: &http.Client{}},
+		HTTP:      NewHTTPDownloader(),
 	}
 }
 

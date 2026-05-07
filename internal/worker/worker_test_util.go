@@ -39,7 +39,9 @@ func testCfg(dataDir string) *config.Config {
 // testDownloader returns a minimal Downloader whose HTTP component uses
 // the real HTTP client — tests spin up httptest.Server stubs, so real HTTP is fine.
 func testDownloader() *download.Downloader {
-	return download.NewDownloader(filepath.Join(os.TempDir(), "no-such-cookies"))
+	d := download.NewDownloader(filepath.Join(os.TempDir(), "no-such-cookies"))
+	d.HTTP = &download.HTTPDownloader{Client: &http.Client{}, AllowPrivateHosts: true}
+	return d
 }
 
 type stubBannerSrv struct {

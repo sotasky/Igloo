@@ -264,7 +264,7 @@ func (db *DB) GetMutationSyncChanges(userID string, sinceVersion int64, limit in
 		limit = 500
 	}
 	cursor := sinceVersion
-	changes := make([]SyncChange, 0, limit)
+	changes := make([]SyncChange, 0)
 	for len(changes) <= limit {
 		page, pageTruncated, err := db.getMutationSyncChangeCandidates(cursor, 500)
 		if err != nil {

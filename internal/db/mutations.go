@@ -295,27 +295,41 @@ func (db *DB) ApplyMuteMutation(handle, action string, updatedAtMs int64) (Mutat
 // ── channel_setting (PUT) ────────────────────────────────────────────
 
 func (db *DB) ApplyChannelSettingMutation(channelID, field string, value any, updatedAtMs int64) (MutationResult, error) {
-	// Whitelist per-channel setting columns to avoid SQL-injection via field.
-	allowed := map[string]bool{
-		"media_only": true, "include_reposts": true,
-		"media_download_limit": true, "max_videos": true,
-		"download_subtitles": true,
-	}
-	if !allowed[field] {
+	column, ok := channelSettingMutationColumn(field)
+	if !ok {
 		return MutationResult{}, fmt.Errorf("unknown channel_setting field: %s", field)
 	}
 	return db.applyMutation("channel_setting", channelID,
 		map[string]any{"field": field, "value": value, "updated_at_ms": updatedAtMs},
 		func(tx *sql.Tx) error {
 			// NULL-means-inherit sentinel: nil value clears the override.
-			query := fmt.Sprintf(`
-				INSERT INTO channel_settings (channel_id, %s, updated_at) VALUES (?, ?, ?)
+			query := fmt.Sprintf(
+				`INSERT INTO channel_settings (channel_id, %s, updated_at) VALUES (?, ?, ?)
 				ON CONFLICT(channel_id) DO UPDATE SET
 				  %s = excluded.%s,
-				  updated_at = excluded.updated_at`, field, field, field)
+				  updated_at = excluded.updated_at`,
+				column, column, column,
+			)
 			_, err := tx.Exec(query, channelID, value, updatedAtMs)
 			return err
 		})
+}
+
+func channelSettingMutationColumn(field string) (string, bool) {
+	switch field {
+	case "media_only":
+		return "media_only", true
+	case "include_reposts":
+		return "include_reposts", true
+	case "media_download_limit":
+		return "media_download_limit", true
+	case "max_videos":
+		return "max_videos", true
+	case "download_subtitles":
+		return "download_subtitles", true
+	default:
+		return "", false
+	}
 }
 
 // ── seen (batched) ───────────────────────────────────────────────────

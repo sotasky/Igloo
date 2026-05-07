@@ -123,7 +123,7 @@ func TestDownloadTwimgQualityFallback(t *testing.T) {
 
 	client := &http.Client{Transport: &twimgTestTransport{srvURL: srv.Listener.Addr().String()}}
 	d := &Downloader{
-		HTTP: &HTTPDownloader{Client: client},
+		HTTP: &HTTPDownloader{Client: client, AllowPrivateHosts: true},
 	}
 	dir := t.TempDir()
 	paths, err := d.Download(context.Background(),
@@ -150,7 +150,7 @@ func TestDownloadTwimgAllQualitiesFail(t *testing.T) {
 
 	client := &http.Client{Transport: &twimgTestTransport{srvURL: srv.Listener.Addr().String()}}
 	d := &Downloader{
-		HTTP: &HTTPDownloader{Client: client},
+		HTTP: &HTTPDownloader{Client: client, AllowPrivateHosts: true},
 	}
 	dir := t.TempDir()
 	_, err := d.Download(context.Background(),

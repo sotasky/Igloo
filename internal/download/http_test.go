@@ -20,7 +20,7 @@ func TestHTTPDownloadFile(t *testing.T) {
 	defer srv.Close()
 
 	dir := t.TempDir()
-	dl := &HTTPDownloader{Client: srv.Client()}
+	dl := &HTTPDownloader{Client: srv.Client(), AllowPrivateHosts: true}
 
 	got, err := dl.DownloadFile(context.Background(), srv.URL+"/test.jpg", dir, "test.jpg")
 	if err != nil {
@@ -57,7 +57,7 @@ func TestHTTPDownloadFileContextCancel(t *testing.T) {
 	}()
 
 	dir := t.TempDir()
-	dl := &HTTPDownloader{Client: srv.Client()}
+	dl := &HTTPDownloader{Client: srv.Client(), AllowPrivateHosts: true}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel immediately
@@ -80,7 +80,7 @@ func TestHTTPDownloadFileBadStatus(t *testing.T) {
 	defer srv.Close()
 
 	dir := t.TempDir()
-	dl := &HTTPDownloader{Client: srv.Client()}
+	dl := &HTTPDownloader{Client: srv.Client(), AllowPrivateHosts: true}
 
 	_, err := dl.DownloadFile(context.Background(), srv.URL+"/missing.jpg", dir, "missing.jpg")
 	if err == nil {
@@ -94,7 +94,7 @@ func TestHTTPStatusError(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	h := NewHTTPDownloader()
+	h := &HTTPDownloader{Client: ts.Client(), AllowPrivateHosts: true}
 	dir := t.TempDir()
 	_, err := h.DownloadFile(context.Background(), ts.URL+"/test.jpg", dir, "test.jpg")
 	if err == nil {
@@ -121,11 +121,21 @@ func TestHTTPDownloadFileRejectsUnsafeFilename(t *testing.T) {
 	defer srv.Close()
 
 	dir := t.TempDir()
-	dl := &HTTPDownloader{Client: srv.Client()}
+	dl := &HTTPDownloader{Client: srv.Client(), AllowPrivateHosts: true}
 
 	for _, filename := range []string{"../escape.jpg", "subdir/file.jpg", "", "..\\escape.jpg"} {
 		if _, err := dl.DownloadFile(context.Background(), srv.URL+"/test.jpg", dir, filename); err == nil {
 			t.Fatalf("expected unsafe filename %q to fail", filename)
 		}
+	}
+}
+
+func TestHTTPDownloadFileRejectsNonPublicHost(t *testing.T) {
+	dir := t.TempDir()
+	h := NewHTTPDownloader()
+
+	_, err := h.DownloadFile(context.Background(), "http://127.0.0.1/test.jpg", dir, "test.jpg")
+	if err == nil {
+		t.Fatal("expected non-public host to fail")
 	}
 }
