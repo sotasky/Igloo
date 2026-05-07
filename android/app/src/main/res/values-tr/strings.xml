@@ -543,7 +543,7 @@
     <string name="settings_quality_default">Varsayılan kalite</string>
     <string name="settings_quality_global_default">Genel ayar (varsayılan)</string>
     <string name="settings_retention_days">%1$d gün</string>
-    <string name="settings_retention_help">Son N gündeki içerikler saklanır; daha eskiler temizlenir ve tekrar indirilmez. Kaydedilen ve beğenilen içerikler silinmez.</string>
+    <string name="settings_retention_help">Son N gündeki gönderiler ve medya saklanır; daha eskiler temizlenir ve tekrar indirilmez. Kaydedilen ve beğenilen gönderiler silinmez.</string>
     <string name="settings_retention_one_day">1 gün</string>
     <string name="settings_sb_ask_to_skip">Atlamayı sor</string>
     <string name="settings_sb_do_not_skip">Atlama</string>
@@ -640,10 +640,10 @@
     <string name="setup_error_passwords_mismatch">Şifreler eşleşmiyor.</string>
     <string name="setup_error_save_failed">Yönetici kullanıcısı oluşturulamadı.</string>
     <string name="setup_error_username_required">Kullanıcı adı gerekli.</string>
-    <string name="setup_platforms_help">Bu Igloo kurulumunun hangi platformlardan içerik alacağını seçin. Kullanıcı erişimini daha sonra değiştirebilirsiniz.</string>
+    <string name="setup_platforms_help">Bu Igloo kurulumunun hangi platformlardan gönderi ve video alacağını seçin. Kullanıcı erişimini daha sonra değiştirebilirsiniz.</string>
     <string name="setup_platforms_title">Platformları seç</string>
     <string name="setup_rsshub_base_label">X için RSSHub URL\'si</string>
-    <string name="setup_rsshub_help_prefix">X içerikleri şununla alınır:</string>
+    <string name="setup_rsshub_help_prefix">X gönderileri şununla alınır:</string>
     <string name="setup_subtitle">Bu Igloo kurulumu için yönetici hesabını oluşturun.</string>
     <string name="setup_title">İlk yöneticiyi oluştur</string>
     <string name="shortcuts_bookmark_video">Videoyu kaydet</string>
