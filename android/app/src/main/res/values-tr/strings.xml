@@ -218,7 +218,7 @@
     <string name="feed_new_posts_posted">paylaştı</string>
     <string name="feed_open_media_index">%d. medyayı aç</string>
     <string name="feed_open_thread">Gönderi dizisini aç</string>
-    <string name="feed_open_x_feed_settings">X akış ayarlarını aç</string>
+    <string name="feed_open_x_feed_settings">X ayarlarını aç</string>
     <string name="feed_post_actions">Gönderi işlemleri</string>
     <string name="feed_post_media">Gönderi medyası</string>
     <string name="feed_post_media_index">Gönderi medyası %d</string>
@@ -480,8 +480,8 @@
     <string name="search_press_enter_to_search_youtube">YouTube\'da aramak için Enter\'a basın</string>
     <string name="search_title">Arama</string>
     <string name="settings_account_credentials">Hesap bilgileri</string>
-    <string name="settings_algorithmic_feed_enabled">Algoritmik akış</string>
-    <string name="settings_algorithmic_feed_help">Gönderileri ilgi ve yakınlığa göre sıralar. Kapalıyken gönderiler kronolojik gösterilir.</string>
+    <string name="settings_algorithmic_feed_enabled">Algoritmik sıralama</string>
+    <string name="settings_algorithmic_feed_help">Gönderileri ilgi ve yakınlığa göre sıralar. Kapalıyken gönderiler kronolojik sırada gösterilir.</string>
     <string name="settings_api_key">API anahtarı</string>
     <string name="settings_api_key_placeholder">API anahtarını gir</string>
     <string name="settings_appearance">Görünüm</string>
@@ -573,7 +573,7 @@
     <string name="settings_section_system">Sistem</string>
     <string name="settings_section_tiktok">TikTok</string>
     <string name="settings_section_translation">Çeviri</string>
-    <string name="settings_section_x_feed">X Akışı</string>
+    <string name="settings_section_x_feed">X ayarları</string>
     <string name="settings_segment_skipping">Bölüm atlama</string>
     <string name="settings_share_embed_friendly_links">Paylaşırken önizleme dostu bağlantılar kullan</string>
     <string name="settings_skip_language_placeholder">Dil ya da kod yazın, örn. Türkçe veya tr</string>
@@ -610,7 +610,7 @@
     <string name="settings_theme_follow_system">Sistem ayarını kullan</string>
     <string name="settings_theme_follow_system_dark_mode">Sistem koyu modunu kullan</string>
     <string name="settings_title">Ayarlar</string>
-    <string name="settings_translate_background">Akışı arka planda sürekli çevir</string>
+    <string name="settings_translate_background">Gönderileri arka planda sürekli çevir</string>
     <string name="settings_translate_lazy">Gönderiler ekrana gelmeden hemen önce çevir</string>
     <string name="settings_translate_lookahead">Önceden çevrilecek gönderi sayısı</string>
     <string name="settings_translate_manual_only">Yalnızca elle</string>
