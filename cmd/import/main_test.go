@@ -17,7 +17,8 @@ func TestRunImportsCurrentFullExportZipFreshInstall(t *testing.T) {
 	configDir := t.TempDir()
 	t.Setenv("IGLOO_DATA_DIR", dataDir)
 	t.Setenv("IGLOO_CONFIG_DIR", configDir)
-	t.Setenv("IGLOO_REPO_DIR", filepath.Clean("../.."))
+	repoDir := filepath.Clean("../..")
+	t.Setenv("IGLOO_REPO_DIR", repoDir)
 
 	zipPath := filepath.Join(t.TempDir(), "igloo-full-test.zip")
 	writeFullExportZipFixture(t, zipPath)
@@ -29,8 +30,8 @@ func TestRunImportsCurrentFullExportZipFreshInstall(t *testing.T) {
 	if !strings.Contains(stdout.String(), "format=full_export_zip") {
 		t.Fatalf("stdout missing format summary: %s", stdout.String())
 	}
-	if !strings.Contains(stdout.String(), "owner=bootstrap") {
-		t.Fatalf("stdout missing bootstrap owner summary: %s", stdout.String())
+	if !strings.Contains(stdout.String(), "owner=user:admin") {
+		t.Fatalf("stdout missing export owner summary: %s", stdout.String())
 	}
 
 	store, err := db.Open(filepath.Join(dataDir, "igloo.db"), dataDir)
@@ -49,8 +50,43 @@ func TestRunImportsCurrentFullExportZipFreshInstall(t *testing.T) {
 	if err := store.QueryRow(`SELECT username FROM feed_likes WHERE tweet_id='liked_post'`).Scan(&likeUser); err != nil {
 		t.Fatalf("like missing: %v", err)
 	}
-	if categoryUser != "" || bookmarkUser != "" || likeUser != "" {
-		t.Fatalf("fresh import owner = category %q bookmark %q like %q, want bootstrap blanks", categoryUser, bookmarkUser, likeUser)
+	if categoryUser != "admin" || bookmarkUser != "admin" || likeUser != "admin" {
+		t.Fatalf("fresh import owner = category %q bookmark %q like %q, want admin", categoryUser, bookmarkUser, likeUser)
+	}
+
+	restoredConfig := map[string]string{
+		"rsshub.env":                  "RSSHUB_SECRET=example\n",
+		"auth_users.json":             `{"admin":{"role":"admin"}}` + "\n",
+		"auth_secret":                 "secret-key",
+		"cookies/twitter_cookies.txt": "cookie-data",
+	}
+	for rel, want := range restoredConfig {
+		got, err := os.ReadFile(filepath.Join(configDir, rel))
+		if err != nil {
+			t.Fatalf("read restored config %s: %v", rel, err)
+		}
+		if string(got) != want {
+			t.Fatalf("restored config %s = %q, want %q", rel, string(got), want)
+		}
+	}
+	nginxConf, err := os.ReadFile(filepath.Join(configDir, "nginx.conf"))
+	if err != nil {
+		t.Fatalf("read restored nginx.conf: %v", err)
+	}
+	nginxText := string(nginxConf)
+	for _, want := range []string{
+		filepath.Join(dataDir, "nginx.pid"),
+		filepath.Join(configDir, "server.crt"),
+		filepath.Join(repoDir, "static"),
+	} {
+		if !strings.Contains(nginxText, want) {
+			t.Fatalf("restored nginx.conf missing rewritten path %q:\n%s", want, nginxText)
+		}
+	}
+	for _, oldPath := range []string{"/old/data", "/old/config", "/old/repo"} {
+		if strings.Contains(nginxText, oldPath) {
+			t.Fatalf("restored nginx.conf still contains old path %q:\n%s", oldPath, nginxText)
+		}
 	}
 
 	var mediaRel, videoPath string
@@ -105,6 +141,7 @@ func writeFullExportZipFixture(t *testing.T, path string) {
 	}
 	cfg := db.ConfigExport{
 		Version:    1,
+		UserID:     "admin",
 		ExportedAt: time.Unix(1700000000, 0).UTC(),
 		Settings: map[string]string{
 			"starting_page": "feed",
@@ -142,6 +179,29 @@ func writeFullExportZipFixture(t *testing.T, path string) {
 	}
 	if err := json.NewEncoder(exportFile).Encode(cfg); err != nil {
 		t.Fatalf("encode export.json: %v", err)
+	}
+	runtimeFile, err := zw.Create("runtime.json")
+	if err != nil {
+		t.Fatalf("create runtime.json: %v", err)
+	}
+	if _, err := runtimeFile.Write([]byte(`{"version":1,"data_dir":"/old/data","config_dir":"/old/config","repo_dir":"/old/repo"}`)); err != nil {
+		t.Fatalf("write runtime.json: %v", err)
+	}
+	configEntries := map[string]string{
+		"config/nginx.conf":                  "pid /old/data/nginx.pid;\nssl_certificate /old/config/server.crt;\nroot /old/repo/static;\n",
+		"config/rsshub.env":                  "RSSHUB_SECRET=example\n",
+		"config/auth_users.json":             `{"admin":{"role":"admin"}}` + "\n",
+		"config/auth_secret":                 "secret-key",
+		"config/cookies/twitter_cookies.txt": "cookie-data",
+	}
+	for name, content := range configEntries {
+		f, err := zw.Create(name)
+		if err != nil {
+			t.Fatalf("create %s: %v", name, err)
+		}
+		if _, err := f.Write([]byte(content)); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
 	}
 	mediaFile, err := zw.Create("media/bookmarks/booked_video/000.mp4")
 	if err != nil {

@@ -21,6 +21,7 @@ type Config struct {
 	DatabasePath      string
 	DataDir           string
 	ConfDir           string
+	RepoDir           string
 	StaticDir         string
 	LocaleDir         string
 	ListenAddr        string
@@ -56,6 +57,7 @@ func Load() *Config {
 		DatabasePath:      databasePath,
 		DataDir:           dataDir,
 		ConfDir:           configDir,
+		RepoDir:           repoDir,
 		StaticDir:         filepath.Join(repoDir, "static"),
 		LocaleDir:         envOr("IGLOO_LOCALE_DIR", filepath.Join(repoDir, "locales", "app")),
 		ListenAddr:        ":" + envOr("IGLOO_PORT", "5001"),

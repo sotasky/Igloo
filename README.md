@@ -186,7 +186,9 @@ Default folders in case installed natively:
 | `~/.config/igloo/` | Auth files, config, platform session files |
 
 For a native fresh install, a full export zip can be imported before the first
-browser login:
+browser login. The current full export zip includes `export.json`, bookmarked
+media, and runtime files from `~/.config/igloo/` such as `nginx.conf`,
+`rsshub.env`, `auth_users.json`, `auth_secret`, and `cookies/`.
 
 ```bash
 IGLOO_DATA_DIR="$HOME/.local/share/igloo" \
@@ -195,9 +197,12 @@ IGLOO_REPO_DIR="$PWD" \
 ./bin/igloo-import --replace "$HOME"/Downloads/igloo-full-*.zip
 ```
 
-If no admin exists yet, user-owned rows are imported into bootstrap ownership
-and claimed by the first admin created in setup. If exactly one user exists,
-the import uses that user. If multiple users exist, pass `--user`.
+Run the import after `scripts/install.sh` builds `bin/igloo-import` and before
+starting the user services. The import restores `nginx.conf` and rewrites path
+roots in it to the current data, config, and repo directories. User-owned rows
+use the exported `user_id`, so a fresh install does not need to guess an admin
+ID. Older zips without `user_id` still fall back to the only configured user or
+bootstrap ownership before first setup.
 
 ## Android
 

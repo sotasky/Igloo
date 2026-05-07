@@ -278,6 +278,62 @@ func TestHandleConfigExportFullIncludesBookmarkedMediaFiles(t *testing.T) {
 	}
 }
 
+func TestHandleConfigExportFullIncludesRuntimeConfigFiles(t *testing.T) {
+	srv := newTestServer(t)
+	srv.cfg.ConfDir = t.TempDir()
+	srv.cfg.CookiesDir = filepath.Join(srv.cfg.ConfDir, "cookies")
+	srv.cfg.StaticDir = filepath.Join(t.TempDir(), "static")
+
+	files := map[string]string{
+		"nginx.conf":                  "pid /old/state/nginx.pid;\nssl_certificate /old/config/server.crt;\n",
+		"rsshub.env":                  "RSSHUB_SECRET=example\n",
+		"auth_users.json":             `{"admin":{"role":"admin"}}` + "\n",
+		"auth_secret":                 "secret-key",
+		"cookies/twitter_cookies.txt": "cookie-data",
+	}
+	for rel, content := range files {
+		path := filepath.Join(srv.cfg.ConfDir, rel)
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatalf("MkdirAll %s: %v", rel, err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatalf("WriteFile %s: %v", rel, err)
+		}
+	}
+
+	req := httptest.NewRequest("GET", "/api/config/export-full", nil)
+	req = req.WithContext(contextWithUser(req, "admin", "admin"))
+	rec := httptest.NewRecorder()
+
+	srv.handleConfigExportFull(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	entries := readZipEntries(t, rec.Body.Bytes())
+	for rel, want := range files {
+		name := filepath.ToSlash(filepath.Join("config", rel))
+		got, ok := entries[name]
+		if !ok {
+			t.Fatalf("missing config entry %s; entries=%v", name, mapKeys(entries))
+		}
+		if string(got) != want {
+			t.Fatalf("%s = %q, want %q", name, string(got), want)
+		}
+	}
+	if _, ok := entries["runtime.json"]; !ok {
+		t.Fatalf("runtime.json missing; entries=%v", mapKeys(entries))
+	}
+	rawJSON := entries["export.json"]
+	var payload map[string]any
+	if err := json.Unmarshal(rawJSON, &payload); err != nil {
+		t.Fatalf("export.json invalid: %v", err)
+	}
+	if got := payload["user_id"]; got != "admin" {
+		t.Fatalf("export user_id = %v, want admin", got)
+	}
+}
+
 func TestHandleConfigExportSavesToBackupDirWhenConfigured(t *testing.T) {
 	srv := newTestServer(t)
 	backupDir := t.TempDir()

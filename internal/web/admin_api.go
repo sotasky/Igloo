@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -1082,10 +1083,12 @@ func (s *Server) handleConfigExportFull(w http.ResponseWriter, r *http.Request) 
 	}
 
 	mediaFiles := s.collectFullExportBookmarkMedia(cfg.Bookmarks)
+	runtimeFiles := s.collectFullExportRuntimeConfigFiles()
+	runtimeManifest := s.fullExportRuntimeManifest()
 
 	if dir := s.configuredExportDir(); dir != "" {
 		path, err := writeExportFile(dir, "igloo-full", ".zip", func(dst io.Writer) error {
-			return writeFullExportZip(dst, cfg, mediaFiles)
+			return writeFullExportZip(dst, cfg, mediaFiles, runtimeFiles, runtimeManifest)
 		})
 		if err != nil {
 			slog.Error("ExportFullData save", "dir", dir, "err", err)
@@ -1105,7 +1108,7 @@ func (s *Server) handleConfigExportFull(w http.ResponseWriter, r *http.Request) 
 		fmt.Sprintf(`attachment; filename="igloo-full-%s.zip"`,
 			time.Now().UTC().Format("2006-01-02")))
 	w.WriteHeader(200)
-	if err := writeFullExportZip(w, cfg, mediaFiles); err != nil {
+	if err := writeFullExportZip(w, cfg, mediaFiles, runtimeFiles, runtimeManifest); err != nil {
 		slog.Error("ExportFullData zip write", "err", err)
 	}
 }
@@ -1114,11 +1117,20 @@ func writeConfigExportJSON(w io.Writer, cfg db.ConfigExport) error {
 	return json.NewEncoder(w).Encode(cfg)
 }
 
-func writeFullExportZip(w io.Writer, cfg db.ConfigExport, mediaFiles []fullExportMediaFile) error {
+func writeFullExportZip(w io.Writer, cfg db.ConfigExport, mediaFiles []fullExportMediaFile, runtimeFiles []fullExportRuntimeFile, runtimeManifest fullimport.RuntimeManifest) error {
 	zw := zip.NewWriter(w)
 	if err := writeFullExportJSON(zw, cfg); err != nil {
 		zw.Close()
 		return err
+	}
+	if err := writeFullExportRuntimeManifest(zw, runtimeManifest); err != nil {
+		zw.Close()
+		return err
+	}
+	for _, file := range runtimeFiles {
+		if err := writeFullExportRuntimeConfigFile(zw, file); err != nil {
+			slog.Warn("ExportFullData runtime config file skipped", "path", file.SourcePath, "err", err)
+		}
 	}
 	for _, file := range mediaFiles {
 		if err := writeFullExportMediaFile(zw, file); err != nil {
@@ -1171,6 +1183,11 @@ type fullExportMediaFile struct {
 	ArchivePath string
 }
 
+type fullExportRuntimeFile struct {
+	SourcePath  string
+	ArchivePath string
+}
+
 func writeFullExportJSON(zw *zip.Writer, cfg db.ConfigExport) error {
 	f, err := zw.Create("export.json")
 	if err != nil {
@@ -1179,6 +1196,43 @@ func writeFullExportJSON(zw *zip.Writer, cfg db.ConfigExport) error {
 	enc := json.NewEncoder(f)
 	enc.SetIndent("", "  ")
 	return enc.Encode(cfg)
+}
+
+func writeFullExportRuntimeManifest(zw *zip.Writer, manifest fullimport.RuntimeManifest) error {
+	f, err := zw.Create("runtime.json")
+	if err != nil {
+		return err
+	}
+	enc := json.NewEncoder(f)
+	enc.SetIndent("", "  ")
+	return enc.Encode(manifest)
+}
+
+func writeFullExportRuntimeConfigFile(zw *zip.Writer, file fullExportRuntimeFile) error {
+	src, err := os.Open(file.SourcePath)
+	if err != nil {
+		return err
+	}
+	defer src.Close()
+	info, err := src.Stat()
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("runtime config path is not a regular file")
+	}
+	hdr, err := zip.FileInfoHeader(info)
+	if err != nil {
+		return err
+	}
+	hdr.Name = file.ArchivePath
+	hdr.Method = zip.Deflate
+	dst, err := zw.CreateHeader(hdr)
+	if err != nil {
+		return err
+	}
+	_, err = io.Copy(dst, src)
+	return err
 }
 
 func writeFullExportMediaFile(zw *zip.Writer, file fullExportMediaFile) error {
@@ -1206,6 +1260,101 @@ func writeFullExportMediaFile(zw *zip.Writer, file fullExportMediaFile) error {
 	}
 	_, err = io.Copy(dst, src)
 	return err
+}
+
+func (s *Server) fullExportRuntimeManifest() fullimport.RuntimeManifest {
+	if s == nil || s.cfg == nil {
+		return fullimport.RuntimeManifest{Version: 1}
+	}
+	return fullimport.RuntimeManifest{
+		Version:   1,
+		DataDir:   s.cfg.DataDir,
+		ConfigDir: s.cfg.ConfDir,
+		RepoDir:   s.repoDirForRuntimeExport(),
+	}
+}
+
+func (s *Server) repoDirForRuntimeExport() string {
+	if s == nil || s.cfg == nil {
+		return ""
+	}
+	if strings.TrimSpace(s.cfg.RepoDir) != "" {
+		return s.cfg.RepoDir
+	}
+	if strings.TrimSpace(s.cfg.StaticDir) != "" {
+		return filepath.Dir(s.cfg.StaticDir)
+	}
+	return ""
+}
+
+func (s *Server) collectFullExportRuntimeConfigFiles() []fullExportRuntimeFile {
+	if s == nil || s.cfg == nil || strings.TrimSpace(s.cfg.ConfDir) == "" {
+		return nil
+	}
+	root := filepath.Clean(s.cfg.ConfDir)
+	var files []fullExportRuntimeFile
+	if err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			slog.Warn("ExportFullData runtime config path skipped", "path", path, "err", err)
+			return nil
+		}
+		if path == root {
+			return nil
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			slog.Warn("ExportFullData runtime config rel path skipped", "path", path, "err", err)
+			return nil
+		}
+		if skipFullExportRuntimeConfigPath(rel) {
+			if entry.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			slog.Warn("ExportFullData runtime config stat skipped", "path", path, "err", err)
+			return nil
+		}
+		if !info.Mode().IsRegular() {
+			return nil
+		}
+		files = append(files, fullExportRuntimeFile{
+			SourcePath:  path,
+			ArchivePath: filepath.ToSlash(filepath.Join("config", rel)),
+		})
+		return nil
+	}); err != nil {
+		slog.Warn("ExportFullData runtime config walk failed", "dir", root, "err", err)
+	}
+	sort.Slice(files, func(i, j int) bool {
+		return files[i].ArchivePath < files[j].ArchivePath
+	})
+	return files
+}
+
+func skipFullExportRuntimeConfigPath(rel string) bool {
+	rel = filepath.Clean(rel)
+	if rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return true
+	}
+	base := filepath.Base(rel)
+	if base == "" || strings.HasPrefix(base, ".") {
+		return true
+	}
+	for _, prefix := range []string{".auth_users_", ".config_", ".upload_", ".import-media-", ".import-config-"} {
+		if strings.HasPrefix(base, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) collectFullExportBookmarkMedia(bookmarks []db.BookmarkExport) []fullExportMediaFile {
@@ -1333,11 +1482,14 @@ func (s *Server) handleConfigImport(w http.ResponseWriter, r *http.Request) {
 			userID = user.Username
 		}
 		replace := r.FormValue("mode") == "replace"
-		result, restoredMedia, err := fullimport.ImportFullExportZip(s.db, s.cfg.DataDir, data, userID, replace)
+		result, restoredMedia, restoredConfig, err := fullimport.ImportFullExportZip(s.db, s.cfg.DataDir, s.cfg.ConfDir, s.repoDirForRuntimeExport(), data, userID, replace)
 		if err != nil {
 			slog.Error("ImportFullExportZip", "err", err)
 			importErr(400, "zip import error: "+err.Error())
 			return
+		}
+		if restoredConfig > 0 {
+			auth.InvalidateCache()
 		}
 		var parts []string
 		if result.AddedChannels > 0 {
@@ -1352,6 +1504,9 @@ func (s *Server) handleConfigImport(w http.ResponseWriter, r *http.Request) {
 		if restoredMedia > 0 {
 			parts = append(parts, fmt.Sprintf("%d media files", restoredMedia))
 		}
+		if restoredConfig > 0 {
+			parts = append(parts, fmt.Sprintf("%d config files", restoredConfig))
+		}
 		summary := "Import complete"
 		if len(parts) > 0 {
 			summary = "Imported: " + strings.Join(parts, ", ")
@@ -1362,7 +1517,7 @@ func (s *Server) handleConfigImport(w http.ResponseWriter, r *http.Request) {
 				"success": true, "format": "full_export_zip",
 				"added_channels": result.AddedChannels, "added_bookmarks": result.AddedBookmarks,
 				"added_categories": result.AddedCategories, "updated_settings": result.UpdatedSettings,
-				"restored_media": restoredMedia, "skipped": result.Skipped,
+				"restored_media": restoredMedia, "restored_config_files": restoredConfig, "skipped": result.Skipped,
 			})
 		}
 		return

@@ -175,6 +175,7 @@ type BookmarkedVideoExport struct {
 // ConfigExport is the config snapshot for export/import.
 type ConfigExport struct {
 	Version            int                     `json:"version"`
+	UserID             string                  `json:"user_id,omitempty"`
 	ExportedAt         time.Time               `json:"exported_at"`
 	Subscriptions      []ChannelExport         `json:"subscriptions"`
 	BookmarkCategories []BookmarkCatExport     `json:"bookmark_categories"`
@@ -224,6 +225,7 @@ func (db *DB) resolveLikeUsername(preferredUserID string) string {
 func (db *DB) ExportConfig(userID string) (ConfigExport, error) {
 	cfg := ConfigExport{
 		Version:    1,
+		UserID:     userID,
 		ExportedAt: time.Now().UTC(),
 	}
 

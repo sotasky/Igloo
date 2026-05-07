@@ -19,11 +19,56 @@ func IsZipPayload(data []byte) bool {
 	return len(data) >= 4 && data[0] == 'P' && data[1] == 'K' && data[2] == 0x03 && data[3] == 0x04
 }
 
-func ImportFullExportZip(store *db.DB, dataDir string, data []byte, userID string, replace bool) (db.ImportResult, int, error) {
+type RuntimeManifest struct {
+	Version   int    `json:"version"`
+	DataDir   string `json:"data_dir,omitempty"`
+	ConfigDir string `json:"config_dir,omitempty"`
+	RepoDir   string `json:"repo_dir,omitempty"`
+}
+
+func ReadExportConfig(data []byte) (db.ConfigExport, error) {
 	zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
 	if err != nil {
-		return db.ImportResult{}, 0, fmt.Errorf("open zip: %w", err)
+		return db.ConfigExport{}, fmt.Errorf("open zip: %w", err)
 	}
+	return readExportConfig(zr)
+}
+
+func ImportFullExportZip(store *db.DB, dataDir, configDir, repoDir string, data []byte, userID string, replace bool) (db.ImportResult, int, int, error) {
+	zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		return db.ImportResult{}, 0, 0, fmt.Errorf("open zip: %w", err)
+	}
+	cfg, err := readExportConfig(zr)
+	if err != nil {
+		return db.ImportResult{}, 0, 0, err
+	}
+	if strings.TrimSpace(userID) == "" && strings.TrimSpace(cfg.UserID) != "" {
+		userID = strings.TrimSpace(cfg.UserID)
+	}
+	sourceRuntime, err := readRuntimeManifest(zr)
+	if err != nil {
+		return db.ImportResult{}, 0, 0, err
+	}
+	targetRuntime := RuntimeManifest{
+		Version:   1,
+		DataDir:   dataDir,
+		ConfigDir: configDir,
+		RepoDir:   repoDir,
+	}
+	result, err := store.ImportConfig(cfg, userID, replace)
+	if err != nil {
+		return result, 0, 0, err
+	}
+	restoredConfig, err := RestoreFullExportRuntimeConfig(configDir, sourceRuntime, targetRuntime, zr)
+	if err != nil {
+		return result, 0, restoredConfig, err
+	}
+	restoredMedia, err := RestoreFullExportBookmarkMedia(store, dataDir, zr)
+	return result, restoredMedia, restoredConfig, err
+}
+
+func readExportConfig(zr *zip.Reader) (db.ConfigExport, error) {
 	var cfg db.ConfigExport
 	for _, f := range zr.File {
 		if filepath.ToSlash(f.Name) != "export.json" {
@@ -31,30 +76,138 @@ func ImportFullExportZip(store *db.DB, dataDir string, data []byte, userID strin
 		}
 		rc, err := f.Open()
 		if err != nil {
-			return db.ImportResult{}, 0, fmt.Errorf("open export.json: %w", err)
+			return db.ConfigExport{}, fmt.Errorf("open export.json: %w", err)
 		}
 		raw, readErr := io.ReadAll(rc)
 		closeErr := rc.Close()
 		if readErr != nil {
-			return db.ImportResult{}, 0, fmt.Errorf("read export.json: %w", readErr)
+			return db.ConfigExport{}, fmt.Errorf("read export.json: %w", readErr)
 		}
 		if closeErr != nil {
-			return db.ImportResult{}, 0, fmt.Errorf("close export.json: %w", closeErr)
+			return db.ConfigExport{}, fmt.Errorf("close export.json: %w", closeErr)
 		}
 		if err := json.Unmarshal(raw, &cfg); err != nil {
-			return db.ImportResult{}, 0, fmt.Errorf("parse export.json: %w", err)
+			return db.ConfigExport{}, fmt.Errorf("parse export.json: %w", err)
 		}
 		break
 	}
 	if cfg.Version == 0 {
-		return db.ImportResult{}, 0, fmt.Errorf("missing export.json")
+		return db.ConfigExport{}, fmt.Errorf("missing export.json")
 	}
-	result, err := store.ImportConfig(cfg, userID, replace)
-	if err != nil {
-		return result, 0, err
+	return cfg, nil
+}
+
+func readRuntimeManifest(zr *zip.Reader) (RuntimeManifest, error) {
+	for _, f := range zr.File {
+		if filepath.ToSlash(f.Name) != "runtime.json" {
+			continue
+		}
+		rc, err := f.Open()
+		if err != nil {
+			return RuntimeManifest{}, fmt.Errorf("open runtime.json: %w", err)
+		}
+		raw, readErr := io.ReadAll(rc)
+		closeErr := rc.Close()
+		if readErr != nil {
+			return RuntimeManifest{}, fmt.Errorf("read runtime.json: %w", readErr)
+		}
+		if closeErr != nil {
+			return RuntimeManifest{}, fmt.Errorf("close runtime.json: %w", closeErr)
+		}
+		var manifest RuntimeManifest
+		if err := json.Unmarshal(raw, &manifest); err != nil {
+			return RuntimeManifest{}, fmt.Errorf("parse runtime.json: %w", err)
+		}
+		return manifest, nil
 	}
-	restored, err := RestoreFullExportBookmarkMedia(store, dataDir, zr)
-	return result, restored, err
+	return RuntimeManifest{}, nil
+}
+
+func RestoreFullExportRuntimeConfig(configDir string, source, target RuntimeManifest, zr *zip.Reader) (int, error) {
+	if strings.TrimSpace(configDir) == "" {
+		return 0, nil
+	}
+	restored := 0
+	for _, f := range zr.File {
+		rel, ok := runtimeConfigEntry(f.Name)
+		if !ok || f.FileInfo().IsDir() {
+			continue
+		}
+		destAbs := filepath.Join(configDir, rel)
+		if !pathWithinDir(configDir, destAbs) {
+			return restored, fmt.Errorf("unsafe config path: %s", f.Name)
+		}
+		if err := os.MkdirAll(filepath.Dir(destAbs), 0o700); err != nil {
+			return restored, fmt.Errorf("create config dir: %w", err)
+		}
+		rc, err := f.Open()
+		if err != nil {
+			return restored, fmt.Errorf("open config entry %s: %w", f.Name, err)
+		}
+		raw, readErr := io.ReadAll(rc)
+		closeErr := rc.Close()
+		if readErr != nil {
+			return restored, fmt.Errorf("read config entry %s: %w", f.Name, readErr)
+		}
+		if closeErr != nil {
+			return restored, fmt.Errorf("close config entry %s: %w", f.Name, closeErr)
+		}
+		raw = rewriteRuntimeConfigPaths(rel, raw, source, target)
+		mode := os.FileMode(0o600)
+		if err := writeZipEntryBytes(destAbs, raw, ".import-config-*.tmp", mode); err != nil {
+			return restored, fmt.Errorf("write config entry %s: %w", f.Name, err)
+		}
+		restored++
+	}
+	return restored, nil
+}
+
+func runtimeConfigEntry(name string) (string, bool) {
+	clean := filepath.ToSlash(filepath.Clean(name))
+	if strings.HasPrefix(clean, "../") || clean == ".." || strings.HasPrefix(clean, "/") {
+		return "", false
+	}
+	if clean == "config" || !strings.HasPrefix(clean, "config/") {
+		return "", false
+	}
+	rel := strings.TrimPrefix(clean, "config/")
+	if rel == "" || rel == "." || rel == ".." || strings.HasPrefix(rel, "../") || strings.HasPrefix(rel, "/") {
+		return "", false
+	}
+	return filepath.FromSlash(rel), true
+}
+
+func rewriteRuntimeConfigPaths(rel string, data []byte, source, target RuntimeManifest) []byte {
+	if filepath.ToSlash(rel) != "nginx.conf" {
+		return data
+	}
+	text := string(data)
+	replacements := [][2]string{
+		{source.DataDir, target.DataDir},
+		{source.ConfigDir, target.ConfigDir},
+		{source.RepoDir, target.RepoDir},
+	}
+	for _, pair := range replacements {
+		oldPath := cleanReplacementPath(pair[0])
+		newPath := cleanReplacementPath(pair[1])
+		if oldPath == "" || newPath == "" || oldPath == newPath {
+			continue
+		}
+		text = strings.ReplaceAll(text, oldPath, newPath)
+	}
+	return []byte(text)
+}
+
+func cleanReplacementPath(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return ""
+	}
+	clean := filepath.Clean(path)
+	if clean == "." || clean == string(filepath.Separator) {
+		return ""
+	}
+	return clean
 }
 
 func RestoreFullExportBookmarkMedia(store *db.DB, dataDir string, zr *zip.Reader) (int, error) {
@@ -148,6 +301,41 @@ func writeZipEntryFile(dest string, src io.Reader) (int64, error) {
 		return wrote, err
 	}
 	return wrote, nil
+}
+
+func writeZipEntryBytes(dest string, data []byte, tmpPattern string, mode os.FileMode) error {
+	if strings.TrimSpace(tmpPattern) == "" {
+		tmpPattern = ".import-config-*.tmp"
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(dest), tmpPattern)
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	closed := false
+	defer func() {
+		if !closed {
+			tmp.Close()
+		}
+		os.Remove(tmpPath)
+	}()
+	if _, err := tmp.Write(data); err != nil {
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		closed = true
+		return err
+	}
+	closed = true
+	if mode != 0 {
+		if err := os.Chmod(tmpPath, mode); err != nil {
+			return err
+		}
+	}
+	if err := os.Rename(tmpPath, dest); err != nil {
+		return err
+	}
+	return nil
 }
 
 func restoredMediaIndex(fileName string) int {
