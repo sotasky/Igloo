@@ -30,6 +30,11 @@ class MomentsPlayerTest {
     }
 
     @Test
+    fun collapsed_caption_start_padding_sits_near_left_edge() {
+        assertEquals(8, momentCollapsedCaptionStartPaddingDp())
+    }
+
+    @Test
     fun moment_slide_count_treats_single_images_as_one_page() {
         assertEquals(0, momentSlideCount(mediaKind = null, slideCount = 0))
         assertEquals(1, momentSlideCount(mediaKind = "image", slideCount = 0))
