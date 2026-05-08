@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import {
@@ -28,30 +29,66 @@ test("normalizes tracked release bump state", () => {
   assert.throws(() => normalizeReleaseBump("major"), /unsupported bump/);
 });
 
-test("plans automatic releases every 10 commits", () => {
-  const commits = Array.from({ length: 9 }, (_, index) => ({
+test("plans automatic releases every 20 commits", () => {
+  const commits = Array.from({ length: 19 }, (_, index) => ({
     sha: `${index}`.repeat(40).slice(0, 40),
     subject: `change ${index}`,
     body: "",
   }));
 
-  assert.deepEqual(planAutomaticRelease(commits, 10), {
+  assert.deepEqual(planAutomaticRelease(commits, 20), {
     shouldRelease: false,
     bump: "patch",
-    commitCount: 9,
+    commitCount: 19,
   });
 
   commits.push({
     sha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-    subject: "change 9",
+    subject: "change 19",
     body: "",
   });
 
-  assert.deepEqual(planAutomaticRelease(commits, 10), {
+  assert.deepEqual(planAutomaticRelease(commits, 20), {
     shouldRelease: true,
     bump: "patch",
-    commitCount: 10,
+    commitCount: 20,
   });
+});
+
+test("release workflow uses the 20 commit automatic threshold", () => {
+  const workflow = readFileSync(
+    new URL("../../.github/workflows/release.yml", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(workflow, /prepare-auto --threshold 20\b/);
+  assert.doesNotMatch(workflow, /prepare-auto --threshold 10\b/);
+});
+
+test("release workflow dispatches CodeQL for release tags", () => {
+  const workflow = readFileSync(
+    new URL("../../.github/workflows/release.yml", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(
+    workflow,
+    /gh workflow run codeql\.yml --ref "\$\{\{ steps\.release\.outputs\.tag \}\}"/,
+  );
+});
+
+test("CodeQL runs on published releases instead of a weekly schedule", () => {
+  const workflow = readFileSync(
+    new URL("../../.github/workflows/codeql.yml", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(
+    workflow,
+    /\n  release:\n    types:\n      - published\n/,
+  );
+  assert.doesNotMatch(workflow, /\n  schedule:\n/);
+  assert.doesNotMatch(workflow, /cron:/);
 });
 
 test("plans automatic minor releases from explicit bump state", () => {

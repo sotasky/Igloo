@@ -7,8 +7,9 @@ on:
   pull_request:
     branches:
       - main
-  schedule:
-    - cron: "23 2 * * 2"
+  release:
+    types:
+      - published
   workflow_dispatch:
 
 concurrency:
