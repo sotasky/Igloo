@@ -221,6 +221,9 @@ func TestShortsOverlayPrewarmsNearbyVideosBeforeScrollActivation(t *testing.T) {
 		"function warmShortVideo(entry, eager)",
 		"function warmNearbyShortVideos(index)",
 		"video.preload = eager ? 'auto' : 'metadata'",
+		"var start = Math.max(0, index - 2)",
+		"var end = Math.min(_state.items.length - 1, index + 5)",
+		"warmShortVideo(entry, i >= index && i <= index + 4)",
 		"video._shortsPrewarmStarted = true",
 		"warmNearbyShortVideos(index)",
 		"warmNearbyShortVideos(centerIndex)",
@@ -250,7 +253,7 @@ func TestShortsItemsDoNotAnimateViewportSizeDuringScrollSnap(t *testing.T) {
 	}
 }
 
-func TestShortsVideoPlaybackWaitsForScrollSettle(t *testing.T) {
+func TestShortsVideoPlaybackStartsImmediatelyWithPosterUntilFirstFrame(t *testing.T) {
 	overlayBytes, err := os.ReadFile("../../static/js/src/shorts/overlay.js")
 	if err != nil {
 		t.Fatal(err)
@@ -268,25 +271,41 @@ func TestShortsVideoPlaybackWaitsForScrollSettle(t *testing.T) {
 	css := string(cssBytes)
 
 	for _, check := range []string{
-		"function clearPendingShortPlayback()",
+		"function revealShortVideoIfReady(entry, video)",
 		"function playShortVideo(entry, video)",
-		"function scheduleSettledShortPlayback(entry)",
-		"_state.pendingPlayTimer = setTimeout(function ()",
-		"entry.refs.wrapper.classList.add('is-settling-playback')",
-		"scheduleSettledShortPlayback(entry)",
+		"function playShortVideoFromStart(entry)",
+		"try {\n    video.currentTime = 0",
+		"playShortVideo(entry, video)",
 	} {
 		if !strings.Contains(overlaySrc, check) {
-			t.Errorf("shorts overlay scroll-settle playback missing %q", check)
+			t.Errorf("shorts overlay immediate playback missing %q", check)
 		}
 	}
-	if strings.Contains(overlaySrc, "var p = video.play()\n        _state.activePlayPromise") {
-		t.Error("activateIndex should not play video immediately during scroll activation")
+	for _, forbidden := range []string{
+		"function scheduleSettledShortPlayback(entry)",
+		"pendingPlayTimer",
+		"is-settling-playback",
+	} {
+		if strings.Contains(overlaySrc, forbidden) {
+			t.Errorf("shorts overlay should not delay playback with %q", forbidden)
+		}
 	}
 	if !strings.Contains(itemsSrc, "shorts-video-poster-frame") {
-		t.Fatal("shorts video items should render a poster layer for settled playback")
+		t.Fatal("shorts video items should render a poster layer for first-frame fallback")
 	}
-	if !strings.Contains(css, ".shorts-video-wrapper.is-settling-playback video") ||
+	for _, check := range []string{
+		"video.preload = 'metadata'",
+		"wrapper.classList.add('is-awaiting-first-frame')",
+		"function revealVideoFrame()",
+		"video.addEventListener('loadeddata', revealVideoFrame)",
+		"video.addEventListener('playing', revealVideoFrame)",
+	} {
+		if !strings.Contains(itemsSrc, check) {
+			t.Errorf("shorts video items first-frame fallback missing %q", check)
+		}
+	}
+	if !strings.Contains(css, ".shorts-video-wrapper.is-awaiting-first-frame video") ||
 		!strings.Contains(css, "opacity: 0;") {
-		t.Fatal("settling playback CSS should hide moving video over the stable poster")
+		t.Fatal("first-frame fallback CSS should hide video over the stable poster")
 	}
 }

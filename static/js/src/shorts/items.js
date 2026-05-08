@@ -294,11 +294,12 @@ export function makeShortItem(entryData, existingEl) {
       poster.decoding = 'async'
       poster.loading = 'eager'
       poster.src = entryData.thumbUrl
+      wrapper.classList.add('is-awaiting-first-frame')
       wrapper.appendChild(poster)
     }
     video = doc.createElement('video')
     video.className = 'native-short-video'
-    video.preload = 'none'
+    video.preload = 'metadata'
     video.playsInline = true
     video.controls = false
     video.setAttribute('playsinline', '')
@@ -493,9 +494,15 @@ export function makeShortItem(entryData, existingEl) {
   var entryObj = { el: item, data: entryData, refs: refs }
 
   if (video) {
+    function revealVideoFrame() {
+      wrapper.classList.remove('is-awaiting-first-frame')
+    }
     video.addEventListener('loadedmetadata', function () {
       maybeMarkAspect(wrapper, video)
     })
+    video.addEventListener('loadeddata', revealVideoFrame)
+    video.addEventListener('canplay', revealVideoFrame)
+    video.addEventListener('playing', revealVideoFrame)
     video.addEventListener('timeupdate', function () {
       handleVideoTimeUpdate({ refs: refs })
     })
@@ -518,6 +525,7 @@ export function makeShortItem(entryData, existingEl) {
       toggleShortPlayback(entryObj)
     })
     video.addEventListener('error', function () {
+      revealVideoFrame()
       wrapper.classList.add('shorts-video-error')
       showToast(t('shorts_media_unavailable_skipping', 'Short media unavailable, skipping'))
       var cur = _fns.currentData()

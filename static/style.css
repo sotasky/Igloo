@@ -5662,7 +5662,7 @@ select.input.themed-select-native {
     object-fit: contain;
 }
 
-.shorts-video-wrapper.is-settling-playback video {
+.shorts-video-wrapper.is-awaiting-first-frame video {
     opacity: 0;
 }
 

@@ -95,27 +95,17 @@ function handleAutoplayRejected(video, err) {
   }
 }
 
-function clearPendingShortPlayback() {
-  if (!_state) return
-  if (_state.pendingPlayTimer) {
-    try { clearTimeout(_state.pendingPlayTimer) } catch (_) {}
-    _state.pendingPlayTimer = 0
-  }
-  var entry = _state.pendingPlayEntry
-  if (entry && entry.refs && entry.refs.wrapper) {
-    entry.refs.wrapper.classList.remove('is-settling-playback')
-  }
-  _state.pendingPlayEntry = null
+function revealShortVideoIfReady(entry, video) {
+  if (!entry || !video || !entry.refs || !entry.refs.wrapper) return
+  if (video.readyState >= 2) entry.refs.wrapper.classList.remove('is-awaiting-first-frame')
 }
 
 function playShortVideo(entry, video) {
   if (!entry || !video) return
-  if (entry.refs && entry.refs.wrapper) {
-    entry.refs.wrapper.classList.remove('is-settling-playback')
-  }
   if (!_state.overlayOpen) return
   var current = currentData()
   if (!current || current.id !== entry.data.id) return
+  revealShortVideoIfReady(entry, video)
   try {
     var promise = video.play()
     _state.activePlayPromise = promise || null
@@ -127,23 +117,13 @@ function playShortVideo(entry, video) {
   }
 }
 
-function scheduleSettledShortPlayback(entry) {
+function playShortVideoFromStart(entry) {
   var video = entry && entry.refs && entry.refs.video
   if (!video) return
-  clearPendingShortPlayback()
   try {
-    video.pause()
     video.currentTime = 0
   } catch (_) {}
-  if (entry.refs.wrapper && entry.refs.poster) {
-    entry.refs.wrapper.classList.add('is-settling-playback')
-  }
-  _state.pendingPlayEntry = entry
-  _state.pendingPlayTimer = setTimeout(function () {
-    _state.pendingPlayTimer = 0
-    _state.pendingPlayEntry = null
-    playShortVideo(entry, video)
-  }, 240)
+  playShortVideo(entry, video)
 }
 
 function warmShortVideo(entry, eager) {
@@ -151,7 +131,7 @@ function warmShortVideo(entry, eager) {
   if (!video) return
   try {
     video.preload = eager ? 'auto' : 'metadata'
-    if (!eager || video._shortsPrewarmStarted || video.readyState >= 2) return
+    if (!eager || video._shortsPrewarmStarted || video.readyState >= 3) return
     var atStart = Math.abs(Number(video.currentTime || 0)) < 0.01
     if (!video.paused || !atStart || typeof video.load !== 'function') return
     video._shortsPrewarmStarted = true
@@ -161,12 +141,12 @@ function warmShortVideo(entry, eager) {
 
 function warmNearbyShortVideos(index) {
   if (!Number.isFinite(index) || !_state || !_state.items) return
-  var start = Math.max(0, index - 1)
-  var end = Math.min(_state.items.length - 1, index + 4)
+  var start = Math.max(0, index - 2)
+  var end = Math.min(_state.items.length - 1, index + 5)
   for (var i = start; i <= end; i += 1) {
     var entry = _state.items[i]
     if (!entry) continue
-    warmShortVideo(entry, i >= index && i <= index + 2)
+    warmShortVideo(entry, i >= index && i <= index + 4)
   }
 }
 
@@ -177,7 +157,6 @@ export function setOverlayVisible(visible) {
   _dom.doc.body.classList.toggle('shorts-mode', _state.overlayOpen)
   _dom.doc.body.classList.toggle('shorts-open', _state.overlayOpen)
   if (!_state.overlayOpen) {
-    clearPendingShortPlayback()
     pauseAllShorts()
     _fns.closeBookmarkMenu()
     var card = _state.cards[_state.currentIndex]
@@ -339,19 +318,14 @@ export function activateIndex(index, options) {
     warmNearbyShortVideos(index)
     if (opts.play !== false) {
       if (_state.storyMode) {
-        clearPendingShortPlayback()
-        try { video.currentTime = 0 } catch (_) {}
-        playShortVideo(entry, video)
+        playShortVideoFromStart(entry)
       } else {
-        scheduleSettledShortPlayback(entry)
+        playShortVideoFromStart(entry)
       }
-    } else {
-      clearPendingShortPlayback()
     }
     return
   }
   if (entry.refs.slideshow) {
-    clearPendingShortPlayback()
     if (opts.play !== false) startSlideshowPlayback(entry)
     else setSlideshowIndex(entry, entry.refs.slideshow.index || 0)
   }
