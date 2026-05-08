@@ -290,12 +290,9 @@ func (m *Manager) ensureIntroducedOwner(ref download.VideoRef) {
 		}
 		m.RequestAvatar(ref.ChannelID)
 	case strings.HasPrefix(ref.ChannelID, "instagram_"):
-		if err := m.db.EnsureInstagramChannelForTagged(ref.ChannelID, ref.AuthorHandle, ref.AuthorDisplayName, ref.AuthorAvatarURL); err != nil {
+		if err := m.db.EnsureInstagramChannelForTagged(ref.ChannelID, ref.AuthorHandle, ref.AuthorDisplayName, ""); err != nil {
 			log.Printf("[scheduler] ensure tagged owner %s: %v", ref.ChannelID, err)
 			return
-		}
-		if ref.AuthorAvatarURL != "" {
-			m.RequestAvatar(ref.ChannelID)
 		}
 	}
 }

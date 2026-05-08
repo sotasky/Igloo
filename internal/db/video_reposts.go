@@ -99,7 +99,7 @@ func (db *DB) EnsureTikTokChannelForRepost(channelID, handle, displayName string
 // EnsureInstagramChannelForTagged creates an unfollowed original-owner channel
 // for an Instagram post discovered through another followed account's tagged
 // route. It does not subscribe/follow the owner.
-func (db *DB) EnsureInstagramChannelForTagged(channelID, handle, displayName, avatarURL string) error {
+func (db *DB) EnsureInstagramChannelForTagged(channelID, handle, displayName, _ string) error {
 	handle = normalizeInstagramHandle(handle)
 	channelID = strings.TrimSpace(channelID)
 	if handle != "" {
@@ -122,7 +122,6 @@ func (db *DB) EnsureInstagramChannelForTagged(channelID, handle, displayName, av
 	if handle != "" {
 		url = "https://www.instagram.com/" + handle + "/"
 	}
-	avatarURL = strings.TrimSpace(avatarURL)
 	now := time.Now().UnixMilli()
 	seq := db.NextSyncSeq()
 	return db.WithWrite(func(tx *sql.Tx) error {
@@ -150,7 +149,6 @@ func (db *DB) EnsureInstagramChannelForTagged(channelID, handle, displayName, av
 			ON CONFLICT(channel_id) DO UPDATE SET
 				handle = COALESCE(NULLIF(channel_profiles.handle, ''), excluded.handle),
 				display_name = COALESCE(NULLIF(channel_profiles.display_name, ''), excluded.display_name),
-				avatar_url = COALESCE(NULLIF(channel_profiles.avatar_url, ''), excluded.avatar_url),
 				fetched_at = CASE
 					WHEN TRIM(COALESCE(channel_profiles.avatar_url, '')) = ''
 					THEN 0
@@ -161,7 +159,7 @@ func (db *DB) EnsureInstagramChannelForTagged(channelID, handle, displayName, av
 					THEN 0
 					ELSE channel_profiles.next_retry_at
 				END
-		`, channelID, nilIfEmpty(handle), nilIfEmpty(displayName), nilIfEmpty(avatarURL))
+		`, channelID, nilIfEmpty(handle), nilIfEmpty(displayName), nil)
 		return err
 	})
 }

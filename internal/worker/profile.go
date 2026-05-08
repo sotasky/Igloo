@@ -557,10 +557,12 @@ func (m *Manager) refreshInstagramStoredProfile(ctx context.Context, channelID, 
 		return
 	}
 	errorBase := m.persistInstagramBannerSnapshot(row, existing)
+	profileFetched := false
 	if profile, err := m.fetchInstagramProfile(ctx, channelID, handle); err != nil {
 		m.recordProfileFetchError(channelID, errorBase, err, now)
 		return
 	} else if profile != nil {
+		profileFetched = true
 		row.Handle = profile.Handle
 		if row.Handle == "" {
 			row.Handle = handle
@@ -580,6 +582,14 @@ func (m *Manager) refreshInstagramStoredProfile(ctx context.Context, channelID, 
 	if err := m.db.UpsertChannelProfile(row); err != nil {
 		log.Printf("[profile] upsert instagram stored %s: %v", channelID, err)
 		return
+	}
+	if profileFetched && row.AvatarURL == "" {
+		if err := m.db.ClearChannelProfileAvatar(channelID); err != nil {
+			log.Printf("[profile] clear instagram avatar %s: %v", channelID, err)
+		}
+		if err := removeConventionalMediaFiles(avDir, channelID); err != nil {
+			log.Printf("[profile] remove stale instagram avatar %s: %v", channelID, err)
+		}
 	}
 	m.primeProfileBioMentions(row)
 	if row.AvatarURL != "" && !hasConventionalMediaFile(avDir, channelID) {

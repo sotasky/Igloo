@@ -273,7 +273,7 @@ func TestEnsureTikTokChannelForRepostDropsInternalAuthorIDWithoutHandle(t *testi
 	}
 }
 
-func TestEnsureInstagramChannelForTaggedPreservesDottedHandleAndAvatar(t *testing.T) {
+func TestEnsureInstagramChannelForTaggedPreservesDottedHandleWithoutMediaAvatar(t *testing.T) {
 	d := openWritableTestDB(t)
 
 	if err := d.EnsureInstagramChannelForTagged("instagram_numeric_placeholder", "collab.one", "Collab One", "https://cdn.example/collab.jpg"); err != nil {
@@ -296,7 +296,7 @@ func TestEnsureInstagramChannelForTaggedPreservesDottedHandleAndAvatar(t *testin
 	`).Scan(&handle, &avatar, &fetchedAt); err != nil {
 		t.Fatalf("query profile: %v", err)
 	}
-	if handle != "collab.one" || avatar != "https://cdn.example/collab.jpg" {
+	if handle != "collab.one" || avatar != "" {
 		t.Fatalf("profile handle/avatar = %q/%q", handle, avatar)
 	}
 	if fetchedAt != 0 {

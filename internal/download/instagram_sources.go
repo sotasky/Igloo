@@ -334,15 +334,16 @@ func instagramProfileFromGalleryDLObject(obj map[string]any, fallbackHandle stri
 		if topHandle == "" {
 			return InstagramProfile{}
 		}
+		mediaObject := instagramObjectLooksLikeMedia(obj)
 		return InstagramProfile{
 			Handle:      fallbackHandle,
 			DisplayName: firstDirectExactString(obj, "fullname", "full_name", "name"),
-			Bio:         firstDirectExactString(obj, "biography", "bio"),
-			Website:     firstDirectExactString(obj, "external_url", "website"),
-			Followers:   firstDirectInt(obj, "edge_followed_by", "followers", "follower_count"),
-			Following:   firstDirectInt(obj, "edge_follow", "following", "following_count"),
-			Verified:    firstDirectBool(obj, "is_verified", "verified"),
-			AvatarURL:   firstDirectExactString(obj, "profile_pic_url_hd", "profile_pic_url", "avatar_url", "profile_image_url"),
+			Bio:         firstDirectProfileString(obj, mediaObject, "biography", "bio"),
+			Website:     firstDirectProfileString(obj, mediaObject, "external_url", "website"),
+			Followers:   firstDirectProfileInt(obj, mediaObject, "edge_followed_by", "followers", "follower_count"),
+			Following:   firstDirectProfileInt(obj, mediaObject, "edge_follow", "following", "following_count"),
+			Verified:    firstDirectProfileBool(obj, mediaObject, "is_verified", "verified"),
+			AvatarURL:   firstDirectProfileString(obj, mediaObject, "profile_pic_url_hd", "profile_pic_url", "avatar_url", "profile_image_url"),
 		}
 	}
 	handle := normalizeInstagramHandle(firstExactString(obj, "username", "owner_username", "uploader_id"))
@@ -356,6 +357,38 @@ func instagramProfileFromGalleryDLObject(obj map[string]any, fallbackHandle stri
 		Verified:    firstBool(obj, "is_verified", "verified"),
 		AvatarURL:   firstExactString(obj, "profile_pic_url_hd", "profile_pic_url", "avatar_url", "profile_image_url"),
 	}
+}
+
+func instagramObjectLooksLikeMedia(obj map[string]any) bool {
+	for _, key := range []string{"post_shortcode", "shortcode", "post_url", "webpage_url", "display_url", "media_id"} {
+		if stringFromAny(obj[key]) != "" {
+			return true
+		}
+	}
+	kind := strings.ToLower(firstDirectExactString(obj, "type", "subcategory"))
+	return kind == "post" || kind == "reel" || kind == "story" ||
+		strings.Contains(kind, "posts") || strings.Contains(kind, "reels") || strings.Contains(kind, "stories")
+}
+
+func firstDirectProfileString(item map[string]any, mediaObject bool, keys ...string) string {
+	if mediaObject {
+		return ""
+	}
+	return firstDirectExactString(item, keys...)
+}
+
+func firstDirectProfileInt(item map[string]any, mediaObject bool, keys ...string) int {
+	if mediaObject {
+		return 0
+	}
+	return firstDirectInt(item, keys...)
+}
+
+func firstDirectProfileBool(item map[string]any, mediaObject bool, keys ...string) bool {
+	if mediaObject {
+		return false
+	}
+	return firstDirectBool(item, keys...)
 }
 
 func instagramProfileHasData(profile InstagramProfile) bool {

@@ -147,6 +147,9 @@ func TestParseInstagramProfileDumpDoesNotUsePostCaptionAsBio(t *testing.T) {
 	if profile.Website != "" {
 		t.Fatalf("Website = %q, want empty because media URLs are not profile websites", profile.Website)
 	}
+	if profile.AvatarURL != "" {
+		t.Fatalf("AvatarURL = %q, want empty because media profile pictures are not trusted profile data", profile.AvatarURL)
+	}
 }
 
 func TestParseInstagramProfileDumpSkipsMismatchedPostOwner(t *testing.T) {

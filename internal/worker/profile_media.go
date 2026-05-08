@@ -24,6 +24,16 @@ func hasConventionalMediaFile(dir, key string) bool {
 	return conventionalMediaPath(dir, key) != ""
 }
 
+func removeConventionalMediaFiles(dir, key string) error {
+	for _, ext := range cachedImageExts {
+		candidate := filepath.Join(dir, key+ext)
+		if err := os.Remove(candidate); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
+	return nil
+}
+
 func normalizeDownloadedImage(path, dir, key string) (string, error) {
 	contentType, err := sniffImageContentType(path)
 	if err != nil {

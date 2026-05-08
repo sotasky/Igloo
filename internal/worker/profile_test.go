@@ -798,6 +798,53 @@ func TestRefreshInstagramProfileClearsCaptionDerivedBio(t *testing.T) {
 	}
 }
 
+func TestRefreshInstagramProfileClearsUntrustedMediaAvatar(t *testing.T) {
+	d := newTestWorkerDB(t)
+	dir := t.TempDir()
+	if err := d.UpsertChannelProfile(model.ChannelProfile{
+		ChannelID:   "instagram_cinema",
+		Platform:    "instagram",
+		Handle:      "cinema",
+		DisplayName: "Cinema",
+		Bio:         "This is a post caption, not a profile bio.",
+		AvatarURL:   "https://example.test/media-avatar.jpg",
+	}); err != nil {
+		t.Fatalf("seed profile: %v", err)
+	}
+
+	m := &Manager{
+		db:  d,
+		cfg: testCfg(dir),
+		instagramProfileFetch: func(context.Context, string, string) (*model.ChannelProfile, error) {
+			return &model.ChannelProfile{
+				ChannelID:   "instagram_cinema",
+				Platform:    "instagram",
+				Handle:      "cinema",
+				DisplayName: "Cinema",
+			}, nil
+		},
+	}
+	avDir, bnDir := filepath.Join(dir, "a"), filepath.Join(dir, "b")
+	_ = os.MkdirAll(avDir, 0o755)
+	_ = os.MkdirAll(bnDir, 0o755)
+	if err := os.WriteFile(filepath.Join(avDir, "instagram_cinema.jpg"), []byte("old avatar"), 0o644); err != nil {
+		t.Fatalf("write cached avatar: %v", err)
+	}
+
+	m.refreshProfile(context.Background(), newFakeFetcher().Fetch, "instagram_cinema", avDir, bnDir)
+
+	got, err := d.GetChannelProfile("instagram_cinema")
+	if err != nil || got == nil {
+		t.Fatalf("GetChannelProfile: %v / %+v", err, got)
+	}
+	if got.Bio != "" || got.AvatarURL != "" {
+		t.Fatalf("profile fields survived trusted empty refresh: %+v", got)
+	}
+	if hasConventionalMediaFile(avDir, "instagram_cinema") {
+		t.Fatal("stale cached avatar survived trusted empty refresh")
+	}
+}
+
 func TestRememberInstagramProfileFromRefsPreservesRichProfile(t *testing.T) {
 	d := newTestWorkerDB(t)
 	fullFetchedAt := time.Now().Add(-2 * time.Hour).UTC().Truncate(time.Millisecond)

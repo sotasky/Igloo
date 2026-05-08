@@ -58,6 +58,19 @@ func (db *DB) UpsertChannelProfile(p model.ChannelProfile) error {
 	})
 }
 
+// ClearChannelProfileAvatar removes a stored avatar source URL when a trusted
+// profile refresh proves that the previous media-derived URL should not survive.
+func (db *DB) ClearChannelProfileAvatar(channelID string) error {
+	channelID = strings.TrimSpace(channelID)
+	if channelID == "" {
+		return nil
+	}
+	return db.WithWrite(func(tx *sql.Tx) error {
+		_, err := tx.Exec(`UPDATE channel_profiles SET avatar_url = NULL WHERE channel_id = ?`, channelID)
+		return err
+	})
+}
+
 // GetChannelProfile returns the row for the given channel_id, or (nil, nil).
 func (db *DB) GetChannelProfile(channelID string) (*model.ChannelProfile, error) {
 	id := strings.TrimSpace(channelID)
