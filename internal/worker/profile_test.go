@@ -45,6 +45,26 @@ func (f *fakeFetcher) Fetch(_ context.Context, channelID string) (*fetchprofile.
 	return nil, fetchprofile.ErrNotFound
 }
 
+type twimgAvatarTestTransport struct {
+	srvURL string
+}
+
+func (t *twimgAvatarTestTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	req2 := req.Clone(req.Context())
+	req2.URL.Scheme = "http"
+	req2.URL.Host = t.srvURL
+	return http.DefaultTransport.RoundTrip(req2)
+}
+
+func testTwimgAvatarDownloader(srv *httptest.Server) *download.Downloader {
+	return &download.Downloader{
+		HTTP: &download.HTTPDownloader{
+			Client:            &http.Client{Transport: &twimgAvatarTestTransport{srvURL: srv.Listener.Addr().String()}},
+			AllowPrivateHosts: true,
+		},
+	}
+}
+
 func TestRefreshProfileUpsertsRow(t *testing.T) {
 	d := newTestWorkerDB(t)
 	dir := t.TempDir()
@@ -1189,6 +1209,102 @@ func TestRefreshFeedProfileCompletenessFetchesReplyParent(t *testing.T) {
 	}
 }
 
+func TestRefreshFeedProfileCompletenessDownloadsStoredTwitterAvatarForFreshRow(t *testing.T) {
+	d := newTestWorkerDB(t)
+	dir := t.TempDir()
+	avatarServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		_, _ = w.Write(testProfilePNGBytes())
+	}))
+	defer avatarServer.Close()
+
+	if err := d.ExecRaw(`
+		INSERT INTO feed_items (
+			tweet_id, author_handle, published_at, fetched_at
+		) VALUES ('tweet_cryptokid', 'cryptokid', 200, 200)
+	`); err != nil {
+		t.Fatalf("seed feed item: %v", err)
+	}
+	now := time.Now().UTC()
+	if err := d.UpsertChannelProfile(model.ChannelProfile{
+		ChannelID:   "twitter_cryptokid",
+		Platform:    "twitter",
+		Handle:      "cryptokid",
+		DisplayName: "Crypto Kid",
+		AvatarURL:   "https://pbs.twimg.com/profile_images/1998822702501838848/OUPVuvCJ_normal.jpg",
+		FetchedAt:   &now,
+	}); err != nil {
+		t.Fatalf("seed profile: %v", err)
+	}
+
+	f := newFakeFetcher()
+	m := &Manager{db: d, cfg: testCfg(dir), downloader: testTwimgAvatarDownloader(avatarServer)}
+	avDir, bnDir := filepath.Join(dir, "avatars"), filepath.Join(dir, "banners")
+	_ = os.MkdirAll(avDir, 0o755)
+	_ = os.MkdirAll(bnDir, 0o755)
+
+	if worked := m.refreshFeedProfileCompletenessBatch(context.Background(), f.Fetch, avDir, bnDir, 10); !worked {
+		t.Fatal("expected feed profile completeness batch to download stored avatar")
+	}
+	if got := f.calls["twitter_cryptokid"]; got != 0 {
+		t.Fatalf("full profile fetch calls = %d, want 0 for fresh stored-avatar recovery", got)
+	}
+	if !hasConventionalMediaFile(avDir, "twitter_cryptokid") {
+		t.Fatal("expected cryptokid avatar file on disk")
+	}
+}
+
+func TestRefreshFeedProfileCompletenessScansStoredAvatarsBeyondProfileFetchLimit(t *testing.T) {
+	d := newTestWorkerDB(t)
+	dir := t.TempDir()
+	avatarServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		_, _ = w.Write(testProfilePNGBytes())
+	}))
+	defer avatarServer.Close()
+
+	if err := d.ExecRaw(`
+		INSERT INTO feed_items (
+			tweet_id, author_handle, published_at, fetched_at
+		) VALUES
+			('tweet_cryptokid', 'cryptokid', 100, 100),
+			('tweet_newer_1', 'newer_1', 300, 300),
+			('tweet_newer_2', 'newer_2', 290, 290)
+	`); err != nil {
+		t.Fatalf("seed feed items: %v", err)
+	}
+	if _, err := d.SeedChannelProfileRows(); err != nil {
+		t.Fatalf("SeedChannelProfileRows: %v", err)
+	}
+	now := time.Now().UTC()
+	if err := d.UpsertChannelProfile(model.ChannelProfile{
+		ChannelID:   "twitter_cryptokid",
+		Platform:    "twitter",
+		Handle:      "cryptokid",
+		DisplayName: "Crypto Kid",
+		AvatarURL:   "https://pbs.twimg.com/profile_images/1998822702501838848/OUPVuvCJ_normal.jpg",
+		FetchedAt:   &now,
+	}); err != nil {
+		t.Fatalf("seed profile: %v", err)
+	}
+
+	f := newFakeFetcher()
+	m := &Manager{db: d, cfg: testCfg(dir), downloader: testTwimgAvatarDownloader(avatarServer)}
+	avDir, bnDir := filepath.Join(dir, "avatars"), filepath.Join(dir, "banners")
+	_ = os.MkdirAll(avDir, 0o755)
+	_ = os.MkdirAll(bnDir, 0o755)
+
+	if worked := m.refreshFeedProfileCompletenessBatch(context.Background(), f.Fetch, avDir, bnDir, 1); !worked {
+		t.Fatal("expected feed profile completeness batch to work")
+	}
+	if !hasConventionalMediaFile(avDir, "twitter_cryptokid") {
+		t.Fatal("expected fresh stored avatar row to be recovered while profile fetches are rate-limited")
+	}
+	if got := f.calls["twitter_newer_1"] + f.calls["twitter_newer_2"]; got != 1 {
+		t.Fatalf("newer backlog fetch calls = %d, want exactly one rate-limited profile fetch", got)
+	}
+}
+
 func TestRefreshFeedProfileCompletenessFetchesInstagramSourceWindowProfile(t *testing.T) {
 	d := newTestWorkerDB(t)
 	dir := t.TempDir()
@@ -1263,6 +1379,65 @@ func TestRefreshFeedProfileCompletenessFetchesInstagramSourceWindowProfile(t *te
 	}
 	if !hasConventionalMediaFile(avDir, "instagram_source.owner") {
 		t.Fatal("expected instagram source-window avatar file on disk")
+	}
+}
+
+func TestRefreshFeedProfileCompletenessFetchesCaptionMentionProfile(t *testing.T) {
+	d := newTestWorkerDB(t)
+	dir := t.TempDir()
+	installGalleryDLAvatarStub(t, dir)
+
+	now := time.Now().UnixMilli()
+	if err := d.InsertVideo(
+		"instagram_caption_mentions", "instagram_owner", "caption mentions", "with @rinn_xc and @dear.chuu",
+		0, "", "media/instagram/owner/post.mp4", 0,
+		now, "", "video", 0, false,
+	); err != nil {
+		t.Fatalf("insert instagram video: %v", err)
+	}
+	if _, err := d.SeedChannelProfileRows(); err != nil {
+		t.Fatalf("SeedChannelProfileRows: %v", err)
+	}
+
+	m := &Manager{
+		db:         d,
+		cfg:        testCfg(dir),
+		downloader: testDownloader(),
+		instagramProfileFetch: func(ctx context.Context, channelID, handle string) (*model.ChannelProfile, error) {
+			if channelID == "instagram_rinn_xc" {
+				return &model.ChannelProfile{
+					ChannelID:   channelID,
+					Platform:    "instagram",
+					Handle:      handle,
+					DisplayName: "rinn_xc",
+					Bio:         "real mention profile",
+					AvatarURL:   "https://cdn.example/rinn.jpg",
+				}, nil
+			}
+			return &model.ChannelProfile{
+				ChannelID:   channelID,
+				Platform:    "instagram",
+				Handle:      handle,
+				DisplayName: handle,
+			}, nil
+		},
+	}
+	avDir, bnDir := filepath.Join(dir, "avatars"), filepath.Join(dir, "banners")
+	_ = os.MkdirAll(avDir, 0o755)
+	_ = os.MkdirAll(bnDir, 0o755)
+
+	if worked := m.refreshFeedProfileCompletenessBatch(context.Background(), newFakeFetcher().Fetch, avDir, bnDir, 10); !worked {
+		t.Fatal("expected feed profile completeness batch to work")
+	}
+	profile, err := d.GetChannelProfile("instagram_rinn_xc")
+	if err != nil {
+		t.Fatalf("GetChannelProfile: %v", err)
+	}
+	if profile == nil || profile.FetchedAt == nil || profile.Bio != "real mention profile" {
+		t.Fatalf("caption mention profile was not fetched: %+v", profile)
+	}
+	if !hasConventionalMediaFile(avDir, "instagram_rinn_xc") {
+		t.Fatal("expected caption mention avatar file on disk")
 	}
 }
 
@@ -1591,6 +1766,47 @@ func TestRequestAvatarSeedsProfileWhenQueueFull(t *testing.T) {
 	}
 }
 
+func TestRequestAvatarMarksExistingAvatarDueWhenQueueFull(t *testing.T) {
+	d := newTestWorkerDB(t)
+	now := time.Now().UTC()
+	if err := d.UpsertChannelProfile(model.ChannelProfile{
+		ChannelID:   "twitter_full",
+		Platform:    "twitter",
+		Handle:      "full",
+		DisplayName: "Full",
+		AvatarURL:   "https://pbs.twimg.com/profile_images/777/photo_normal.jpg",
+		FetchedAt:   &now,
+	}); err != nil {
+		t.Fatalf("seed profile: %v", err)
+	}
+	m := &Manager{
+		db:            d,
+		cfg:           testCfg(t.TempDir()),
+		avatarRequest: make(chan string, 1),
+	}
+	m.avatarRequest <- "twitter_busy"
+
+	m.RequestAvatar("twitter_full")
+
+	got, err := d.GetChannelProfile("twitter_full")
+	if err != nil || got == nil {
+		t.Fatalf("GetChannelProfile: %v / %+v", err, got)
+	}
+	if got.AvatarURL != "https://pbs.twimg.com/profile_images/777/photo_normal.jpg" {
+		t.Fatalf("avatar URL was not preserved: %+v", got)
+	}
+	if got.FetchedAt != nil || got.NextRetryAt != nil || got.FailCount != 0 {
+		t.Fatalf("profile was not marked due for background recovery: %+v", got)
+	}
+	candidate, err := d.NextChannelProfileRefreshCandidate(24 * time.Hour)
+	if err != nil {
+		t.Fatalf("NextChannelProfileRefreshCandidate: %v", err)
+	}
+	if candidate != "twitter_full" {
+		t.Fatalf("candidate = %q, want twitter_full", candidate)
+	}
+}
+
 func TestRequestAvatarPreservesExistingRichProfile(t *testing.T) {
 	d := newTestWorkerDB(t)
 	now := time.Now().UTC()
@@ -1744,6 +1960,62 @@ func TestRefreshRequestedAvatarFetchesKnownInstagramProfile(t *testing.T) {
 	}
 	if got.Bio != "real profile bio" || got.AvatarURL != "https://cdn.example/profile-avatar.jpg" {
 		t.Fatalf("profile was not refreshed from queued background request: %+v", got)
+	}
+}
+
+func TestOnDemandProfileRequestLoopDownloadsStoredTwitterAvatar(t *testing.T) {
+	d := newTestWorkerDB(t)
+	dir := t.TempDir()
+	avatarServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		_, _ = w.Write(testProfilePNGBytes())
+	}))
+	defer avatarServer.Close()
+
+	now := time.Now().UTC()
+	if err := d.UpsertChannelProfile(model.ChannelProfile{
+		ChannelID:   "twitter_cryptokid",
+		Platform:    "twitter",
+		Handle:      "cryptokid",
+		DisplayName: "Crypto Kid",
+		AvatarURL:   "https://pbs.twimg.com/profile_images/1998822702501838848/OUPVuvCJ_normal.jpg",
+		FetchedAt:   &now,
+	}); err != nil {
+		t.Fatalf("seed profile: %v", err)
+	}
+
+	m := &Manager{
+		db:            d,
+		cfg:           testCfg(dir),
+		downloader:    testTwimgAvatarDownloader(avatarServer),
+		avatarRequest: make(chan string, 1),
+	}
+	avDir, bnDir := filepath.Join(dir, "avatars"), filepath.Join(dir, "banners")
+	_ = os.MkdirAll(avDir, 0o755)
+	_ = os.MkdirAll(bnDir, 0o755)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		m.runOnDemandProfileRequestLoop(ctx, avDir, bnDir)
+	}()
+
+	m.avatarRequest <- "twitter_cryptokid"
+	deadline := time.After(time.Second)
+	for !hasConventionalMediaFile(avDir, "twitter_cryptokid") {
+		select {
+		case <-deadline:
+			t.Fatal("expected on-demand loop to write cryptokid avatar")
+		default:
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("on-demand profile request loop did not stop")
 	}
 }
 

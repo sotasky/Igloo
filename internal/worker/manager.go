@@ -241,10 +241,14 @@ func (m *Manager) KickDownloadPool() {
 
 // RequestAvatar enqueues channelID for an on-demand avatar fetch.
 // The send is non-blocking; if the buffer is full, a skeleton channel_profiles
-// row still ensures the next refresh cycle will pick it up.
+// row or stale existing avatar row still ensures the next refresh cycle will
+// pick it up.
 func (m *Manager) RequestAvatar(channelID string) {
 	channelID = normalizeProfileRequestChannelID(channelID)
 	if channelID == "" {
+		return
+	}
+	if m == nil || m.db == nil {
 		return
 	}
 	if model.IsSyntheticTwitterAvatarChannelID(channelID) {
@@ -252,9 +256,13 @@ func (m *Manager) RequestAvatar(channelID string) {
 		if existing == nil || existing.AvatarURL == "" {
 			return
 		}
+		if m.avatarRequest == nil {
+			return
+		}
 		select {
 		case m.avatarRequest <- channelID:
 		default:
+			m.markAvatarRecoveryDue(channelID, existing)
 		}
 		return
 	}
@@ -283,9 +291,25 @@ func (m *Manager) RequestAvatar(channelID string) {
 			log.Printf("[profile] seed %s: %v", channelID, err)
 		}
 	}
+	if m.avatarRequest == nil {
+		return
+	}
 	select {
 	case m.avatarRequest <- channelID:
 	default:
+		m.markAvatarRecoveryDue(channelID, existing)
+	}
+}
+
+func (m *Manager) markAvatarRecoveryDue(channelID string, existing *model.ChannelProfile) {
+	if m == nil || m.db == nil || existing == nil || existing.AvatarURL == "" {
+		return
+	}
+	if !profileRetryDue(existing, time.Now()) {
+		return
+	}
+	if err := m.db.MarkChannelProfileRefreshDue(channelID); err != nil {
+		log.Printf("[profile] mark avatar recovery due %s: %v", channelID, err)
 	}
 }
 

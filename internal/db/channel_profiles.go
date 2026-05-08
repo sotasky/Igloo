@@ -71,6 +71,26 @@ func (db *DB) ClearChannelProfileAvatar(channelID string) error {
 	})
 }
 
+// MarkChannelProfileRefreshDue clears retry/freshness state so the profile
+// worker will revisit an existing row even if the last metadata fetch is recent.
+func (db *DB) MarkChannelProfileRefreshDue(channelID string) error {
+	channelID = strings.TrimSpace(channelID)
+	if channelID == "" {
+		return nil
+	}
+	return db.WithWrite(func(tx *sql.Tx) error {
+		_, err := tx.Exec(`
+			UPDATE channel_profiles
+			SET fetched_at = 0,
+			    next_retry_at = 0,
+			    fail_count = 0,
+			    tombstone = 0
+			WHERE channel_id = ?
+		`, channelID)
+		return err
+	})
+}
+
 // GetChannelProfile returns the row for the given channel_id, or (nil, nil).
 func (db *DB) GetChannelProfile(channelID string) (*model.ChannelProfile, error) {
 	id := strings.TrimSpace(channelID)
@@ -482,35 +502,26 @@ func (db *DB) ListFeedAvatarProfileIDs() ([]string, error) {
 			FROM download_queue dq
 			WHERE (dq.channel_id LIKE 'twitter_%' OR dq.channel_id LIKE 'tiktok_%' OR dq.channel_id LIKE 'instagram_%')
 			  AND COALESCE(dq.status, 'pending') IN ('pending', 'processing')
+
+			UNION
+
+			SELECT channel_id,
+			       COALESCE(fetched_at, 0) AS seen_at
+			FROM channel_profiles
+			WHERE platform IN ('twitter', 'youtube', 'tiktok', 'instagram')
+			  AND COALESCE(tombstone, 0) = 0
 		),
 		feed_profiles AS (
 			SELECT channel_id, MAX(seen_at) AS last_seen_at
 			FROM feed_profile_ids
 			WHERE channel_id != ''
 			GROUP BY channel_id
-		),
-		instagram_source_window_profiles AS (
-			SELECT DISTINCT v.channel_id
-			FROM videos v
-			INNER JOIN video_repost_sources vrs ON vrs.video_id = v.video_id
-			WHERE v.channel_id LIKE 'instagram_%'
-			  AND COALESCE(v.channel_id, '') != ''
 		)
 		SELECT cp.channel_id
 		FROM channel_profiles cp
 		INNER JOIN feed_profiles f ON f.channel_id = cp.channel_id
-		LEFT JOIN instagram_source_window_profiles isw ON isw.channel_id = cp.channel_id
 		WHERE cp.tombstone = 0
-		ORDER BY
-			CASE
-				WHEN isw.channel_id IS NOT NULL THEN 0
-				ELSE 1
-			END,
-			f.last_seen_at DESC,
-			CASE WHEN COALESCE(cp.fetched_at, 0) = 0 THEN 0 ELSE 1 END,
-			CASE WHEN COALESCE(cp.avatar_url, '') = '' THEN 0 ELSE 1 END,
-			cp.fetched_at ASC,
-			cp.channel_id ASC
+		ORDER BY cp.channel_id ASC
 	`)
 	if err != nil {
 		return nil, err

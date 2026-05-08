@@ -1,6 +1,7 @@
 package db
 
 import (
+	"reflect"
 	"testing"
 	"time"
 
@@ -48,6 +49,41 @@ func TestUpsertGetChannelProfile(t *testing.T) {
 	}
 	if got.FetchedAt == nil || got.FetchedAt.UnixMilli() != now.UnixMilli() {
 		t.Fatalf("fetched_at lost: %v", got.FetchedAt)
+	}
+}
+
+func TestMarkChannelProfileRefreshDueClearsFreshness(t *testing.T) {
+	d := openWritableTestDB(t)
+
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	nextRetry := now.Add(time.Hour)
+	if err := d.UpsertChannelProfile(model.ChannelProfile{
+		ChannelID:   "twitter_cached",
+		Platform:    "twitter",
+		Handle:      "cached",
+		DisplayName: "Cached",
+		AvatarURL:   "https://pbs.twimg.com/profile_images/777/photo_normal.jpg",
+		FetchedAt:   &now,
+		FailCount:   3,
+		NextRetryAt: &nextRetry,
+		Tombstone:   true,
+	}); err != nil {
+		t.Fatalf("seed profile: %v", err)
+	}
+
+	if err := d.MarkChannelProfileRefreshDue("twitter_cached"); err != nil {
+		t.Fatalf("MarkChannelProfileRefreshDue: %v", err)
+	}
+
+	got, err := d.GetChannelProfile("twitter_cached")
+	if err != nil || got == nil {
+		t.Fatalf("GetChannelProfile: %v / %+v", err, got)
+	}
+	if got.AvatarURL != "https://pbs.twimg.com/profile_images/777/photo_normal.jpg" {
+		t.Fatalf("avatar URL was not preserved: %+v", got)
+	}
+	if got.FetchedAt != nil || got.NextRetryAt != nil || got.FailCount != 0 || got.Tombstone {
+		t.Fatalf("refresh state was not cleared: %+v", got)
 	}
 }
 
@@ -583,6 +619,41 @@ func TestSeedChannelProfileRowsSeedsShortDescriptionMentions(t *testing.T) {
 	}
 }
 
+func TestListFeedAvatarProfileIDsIncludesShortDescriptionMentions(t *testing.T) {
+	d := openWritableTestDB(t)
+	now := time.Now().UnixMilli()
+
+	if err := d.InsertVideo(
+		"instagram_caption_mentions", "instagram_owner", "caption mentions", "with @rinn_xc and @dear.chuu",
+		0, "", "media/instagram/owner/post.mp4", 0,
+		now, "", "video", 0, false,
+	); err != nil {
+		t.Fatalf("insert instagram video: %v", err)
+	}
+	if _, err := d.SeedChannelProfileRows(); err != nil {
+		t.Fatalf("SeedChannelProfileRows: %v", err)
+	}
+
+	got, err := d.ListFeedAvatarProfileIDs()
+	if err != nil {
+		t.Fatalf("ListFeedAvatarProfileIDs: %v", err)
+	}
+	found := map[string]bool{
+		"instagram_rinn_xc":   false,
+		"instagram_dear.chuu": false,
+	}
+	for _, id := range got {
+		if _, ok := found[id]; ok {
+			found[id] = true
+		}
+	}
+	for id, seen := range found {
+		if !seen {
+			t.Fatalf("profile ids = %v, missing caption mention %s", got, id)
+		}
+	}
+}
+
 func TestSeedChannelProfileRowsSeedsProfileBioMentionsByPlatform(t *testing.T) {
 	d := openWritableTestDB(t)
 	now := time.Now().UTC()
@@ -984,7 +1055,7 @@ func TestListFeedAvatarProfileIDsIncludesShortFormSourceWindowOwners(t *testing.
 	}
 }
 
-func TestListFeedAvatarProfileIDsPrioritizesUnfetchedInstagramSourceWindowOwners(t *testing.T) {
+func TestListFeedAvatarProfileIDsIncludesUnfetchedInstagramSourceWindowOwners(t *testing.T) {
 	d := openWritableTestDB(t)
 	now := time.Now().UnixMilli()
 
@@ -1018,15 +1089,19 @@ func TestListFeedAvatarProfileIDsPrioritizesUnfetchedInstagramSourceWindowOwners
 	if err != nil {
 		t.Fatalf("ListFeedAvatarProfileIDs: %v", err)
 	}
-	if len(got) < 2 {
-		t.Fatalf("profile ids = %v, want at least two", got)
+	found := false
+	for _, id := range got {
+		if id == "instagram_source.owner" {
+			found = true
+			break
+		}
 	}
-	if got[0] != "instagram_source.owner" {
-		t.Fatalf("first profile id = %q, want instagram_source.owner (got %v)", got[0], got)
+	if !found {
+		t.Fatalf("profile ids = %v, missing instagram_source.owner", got)
 	}
 }
 
-func TestListFeedAvatarProfileIDsPrioritizesInstagramSourceWindowAvatarCaching(t *testing.T) {
+func TestListFeedAvatarProfileIDsIncludesInstagramSourceWindowAvatarCaching(t *testing.T) {
 	d := openWritableTestDB(t)
 	nowMs := time.Now().UnixMilli()
 
@@ -1071,15 +1146,19 @@ func TestListFeedAvatarProfileIDsPrioritizesInstagramSourceWindowAvatarCaching(t
 	if err != nil {
 		t.Fatalf("ListFeedAvatarProfileIDs: %v", err)
 	}
-	if len(got) < 2 {
-		t.Fatalf("profile ids = %v, want at least two", got)
+	found := false
+	for _, id := range got {
+		if id == "instagram_cached.source" {
+			found = true
+			break
+		}
 	}
-	if got[0] != "instagram_cached.source" {
-		t.Fatalf("first profile id = %q, want instagram_cached.source (got %v)", got[0], got)
+	if !found {
+		t.Fatalf("profile ids = %v, missing instagram_cached.source", got)
 	}
 }
 
-func TestListFeedAvatarProfileIDsPrioritizesRecentUnfetchedRows(t *testing.T) {
+func TestListFeedAvatarProfileIDsIncludesRecentUnfetchedRows(t *testing.T) {
 	d := openWritableTestDB(t)
 	if _, err := d.conn.Exec(`
 		INSERT INTO feed_items (
@@ -1098,15 +1177,23 @@ func TestListFeedAvatarProfileIDsPrioritizesRecentUnfetchedRows(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListFeedAvatarProfileIDs: %v", err)
 	}
-	if len(got) < 2 {
-		t.Fatalf("profile ids = %v, want at least two", got)
+	found := map[string]bool{
+		"twitter_old_author": false,
+		"twitter_new_author": false,
 	}
-	if got[0] != "twitter_new_author" {
-		t.Fatalf("first profile id = %q, want twitter_new_author (got %v)", got[0], got)
+	for _, id := range got {
+		if _, ok := found[id]; ok {
+			found[id] = true
+		}
+	}
+	for id, seen := range found {
+		if !seen {
+			t.Fatalf("profile ids = %v, missing %s", got, id)
+		}
 	}
 }
 
-func TestListFeedAvatarProfileIDsPrioritizesRecentRowsBeforeOldBacklog(t *testing.T) {
+func TestListFeedAvatarProfileIDsIncludesRecentRowsAndOldBacklog(t *testing.T) {
 	d := openWritableTestDB(t)
 	if _, err := d.conn.Exec(`
 		INSERT INTO feed_items (
@@ -1136,11 +1223,90 @@ func TestListFeedAvatarProfileIDsPrioritizesRecentRowsBeforeOldBacklog(t *testin
 	if err != nil {
 		t.Fatalf("ListFeedAvatarProfileIDs: %v", err)
 	}
-	if len(got) < 2 {
-		t.Fatalf("profile ids = %v, want at least two", got)
+	found := map[string]bool{
+		"twitter_old_backlog": false,
+		"twitter_new_seen":    false,
 	}
-	if got[0] != "twitter_new_seen" {
-		t.Fatalf("first profile id = %q, want twitter_new_seen (got %v)", got[0], got)
+	for _, id := range got {
+		if _, ok := found[id]; ok {
+			found[id] = true
+		}
+	}
+	for id, seen := range found {
+		if !seen {
+			t.Fatalf("profile ids = %v, missing %s", got, id)
+		}
+	}
+}
+
+func TestListFeedAvatarProfileIDsUsesStableChannelOrder(t *testing.T) {
+	d := openWritableTestDB(t)
+	now := time.Now().UTC()
+	if err := d.UpsertChannelProfile(model.ChannelProfile{
+		ChannelID: "twitter_zed",
+		Platform:  "twitter",
+		Handle:    "zed",
+	}); err != nil {
+		t.Fatalf("seed zed profile: %v", err)
+	}
+	if err := d.UpsertChannelProfile(model.ChannelProfile{
+		ChannelID: "twitter_alpha",
+		Platform:  "twitter",
+		Handle:    "alpha",
+		FetchedAt: &now,
+	}); err != nil {
+		t.Fatalf("seed alpha profile: %v", err)
+	}
+
+	got, err := d.ListFeedAvatarProfileIDs()
+	if err != nil {
+		t.Fatalf("ListFeedAvatarProfileIDs: %v", err)
+	}
+	want := []string{"twitter_alpha", "twitter_zed"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("profile ids = %v, want stable channel-id order %v", got, want)
+	}
+}
+
+func TestListFeedAvatarProfileIDsIncludesFreshStoredAvatarRecovery(t *testing.T) {
+	d := openWritableTestDB(t)
+	if _, err := d.conn.Exec(`
+		INSERT INTO feed_items (
+			tweet_id, author_handle, published_at, fetched_at
+		) VALUES
+			('tweet_older_avatar', 'cryptokid', 100, 100),
+			('tweet_newer_backlog', 'new_backlog', 300, 300)
+	`); err != nil {
+		t.Fatalf("seed feed_items: %v", err)
+	}
+	if _, err := d.SeedChannelProfileRows(); err != nil {
+		t.Fatalf("SeedChannelProfileRows: %v", err)
+	}
+	now := time.Now().UTC()
+	if err := d.UpsertChannelProfile(model.ChannelProfile{
+		ChannelID:   "twitter_cryptokid",
+		Platform:    "twitter",
+		Handle:      "cryptokid",
+		DisplayName: "Crypto Kid",
+		AvatarURL:   "https://pbs.twimg.com/profile_images/1998822702501838848/OUPVuvCJ_normal.jpg",
+		FetchedAt:   &now,
+	}); err != nil {
+		t.Fatalf("seed fetched profile: %v", err)
+	}
+
+	got, err := d.ListFeedAvatarProfileIDs()
+	if err != nil {
+		t.Fatalf("ListFeedAvatarProfileIDs: %v", err)
+	}
+	found := false
+	for _, id := range got {
+		if id == "twitter_cryptokid" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("profile ids = %v, missing twitter_cryptokid", got)
 	}
 }
 

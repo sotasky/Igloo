@@ -44,12 +44,9 @@ type fetchFn func(ctx context.Context, channelID string) (*fetchprofile.Profile,
 
 type instagramProfileFetchFn func(ctx context.Context, channelID, handle string) (*model.ChannelProfile, error)
 
-// runProfileRefreshLoop owns every profile + avatar + banner refresh across
+// runProfileRefreshLoop owns the broad profile + avatar + banner sweeps across
 // all platforms. Two-phase cadence: 5 s between refresh batches while work is
 // pending, 5 min idle tick when everything is fresh.
-//
-// Also drains m.avatarRequest for on-demand fetches of non-subscribed
-// channels (used for feed author enrichment).
 func (m *Manager) runProfileRefreshLoop(ctx context.Context) {
 	log.Printf("[profile] refresh worker started")
 	avDir := filepath.Join(m.cfg.DataDir, "thumbnails", "avatars")
@@ -60,6 +57,14 @@ func (m *Manager) runProfileRefreshLoop(ctx context.Context) {
 	if err := os.MkdirAll(bnDir, 0o755); err != nil {
 		log.Printf("[profile] mkdir %s: %v", bnDir, err)
 	}
+	var requestWG sync.WaitGroup
+	requestWG.Add(1)
+	go func() {
+		defer requestWG.Done()
+		m.runOnDemandProfileRequestLoop(ctx, avDir, bnDir)
+	}()
+	defer requestWG.Wait()
+
 	interval := profileActiveTick
 	lastFeedAvatarSeed := time.Time{}
 	ticker := time.NewTicker(interval)
@@ -68,10 +73,7 @@ func (m *Manager) runProfileRefreshLoop(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
-		case channelID := <-m.avatarRequest:
-			m.refreshRequestedAvatar(ctx, fetchprofile.Fetch, channelID, avDir, bnDir)
 		case <-ticker.C:
-			m.drainOnDemandProfileRequests(ctx, avDir, bnDir)
 			if time.Since(lastFeedAvatarSeed) >= feedAvatarSeedMinSpacing {
 				if n, err := m.db.SeedChannelProfileRows(); err != nil {
 					log.Printf("[profile] SeedChannelProfileRows: %v", err)
@@ -167,7 +169,7 @@ func (m *Manager) refreshFeedProfileCompletenessIDs(ctx context.Context, fetch f
 	attempts := 0
 	now := time.Now()
 	for _, channelID := range channelIDs {
-		if ctx.Err() != nil || attempts >= limit {
+		if ctx.Err() != nil {
 			break
 		}
 		existing, err := m.db.GetChannelProfile(channelID)
@@ -178,20 +180,21 @@ func (m *Manager) refreshFeedProfileCompletenessIDs(ctx context.Context, fetch f
 		if existing == nil || existing.Tombstone || !profileRetryDue(existing, now) {
 			continue
 		}
+		downloaded, attempted := m.downloadStoredProfileMedia(ctx, channelID, existing, avDir, bnDir)
+		if downloaded {
+			worked = true
+			continue
+		}
+		if attempts >= limit {
+			continue
+		}
 		if shouldRefreshFullProfile(channelID, existing, now) {
 			m.refreshProfile(ctx, fetch, channelID, avDir, bnDir)
-			m.downloadStoredProfileMedia(ctx, channelID, existing, avDir, bnDir)
 			worked = true
 			attempts++
 			continue
 		}
 
-		downloaded, attempted := m.downloadStoredProfileMedia(ctx, channelID, existing, avDir, bnDir)
-		if downloaded {
-			worked = true
-			attempts++
-			continue
-		}
 		if strings.HasPrefix(channelID, "instagram_") &&
 			existing.AvatarURL == "" &&
 			!profileFetchDue(existing, now) &&
@@ -346,13 +349,13 @@ func (m *Manager) refreshStaleProfilesBatch(ctx context.Context, fetch fetchFn, 
 	return worked
 }
 
-func (m *Manager) drainOnDemandProfileRequests(ctx context.Context, avDir, bnDir string) {
+func (m *Manager) runOnDemandProfileRequestLoop(ctx context.Context, avDir, bnDir string) {
 	for {
 		select {
+		case <-ctx.Done():
+			return
 		case channelID := <-m.avatarRequest:
 			m.refreshRequestedAvatar(ctx, fetchprofile.Fetch, channelID, avDir, bnDir)
-		default:
-			return
 		}
 	}
 }
