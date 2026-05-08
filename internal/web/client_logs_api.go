@@ -14,8 +14,10 @@ import (
 //
 // POST /api/logs/server  — always-on, significant events + errors.
 //   Appended to ~/.local/share/igloo/logs/android/server.log.
-// POST /api/logs/debug   — debug-mode-gated (client decides whether to emit).
+// POST /api/logs/debug   — debug-mode-gated Android/client diagnostics.
 //   Appended to ~/.local/share/igloo/logs/android/debug.log.
+// POST /api/logs/moments — debug-mode-gated web Moments diagnostics.
+//   Appended to ~/.local/share/igloo/logs/moments/debug.jsonl.
 //
 // Replaces the v1 /api/logs/android/* sprawl (audit Part 34 + Bundle D
 // "three sinks → one upload channel"). Both endpoints accept a JSON
@@ -43,17 +45,22 @@ var clientLogMu sync.Mutex
 func (s *Server) registerClientLogsAPIRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/logs/server", s.handleClientLogServer)
 	mux.HandleFunc("POST /api/logs/debug", s.handleClientLogDebug)
+	mux.HandleFunc("POST /api/logs/moments", s.handleClientLogMoments)
 }
 
 func (s *Server) handleClientLogServer(w http.ResponseWriter, r *http.Request) {
-	s.appendClientLog(w, r, "server.log")
+	s.appendClientLog(w, r, filepath.Join("android", "server.log"))
 }
 
 func (s *Server) handleClientLogDebug(w http.ResponseWriter, r *http.Request) {
-	s.appendClientLog(w, r, "debug.log")
+	s.appendClientLog(w, r, filepath.Join("android", "debug.log"))
 }
 
-func (s *Server) appendClientLog(w http.ResponseWriter, r *http.Request, filename string) {
+func (s *Server) handleClientLogMoments(w http.ResponseWriter, r *http.Request) {
+	s.appendClientLog(w, r, filepath.Join("moments", "debug.jsonl"))
+}
+
+func (s *Server) appendClientLog(w http.ResponseWriter, r *http.Request, logRelPath string) {
 	r.Body = http.MaxBytesReader(w, r.Body, clientLogMaxBodyByte)
 	var batch clientLogBatch
 	if err := json.NewDecoder(r.Body).Decode(&batch); err != nil {
@@ -74,12 +81,12 @@ func (s *Server) appendClientLog(w http.ResponseWriter, r *http.Request, filenam
 		username = user.Username
 	}
 
-	logDir := filepath.Join(s.cfg.DataDir, "logs", "android")
+	path := filepath.Join(s.cfg.DataDir, "logs", logRelPath)
+	logDir := filepath.Dir(path)
 	if err := os.MkdirAll(logDir, 0o755); err != nil {
 		writeJSONError(w, 500, "log_write_failed", fmt.Sprintf("mkdir: %v", err))
 		return
 	}
-	path := filepath.Join(logDir, filename)
 
 	clientLogMu.Lock()
 	defer clientLogMu.Unlock()
@@ -99,9 +106,9 @@ func (s *Server) appendClientLog(w http.ResponseWriter, r *http.Request, filenam
 		// envelope-style attribution fields (username, device_id) that
 		// debug viewers can filter on.
 		row := map[string]any{
-			"timestamp_ms":    e.TimestampMs,
-			"received_at_ms":  receivedAtMs,
-			"event":           e.Event,
+			"timestamp_ms":   e.TimestampMs,
+			"received_at_ms": receivedAtMs,
+			"event":          e.Event,
 		}
 		if e.Level != "" {
 			row["level"] = e.Level

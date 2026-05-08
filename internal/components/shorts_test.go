@@ -329,9 +329,16 @@ func TestShortsDebugToolsExposeOptInMediaSnapshots(t *testing.T) {
 	}
 	debugSrc := string(debugBytes)
 	for _, check := range []string{
+		"import { apiFetch } from '../utils.js'",
 		"window.MpaShortsDebug",
 		"shorts_debug=1",
+		"shorts_debug=0",
 		"localStorage.getItem('shortsDebug')",
+		"_serverLog = '~/.local/share/igloo/logs/moments/debug.jsonl'",
+		"event: 'moments_video_debug'",
+		"flush: flush",
+		"download: function ()",
+		"status: function ()",
 		"current: function ()",
 		"recent: function ()",
 		"copy: function ()",

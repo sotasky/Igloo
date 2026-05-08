@@ -2,6 +2,7 @@ package web
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"net/http/httptest"
 	"os"
@@ -83,6 +84,35 @@ func TestClientLogDebugWritesToDebugFile(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dataDir, "logs", "android", "debug.log")); err != nil {
 		t.Errorf("debug.log not created: %v", err)
+	}
+}
+
+func TestClientLogMomentsWritesPersistentJSONL(t *testing.T) {
+	srv := newTestServer(t)
+	dataDir := t.TempDir()
+	srv.cfg.DataDir = dataDir
+
+	body := `{"device_id":"web-moments","entries":[{"event":"moments_video_debug","level":"debug","timestamp_ms":1745100000000,"fields":{"id":"short_1","bands":{"bottom":{"darkPct":100}}}}]}`
+	rec := httptest.NewRecorder()
+	srv.handleClientLogMoments(rec, httptest.NewRequest("POST", "/api/logs/moments", strings.NewReader(body)))
+
+	if rec.Code != 200 {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	}
+	logPath := filepath.Join(dataDir, "logs", "moments", "debug.jsonl")
+	raw, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read moments debug log: %v", err)
+	}
+	var row map[string]any
+	if err := json.Unmarshal(bytes.TrimSpace(raw), &row); err != nil {
+		t.Fatalf("decode moments debug row: %v (%s)", err, string(raw))
+	}
+	if row["event"] != "moments_video_debug" {
+		t.Fatalf("event = %v, want moments_video_debug", row["event"])
+	}
+	if row["device_id"] != "web-moments" {
+		t.Fatalf("device_id = %v, want web-moments", row["device_id"])
 	}
 }
 

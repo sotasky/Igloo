@@ -1,17 +1,32 @@
 // Opt-in Moments media diagnostics. Enable with ?shorts_debug=1 or
-// MpaShortsDebug.enable(), then inspect MpaShortsDebug.current()/recent().
+// MpaShortsDebug.enable(). Events are kept in-page, POSTed to the server
+// debug log, and can be downloaded as JSON.
+
+import { apiFetch } from '../utils.js'
 
 var _state = null
 var _events = []
 var _maxEvents = 160
+var _pending = []
+var _flushTimer = null
+var _flushing = false
+var _sessionID = 'moments-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8)
+var _logEndpoint = '/api/logs/moments'
+var _serverLog = '~/.local/share/igloo/logs/moments/debug.jsonl'
 
 function wantsDebug() {
   try {
-    return /(?:^|[?&])shorts_debug=1(?:&|$)/.test(window.location.search) ||
-      localStorage.getItem('shortsDebug') === '1'
+    return localStorage.getItem('shortsDebug') === '1'
   } catch (_) {
     return false
   }
+}
+
+function syncDebugFlagFromURL() {
+  try {
+    if (/(?:^|[?&])shorts_debug=1(?:&|$)/.test(window.location.search)) setEnabled(true)
+    if (/(?:^|[?&])shorts_debug=0(?:&|$)/.test(window.location.search)) setEnabled(false)
+  } catch (_) {}
 }
 
 function setEnabled(enabled) {
@@ -100,6 +115,8 @@ function snapshot(entry, eventName, extra) {
   var posterStyle = poster ? getComputedStyle(poster) : null
   return {
     t: Math.round(performance.now()),
+    timestampMs: Date.now(),
+    sessionId: _sessionID,
     event: eventName || 'snapshot',
     id: entry.data && entry.data.id,
     index: _state ? _state.items.indexOf(entry) : -1,
@@ -141,7 +158,68 @@ export function recordShortsDebugEvent(entry, eventName, extra) {
   if (!row) return
   _events.push(row)
   if (_events.length > _maxEvents) _events.shift()
-  try { console.debug('[shorts-debug]', row.event, row) } catch (_) {}
+  _pending.push(row)
+  if (_pending.length > _maxEvents) _pending = _pending.slice(-_maxEvents)
+  scheduleFlush()
+}
+
+function scheduleFlush() {
+  if (_flushTimer) return
+  _flushTimer = setTimeout(function () {
+    _flushTimer = null
+    flush()
+  }, 750)
+}
+
+function flush() {
+  if (_flushing || !_pending.length) return Promise.resolve({ written: 0 })
+  _flushing = true
+  var batch = _pending.splice(0, 80)
+  return apiFetch(_logEndpoint, {
+    method: 'POST',
+    body: JSON.stringify({
+      device_id: 'web-moments',
+      entries: batch.map(function (row) {
+        return {
+          level: 'debug',
+          event: 'moments_video_debug',
+          timestamp_ms: row.timestampMs || Date.now(),
+          fields: row
+        }
+      })
+    })
+  }).catch(function () {
+    _pending = batch.concat(_pending).slice(-_maxEvents)
+    return { written: 0, error: true }
+  }).finally(function () {
+    _flushing = false
+    if (_pending.length) scheduleFlush()
+  })
+}
+
+function payload() {
+  return {
+    sessionId: _sessionID,
+    generatedAtMs: Date.now(),
+    serverLog: _serverLog,
+    current: snapshot(currentEntry(), 'manual:current'),
+    recent: _events.slice()
+  }
+}
+
+function downloadPayload() {
+  var body = JSON.stringify(payload(), null, 2)
+  var blob = new Blob([body], { type: 'application/json' })
+  var a = document.createElement('a')
+  a.href = URL.createObjectURL(blob)
+  a.download = 'igloo-moments-debug-' + _sessionID + '.json'
+  document.body.appendChild(a)
+  a.click()
+  setTimeout(function () {
+    URL.revokeObjectURL(a.href)
+    a.remove()
+  }, 0)
+  return body
 }
 
 export function attachShortVideoDebug(entry) {
@@ -168,19 +246,32 @@ export function attachShortVideoDebug(entry) {
 
 export function initShortsDebug(stateRef) {
   _state = stateRef
+  syncDebugFlagFromURL()
   window.MpaShortsDebug = {
     enable: function () { setEnabled(true); recordShortsDebugEvent(currentEntry(), 'debug:enabled'); return this.current() },
-    disable: function () { setEnabled(false); return true },
+    disable: function () { setEnabled(false); return flush() },
     enabled: enabled,
+    status: function () {
+      return {
+        enabled: enabled(),
+        sessionId: _sessionID,
+        events: _events.length,
+        pending: _pending.length,
+        endpoint: _logEndpoint,
+        serverLog: _serverLog
+      }
+    },
     current: function () { return snapshot(currentEntry(), 'manual:current') },
     recent: function () { return _events.slice() },
+    payload: payload,
+    flush: flush,
+    download: function () { return flush().then(downloadPayload) },
     clear: function () { _events = []; return true },
     mark: function (label) { recordShortsDebugEvent(currentEntry(), 'mark:' + String(label || 'manual')); return this.current() },
     copy: function () {
-      var payload = JSON.stringify({ current: this.current(), recent: this.recent() }, null, 2)
-      if (navigator.clipboard && navigator.clipboard.writeText) return navigator.clipboard.writeText(payload)
-      console.log(payload)
-      return Promise.resolve(payload)
+      var body = JSON.stringify(payload(), null, 2)
+      if (navigator.clipboard && navigator.clipboard.writeText) return navigator.clipboard.writeText(body)
+      return Promise.resolve(body)
     }
   }
   if (enabled()) recordShortsDebugEvent(currentEntry(), 'debug:init')
