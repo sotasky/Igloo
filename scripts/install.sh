@@ -94,7 +94,12 @@ check_optional() {
 
 # Required
 check_required go        "Go compiler — install from https://go.dev/dl/"
+if [ "$CHECK_ONLY" = false ] && command -v go >/dev/null 2>&1 && ! command -v templ >/dev/null 2>&1; then
+    info "installing templ with go install..."
+    go install github.com/a-h/templ/cmd/templ@latest
+fi
 check_required templ     "templ code generator — go install github.com/a-h/templ/cmd/templ@latest"
+check_required npm       "Node package manager — install nodejs/npm"
 check_required yt-dlp    "video downloader — pip install yt-dlp or pacman -S yt-dlp"
 check_required gallery-dl "image downloader — pip install gallery-dl or pacman -S gallery-dl"
 check_required ffmpeg    "media processing — pacman -S ffmpeg"
@@ -173,6 +178,10 @@ if [ "$SKIP_BUILD" = false ]; then
 
     export PATH="$HOME_DIR/go/bin:$PATH"
     cd "$REPO_DIR"
+
+    info "npm ci..."
+    npm ci --include=dev
+    ok "node_modules"
 
     info "templ generate..."
     templ generate
