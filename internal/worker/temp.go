@@ -196,8 +196,8 @@ func (m *Manager) DownloadTemp(ctx context.Context, rawURL string, saveChannel b
 	avatarCancel()
 
 	// Synchronously fetch comments so they appear on first player page load.
-	commentsCtx, commentsCancel := context.WithTimeout(ctx, 30*time.Second)
-	comments, commentsErr := m.downloader.YtDlp.FetchComments(commentsCtx, rawURL, 50, opts)
+	commentsCtx, commentsCancel := context.WithTimeout(ctx, 2*time.Minute)
+	comments, commentsErr := m.downloader.YtDlp.FetchComments(commentsCtx, rawURL, download.DefaultCommentFetchLimit, opts)
 	commentsCancel()
 	if commentsErr != nil {
 		log.Printf("[temp] comments fetch failed for %s: %v", videoID, commentsErr)

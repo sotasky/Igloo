@@ -1,9 +1,11 @@
 package download
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/url"
 	"os"
@@ -13,6 +15,8 @@ import (
 
 	"github.com/screwys/igloo/internal/db"
 )
+
+const DefaultCommentFetchLimit = 500
 
 // ChannelInfoResult holds the resolved channel identity from yt-dlp.
 type ChannelInfoResult struct {
@@ -219,6 +223,27 @@ func fetchInfoCommand(opts Opts) *ytdlp.Command {
 		DumpJSON(), opts)
 }
 
+func commentExtractorArgs(maxComments int) string {
+	if maxComments <= 0 {
+		maxComments = DefaultCommentFetchLimit
+	}
+	maxRepliesPerThread := 100
+	if maxComments < maxRepliesPerThread {
+		maxRepliesPerThread = maxComments
+	}
+	return fmt.Sprintf("youtube:max_comments=%d,%d,%d,%d", maxComments, maxComments, maxComments, maxRepliesPerThread)
+}
+
+func fetchCommentsCommand(maxComments int, opts Opts) *ytdlp.Command {
+	return applyCookieAuth(ytdlp.New().
+		SkipDownload().
+		NoWarnings().
+		NoPlaylist().
+		WriteComments().
+		ExtractorArgs(commentExtractorArgs(maxComments)).
+		DumpJSON(), opts)
+}
+
 // FetchInfo fetches metadata for a single URL without downloading.
 func (y *YtDlpWrapper) FetchInfo(ctx context.Context, url string, opts ...Opts) (map[string]any, error) {
 	result, err := fetchInfoCommand(firstOpts(opts)).Run(ctx, url)
@@ -405,17 +430,7 @@ func extractFilenamesFromRaw(result *ytdlp.Result) []string {
 // FetchComments fetches comments for a URL via yt-dlp without re-downloading media.
 // Returns up to maxComments comments mapped to CommentInput for DB insertion.
 func (y *YtDlpWrapper) FetchComments(ctx context.Context, url string, maxComments int, opts Opts) ([]db.CommentInput, error) {
-	cmd := ytdlp.New().
-		SkipDownload().
-		NoWarnings().
-		NoPlaylist().
-		WriteComments().
-		ExtractorArgs(fmt.Sprintf("youtube:max_comments=%d", maxComments)).
-		DumpJSON()
-
-	cmd = applyCookieAuth(cmd, opts)
-
-	result, err := cmd.Run(ctx, url)
+	result, err := fetchCommentsCommand(maxComments, opts).Run(ctx, url)
 	if err != nil {
 		return nil, fmt.Errorf("yt-dlp comments: %w", err)
 	}
@@ -461,4 +476,85 @@ func (y *YtDlpWrapper) FetchComments(ctx context.Context, url string, maxComment
 		out = append(out, ci)
 	}
 	return out, nil
+}
+
+// ParseCommentsDumpJSON maps yt-dlp --dump-json output into DB comment rows.
+// yt-dlp can emit one JSON object per line; each object may carry comments.
+func ParseCommentsDumpJSON(output []byte) ([]db.CommentInput, error) {
+	var out []db.CommentInput
+	decoder := json.NewDecoder(bytes.NewReader(bytes.TrimSpace(output)))
+	for {
+		var info struct {
+			Comments []map[string]any `json:"comments"`
+		}
+		if err := decoder.Decode(&info); err != nil {
+			if err == io.EOF {
+				break
+			}
+			return nil, err
+		}
+		for _, ce := range info.Comments {
+			ci := db.CommentInput{
+				CommentID:       stringFromCommentField(ce["id"]),
+				Author:          stringFromCommentField(ce["author"]),
+				AuthorID:        stringFromCommentField(ce["author_id"]),
+				AuthorThumbnail: stringFromCommentField(ce["author_thumbnail"]),
+				Text:            stringFromCommentField(ce["text"]),
+				ParentID:        stringFromCommentField(ce["parent"]),
+				LikeCount:       intFromCommentField(ce["like_count"]),
+				Timestamp:       int64FromCommentField(ce["timestamp"]),
+			}
+			if ci.ParentID == "root" {
+				ci.ParentID = ""
+			}
+			if ci.CommentID == "" || ci.CommentID == "<nil>" || ci.Text == "" {
+				continue
+			}
+			out = append(out, ci)
+		}
+	}
+	return out, nil
+}
+
+func stringFromCommentField(v any) string {
+	switch x := v.(type) {
+	case string:
+		return x
+	case nil:
+		return ""
+	default:
+		return fmt.Sprint(x)
+	}
+}
+
+func intFromCommentField(v any) int {
+	switch x := v.(type) {
+	case float64:
+		return int(x)
+	case int:
+		return x
+	case int64:
+		return int(x)
+	case json.Number:
+		n, _ := x.Int64()
+		return int(n)
+	default:
+		return 0
+	}
+}
+
+func int64FromCommentField(v any) int64 {
+	switch x := v.(type) {
+	case float64:
+		return int64(x)
+	case int:
+		return int64(x)
+	case int64:
+		return x
+	case json.Number:
+		n, _ := x.Int64()
+		return n
+	default:
+		return 0
+	}
 }

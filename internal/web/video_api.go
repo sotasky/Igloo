@@ -23,6 +23,7 @@ import (
 
 	"github.com/screwys/igloo/internal/components"
 	"github.com/screwys/igloo/internal/db"
+	"github.com/screwys/igloo/internal/download"
 	"github.com/screwys/igloo/internal/model"
 	"github.com/screwys/igloo/internal/sponsorblock"
 	"github.com/screwys/igloo/internal/subtitlemeta"
@@ -669,23 +670,19 @@ func (s *Server) handleVideoCommentsRefresh(w http.ResponseWriter, r *http.Reque
 		subCancel()
 	}
 
-	// Fetch comments via --dump-json.
-	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	// Fetch comments through the same yt-dlp wrapper used by normal and temp downloads.
+	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
 	defer cancel()
 
-	args := []string{
-		"--get-comments",
-		"--no-download",
-		"--no-warnings",
-		"--no-config",
-		"--quiet",
-		"--dump-json",
-		"--cookies-from-browser", "firefox",
-		"--extractor-args", "youtube:max_comments=50",
+	commentsDownloader := &download.YtDlpWrapper{}
+	if s.workers != nil {
+		if dl := s.workers.Downloader(); dl != nil && dl.YtDlp != nil {
+			commentsDownloader = dl.YtDlp
+		}
 	}
-	args = append(args, sourceURL)
-	cmd := exec.CommandContext(ctx, "yt-dlp", args...)
-	output, err := cmd.Output()
+	parsed, err := commentsDownloader.FetchComments(ctx, sourceURL, download.DefaultCommentFetchLimit, download.Opts{
+		CookiesFromBrowser: "firefox",
+	})
 	if err != nil {
 		slog.Warn("comments refresh yt-dlp failed", "video", videoID, "err", err)
 		// Return existing comments on failure
@@ -700,44 +697,6 @@ func (s *Server) handleVideoCommentsRefresh(w http.ResponseWriter, r *http.Reque
 			"count":    len(comments),
 		})
 		return
-	}
-
-	// Parse yt-dlp JSON output
-	var parsed []db.CommentInput
-	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
-		if line == "" {
-			continue
-		}
-		var info map[string]any
-		if err := json.Unmarshal([]byte(line), &info); err != nil {
-			continue
-		}
-		commentEntries, _ := info["comments"].([]any)
-		for _, entry := range commentEntries {
-			ce, ok := entry.(map[string]any)
-			if !ok {
-				continue
-			}
-			ci := db.CommentInput{
-				CommentID:       fmt.Sprint(ce["id"]),
-				Author:          stringFromAny(ce["author"]),
-				AuthorID:        stringFromAny(ce["author_id"]),
-				AuthorThumbnail: stringFromAny(ce["author_thumbnail"]),
-				Text:            stringFromAny(ce["text"]),
-			}
-			if parent, ok := ce["parent"].(string); ok {
-				ci.ParentID = parent
-			}
-			if lc, ok := ce["like_count"].(float64); ok {
-				ci.LikeCount = int(lc)
-			}
-			if ts, ok := ce["timestamp"].(float64); ok {
-				ci.Timestamp = int64(ts)
-			}
-			if ci.CommentID != "" && ci.CommentID != "<nil>" {
-				parsed = append(parsed, ci)
-			}
-		}
 	}
 
 	// Save: delete old, insert new

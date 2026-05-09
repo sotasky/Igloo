@@ -325,7 +325,7 @@ func (m *Manager) downloadVideo(ctx context.Context, job db.DownloadQueueRow, pl
 		go func() {
 			bgCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 			defer cancel()
-			comments, err := m.downloader.YtDlp.FetchComments(bgCtx, capturedURL, 50, capturedOpts)
+			comments, err := m.downloader.YtDlp.FetchComments(bgCtx, capturedURL, download.DefaultCommentFetchLimit, capturedOpts)
 			if err != nil {
 				log.Printf("[downloadpool] comments fetch failed for %s: %v", capturedID, err)
 				return
