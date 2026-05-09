@@ -19,6 +19,7 @@ import (
 func (s *Server) registerFeedAPIRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/feed/like/{tweetID}", s.handleFeedLike)
 	mux.HandleFunc("DELETE /api/feed/like/{tweetID}", s.handleFeedUnlike)
+	mux.HandleFunc("GET /api/feed/debug/item/{tweetID}", s.handleFeedDebugItem)
 	mux.HandleFunc("POST /api/feed/seen", s.handleFeedSeen)
 	mux.HandleFunc("POST /api/feed/mute/{handle}", s.handleFeedMute)
 	mux.HandleFunc("DELETE /api/feed/mute/{handle}", s.handleFeedUnmute)
