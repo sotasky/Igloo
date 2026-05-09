@@ -618,6 +618,27 @@ func TestSubscribeYouTubeKnownProfileHandleDoesNotRequireYtDlp(t *testing.T) {
 	}
 }
 
+func TestParseOPMLCanonicalizesYouTubeChannelIDs(t *testing.T) {
+	channels := parseOPML([]byte(`
+		<opml><body>
+			<outline text="Example" xmlUrl="https://www.youtube.com/feeds/videos.xml?channel_id=UCexample12345"/>
+		</body></opml>
+	`))
+	if len(channels) != 1 {
+		t.Fatalf("channels len = %d, want 1", len(channels))
+	}
+	ch := channels[0]
+	if ch.ChannelID != "youtube_UCexample12345" {
+		t.Fatalf("ChannelID = %q, want youtube_UCexample12345", ch.ChannelID)
+	}
+	if ch.SourceID != "UCexample12345" {
+		t.Fatalf("SourceID = %q, want UCexample12345", ch.SourceID)
+	}
+	if ch.URL != "https://www.youtube.com/channel/UCexample12345" {
+		t.Fatalf("URL = %q", ch.URL)
+	}
+}
+
 func TestSettingsFromForm_OmitsDearrowModeWhenEmpty(t *testing.T) {
 	// When the form has no dearrow_mode field the field should be absent
 	// from the body — simpleFields handling uses `if v != ""`.

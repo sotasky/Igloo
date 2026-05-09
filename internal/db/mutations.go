@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -182,6 +183,9 @@ func (db *DB) ApplyFollowMutation(channelID, action string, updatedAtMs int64) (
 		updatedAtMs = time.Now().UnixMilli()
 	}
 	if action == "set" {
+		if looksLikeBareYouTubeChannelID(channelID) {
+			return MutationResult{}, fmt.Errorf("invalid channel_id")
+		}
 		sourceID, _, _, platform := channelDefaultsFromID(channelID)
 		if platform != "" && !isSafeChannelDerivedID(sourceID) {
 			return MutationResult{}, fmt.Errorf("invalid channel_id")
@@ -209,6 +213,11 @@ func (db *DB) ApplyFollowMutation(channelID, action string, updatedAtMs int64) (
 			}
 			return errInvalidAction
 		})
+}
+
+func looksLikeBareYouTubeChannelID(channelID string) bool {
+	channelID = strings.TrimSpace(channelID)
+	return strings.HasPrefix(channelID, "UC") && len(channelID) >= 10
 }
 
 func (db *DB) ensureChannelStubForFollowTx(tx *sql.Tx, channelID string, updatedAtMs int64) error {

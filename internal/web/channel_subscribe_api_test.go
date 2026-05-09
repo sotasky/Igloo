@@ -60,3 +60,33 @@ func TestChannelSubscribeRouteRejectsUnknownChannel(t *testing.T) {
 		t.Fatal("unknown channel should not create a follow row")
 	}
 }
+
+func TestChannelSubscribeRouteCanonicalizesBareYouTubeID(t *testing.T) {
+	srv := newTestServer(t)
+	const rawID = "UCtempchannel"
+	const channelID = "youtube_" + rawID
+	if err := srv.db.AddChannel(model.Channel{
+		ChannelID: channelID,
+		SourceID:  rawID,
+		Name:      "Temp Channel",
+		URL:       "https://www.youtube.com/channel/" + rawID,
+		Platform:  "youtube",
+	}); err != nil {
+		t.Fatalf("AddChannel: %v", err)
+	}
+
+	req := httptest.NewRequest("POST", "/api/channels/"+rawID+"/subscribe", nil)
+	rec := httptest.NewRecorder()
+
+	srv.mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if !srv.db.IsChannelFollowed(channelID) {
+		t.Fatal("expected canonical channel to gain a follow row")
+	}
+	if srv.db.IsChannelFollowed(rawID) {
+		t.Fatal("bare YouTube id should not gain a follow row")
+	}
+}

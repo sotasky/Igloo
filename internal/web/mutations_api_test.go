@@ -142,6 +142,25 @@ func TestMutationFollowRejectsPathTraversalChannelID(t *testing.T) {
 	}
 }
 
+func TestMutationFollowRejectsBareYouTubeChannelID(t *testing.T) {
+	srv := newTestServer(t)
+	resp := postMutation(t, srv, "POST", "/api/mutations/follow", "alice", `{
+	  "channel_id": "UCbarechannel", "action": "set", "updated_at_ms": 1
+	}`)
+	if resp["error_code"] != "invalid_body" {
+		t.Fatalf("error_code = %v, want invalid_body", resp["error_code"])
+	}
+	var count int
+	srv.db.QueryRow(`SELECT COUNT(*) FROM channel_follows WHERE channel_id='UCbarechannel'`).Scan(&count)
+	if count != 0 {
+		t.Fatalf("follow row created for bare YouTube channel_id, count=%d", count)
+	}
+	srv.db.QueryRow(`SELECT COUNT(*) FROM channels WHERE channel_id='UCbarechannel'`).Scan(&count)
+	if count != 0 {
+		t.Fatalf("channel row created for bare YouTube channel_id, count=%d", count)
+	}
+}
+
 func TestMutationFollowAndStar(t *testing.T) {
 	srv := newTestServer(t)
 	postMutation(t, srv, "POST", "/api/mutations/follow", "alice", `{

@@ -125,7 +125,7 @@ func (s *Server) handleChannelStar(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleChannelSubscribe(w http.ResponseWriter, r *http.Request) {
-	channelID := r.PathValue("channelID")
+	channelID := canonicalSubscribeChannelID(r.PathValue("channelID"))
 	ch, err := s.db.GetChannelByID(channelID)
 	if err != nil {
 		writeJSON(w, http.StatusNotFound, map[string]any{"success": false, "error": "channel not found"})
@@ -159,6 +159,14 @@ func (s *Server) handleChannelSubscribe(w http.ResponseWriter, r *http.Request) 
 		"subscribed":      true,
 		"already_existed": alreadyFollowed,
 	})
+}
+
+func canonicalSubscribeChannelID(channelID string) string {
+	channelID = strings.TrimSpace(channelID)
+	if strings.HasPrefix(channelID, "UC") {
+		return "youtube_" + channelID
+	}
+	return channelID
 }
 
 func (s *Server) handleChannelSettingsGet(w http.ResponseWriter, r *http.Request) {

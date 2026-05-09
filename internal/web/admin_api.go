@@ -1734,15 +1734,17 @@ func parseOPML(data []byte) []model.Channel {
 		if len(m) < 2 {
 			return
 		}
-		channelID := m[1]
+		rawID := m[1]
+		channelID := "youtube_" + strings.TrimPrefix(rawID, "youtube_")
 		if seen[channelID] {
 			return
 		}
 		seen[channelID] = true
 		channels = append(channels, model.Channel{
 			ChannelID:    channelID,
+			SourceID:     strings.TrimPrefix(channelID, "youtube_"),
 			Name:         name,
-			URL:          "https://www.youtube.com/channel/" + channelID,
+			URL:          "https://www.youtube.com/channel/" + strings.TrimPrefix(channelID, "youtube_"),
 			Platform:     "youtube",
 			IsSubscribed: true,
 		})
