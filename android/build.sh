@@ -14,11 +14,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/env.sh"
 require_java_home
+ensure_android_sdk
 
-export ANDROID_HOME="${ANDROID_HOME:-$HOME/Android/Sdk}"
-export ANDROID_SDK_ROOT="$ANDROID_HOME"
 export GRADLE_USER_HOME="${GRADLE_USER_HOME:-$SCRIPT_DIR/.gradle-home}"
-export PATH="$JAVA_HOME/bin:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH"
 mkdir -p "$GRADLE_USER_HOME"
 
 echo "🚀 Igloo Android"
@@ -99,7 +97,19 @@ if [ -z "$adb_serial" ]; then
 fi
 echo "   Device: $adb_serial"
 
-adb -s "$adb_serial" install -r --user 0 "$apk_path"
+install_output=""
+if ! install_output="$(adb -s "$adb_serial" install -r --user 0 "$apk_path" 2>&1)"; then
+    printf '%s\n' "$install_output"
+    if [[ "$install_output" == *"INSTALL_FAILED_UPDATE_INCOMPATIBLE"* ]]; then
+        echo "❌ Installed APK has a different signature."
+        echo "   Install a build signed with the same key, or approve a manual data-reset install."
+        exit 1
+    else
+        exit 1
+    fi
+else
+    printf '%s\n' "$install_output"
+fi
 while IFS= read -r user_id; do
     [ "$user_id" = "0" ] && continue
     if adb -s "$adb_serial" shell pm list packages --user "$user_id" 2>/dev/null | grep -qx "package:com.screwy.igloo"; then

@@ -13,11 +13,9 @@ cd "$SCRIPT_DIR"
 
 source "$SCRIPT_DIR/env.sh"
 require_java_home
+ensure_android_sdk
 
-export ANDROID_HOME="${ANDROID_HOME:-$HOME/Android/Sdk}"
-export ANDROID_SDK_ROOT="$ANDROID_HOME"
 export GRADLE_USER_HOME="${GRADLE_USER_HOME:-$SCRIPT_DIR/.gradle-home}"
-export PATH="$JAVA_HOME/bin:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH"
 mkdir -p "$GRADLE_USER_HOME"
 
 test_args=(":app:testDevtestUnitTest")
