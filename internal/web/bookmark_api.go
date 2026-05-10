@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -15,6 +16,8 @@ import (
 	"strings"
 
 	"github.com/screwys/igloo/internal/components"
+	"github.com/screwys/igloo/internal/download"
+	"github.com/screwys/igloo/internal/model"
 )
 
 // registerBookmarkAPIRoutes registers bookmark CRUD API routes.
@@ -451,6 +454,14 @@ func (s *Server) archiveBookmarkCombined(tweetID, archivePath, customTitle, acco
 		return
 	}
 
+	account := buildArchiveAccount(accountHandlesJSON, "", tweetID)
+	label := customTitle
+	if label == "" {
+		label = tweetID
+	}
+	safeName := sanitizeArchiveName(account + " " + label)
+	startNum := bookmarkArchiveStartNumber(archivePath, safeName)
+
 	// Build the combined slide list: parent first, then quote.
 	// This matches the JS download-order indexing.
 	var allSlides []string
@@ -467,55 +478,31 @@ func (s *Server) archiveBookmarkCombined(tweetID, archivePath, customTitle, acco
 	}
 
 	if len(allSlides) == 0 {
-		slog.Warn("[Bookmark] no slides found", "tweet", tweetID)
+		refs := s.collectArchiveMediaRefs(tweetID)
+		if len(refs) == 0 {
+			slog.Warn("[Bookmark] no slides found", "tweet", tweetID)
+			return
+		}
+		refs = filterArchiveMediaRefs(refs, mediaIndices)
+		if len(refs) == 0 {
+			slog.Warn("[Bookmark] no slides after filtering", "tweet", tweetID, "indices", mediaIndices)
+			return
+		}
+		archived := s.archiveBookmarkRemoteRefs(tweetID, archivePath, safeName, startNum, refs)
+		if archived == 0 {
+			slog.Warn("[Bookmark] no remote media archived", "tweet", tweetID)
+		}
 		return
 	}
 
 	slog.Info("[Bookmark] combined slides", "tweet", tweetID, "total", len(allSlides), "slides", allSlides, "mediaIndices", mediaIndices)
 
 	// Filter by media_indices if specified
-	if len(mediaIndices) > 0 {
-		allowed := make(map[int]bool, len(mediaIndices))
-		for _, idx := range mediaIndices {
-			allowed[idx] = true
-		}
-		var filtered []string
-		for i, slide := range allSlides {
-			if allowed[i] {
-				filtered = append(filtered, slide)
-			}
-		}
-		allSlides = filtered
-	}
+	allSlides = filterArchiveSlides(allSlides, mediaIndices)
 
 	if len(allSlides) == 0 {
 		slog.Warn("[Bookmark] no slides after filtering", "tweet", tweetID, "indices", mediaIndices)
 		return
-	}
-
-	// Build filename prefix
-	account := buildArchiveAccount(accountHandlesJSON, "", tweetID)
-	label := customTitle
-	if label == "" {
-		label = tweetID
-	}
-	safeName := sanitizeArchiveName(account + " " + label)
-
-	// Find the highest existing numbered file for this name prefix so we
-	// don't overwrite previous bookmarks saved under the same label.
-	startNum := 0
-	entries, _ := os.ReadDir(archivePath)
-	namePrefix := safeName + " "
-	for _, e := range entries {
-		n := e.Name()
-		if strings.HasPrefix(n, namePrefix) {
-			// Extract number from "prefix NNN.ext"
-			numPart := strings.TrimPrefix(n, namePrefix)
-			numPart = strings.TrimSuffix(numPart, filepath.Ext(numPart))
-			if num, err := strconv.Atoi(strings.TrimSpace(numPart)); err == nil && num > startNum {
-				startNum = num
-			}
-		}
 	}
 
 	// Copy files
@@ -541,6 +528,105 @@ func (s *Server) archiveBookmarkCombined(tweetID, archivePath, customTitle, acco
 		src.Close()
 	}
 	slog.Info("[Bookmark] archived", "tweet", tweetID, "slides", len(allSlides), "dest", archivePath)
+}
+
+func (s *Server) collectArchiveMediaRefs(tweetID string) []model.MediaRef {
+	items, err := s.db.GetFeedItemsForTweetIDs([]string{tweetID})
+	if err != nil {
+		slog.Warn("[Bookmark] feed item lookup failed", "tweet", tweetID, "err", err)
+		return nil
+	}
+	fi, ok := items[tweetID]
+	if !ok {
+		return nil
+	}
+	fi.ParseMedia()
+	refs := make([]model.MediaRef, 0, len(fi.Media)+len(fi.QuoteMedia))
+	refs = append(refs, fi.Media...)
+	refs = append(refs, fi.QuoteMedia...)
+	return refs
+}
+
+func filterArchiveSlides(slides []string, mediaIndices []int) []string {
+	if len(mediaIndices) == 0 {
+		return slides
+	}
+	allowed := make(map[int]bool, len(mediaIndices))
+	for _, idx := range mediaIndices {
+		allowed[idx] = true
+	}
+	filtered := make([]string, 0, len(slides))
+	for i, slide := range slides {
+		if allowed[i] {
+			filtered = append(filtered, slide)
+		}
+	}
+	return filtered
+}
+
+func filterArchiveMediaRefs(refs []model.MediaRef, mediaIndices []int) []model.MediaRef {
+	if len(mediaIndices) == 0 {
+		return refs
+	}
+	allowed := make(map[int]bool, len(mediaIndices))
+	for _, idx := range mediaIndices {
+		allowed[idx] = true
+	}
+	filtered := make([]model.MediaRef, 0, len(refs))
+	for i, ref := range refs {
+		if allowed[i] {
+			filtered = append(filtered, ref)
+		}
+	}
+	return filtered
+}
+
+func (s *Server) archiveBookmarkRemoteRefs(tweetID, archivePath, safeName string, startNum int, refs []model.MediaRef) int {
+	if s.workers == nil || s.workers.Downloader() == nil {
+		return 0
+	}
+	ctx := context.Background()
+	archived := 0
+	for i, ref := range refs {
+		rawURL := strings.TrimSpace(ref.URL)
+		if rawURL == "" {
+			continue
+		}
+		fileNum := startNum + i + 1
+		id := fmt.Sprintf("%s %03d", safeName, fileNum)
+		paths, err := s.workers.Downloader().Download(ctx, rawURL, ref.Type, download.Opts{
+			OutputDir: archivePath,
+			ID:        id,
+		})
+		if err != nil {
+			slog.Warn("[Bookmark] remote archive download failed", "tweet", tweetID, "url", rawURL, "err", err)
+			continue
+		}
+		archived += len(paths)
+	}
+	if archived > 0 {
+		slog.Info("[Bookmark] archived remote media", "tweet", tweetID, "files", archived, "dest", archivePath)
+	}
+	return archived
+}
+
+func bookmarkArchiveStartNumber(archivePath, safeName string) int {
+	// Find the highest existing numbered file for this name prefix so we
+	// don't overwrite previous bookmarks saved under the same label.
+	startNum := 0
+	entries, _ := os.ReadDir(archivePath)
+	namePrefix := safeName + " "
+	for _, e := range entries {
+		n := e.Name()
+		if strings.HasPrefix(n, namePrefix) {
+			numPart := strings.TrimPrefix(n, namePrefix)
+			numPart = strings.TrimSuffix(numPart, filepath.Ext(numPart))
+			if num, err := strconv.Atoi(strings.TrimSpace(numPart)); err == nil && num > startNum {
+				startNum = num
+			}
+		}
+	}
+	return startNum
 }
 
 // collectSlides gathers all local media file paths for a tweet ID.

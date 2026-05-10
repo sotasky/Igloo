@@ -82,6 +82,37 @@ func TestHandleBookmarkAdd_DoesNotRearchiveUnchangedBookmark(t *testing.T) {
 	assertFileDoesNotAppear(t, filepath.Join(archiveDir, "author_handle Saved Label 002.jpg"), 300*time.Millisecond)
 }
 
+func TestArchiveBookmarkCombinedDownloadsMediaJSONWhenCacheMissing(t *testing.T) {
+	srv := newTestServer(t)
+
+	mediaSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/jpeg")
+		_, _ = w.Write([]byte("remote-image-bytes"))
+	}))
+	defer mediaSrv.Close()
+	srv.workers.Downloader().HTTP.Client = mediaSrv.Client()
+	srv.workers.Downloader().HTTP.AllowPrivateHosts = true
+
+	if err := srv.db.ExecRaw(`
+		INSERT INTO feed_items (tweet_id, source_handle, author_handle, media_json, published_at, fetched_at)
+		VALUES (?, 'alice', 'alice', ?, 1, 1)
+	`, "tw_remote_archive", fmt.Sprintf(`[{"url":%q,"type":"photo"}]`, mediaSrv.URL+"/photo.jpg")); err != nil {
+		t.Fatalf("insert feed item: %v", err)
+	}
+
+	archiveDir := t.TempDir()
+	srv.archiveBookmarkCombined("tw_remote_archive", archiveDir, "Remote Label", `["alice"]`, nil)
+
+	gotPath := filepath.Join(archiveDir, "alice Remote Label 001.jpg")
+	got, err := os.ReadFile(gotPath)
+	if err != nil {
+		t.Fatalf("archived remote media missing: %v", err)
+	}
+	if string(got) != "remote-image-bytes" {
+		t.Fatalf("archived bytes = %q, want remote-image-bytes", string(got))
+	}
+}
+
 func TestHandleBookmarkCategoryCreateRejectsRelativeArchivePath(t *testing.T) {
 	srv := newTestServer(t)
 
