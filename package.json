@@ -1,6 +1,6 @@
 {
   "name": "igloo",
-  "version": "1.0.9",
+  "version": "1.0.10",
   "description": "Personal social inbox platform for YouTube, TikTok, and X/Twitter feeds.",
   "main": "index.js",
   "directories": {
