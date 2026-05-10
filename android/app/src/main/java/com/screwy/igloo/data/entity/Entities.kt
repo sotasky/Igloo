@@ -141,7 +141,6 @@ data class ChannelEntity(
     @ColumnInfo(name = "platform") val platform: String,
     @ColumnInfo(name = "avatar_url") val avatarUrl: String? = null,
     @ColumnInfo(name = "quality") val quality: String? = null,
-    @ColumnInfo(name = "check_interval") val checkInterval: Long? = null,
     @ColumnInfo(name = "last_checked") val lastChecked: Long? = null,
     @ColumnInfo(name = "created_at") val createdAt: Long = 0,
 )

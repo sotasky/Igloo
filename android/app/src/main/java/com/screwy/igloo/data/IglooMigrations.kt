@@ -16,7 +16,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
  */
 object IglooMigrations {
     const val SUPPORTED_SCHEMA_BASELINE_VERSION = 29
-    const val CURRENT_SCHEMA_VERSION = 30
+    const val CURRENT_SCHEMA_VERSION = 31
 
     /** Adds `media_inventory.audio_language` for the subtitle auto-on rule. */
     val MIGRATION_7_8 = object : Migration(7, 8) {
@@ -332,6 +332,41 @@ object IglooMigrations {
         }
     }
 
+    val MIGRATION_30_31 = object : Migration(30, 31) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS channels_new (
+                    channel_id TEXT NOT NULL,
+                    source_id TEXT,
+                    name TEXT NOT NULL,
+                    url TEXT,
+                    platform TEXT NOT NULL,
+                    avatar_url TEXT,
+                    quality TEXT,
+                    last_checked INTEGER,
+                    created_at INTEGER NOT NULL,
+                    PRIMARY KEY(channel_id)
+                )
+                """.trimIndent(),
+            )
+            db.execSQL(
+                """
+                INSERT INTO channels_new (
+                    channel_id, source_id, name, url, platform,
+                    avatar_url, quality, last_checked, created_at
+                )
+                SELECT channel_id, source_id, name, url, platform,
+                       avatar_url, quality, last_checked, created_at
+                FROM channels
+                """.trimIndent(),
+            )
+            db.execSQL("DROP TABLE channels")
+            db.execSQL("ALTER TABLE channels_new RENAME TO channels")
+            db.execSQL("CREATE INDEX IF NOT EXISTS idx_channels_platform ON channels(platform)")
+        }
+    }
+
     val ALL: Array<Migration> = arrayOf(
         MIGRATION_7_8,
         MIGRATION_8_9,
@@ -356,5 +391,6 @@ object IglooMigrations {
         MIGRATION_27_28,
         MIGRATION_28_29,
         MIGRATION_29_30,
+        MIGRATION_30_31,
     )
 }

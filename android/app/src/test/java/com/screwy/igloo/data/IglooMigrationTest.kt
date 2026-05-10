@@ -61,7 +61,7 @@ class IglooMigrationTest {
         }
 
         val roomDb = Room.databaseBuilder(context, IglooDatabase::class.java, dbName)
-            .addMigrations(IglooMigrations.MIGRATION_29_30)
+            .addMigrations(IglooMigrations.MIGRATION_29_30, IglooMigrations.MIGRATION_30_31)
             .allowMainThreadQueries()
             .build()
 
@@ -81,6 +81,64 @@ class IglooMigrationTest {
                 assertNull(it.getString(1))
                 assertEquals("quote", it.getString(2))
                 assertNull(it.getString(3))
+            }
+        } finally {
+            roomDb.close()
+            context.deleteDatabase(dbName)
+        }
+    }
+
+    @Test fun migration30To31DropsChannelCheckIntervalWithoutDroppingChannels() {
+        val dbName = "igloo-migration-30-31"
+        val context: Context = ApplicationProvider.getApplicationContext()
+        val sqlite = createDatabaseFromSchemaSnapshot(
+            context,
+            dbName,
+            30,
+        )
+        try {
+            sqlite.execSQL(
+                """
+                INSERT INTO channels (
+                    channel_id, source_id, name, url, platform, avatar_url,
+                    quality, check_interval, last_checked, created_at
+                ) VALUES (
+                    'youtube_UCmigration', 'UCmigration', 'Migration Channel',
+                    'https://www.youtube.com/channel/UCmigration', 'youtube', '/avatar',
+                    '1080p', 6, 1234, 5678
+                )
+                """.trimIndent(),
+            )
+        } finally {
+            sqlite.close()
+        }
+
+        val roomDb = Room.databaseBuilder(context, IglooDatabase::class.java, dbName)
+            .addMigrations(IglooMigrations.MIGRATION_30_31)
+            .allowMainThreadQueries()
+            .build()
+
+        try {
+            val readable = roomDb.openHelper.readableDatabase
+            assertEquals(IglooMigrations.CURRENT_SCHEMA_VERSION, readable.version)
+            readable.query("PRAGMA table_info(channels)").use { cursor ->
+                while (cursor.moveToNext()) {
+                    assertFalse(cursor.getString(1) == "check_interval")
+                }
+            }
+            readable.query(
+                """
+                SELECT source_id, name, quality, last_checked, created_at
+                FROM channels
+                WHERE channel_id = 'youtube_UCmigration'
+                """.trimIndent(),
+            ).use {
+                assertTrue(it.moveToFirst())
+                assertEquals("UCmigration", it.getString(0))
+                assertEquals("Migration Channel", it.getString(1))
+                assertEquals("1080p", it.getString(2))
+                assertEquals(1234L, it.getLong(3))
+                assertEquals(5678L, it.getLong(4))
             }
         } finally {
             roomDb.close()

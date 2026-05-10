@@ -117,7 +117,10 @@ var settingsInternalKeys = map[string]bool{
 	"shorts_cursor_video_id": true, "shorts_cursor_updated_at_ms": true,
 	"deleted_channels": true, "x_media_staging_dir": true, "android_last_known_server_url": true,
 	"cookies_enabled_twitter": true, "cookies_enabled_youtube": true, "cookies_enabled_tiktok": true,
-	"include_reposts_default": true,
+	"include_reposts_default":  true,
+	"youtube_check_interval":   true,
+	"shorts_check_interval":    true,
+	"instagram_check_interval": true,
 }
 
 // settingsToAPIFormat transforms raw DB settings into the format the JS frontend expects.
@@ -293,10 +296,10 @@ func (s *Server) settingsFromForm(r *http.Request) map[string]string {
 	// Simple text/number fields.
 	simpleFields := []string{
 		"web_theme_id", "web_theme_accent",
-		"quality", "youtube_check_interval", "youtube_max_videos",
+		"quality", "youtube_fetch_delay", "youtube_max_videos",
 		"youtube_default_playback_speed",
-		"shorts_check_interval", "shorts_max_videos",
-		"instagram_check_interval", "instagram_max_videos",
+		"tiktok_fetch_delay", "shorts_max_videos",
+		"instagram_fetch_delay", "instagram_max_videos",
 		"moments_default_tab", "stories_window_hours",
 		"media_download_limit_default", "x_feed_fetch_delay",
 		"translate_target_lang", "translate_backend",

@@ -202,7 +202,7 @@ func TestPrefsBodyRendersInstagramTaggedToggleInRightColumn(t *testing.T) {
 		t.Fatalf("preferences body should render checked Instagram tagged toggle:\n%s", html)
 	}
 	translationIdx := strings.Index(html, `name="translate_auto_mode"`)
-	instagramIdx := strings.Index(html, `name="instagram_check_interval"`)
+	instagramIdx := strings.Index(html, `name="instagram_fetch_delay"`)
 	if translationIdx < 0 || instagramIdx < 0 {
 		t.Fatalf("preferences body missing translation or Instagram controls")
 	}
@@ -504,7 +504,7 @@ func TestPrefsPlatformSettingsTabOwnsPlatformDefaults(t *testing.T) {
 
 	platformPanel := strings.Index(html, `data-prefs-panel="feed"`)
 	sponsorPanel := strings.Index(html, `data-prefs-panel="sponsorblock"`)
-	youtubeSetting := strings.Index(html, `name="youtube_check_interval"`)
+	youtubeSetting := strings.Index(html, `name="youtube_fetch_delay"`)
 	if platformPanel < 0 || sponsorPanel < 0 || youtubeSetting < 0 {
 		t.Fatalf("missing expected platform panel or YouTube setting:\n%s", html)
 	}

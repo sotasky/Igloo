@@ -61,6 +61,7 @@ func TestEnsureSchemaWithOptionsReportsSubPhases(t *testing.T) {
 	assertPhaseSubsequence(t, phases, []string{
 		"schema.create_tables",
 		"schema.add_columns",
+		"schema.drop_channel_check_interval",
 		"schema.indexes",
 		"schema.android_sync_cleanup",
 		"schema.legacy_table_repairs",

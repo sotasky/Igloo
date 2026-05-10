@@ -412,9 +412,6 @@ func channelToBundlePrimary(c model.Channel) map[string]any {
 		"channel_is_starred":  c.IsStarred,
 		"sync_seq":            c.SyncSeq,
 	}
-	if c.CheckInterval != nil {
-		m["check_interval"] = *c.CheckInterval
-	}
 	if c.LastChecked != nil {
 		m["last_checked"] = c.LastChecked.UnixMilli()
 		m["last_checked_ms"] = c.LastChecked.UnixMilli()

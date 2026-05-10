@@ -187,7 +187,6 @@ func (s *Server) handleChannelSettingsGet(w http.ResponseWriter, r *http.Request
 		platform := r.URL.Query().Get("platform")
 		cs := components.ChannelSettingsData{
 			Quality:            settings.Quality,
-			CheckInterval:      settings.CheckInterval,
 			MaxVideos:          settings.MaxVideos,
 			DownloadSubtitles:  settings.DownloadSubtitles,
 			MediaOnly:          settings.MediaOnly,
@@ -225,11 +224,6 @@ func (s *Server) handleChannelSettingsPost(w http.ResponseWriter, r *http.Reques
 			body["quality"] = v
 		} else {
 			body["quality"] = ""
-		}
-		if v := r.FormValue("check_interval"); v != "" {
-			if n, err := strconv.Atoi(v); err == nil {
-				body["check_interval"] = n
-			}
 		}
 		if v := r.FormValue("max_videos"); v != "" {
 			if n, err := strconv.Atoi(v); err == nil {
@@ -295,7 +289,6 @@ func (s *Server) handleChannelSettingsPost(w http.ResponseWriter, r *http.Reques
 
 	// Convert float64 JSON numbers to int.
 	intFields := map[string]bool{
-		"check_interval":       true,
 		"max_videos":           true,
 		"media_download_limit": true,
 	}
@@ -343,7 +336,6 @@ func (s *Server) handleChannelSettingsPost(w http.ResponseWriter, r *http.Reques
 		if updated != nil {
 			cs = components.ChannelSettingsData{
 				Quality:            updated.Quality,
-				CheckInterval:      updated.CheckInterval,
 				MaxVideos:          updated.MaxVideos,
 				DownloadSubtitles:  updated.DownloadSubtitles,
 				MediaOnly:          updated.MediaOnly,

@@ -59,6 +59,22 @@ func TestSettingsToAPIFormat_DefaultsShareEmbedFriendlyLinksOff(t *testing.T) {
 	}
 }
 
+func TestSettingsToAPIFormatFiltersRetiredIntervalSettings(t *testing.T) {
+	got := settingsToAPIFormat(map[string]string{
+		"youtube_fetch_delay":    "12",
+		"youtube_check_interval": "6",
+		"shorts_check_interval":  "3",
+	})
+	if got["youtube_fetch_delay"] != "12" {
+		t.Fatalf("youtube_fetch_delay = %#v, want 12", got["youtube_fetch_delay"])
+	}
+	for _, key := range []string{"youtube_check_interval", "shorts_check_interval"} {
+		if _, ok := got[key]; ok {
+			t.Fatalf("%s should not be exposed: %#v", key, got)
+		}
+	}
+}
+
 func TestSettingsFromForm_PersistsWebThemeSettings(t *testing.T) {
 	srv := newTestServer(t)
 	form := url.Values{}
@@ -767,7 +783,7 @@ func TestSettingsFromForm_PersistsUILanguage(t *testing.T) {
 func TestSettingsFromForm_PersistsInstagramGlobals(t *testing.T) {
 	srv := newTestServer(t)
 	form := url.Values{}
-	form.Set("instagram_check_interval", "5")
+	form.Set("instagram_fetch_delay", "5")
 	form.Set("instagram_max_videos", "37")
 	form.Set("instagram_include_tagged_default", "true")
 	req := httptest.NewRequest("POST", "/api/settings", strings.NewReader(form.Encode()))
@@ -777,8 +793,8 @@ func TestSettingsFromForm_PersistsInstagramGlobals(t *testing.T) {
 	}
 
 	body := srv.settingsFromForm(req)
-	if got := body["instagram_check_interval"]; got != "5" {
-		t.Errorf("instagram_check_interval = %q, want 5", got)
+	if got := body["instagram_fetch_delay"]; got != "5" {
+		t.Errorf("instagram_fetch_delay = %q, want 5", got)
 	}
 	if got := body["instagram_max_videos"]; got != "37" {
 		t.Errorf("instagram_max_videos = %q, want 37", got)

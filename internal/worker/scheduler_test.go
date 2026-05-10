@@ -95,11 +95,11 @@ func TestEnsureIntroducedInstagramOwnerQueuesProfileRefresh(t *testing.T) {
 
 func TestInstagramUsesOwnGlobalSchedulerSettings(t *testing.T) {
 	d := newTestWorkerDB(t)
-	if err := d.SetSetting("", "shorts_check_interval", "3"); err != nil {
-		t.Fatalf("SetSetting shorts_check_interval: %v", err)
+	if err := d.SetSetting("", "tiktok_fetch_delay", "3"); err != nil {
+		t.Fatalf("SetSetting tiktok_fetch_delay: %v", err)
 	}
-	if err := d.SetSetting("", "instagram_check_interval", "7"); err != nil {
-		t.Fatalf("SetSetting instagram_check_interval: %v", err)
+	if err := d.SetSetting("", "instagram_fetch_delay", "7"); err != nil {
+		t.Fatalf("SetSetting instagram_fetch_delay: %v", err)
 	}
 	if err := d.SetSetting("", "shorts_max_videos", "20"); err != nil {
 		t.Fatalf("SetSetting shorts_max_videos: %v", err)
@@ -111,10 +111,103 @@ func TestInstagramUsesOwnGlobalSchedulerSettings(t *testing.T) {
 	m := &Manager{db: d, cfg: testCfg(t.TempDir())}
 	ch := model.Channel{ChannelID: "instagram_cinema", Platform: "instagram"}
 
-	if got := m.getCheckInterval(ch); got != 7*time.Hour {
-		t.Fatalf("instagram check interval = %s, want 7h", got)
+	if got := m.platformFetchDelay(ch.Platform); got != 7*time.Second {
+		t.Fatalf("instagram fetch delay = %s, want 7s", got)
+	}
+	if got := m.platformDiscoveryCycleInterval(ch.Platform, 4); got != 28*time.Second {
+		t.Fatalf("instagram cycle interval = %s, want 28s", got)
 	}
 	if got := m.getChannelMaxVideos(ch); got != 45 {
 		t.Fatalf("instagram max videos = %d, want 45", got)
 	}
+}
+
+func TestDiscoveryChannelsResumeByStaleness(t *testing.T) {
+	now := time.Unix(100, 0)
+	old := now.Add(-30 * time.Second)
+	fresh := now.Add(-5 * time.Second)
+	channels := []model.Channel{
+		{ChannelID: "youtube_fresh", Platform: "youtube", LastChecked: &fresh},
+		{ChannelID: "youtube_never", Platform: "youtube"},
+		{ChannelID: "youtube_old", Platform: "youtube", LastChecked: &old},
+	}
+
+	sortChannelsByLastChecked(channels)
+	ready := readyDiscoveryChannels(channels, 20*time.Second, now)
+
+	got := make([]string, 0, len(ready))
+	for _, ch := range ready {
+		got = append(got, ch.ChannelID)
+	}
+	want := []string{"youtube_never", "youtube_old"}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("ready channels = %v, want %v", got, want)
+	}
+}
+
+func TestDiscoverySelectionForceBypassesDueWindow(t *testing.T) {
+	d := newTestWorkerDB(t)
+	if err := d.SetSetting("", "youtube_fetch_delay", "60"); err != nil {
+		t.Fatalf("SetSetting youtube_fetch_delay: %v", err)
+	}
+	m := &Manager{db: d, cfg: testCfg(t.TempDir())}
+	now := time.Unix(100, 0)
+	fresh := now.Add(-1 * time.Second)
+
+	byPlatform := m.discoveryChannelsByPlatform([]model.Channel{
+		{ChannelID: "youtube_fresh", Platform: "youtube", LastChecked: &fresh},
+		{ChannelID: "youtube_never", Platform: "youtube"},
+	}, true, now)
+
+	if got, want := schedulerChannelIDs(byPlatform["youtube"]), []string{"youtube_never", "youtube_fresh"}; fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("forced channels = %v, want %v", got, want)
+	}
+}
+
+func TestDiscoverySelectionSkipsDisabledPlatforms(t *testing.T) {
+	d := newTestWorkerDB(t)
+	cfg := testCfg(t.TempDir())
+	cfg.EnabledPlatforms = []string{"youtube"}
+	cfg.EnabledPlatformSet = map[string]bool{"youtube": true}
+	m := &Manager{db: d, cfg: cfg}
+
+	byPlatform := m.discoveryChannelsByPlatform([]model.Channel{
+		{ChannelID: "youtube_enabled", Platform: "youtube"},
+		{ChannelID: "tiktok_disabled", Platform: "tiktok"},
+		{ChannelID: "twitter_feed", Platform: "twitter"},
+	}, false, time.Unix(100, 0))
+
+	if got, want := schedulerChannelIDs(byPlatform["youtube"]), []string{"youtube_enabled"}; fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("youtube channels = %v, want %v", got, want)
+	}
+	if _, ok := byPlatform["tiktok"]; ok {
+		t.Fatalf("disabled platform should be skipped: %#v", byPlatform)
+	}
+	if _, ok := byPlatform["twitter"]; ok {
+		t.Fatalf("twitter feed channel should not enter discovery scheduler: %#v", byPlatform)
+	}
+}
+
+func TestPlatformFetchDelayDefaults(t *testing.T) {
+	d := newTestWorkerDB(t)
+	m := &Manager{db: d, cfg: testCfg(t.TempDir())}
+
+	tests := map[string]time.Duration{
+		"youtube":   10 * time.Second,
+		"tiktok":    2 * time.Second,
+		"instagram": 2 * time.Second,
+	}
+	for platform, want := range tests {
+		if got := m.platformFetchDelay(platform); got != want {
+			t.Fatalf("%s fetch delay = %s, want %s", platform, got, want)
+		}
+	}
+}
+
+func schedulerChannelIDs(channels []model.Channel) []string {
+	ids := make([]string, 0, len(channels))
+	for _, ch := range channels {
+		ids = append(ids, ch.ChannelID)
+	}
+	return ids
 }

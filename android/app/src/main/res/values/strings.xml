@@ -496,7 +496,6 @@
     <string name="settings_backup_folder">Backup Folder</string>
     <string name="settings_backup_help">Please use a dedicated folder, older backups are automatically deleted (5 kept). Daily backups of database &amp; config.</string>
     <string name="settings_bookmark_per_category">Per-Category Settings</string>
-    <string name="settings_check_interval_hours">Check Interval (hours)</string>
     <string name="settings_clear_muted_help">All muted accounts will be unmuted, and their posts can appear in your feed again.</string>
     <string name="settings_clear_muted_title">Clear muted accounts?</string>
     <string name="settings_cookie_files">Cookie Files</string>
@@ -633,7 +632,6 @@
     <string name="settings_unmute_title">Unmute @%1$s?</string>
     <string name="settings_video_quality">Video Quality</string>
     <string name="settings_wifi_only">Wi-Fi only</string>
-    <string name="settings_youtube_check_interval_hours">Default YouTube Check Interval (hours)</string>
     <string name="settings_youtube_max_videos">Default YouTube Max Videos</string>
     <string name="settings_youtube_only">YouTube only.</string>
     <string name="settings_youtube_playback_speed">Default YouTube Playback Speed</string>

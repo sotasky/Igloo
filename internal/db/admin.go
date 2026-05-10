@@ -9,6 +9,12 @@ import (
 
 // --- Settings batch operations ---
 
+var retiredGlobalSettingKeys = map[string]bool{
+	"youtube_check_interval":   true,
+	"shorts_check_interval":    true,
+	"instagram_check_interval": true,
+}
+
 // GetAllSettings returns all global settings (user_id=”) as a key->value map.
 func (db *DB) GetAllSettings() (map[string]string, error) {
 	rows, err := db.conn.Query(
@@ -24,6 +30,9 @@ func (db *DB) GetAllSettings() (map[string]string, error) {
 		var k, v string
 		if err := rows.Scan(&k, &v); err != nil {
 			return nil, err
+		}
+		if retiredGlobalSettingKeys[k] {
+			continue
 		}
 		out[k] = v
 	}
@@ -46,6 +55,12 @@ func (db *DB) UpdateSettings(settings map[string]string) error {
 		}
 		defer stmt.Close()
 		for k, v := range settings {
+			if retiredGlobalSettingKeys[k] {
+				if _, err := tx.Exec(`DELETE FROM settings WHERE key = ?`, k); err != nil {
+					return err
+				}
+				continue
+			}
 			if _, err := stmt.Exec(k, v); err != nil {
 				return err
 			}
@@ -145,7 +160,6 @@ type ChannelExport struct {
 	Platform           string `json:"platform"`
 	IsStarred          bool   `json:"starred,omitempty"`
 	Quality            string `json:"quality,omitempty"`
-	CheckInterval      *int   `json:"check_interval,omitempty"`
 	MaxVideos          int    `json:"max_videos,omitempty"`
 	DownloadSubtitles  bool   `json:"download_subtitles,omitempty"`
 	MediaOnly          *bool  `json:"media_only,omitempty"`
@@ -259,9 +273,6 @@ func (db *DB) ExportConfig(userID string) (ConfigExport, error) {
 			Platform:  ch.Platform,
 			IsStarred: ch.IsStarred,
 			Quality:   ch.Quality,
-		}
-		if ch.CheckInterval != nil {
-			ce.CheckInterval = ch.CheckInterval
 		}
 		if s, ok := settingsByChannel[ch.ChannelID]; ok {
 			ce.MaxVideos = s.maxVideos
@@ -482,6 +493,9 @@ func (db *DB) ImportConfig(cfg ConfigExport, userID string, replace bool) (Impor
 			}
 			defer stmt.Close()
 			for k, v := range cfg.Settings {
+				if retiredGlobalSettingKeys[k] {
+					continue
+				}
 				if _, err := stmt.Exec(k, v); err != nil {
 					return err
 				}
@@ -563,11 +577,11 @@ func (db *DB) ImportConfig(cfg ConfigExport, userID string, replace bool) (Impor
 			seq := db.NextSyncSeq()
 			result, err := tx.Exec(`
 				INSERT OR IGNORE INTO channels
-					(channel_id, name, url, platform, quality, check_interval, sync_seq)
-				VALUES (?, ?, ?, ?, ?, ?, ?)
+					(channel_id, name, url, platform, quality, sync_seq)
+				VALUES (?, ?, ?, ?, ?, ?)
 			`,
 				ch.ChannelID, ch.Name, buildChannelURL(ch), ch.Platform,
-				nilIfEmpty(ch.Quality), ch.CheckInterval, seq,
+				nilIfEmpty(ch.Quality), seq,
 			)
 			if err != nil {
 				return err

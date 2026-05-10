@@ -276,7 +276,7 @@ func (db *DB) ListChannelsForDelta(since int64, limit int) ([]model.Channel, int
 	query := `
 		SELECT c.channel_id, COALESCE(c.source_id,''), COALESCE(c.name,''), COALESCE(c.url,''),
 		       COALESCE(c.platform,''), '' AS avatar_url, COALESCE(c.quality,''),
-		       c.check_interval, c.last_checked, c.created_at, COALESCE(c.sync_seq,0),
+		       c.last_checked, c.created_at, COALESCE(c.sync_seq,0),
 		       CASE WHEN cf.channel_id IS NOT NULL THEN 1 ELSE 0 END AS is_followed,
 		       CASE WHEN cs.channel_id IS NOT NULL THEN 1 ELSE 0 END AS is_starred
 		FROM channels c
@@ -298,17 +298,13 @@ func (db *DB) ListChannelsForDelta(since int64, limit int) ([]model.Channel, int
 	var maxSeq int64
 	for rows.Next() {
 		var c model.Channel
-		var checkInterval, lastChecked, createdAt sql.NullInt64
+		var lastChecked, createdAt sql.NullInt64
 		var isFollowed, isStarred int
 		if err := rows.Scan(
 			&c.ChannelID, &c.SourceID, &c.Name, &c.URL, &c.Platform, &c.AvatarURL,
-			&c.Quality, &checkInterval, &lastChecked, &createdAt, &c.SyncSeq, &isFollowed, &isStarred,
+			&c.Quality, &lastChecked, &createdAt, &c.SyncSeq, &isFollowed, &isStarred,
 		); err != nil {
 			return nil, 0, err
-		}
-		if checkInterval.Valid {
-			value := int(checkInterval.Int64)
-			c.CheckInterval = &value
 		}
 		c.LastChecked = millisToTimePtr(lastChecked)
 		if createdAt.Valid && createdAt.Int64 > 0 {

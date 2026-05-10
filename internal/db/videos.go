@@ -997,7 +997,7 @@ func (db *DB) GetChannel(channelID string) (*model.Channel, error) {
 		       COALESCE(c.url,''), COALESCE(c.platform,'youtube'),
 		       CASE WHEN cf.channel_id IS NOT NULL THEN 1 ELSE 0 END,
 		       CASE WHEN cs.channel_id IS NOT NULL THEN 1 ELSE 0 END,
-		       COALESCE(c.quality,''), c.check_interval,
+		       COALESCE(c.quality,''),
 		       c.last_checked, c.created_at
 		FROM channels c
 		LEFT JOIN channel_follows cf ON cf.channel_id = c.channel_id AND cf.user_id = ''
@@ -1007,13 +1007,12 @@ func (db *DB) GetChannel(channelID string) (*model.Channel, error) {
 
 	var ch model.Channel
 	var lastChecked, createdAt sql.NullInt64
-	var checkInterval sql.NullInt64
 	var isSubscribed, isStarred int
 	err := row.Scan(
 		&ch.ID, &ch.ChannelID, &ch.SourceID, &ch.Name,
 		&ch.URL, &ch.Platform,
 		&isSubscribed, &isStarred,
-		&ch.Quality, &checkInterval,
+		&ch.Quality,
 		&lastChecked, &createdAt,
 	)
 	ch.IsSubscribed = isSubscribed != 0
@@ -1023,10 +1022,6 @@ func (db *DB) GetChannel(channelID string) (*model.Channel, error) {
 	}
 	if err != nil {
 		return nil, err
-	}
-	if checkInterval.Valid {
-		v := int(checkInterval.Int64)
-		ch.CheckInterval = &v
 	}
 	ch.LastChecked = millisToTimePtr(lastChecked)
 	if t := millisToTimePtr(createdAt); t != nil {

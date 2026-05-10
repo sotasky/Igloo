@@ -451,19 +451,10 @@ func TestChannelSettingsInstagramUsesInstagramGlobals(t *testing.T) {
 	if err := d.SetSetting("", "instagram_max_videos", "20"); err != nil {
 		t.Fatalf("SetSetting instagram_max_videos=20: %v", err)
 	}
-	if err := d.SetSetting("", "youtube_check_interval", "9"); err != nil {
-		t.Fatalf("SetSetting youtube_check_interval=9: %v", err)
-	}
-	if err := d.SetSetting("", "instagram_check_interval", "4"); err != nil {
-		t.Fatalf("SetSetting instagram_check_interval=4: %v", err)
-	}
 
 	s, err := d.GetChannelSettings("instagram_user_settings")
 	if err != nil || s == nil {
 		t.Fatalf("GetChannelSettings: %v / %+v", err, s)
-	}
-	if s.CheckInterval != 4 {
-		t.Fatalf("instagram check_interval = %d, want 4", s.CheckInterval)
 	}
 	if s.MaxVideos != 20 {
 		t.Fatalf("instagram max_videos = %d, want 20", s.MaxVideos)

@@ -45,7 +45,8 @@ var sqlKeywords = map[string]bool{
 	"tweet": true, "uploaded": true, "url": true, "youtube": true, "is_starred": true,
 	// Comment false positives (FROM x in English sentences)
 	"cdn": true, "lost": true, "scratch": true, "disk_path": true,
-	"x_feed_fetch_delay": true, "it": true, "this": true, "that": true,
+	"x_feed_fetch_delay": true, "youtube_fetch_delay": true, "tiktok_fetch_delay": true,
+	"instagram_fetch_delay": true, "it": true, "this": true, "that": true,
 	"which": true, "each": true, "any": true, "there": true, "here": true,
 }
 

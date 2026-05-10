@@ -200,6 +200,9 @@ func TestExportConfig(t *testing.T) {
 	if err := d.SetSetting("", "export_test_key", "export_test_val"); err != nil {
 		t.Fatalf("SetSetting: %v", err)
 	}
+	if err := d.SetSetting("", "youtube_check_interval", "6"); err != nil {
+		t.Fatalf("SetSetting legacy interval: %v", err)
+	}
 
 	cfg, err := d.ExportConfig("")
 	if err != nil {
@@ -230,10 +233,42 @@ func TestExportConfig(t *testing.T) {
 		t.Errorf("Settings[export_test_key]: got %q, want %q",
 			cfg.Settings["export_test_key"], "export_test_val")
 	}
+	if _, ok := cfg.Settings["youtube_check_interval"]; ok {
+		t.Fatal("ExportConfig should not export retired interval settings")
+	}
 
 	// Settings and Subscriptions should be non-nil maps/slices
 	if cfg.Settings == nil {
 		t.Error("Settings map should not be nil")
+	}
+}
+
+func TestImportConfigIgnoresRetiredIntervalSettings(t *testing.T) {
+	d := openWritableTestDB(t)
+
+	cfg := ConfigExport{
+		Version: 1,
+		Settings: map[string]string{
+			"youtube_fetch_delay":    "12",
+			"youtube_check_interval": "6",
+			"shorts_check_interval":  "3",
+		},
+	}
+	if _, err := d.ImportConfig(cfg, "alice", false); err != nil {
+		t.Fatalf("ImportConfig: %v", err)
+	}
+
+	if got, err := d.GetSetting("youtube_fetch_delay", ""); err != nil || got != "12" {
+		t.Fatalf("youtube_fetch_delay = %q, %v; want 12, nil", got, err)
+	}
+	for _, key := range []string{"youtube_check_interval", "shorts_check_interval"} {
+		var count int
+		if err := d.QueryRow(`SELECT COUNT(*) FROM settings WHERE key = ?`, key).Scan(&count); err != nil {
+			t.Fatalf("count %s: %v", key, err)
+		}
+		if count != 0 {
+			t.Fatalf("%s rows = %d, want 0", key, count)
+		}
 	}
 }
 

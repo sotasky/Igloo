@@ -711,6 +711,9 @@ func TestChannelsDeltaCarriesUserStateAttachment(t *testing.T) {
 		if isFollowed != nil || isStarred != nil {
 			t.Fatalf("channel primary should not carry inline state: %#v", b.Primary)
 		}
+		if _, ok := b.Primary["check_interval"]; ok {
+			t.Fatalf("channel primary should not carry retired check_interval: %#v", b.Primary)
+		}
 		if b.Primary["channel_id"] == "youtube_followed" {
 			if follows := userStateRows(t, b, "channel_follows"); len(follows) != 1 || follows[0]["followed"] != true {
 				t.Errorf("followed channel attachment = %#v", follows)

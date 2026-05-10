@@ -15,7 +15,6 @@ import (
 // ChannelSettings holds merged channel + global settings for a channel.
 type ChannelSettings struct {
 	Quality            string `json:"quality"`
-	CheckInterval      int    `json:"check_interval"`
 	MaxVideos          int    `json:"max_videos"`
 	DownloadSubtitles  bool   `json:"download_subtitles"`
 	MediaOnly          bool   `json:"media_only"`
@@ -42,7 +41,7 @@ func (db *DB) GetSubscribedChannels() ([]model.Channel, error) {
 		SELECT COALESCE(c.id, 0), cf.channel_id, COALESCE(c.source_id,''), COALESCE(c.name,''),
 		       COALESCE(c.url,''), COALESCE(c.platform,''),
 		       CASE WHEN cs2.channel_id IS NOT NULL THEN 1 ELSE 0 END AS is_starred,
-		       COALESCE(c.quality,''), c.check_interval,
+		       COALESCE(c.quality,''),
 		       c.last_checked, c.created_at,
 		       cs.include_reposts,
 		       COALESCE(cp.handle,'')       AS handle,
@@ -64,13 +63,12 @@ func (db *DB) GetSubscribedChannels() ([]model.Channel, error) {
 	for rows.Next() {
 		var ch model.Channel
 		var lastChecked, createdAt sql.NullInt64
-		var checkInterval sql.NullInt64
 		var includeReposts sql.NullBool
 		err := rows.Scan(
 			&ch.ID, &ch.ChannelID, &ch.SourceID, &ch.Name,
 			&ch.URL, &ch.Platform,
 			&ch.IsStarred,
-			&ch.Quality, &checkInterval,
+			&ch.Quality,
 			&lastChecked, &createdAt,
 			&includeReposts,
 			&ch.Handle,
@@ -82,10 +80,6 @@ func (db *DB) GetSubscribedChannels() ([]model.Channel, error) {
 		// Any channel surfaced by GetSubscribedChannels is, by
 		// construction, followed.
 		ch.IsSubscribed = true
-		if checkInterval.Valid {
-			v := int(checkInterval.Int64)
-			ch.CheckInterval = &v
-		}
 		if includeReposts.Valid {
 			v := includeReposts.Bool
 			ch.IncludeReposts = &v
@@ -361,7 +355,7 @@ func (db *DB) IsChannelFollowed(channelID string) bool {
 // side table, merging global defaults for every NULL field.
 func (db *DB) GetChannelSettings(channelID string) (*ChannelSettings, error) {
 	row := db.conn.QueryRow(`
-		SELECT COALESCE(c.quality,''), c.check_interval, COALESCE(c.platform,''),
+		SELECT COALESCE(c.quality,''), COALESCE(c.platform,''),
 		       cs.max_videos, cs.download_subtitles,
 		       cs.media_only, cs.media_download_limit, cs.include_reposts
 		FROM channels c
@@ -370,14 +364,13 @@ func (db *DB) GetChannelSettings(channelID string) (*ChannelSettings, error) {
 	`, channelID)
 
 	var s ChannelSettings
-	var checkInterval sql.NullInt64
 	var platform string
 	var maxVideos, downloadSubtitles sql.NullInt64
 	var mediaOnly, includeReposts sql.NullInt64
 	var mediaDownloadLimit sql.NullInt64
 
 	err := row.Scan(
-		&s.Quality, &checkInterval, &platform,
+		&s.Quality, &platform,
 		&maxVideos, &downloadSubtitles,
 		&mediaOnly, &mediaDownloadLimit, &includeReposts,
 	)
@@ -386,13 +379,6 @@ func (db *DB) GetChannelSettings(channelID string) (*ChannelSettings, error) {
 	}
 	if err != nil {
 		return nil, err
-	}
-
-	// CheckInterval: channel value or global default.
-	if checkInterval.Valid {
-		s.CheckInterval = int(checkInterval.Int64)
-	} else {
-		s.CheckInterval = db.IntSetting(channelCheckIntervalSettingKey(platform))
 	}
 
 	// DownloadSubtitles: channel override if non-nil, else global default.
@@ -437,17 +423,6 @@ func (db *DB) GetChannelSettings(channelID string) (*ChannelSettings, error) {
 	return &s, nil
 }
 
-func channelCheckIntervalSettingKey(platform string) string {
-	switch platform {
-	case "tiktok":
-		return "shorts_check_interval"
-	case "instagram":
-		return "instagram_check_interval"
-	default:
-		return "youtube_check_interval"
-	}
-}
-
 func channelMaxVideosSettingKey(platform string) string {
 	switch platform {
 	case "tiktok":
@@ -460,13 +435,12 @@ func channelMaxVideosSettingKey(platform string) string {
 }
 
 // UpdateChannelSettings updates provided fields for a channel. Channel-level
-// columns (quality, check_interval) are written to `channels`; per-channel
+// columns (quality) are written to `channels`; per-channel
 // settings (max_videos, download_subtitles, media_only, media_download_limit,
 // include_reposts) are UPSERTed into `channel_settings`.
 func (db *DB) UpdateChannelSettings(channelID string, fields map[string]any) error {
 	channelCols := map[string]bool{
-		"quality":        true,
-		"check_interval": true,
+		"quality": true,
 	}
 	settingCols := map[string]bool{
 		"max_videos":           true,
@@ -548,8 +522,8 @@ func (db *DB) AddChannel(ch model.Channel) error {
 		if _, err := tx.Exec(`
 			INSERT INTO channels
 				(channel_id, source_id, name, url, platform,
-				 quality, check_interval, sync_seq)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+				 quality, sync_seq)
+			VALUES (?, ?, ?, ?, ?, ?, ?)
 		`,
 			ch.ChannelID,
 			nilIfEmpty(ch.SourceID),
@@ -557,7 +531,6 @@ func (db *DB) AddChannel(ch model.Channel) error {
 			nilIfEmpty(ch.URL),
 			nilIfEmpty(ch.Platform),
 			nilIfEmpty(ch.Quality),
-			ch.CheckInterval,
 			seq,
 		); err != nil {
 			return err
@@ -587,14 +560,13 @@ func (db *DB) AddChannel(ch model.Channel) error {
 func (db *DB) GetChannelByID(channelID string) (model.Channel, error) {
 	var ch model.Channel
 	var lastChecked, createdAt sql.NullInt64
-	var checkInterval sql.NullInt64
 	var isSubscribed, isStarred int
 	err := db.conn.QueryRow(`
 		SELECT c.id, c.channel_id, COALESCE(c.source_id,''), c.name,
 		       COALESCE(c.url,''), COALESCE(c.platform,'youtube'),
 		       CASE WHEN cf.channel_id IS NOT NULL THEN 1 ELSE 0 END,
 		       CASE WHEN cs.channel_id IS NOT NULL THEN 1 ELSE 0 END,
-		       COALESCE(c.quality,''), c.check_interval,
+		       COALESCE(c.quality,''),
 		       c.last_checked, c.created_at
 		FROM channels c
 		LEFT JOIN channel_follows cf ON cf.channel_id = c.channel_id AND cf.user_id = ''
@@ -604,7 +576,7 @@ func (db *DB) GetChannelByID(channelID string) (model.Channel, error) {
 		&ch.ID, &ch.ChannelID, &ch.SourceID, &ch.Name,
 		&ch.URL, &ch.Platform,
 		&isSubscribed, &isStarred,
-		&ch.Quality, &checkInterval,
+		&ch.Quality,
 		&lastChecked, &createdAt,
 	)
 	ch.IsSubscribed = isSubscribed != 0
@@ -614,10 +586,6 @@ func (db *DB) GetChannelByID(channelID string) (model.Channel, error) {
 	}
 	if err != nil {
 		return ch, err
-	}
-	if checkInterval.Valid {
-		v := int(checkInterval.Int64)
-		ch.CheckInterval = &v
 	}
 	ch.LastChecked = millisToTimePtr(lastChecked)
 	if t := millisToTimePtr(createdAt); t != nil {

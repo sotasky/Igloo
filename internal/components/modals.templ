@@ -93,10 +93,6 @@ templ ChannelSettingsForm(p PageProps, channelID string, platform string, cs Cha
 					</select>
 				</div>
 				<div class="form-group">
-					<label for="setting-interval">{ L(p, "settings_check_interval_hours", "Check Interval (hours)") }</label>
-					<input type="number" id="setting-interval" name="check_interval" class="input" min="1" max="168" value={ intOrEmpty(cs.CheckInterval) }/>
-				</div>
-				<div class="form-group">
 					<label for="setting-max-videos">{ L(p, "settings_max_videos_to_download", "Max Videos to Download") }</label>
 					<input type="number" id="setting-max-videos" name="max_videos" class="input" min="1" max="300" value={ intOrEmpty(cs.MaxVideos) }/>
 				</div>
@@ -416,8 +412,8 @@ templ prefsFeedTab(p PageProps, prefs PrefsData) {
 			<div>
 				<h4 style="margin:0 0 1rem; color: var(--accent-primary); font-size: 0.9rem;">{ L(p, "platform_youtube", "YouTube") }</h4>
 				<div class="form-group">
-					<label for="global-setting-youtube-check-interval">{ L(p, "settings_youtube_check_interval_hours", "Default YouTube Check Interval (hours)") }</label>
-					<input type="number" id="global-setting-youtube-check-interval" name="youtube_check_interval" class="input" min="1" max="168" value={ prefs.Str("youtube_check_interval", "6") }/>
+					<label for="global-setting-youtube-fetch-delay">{ L(p, "settings_fetch_delay_seconds", "Fetch Delay (seconds)") }</label>
+					<input type="number" id="global-setting-youtube-fetch-delay" name="youtube_fetch_delay" class="input" min="1" max="300" value={ prefs.Str("youtube_fetch_delay", "10") }/>
 				</div>
 				<div class="form-group">
 					<label for="global-setting-youtube-max-videos">{ L(p, "settings_youtube_max_videos", "Default YouTube Max Videos") }</label>
@@ -553,8 +549,8 @@ templ prefsFeedTab(p PageProps, prefs PrefsData) {
 				</div>
 				<h4 style="margin:1.25rem 0 1rem; color: var(--accent-primary); font-size: 0.9rem;">{ L(p, "platform_instagram", "Instagram") }</h4>
 				<div class="form-group">
-					<label for="global-setting-instagram-interval">{ L(p, "settings_check_interval_hours", "Check Interval (hours)") }</label>
-					<input type="number" id="global-setting-instagram-interval" name="instagram_check_interval" class="input" min="1" max="168" value={ prefs.Str("instagram_check_interval", "3") }/>
+					<label for="global-setting-instagram-fetch-delay">{ L(p, "settings_fetch_delay_seconds", "Fetch Delay (seconds)") }</label>
+					<input type="number" id="global-setting-instagram-fetch-delay" name="instagram_fetch_delay" class="input" min="1" max="300" value={ prefs.Str("instagram_fetch_delay", "2") }/>
 				</div>
 				<div class="form-group">
 					<label for="global-setting-instagram-max-videos">{ L(p, "settings_max_videos", "Max Videos") }</label>
@@ -572,8 +568,8 @@ templ prefsFeedTab(p PageProps, prefs PrefsData) {
 				</div>
 				<h4 style="margin:1.25rem 0 1rem; color: var(--accent-primary); font-size: 0.9rem;">{ L(p, "settings_section_tiktok", "TikTok") }</h4>
 				<div class="form-group">
-					<label for="global-setting-shorts-interval">{ L(p, "settings_check_interval_hours", "Check Interval (hours)") }</label>
-					<input type="number" id="global-setting-shorts-interval" name="shorts_check_interval" class="input" min="1" max="168" value={ prefs.Str("shorts_check_interval", "3") }/>
+					<label for="global-setting-tiktok-fetch-delay">{ L(p, "settings_fetch_delay_seconds", "Fetch Delay (seconds)") }</label>
+					<input type="number" id="global-setting-tiktok-fetch-delay" name="tiktok_fetch_delay" class="input" min="1" max="300" value={ prefs.Str("tiktok_fetch_delay", "2") }/>
 				</div>
 				<div class="form-group">
 					<label for="global-setting-shorts-max-videos">{ L(p, "settings_max_videos", "Max Videos") }</label>

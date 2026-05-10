@@ -13,12 +13,6 @@ import (
 	"github.com/screwys/igloo/internal/model"
 )
 
-var (
-	tiktokCheckMu    sync.Mutex
-	tiktokLastCheck  time.Time
-	tiktokCheckDelay = 2 * time.Second
-)
-
 // runScheduler periodically checks channels for new content.
 func (m *Manager) runScheduler(ctx context.Context) {
 	// Initial delay to let server start.
@@ -79,20 +73,7 @@ func (m *Manager) runSchedulerCycle(ctx context.Context, force bool) {
 		return
 	}
 
-	// Group due channels by platform so each platform runs in its own goroutine.
-	byPlatform := make(map[string][]model.Channel)
-	for _, ch := range channels {
-		if ch.Platform == "twitter" {
-			continue
-		}
-		if m.cfg != nil && !m.cfg.PlatformEnabled(ch.Platform) {
-			continue
-		}
-		if !force && !m.isChannelDue(ch) {
-			continue
-		}
-		byPlatform[ch.Platform] = append(byPlatform[ch.Platform], ch)
-	}
+	byPlatform := m.discoveryChannelsByPlatform(channels, force, time.Now())
 
 	var (
 		queuedMu sync.Mutex
@@ -104,25 +85,18 @@ func (m *Manager) runSchedulerCycle(ctx context.Context, force bool) {
 		wg.Add(1)
 		go func(platform string, chs []model.Channel) {
 			defer wg.Done()
-			for _, ch := range chs {
+			for i, ch := range chs {
 				if ctx.Err() != nil {
 					return
+				}
+				if i > 0 {
+					if !m.waitForPlatformFetchDelay(ctx, platform) {
+						return
+					}
 				}
 
 				log.Printf("[scheduler] checking %s (%s)", ch.Name, ch.ChannelID)
 				m.emitSchedulerEvent(fmt.Sprintf("Checking: %s", ch.Name), "start", ch.ChannelID, ch.Platform)
-
-				// Short-form platforms use gallery-dl and should not stampede
-				// the same upstream account/session.
-				if ch.Platform == "tiktok" || ch.Platform == "instagram" {
-					tiktokCheckMu.Lock()
-					elapsed := time.Since(tiktokLastCheck)
-					if elapsed < tiktokCheckDelay {
-						time.Sleep(tiktokCheckDelay - elapsed)
-					}
-					tiktokLastCheck = time.Now()
-					tiktokCheckMu.Unlock()
-				}
 
 				refs, err := m.checkChannel(ctx, ch)
 				if err != nil {
@@ -189,24 +163,109 @@ func (m *Manager) runSchedulerCycle(ctx context.Context, force bool) {
 		fmt.Sprintf("cycle done: %d queued (%s)", queued, elapsed), ""))
 }
 
-func (m *Manager) isChannelDue(ch model.Channel) bool {
-	if ch.LastChecked == nil {
-		return true
+func (m *Manager) platformFetchDelay(platform string) time.Duration {
+	key := platformFetchDelaySettingKey(platform)
+	secs := m.db.IntSetting(key)
+	if secs < 1 {
+		secs = 1
 	}
-	return time.Since(*ch.LastChecked) >= m.getCheckInterval(ch)
+	return time.Duration(secs) * time.Second
 }
 
-func (m *Manager) getCheckInterval(ch model.Channel) time.Duration {
-	if ch.CheckInterval != nil && *ch.CheckInterval > 0 {
-		return time.Duration(*ch.CheckInterval) * time.Hour
+func (m *Manager) discoveryChannelsByPlatform(channels []model.Channel, force bool, now time.Time) map[string][]model.Channel {
+	allByPlatform := make(map[string][]model.Channel)
+	for _, ch := range channels {
+		if ch.Platform == "twitter" {
+			continue
+		}
+		if m.cfg != nil && !m.cfg.PlatformEnabled(ch.Platform) {
+			continue
+		}
+		allByPlatform[ch.Platform] = append(allByPlatform[ch.Platform], ch)
 	}
-	key := "youtube_check_interval"
-	if ch.Platform == "tiktok" {
-		key = "shorts_check_interval"
-	} else if ch.Platform == "instagram" {
-		key = "instagram_check_interval"
+
+	byPlatform := make(map[string][]model.Channel, len(allByPlatform))
+	for platform, chs := range allByPlatform {
+		sortChannelsByLastChecked(chs)
+		if force {
+			byPlatform[platform] = chs
+			continue
+		}
+		ready := readyDiscoveryChannels(chs, m.platformDiscoveryCycleInterval(platform, len(chs)), now)
+		if len(ready) > 0 {
+			byPlatform[platform] = ready
+		}
 	}
-	return time.Duration(m.db.IntSetting(key)) * time.Hour
+	return byPlatform
+}
+
+func platformFetchDelaySettingKey(platform string) string {
+	switch strings.ToLower(strings.TrimSpace(platform)) {
+	case "tiktok":
+		return "tiktok_fetch_delay"
+	case "instagram":
+		return "instagram_fetch_delay"
+	default:
+		return "youtube_fetch_delay"
+	}
+}
+
+func (m *Manager) platformDiscoveryCycleInterval(platform string, channelCount int) time.Duration {
+	if channelCount <= 0 {
+		return 0
+	}
+	return m.platformFetchDelay(platform) * time.Duration(channelCount)
+}
+
+func readyDiscoveryChannels(channels []model.Channel, interval time.Duration, now time.Time) []model.Channel {
+	if len(channels) == 0 {
+		return nil
+	}
+	if interval <= 0 {
+		return append([]model.Channel(nil), channels...)
+	}
+	ready := make([]model.Channel, 0, len(channels))
+	for _, ch := range channels {
+		if ch.LastChecked == nil || now.Sub(*ch.LastChecked) >= interval {
+			ready = append(ready, ch)
+		}
+	}
+	return ready
+}
+
+func sortChannelsByLastChecked(channels []model.Channel) {
+	sort.SliceStable(channels, func(i, j int) bool {
+		left := channels[i].LastChecked
+		right := channels[j].LastChecked
+		switch {
+		case left == nil && right == nil:
+			return channels[i].ChannelID < channels[j].ChannelID
+		case left == nil:
+			return true
+		case right == nil:
+			return false
+		default:
+			if left.Equal(*right) {
+				return channels[i].ChannelID < channels[j].ChannelID
+			}
+			return left.Before(*right)
+		}
+	})
+}
+
+func (m *Manager) waitForPlatformFetchDelay(ctx context.Context, platform string) bool {
+	delay := m.platformFetchDelay(platform)
+	if delay <= 0 {
+		return true
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
 }
 
 func (m *Manager) checkChannel(ctx context.Context, ch model.Channel) ([]download.VideoRef, error) {

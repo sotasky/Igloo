@@ -28,7 +28,6 @@ func EnsureSchemaWithOptions(conn *sql.DB, opts EnsureSchemaOptions) error {
 			url TEXT,
 			platform TEXT,
 			quality TEXT,
-			check_interval INTEGER,
 			last_checked INTEGER NOT NULL DEFAULT 0,
 			created_at INTEGER NOT NULL DEFAULT 0
 		)`,
@@ -568,6 +567,12 @@ func EnsureSchemaWithOptions(conn *sql.DB, opts EnsureSchemaOptions) error {
 	}
 	reportPhase(opts.Phase, "schema.add_columns", phaseStart)
 
+	phaseStart = time.Now()
+	if err := dropChannelCheckIntervalOnce(conn); err != nil {
+		return err
+	}
+	reportPhase(opts.Phase, "schema.drop_channel_check_interval", phaseStart)
+
 	// Create indexes for sync_seq delta-sync queries.
 	phaseStart = time.Now()
 	conn.Exec("CREATE INDEX IF NOT EXISTS idx_feed_items_sync_seq ON feed_items(sync_seq)")
@@ -758,6 +763,30 @@ func runLegacyTableRepairs(conn *sql.DB) error {
 	return cleanupLegacyAvatarBannerMediaOnce(conn)
 }
 
+func dropChannelCheckIntervalOnce(conn *sql.DB) error {
+	ran, err := runSchemaMigrationOnce(conn, "drop_channel_check_interval", func(tx *sql.Tx) error {
+		if _, err := tx.Exec(`
+			DELETE FROM settings
+			WHERE key IN ('youtube_check_interval', 'shorts_check_interval', 'instagram_check_interval')
+		`); err != nil {
+			return err
+		}
+		exists, err := columnExistsTx(tx, "channels", "check_interval")
+		if err != nil || !exists {
+			return err
+		}
+		_, err = tx.Exec(`ALTER TABLE channels DROP COLUMN check_interval`)
+		return err
+	})
+	if err != nil {
+		return err
+	}
+	if !ran {
+		warnIfColumnExists(conn, "drop_channel_check_interval", "channels", "check_interval")
+	}
+	return nil
+}
+
 func dropLegacyChannelAvatarsOnce(conn *sql.DB) error {
 	ran, err := runSchemaMigrationOnce(conn, "drop_legacy_channel_avatars", func(tx *sql.Tx) error {
 		_, err := tx.Exec("DROP TABLE IF EXISTS channel_avatars")
@@ -861,6 +890,56 @@ func warnIfTableExists(conn *sql.DB, migrationName, tableName string) {
 		return
 	}
 	log.Printf("schema migration %s already applied, but legacy table %s exists; leaving it for investigation", migrationName, tableName)
+}
+
+func columnExistsTx(tx *sql.Tx, tableName, columnName string) (bool, error) {
+	rows, err := tx.Query("PRAGMA table_info(" + tableName + ")")
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var (
+			cid     int
+			name    string
+			typ     sql.NullString
+			notnull int
+			dflt    sql.NullString
+			pk      int
+		)
+		if err := rows.Scan(&cid, &name, &typ, &notnull, &dflt, &pk); err != nil {
+			return false, err
+		}
+		if name == columnName {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
+}
+
+func warnIfColumnExists(conn *sql.DB, migrationName, tableName, columnName string) {
+	rows, err := conn.Query("PRAGMA table_info(" + tableName + ")")
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var (
+			cid     int
+			name    string
+			typ     sql.NullString
+			notnull int
+			dflt    sql.NullString
+			pk      int
+		)
+		if err := rows.Scan(&cid, &name, &typ, &notnull, &dflt, &pk); err != nil {
+			return
+		}
+		if name == columnName {
+			log.Printf("schema migration %s already applied, but %s.%s still exists; leaving it for investigation", migrationName, tableName, columnName)
+			return
+		}
+	}
 }
 
 func warnIfRows(conn *sql.DB, migrationName, countQuery string) {

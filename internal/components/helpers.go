@@ -676,7 +676,6 @@ func hasPlat(platforms []string, p string) bool {
 // ChannelSettingsData holds per-channel settings for the channel settings form.
 type ChannelSettingsData struct {
 	Quality            string
-	CheckInterval      int
 	MaxVideos          int
 	DownloadSubtitles  bool
 	MediaOnly          bool

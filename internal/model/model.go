@@ -11,18 +11,17 @@ import (
 
 // Channel represents a subscribed channel across all platforms.
 type Channel struct {
-	ID            int64
-	ChannelID     string
-	SourceID      string
-	Name          string
-	URL           string
-	Platform      string
-	IsSubscribed  bool
-	IsStarred     bool
-	Quality       string
-	CheckInterval *int
-	LastChecked   *time.Time
-	CreatedAt     time.Time
+	ID           int64
+	ChannelID    string
+	SourceID     string
+	Name         string
+	URL          string
+	Platform     string
+	IsSubscribed bool
+	IsStarred    bool
+	Quality      string
+	LastChecked  *time.Time
+	CreatedAt    time.Time
 	// Handle is the platform @-style identifier joined from `channel_profiles`.
 	// Twitter/TikTok populate this for ~100% of rows; YouTube ~95%. When
 	// missing it's "" and the sidebar handle filter simply won't match on

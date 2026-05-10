@@ -41,13 +41,12 @@ var (
 )
 
 type channelRow struct {
-	ChannelID     string
-	SourceID      string
-	Name          string
-	URL           string
-	Platform      string
-	Quality       string
-	CheckInterval sql.NullInt64
+	ChannelID string
+	SourceID  string
+	Name      string
+	URL       string
+	Platform  string
+	Quality   string
 }
 
 type mergeCandidate struct {
@@ -142,7 +141,7 @@ func findMergeCandidates(store *db.DB) ([]mergeCandidate, error) {
 	err := store.WithRead(func(conn *sql.DB) error {
 		result, err := conn.Query(`
 			SELECT channel_id, COALESCE(source_id,''), COALESCE(name,''), COALESCE(url,''),
-			       COALESCE(platform,''), COALESCE(quality,''), check_interval
+			       COALESCE(platform,''), COALESCE(quality,'')
 			FROM channels
 			WHERE channel_id LIKE 'youtube_%'
 		`)
@@ -159,7 +158,6 @@ func findMergeCandidates(store *db.DB) ([]mergeCandidate, error) {
 				&row.URL,
 				&row.Platform,
 				&row.Quality,
-				&row.CheckInterval,
 			); err != nil {
 				return err
 			}
@@ -252,16 +250,11 @@ func applyMerge(tx *sql.Tx, store *db.DB, candidate mergeCandidate) error {
 		Platform:  "youtube",
 		Quality:   firstNonEmpty(existing.Quality, candidate.Old.Quality),
 	}
-	if existing.CheckInterval.Valid {
-		merged.CheckInterval = existing.CheckInterval
-	} else {
-		merged.CheckInterval = candidate.Old.CheckInterval
-	}
 
 	channelSeq := store.NextSyncSeq()
 	if _, err := tx.Exec(`
-		INSERT INTO channels (channel_id, source_id, name, url, platform, quality, check_interval, sync_seq)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO channels (channel_id, source_id, name, url, platform, quality, sync_seq)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(channel_id) DO UPDATE SET
 			source_id = CASE
 				WHEN COALESCE(channels.source_id,'') = '' AND excluded.source_id IS NOT NULL THEN excluded.source_id
@@ -280,9 +273,8 @@ func applyMerge(tx *sql.Tx, store *db.DB, candidate mergeCandidate) error {
 				WHEN COALESCE(channels.quality,'') = '' AND excluded.quality IS NOT NULL THEN excluded.quality
 				ELSE channels.quality
 			END,
-			check_interval = COALESCE(channels.check_interval, excluded.check_interval),
 			sync_seq = excluded.sync_seq
-	`, merged.ChannelID, nilIfEmpty(merged.SourceID), nilIfEmpty(merged.Name), nilIfEmpty(merged.URL), merged.Platform, nilIfEmpty(merged.Quality), nullableInt64(merged.CheckInterval), channelSeq); err != nil {
+	`, merged.ChannelID, nilIfEmpty(merged.SourceID), nilIfEmpty(merged.Name), nilIfEmpty(merged.URL), merged.Platform, nilIfEmpty(merged.Quality), channelSeq); err != nil {
 		return fmt.Errorf("upsert canonical channel %s: %w", candidate.New, err)
 	}
 
@@ -374,7 +366,7 @@ func loadChannel(tx *sql.Tx, channelID string) (channelRow, error) {
 	var row channelRow
 	err := tx.QueryRow(`
 		SELECT channel_id, COALESCE(source_id,''), COALESCE(name,''), COALESCE(url,''),
-		       COALESCE(platform,''), COALESCE(quality,''), check_interval
+		       COALESCE(platform,''), COALESCE(quality,'')
 		FROM channels
 		WHERE channel_id = ?
 	`, channelID).Scan(
@@ -384,7 +376,6 @@ func loadChannel(tx *sql.Tx, channelID string) (channelRow, error) {
 		&row.URL,
 		&row.Platform,
 		&row.Quality,
-		&row.CheckInterval,
 	)
 	if err == sql.ErrNoRows {
 		return channelRow{}, nil
@@ -555,11 +546,4 @@ func nilIfEmpty(s string) any {
 		return nil
 	}
 	return s
-}
-
-func nullableInt64(v sql.NullInt64) any {
-	if !v.Valid {
-		return nil
-	}
-	return v.Int64
 }

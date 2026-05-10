@@ -495,7 +495,6 @@
     <string name="settings_backup_folder">Yedekleme klasörü</string>
     <string name="settings_backup_help">Ayrı bir klasör seçin. Veritabanı ve ayarlar her gün yedeklenir; yalnızca son 5 yedek saklanır.</string>
     <string name="settings_bookmark_per_category">Kategoriye göre ayarlar</string>
-    <string name="settings_check_interval_hours">Kontrol aralığı (saat)</string>
     <string name="settings_clear_muted_help">Sessize alınan tüm hesaplar sessizden çıkarılır. Bu hesapların gönderileri eşitlemeden sonra akışınızda tekrar görünebilir.</string>
     <string name="settings_clear_muted_title">Tüm hesaplar sessizden çıkarılsın mı?</string>
     <string name="settings_cookie_files">Çerez dosyaları</string>
@@ -632,7 +631,6 @@
     <string name="settings_unmute_title">@%1$s sessizden çıkarılsın mı?</string>
     <string name="settings_video_quality">Video kalitesi</string>
     <string name="settings_wifi_only">Yalnızca Wi-Fi</string>
-    <string name="settings_youtube_check_interval_hours">Varsayılan YouTube kontrol aralığı (saat)</string>
     <string name="settings_youtube_max_videos">Varsayılan YouTube video sınırı</string>
     <string name="settings_youtube_only">Yalnızca YouTube için.</string>
     <string name="settings_youtube_playback_speed">Varsayılan YouTube oynatma hızı</string>

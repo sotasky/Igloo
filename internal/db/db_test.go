@@ -70,6 +70,81 @@ func TestOpen(t *testing.T) {
 	}
 }
 
+func TestOpenDropsLegacyChannelCheckInterval(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "igloo.db")
+	dataDir := filepath.Join(tmpDir, "data")
+
+	seed, err := sql.Open("sqlite", "file:"+dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, stmt := range []string{
+		`CREATE TABLE channels (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			channel_id TEXT UNIQUE NOT NULL,
+			source_id TEXT,
+			name TEXT NOT NULL,
+			url TEXT,
+			platform TEXT,
+			quality TEXT,
+			check_interval INTEGER,
+			last_checked INTEGER NOT NULL DEFAULT 0,
+			created_at INTEGER NOT NULL DEFAULT 0
+		)`,
+		`CREATE TABLE settings (user_id TEXT NOT NULL DEFAULT '', key TEXT NOT NULL, value TEXT, PRIMARY KEY (user_id, key))`,
+		`INSERT INTO channels (channel_id, name, platform, check_interval) VALUES ('youtube_legacy', 'Legacy', 'youtube', 6)`,
+		`INSERT INTO settings (user_id, key, value) VALUES ('', 'youtube_check_interval', '6')`,
+		`INSERT INTO settings (user_id, key, value) VALUES ('feed', 'shorts_check_interval', '3')`,
+	} {
+		if _, err := seed.Exec(stmt); err != nil {
+			seed.Close()
+			t.Fatalf("seed %q: %v", stmt, err)
+		}
+	}
+	if err := seed.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	d, err := Open(dbPath, dataDir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer d.Close()
+
+	rows, err := d.conn.Query(`PRAGMA table_info(channels)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var (
+			cid     int
+			name    string
+			typ     sql.NullString
+			notnull int
+			dflt    sql.NullString
+			pk      int
+		)
+		if err := rows.Scan(&cid, &name, &typ, &notnull, &dflt, &pk); err != nil {
+			t.Fatal(err)
+		}
+		if name == "check_interval" {
+			t.Fatal("channels.check_interval should be dropped")
+		}
+	}
+	var retiredSettings int
+	if err := d.conn.QueryRow(`
+		SELECT COUNT(*) FROM settings
+		WHERE key IN ('youtube_check_interval', 'shorts_check_interval', 'instagram_check_interval')
+	`).Scan(&retiredSettings); err != nil {
+		t.Fatal(err)
+	}
+	if retiredSettings != 0 {
+		t.Fatalf("retired interval settings = %d, want 0", retiredSettings)
+	}
+}
+
 func TestOpenReadOnly(t *testing.T) {
 	path := testDBPath()
 	if _, err := os.Stat(path); err != nil {
