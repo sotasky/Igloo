@@ -225,7 +225,7 @@ func storyChannelMeta(p PageProps, ch model.StoryChannel) string {
 	}
 	label := L(p, "stories_count_one", "1 story")
 	if count != 1 {
-		label = fmt.Sprintf(L(p, "stories_count_many", "%1$d stories"), count)
+		label = LF(p, "stories_count_many", "%1$d stories", count)
 	}
 	if ch.LatestAtMs > 0 {
 		if rel := RelativeTimeText(p, storyLatestTime(ch.LatestAtMs)); rel != "" {

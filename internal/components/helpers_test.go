@@ -63,11 +63,11 @@ func TestPrefsData_VideoTitle(t *testing.T) {
 
 func TestPrefsData_VideoThumbURL(t *testing.T) {
 	cases := []struct {
-		name          string
-		mode          string
-		thumbnailURL  string
-		dearrowThumb  *string
-		want          string
+		name         string
+		mode         string
+		thumbnailURL string
+		dearrowThumb *string
+		want         string
 	}{
 		{"off mode returns ThumbnailURL directly", "off", "https://cdn.example.com/thumb.jpg", ptr("path/dearrow.jpg"), "https://cdn.example.com/thumb.jpg"},
 		{"off mode no ThumbnailURL returns api path", "off", "", ptr("path/dearrow.jpg"), "/api/media/thumbnail/vid1"},
@@ -89,5 +89,18 @@ func TestPrefsData_VideoThumbURL(t *testing.T) {
 				t.Errorf("got %q want %q", got, c.want)
 			}
 		})
+	}
+}
+
+func TestStoryChannelMetaFormatsIndexedCount(t *testing.T) {
+	p := PageProps{
+		Text: map[string]string{
+			"stories_count_many": "%1$d stories",
+		},
+	}
+	ch := model.StoryChannel{Count: 2}
+
+	if got, want := storyChannelMeta(p, ch), "2 stories"; got != want {
+		t.Fatalf("storyChannelMeta() = %q, want %q", got, want)
 	}
 }
