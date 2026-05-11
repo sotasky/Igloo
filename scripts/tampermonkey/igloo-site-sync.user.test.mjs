@@ -553,6 +553,20 @@ test("uses follow wording for visible subscription labels", () => {
   );
 });
 
+test("declares Tampermonkey update metadata", () => {
+  assert.match(script, /^\/\/ @author\s+screwys$/m);
+  assert.match(script, /^\/\/ @homepageURL\s+https:\/\/github\.com\/screwys\/Igloo$/m);
+  assert.match(script, /^\/\/ @supportURL\s+https:\/\/github\.com\/screwys\/Igloo\/issues$/m);
+  assert.match(
+    script,
+    /^\/\/ @updateURL\s+https:\/\/raw\.githubusercontent\.com\/screwys\/Igloo\/main\/scripts\/tampermonkey\/igloo-site-sync\.user\.js$/m,
+  );
+  assert.match(
+    script,
+    /^\/\/ @downloadURL\s+https:\/\/raw\.githubusercontent\.com\/screwys\/Igloo\/main\/scripts\/tampermonkey\/igloo-site-sync\.user\.js$/m,
+  );
+});
+
 test("themes current X composer toolbar buttons", () => {
   for (const selector of [
     'button[role="button"][aria-label="Add photos or video"]',

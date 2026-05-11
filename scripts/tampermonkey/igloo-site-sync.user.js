@@ -1,8 +1,13 @@
 // ==UserScript==
 // @name         Igloo Site Sync
 // @namespace    local.igloo.site.sync
-// @version      8.0.15
+// @version      8.0.16
+// @author       screwys
 // @description  Follow X, TikTok, Instagram, and YouTube channels in Igloo; includes the full X media workflow.
+// @homepageURL  https://github.com/screwys/Igloo
+// @supportURL   https://github.com/screwys/Igloo/issues
+// @updateURL    https://raw.githubusercontent.com/screwys/Igloo/main/scripts/tampermonkey/igloo-site-sync.user.js
+// @downloadURL  https://raw.githubusercontent.com/screwys/Igloo/main/scripts/tampermonkey/igloo-site-sync.user.js
 // @match        https://x.com/*
 // @match        https://twitter.com/*
 // @match        https://www.tiktok.com/*
@@ -29,7 +34,7 @@
 
 (function () {
   "use strict";
-  const SCRIPT_VERSION = "8.0.15";
+  const SCRIPT_VERSION = "8.0.16";
 
   const SETTINGS = {
     apiBase: "xsync_api_base",
