@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Igloo Site Sync
 // @namespace    local.igloo.site.sync
-// @version      8.0.14
+// @version      8.0.15
 // @description  Follow X, TikTok, Instagram, and YouTube channels in Igloo; includes the full X media workflow.
 // @match        https://x.com/*
 // @match        https://twitter.com/*
@@ -29,7 +29,7 @@
 
 (function () {
   "use strict";
-  const SCRIPT_VERSION = "8.0.14";
+  const SCRIPT_VERSION = "8.0.15";
 
   const SETTINGS = {
     apiBase: "xsync_api_base",
@@ -76,6 +76,16 @@
     "verified",
     "jobs",
   ]);
+  const X_COMPOSER_TOOLBAR_BUTTON_SELECTOR = [
+    'button[role="button"][aria-label="Add photos or video"]',
+    'button[role="button"][data-testid="gifSearchButton"]',
+    'button[role="button"][data-testid="grokImgGen"]',
+    'button[role="button"][data-testid="createPollButton"]',
+    'button[role="button"][aria-label="Add emoji"]',
+    'button[role="button"][data-testid="scheduleOption"]',
+    'button[role="button"][data-testid="geoButton"]',
+    'button[role="button"][data-testid="contentDisclosureButton"]',
+  ].join(",");
 
   function normalizeApiBase(value) {
     return String(value || "")
@@ -1178,7 +1188,7 @@
     body.igloo-x-cleanup button[role="button"][data-testid="createPollButton"] div,
     body.igloo-x-cleanup button[role="button"][aria-label="Add emoji"] div,
     body.igloo-x-cleanup button[role="button"][data-testid="scheduleOption"] div,
-    body.igloo-x-cleanup button[role="button"][data-testid="geoButton"] div,
+    body.igloo-x-cleanup button[role="button"][data-testid="geoButton"]:not(:disabled) div,
     body.igloo-x-cleanup button[role="button"][data-testid="contentDisclosureButton"] div,
     body.igloo-x-cleanup button[role="button"][aria-label="Add photos or video"] svg,
     body.igloo-x-cleanup button[role="button"][data-testid="gifSearchButton"] svg,
@@ -1186,10 +1196,25 @@
     body.igloo-x-cleanup button[role="button"][data-testid="createPollButton"] svg,
     body.igloo-x-cleanup button[role="button"][aria-label="Add emoji"] svg,
     body.igloo-x-cleanup button[role="button"][data-testid="scheduleOption"] svg,
-    body.igloo-x-cleanup button[role="button"][data-testid="geoButton"] svg,
-    body.igloo-x-cleanup button[role="button"][data-testid="contentDisclosureButton"] svg {
+    body.igloo-x-cleanup button[role="button"][data-testid="geoButton"]:not(:disabled) svg,
+    body.igloo-x-cleanup button[role="button"][data-testid="contentDisclosureButton"] svg,
+    body.igloo-x-cleanup button[role="button"][aria-label="Add photos or video"] svg *,
+    body.igloo-x-cleanup button[role="button"][data-testid="gifSearchButton"] svg *,
+    body.igloo-x-cleanup button[role="button"][data-testid="grokImgGen"] svg *,
+    body.igloo-x-cleanup button[role="button"][data-testid="createPollButton"] svg *,
+    body.igloo-x-cleanup button[role="button"][aria-label="Add emoji"] svg *,
+    body.igloo-x-cleanup button[role="button"][data-testid="scheduleOption"] svg *,
+    body.igloo-x-cleanup button[role="button"][data-testid="geoButton"]:not(:disabled) svg *,
+    body.igloo-x-cleanup button[role="button"][data-testid="contentDisclosureButton"] svg * {
       color: #f38ba8 !important;
       fill: #f38ba8 !important;
+    }
+
+    body.igloo-x-cleanup button[role="button"][data-testid="geoButton"]:disabled div,
+    body.igloo-x-cleanup button[role="button"][data-testid="geoButton"]:disabled svg,
+    body.igloo-x-cleanup button[role="button"][data-testid="geoButton"]:disabled svg * {
+      color: #6c7086 !important;
+      fill: #6c7086 !important;
     }
 
     body.igloo-x-cleanup button[role="button"][aria-label="Add photos or video"] span,
@@ -3332,10 +3357,38 @@
     currentYouTubeKey = stateKey;
   }
 
+  function setImportantStyle(el, property, value) {
+    if (el && el.style && typeof el.style.setProperty === "function") {
+      el.style.setProperty(property, value, "important");
+    }
+  }
+
+  function applyXComposerToolbarTheme() {
+    if (!isXSite() || !xCleanupEnabled()) return;
+    for (const btn of document.querySelectorAll(
+      X_COMPOSER_TOOLBAR_BUTTON_SELECTOR,
+    )) {
+      const color =
+        btn.disabled || btn.getAttribute("aria-disabled") === "true"
+          ? "#6c7086"
+          : "#f38ba8";
+      setImportantStyle(btn, "background-color", "transparent");
+      setImportantStyle(btn, "border-color", "transparent");
+      for (const svgEl of btn.querySelectorAll("svg, svg *")) {
+        setImportantStyle(svgEl, "color", color);
+        setImportantStyle(svgEl, "fill", color);
+      }
+      for (const underline of btn.querySelectorAll("span")) {
+        setImportantStyle(underline, "border-bottom-color", color);
+      }
+    }
+  }
+
   function runCurrentPlatformScan() {
     const platform = currentPlatform();
     if (platform === "twitter") {
       syncXCleanupClass();
+      applyXComposerToolbarTheme();
       mountXFeedSourceButton();
       mountFeedButtons();
       mountDlButtons();
