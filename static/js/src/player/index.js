@@ -662,7 +662,6 @@ if (root && video) {
         .then(function (payload) {
           var tracks = Array.isArray(payload && payload.tracks) ? payload.tracks : []
           if (!tracks.length) return
-          var audioLang = (payload && payload.audio_language || '').toLowerCase()
           var track = tracks.find(function (candidate) { return !(candidate && candidate.is_auto) }) || tracks[0]
           var trackEl = doc.createElement('track')
           trackEl.kind = 'subtitles'
@@ -697,12 +696,9 @@ if (root && video) {
 
           ccBtn.classList.remove('hidden')
 
-          // Auto-enable only when audio language is non-English. yt-dlp's
-          // manual-vs-auto distinction is unreliable (YouTube ASR tracks get
-          // promoted into the "manual" subtitles map for the canonical audio
-          // language slot), so we key off the audio language directly.
-          var nonEnglishAudio = audioLang && audioLang.indexOf('en') !== 0
-          if (nonEnglishAudio) {
+          // Auto-enable manual subtitle tracks. Auto-generated captions stay
+          // available through the CC button but do not appear by default.
+          if (!(track && track.is_auto)) {
             ccOn = true
             var ttInit = video.textTracks && video.textTracks[0]
             if (ttInit) {
