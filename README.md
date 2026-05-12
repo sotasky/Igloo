@@ -1,4 +1,4 @@
-# Igloo
+# Igloo 
 
 <p align="center">
   <img alt="Igloo" src="static/logo.svg" width="320">
