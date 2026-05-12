@@ -18,7 +18,9 @@ templ FeedItem(p PageProps, item model.FeedItem) {
 				</div>
 			}
 			for i, ancestor := range item.ThreadChain {
-				@feedThreadCard(p, stripThreadNoise(ancestor), i < visibleAncestorStart)
+				if i < visibleAncestorStart {
+					@feedThreadCard(p, stripThreadNoise(ancestor), true)
+				}
 			}
 			if visibleAncestorStart > 0 {
 				<div class="feed-thread-more-wrap" data-feed-thread-more-wrap>
@@ -29,6 +31,11 @@ templ FeedItem(p PageProps, item model.FeedItem) {
 						data-i18n="feed_thread_load_more_replies"
 					>{ L(p, "feed_thread_load_more_replies", "Load more replies") }</button>
 				</div>
+			}
+			for i, ancestor := range item.ThreadChain {
+				if i >= visibleAncestorStart {
+					@feedThreadCard(p, stripThreadNoise(ancestor), false)
+				}
 			}
 			@feedLeafCard(p, stripThreadNoise(item))
 		</div>
@@ -579,6 +586,12 @@ templ feedQuoteCard(p PageProps, item model.FeedItem) {
 	<div
 		class={ "feed-quote-card", templ.KV("unavailable", isUnavailable) }
 		data-quote-tweet-id={ item.QuoteTweetID }
+		if item.QuoteChannelID != "" {
+			data-quote-author-channel-id={ item.QuoteChannelID }
+		}
+		if item.QuoteAuthorHandle != "" {
+			data-quote-author-handle={ item.QuoteAuthorHandle }
+		}
 		if item.QuoteCanonicalURL != "" {
 			data-quote-link={ item.QuoteCanonicalURL }
 		}

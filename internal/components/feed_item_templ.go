@@ -71,9 +71,11 @@ func FeedItem(p PageProps, item model.FeedItem) templ.Component {
 				}
 			}
 			for i, ancestor := range item.ThreadChain {
-				templ_7745c5c3_Err = feedThreadCard(p, stripThreadNoise(ancestor), i < visibleAncestorStart).Render(ctx, templ_7745c5c3_Buffer)
-				if templ_7745c5c3_Err != nil {
-					return templ_7745c5c3_Err
+				if i < visibleAncestorStart {
+					templ_7745c5c3_Err = feedThreadCard(p, stripThreadNoise(ancestor), true).Render(ctx, templ_7745c5c3_Buffer)
+					if templ_7745c5c3_Err != nil {
+						return templ_7745c5c3_Err
+					}
 				}
 			}
 			if visibleAncestorStart > 0 {
@@ -84,7 +86,7 @@ func FeedItem(p PageProps, item model.FeedItem) templ.Component {
 				var templ_7745c5c3_Var3 string
 				templ_7745c5c3_Var3, templ_7745c5c3_Err = templ.JoinStringErrs(L(p, "feed_thread_load_more_replies", "Load more replies"))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 30, Col: 66}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 32, Col: 66}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var3))
 				if templ_7745c5c3_Err != nil {
@@ -93,6 +95,14 @@ func FeedItem(p PageProps, item model.FeedItem) templ.Component {
 				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 6, "</button></div>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
+				}
+			}
+			for i, ancestor := range item.ThreadChain {
+				if i >= visibleAncestorStart {
+					templ_7745c5c3_Err = feedThreadCard(p, stripThreadNoise(ancestor), false).Render(ctx, templ_7745c5c3_Buffer)
+					if templ_7745c5c3_Err != nil {
+						return templ_7745c5c3_Err
+					}
 				}
 			}
 			templ_7745c5c3_Err = feedLeafCard(p, stripThreadNoise(item)).Render(ctx, templ_7745c5c3_Buffer)
@@ -175,7 +185,7 @@ func feedThreadCard(p PageProps, item model.FeedItem, collapsed bool) templ.Comp
 		var templ_7745c5c3_Var7 string
 		templ_7745c5c3_Var7, templ_7745c5c3_Err = templ.ResolveAttributeValue(item.TweetID)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 54, Col: 30}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 61, Col: 30}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var7)
 		if templ_7745c5c3_Err != nil {
@@ -188,7 +198,7 @@ func feedThreadCard(p PageProps, item model.FeedItem, collapsed bool) templ.Comp
 		var templ_7745c5c3_Var8 string
 		templ_7745c5c3_Var8, templ_7745c5c3_Err = templ.ResolveAttributeValue(externalURL)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 55, Col: 30}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 62, Col: 30}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var8)
 		if templ_7745c5c3_Err != nil {
@@ -201,7 +211,7 @@ func feedThreadCard(p PageProps, item model.FeedItem, collapsed bool) templ.Comp
 		var templ_7745c5c3_Var9 string
 		templ_7745c5c3_Var9, templ_7745c5c3_Err = templ.ResolveAttributeValue(item.ContentHash)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 56, Col: 38}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 63, Col: 38}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var9)
 		if templ_7745c5c3_Err != nil {
@@ -214,7 +224,7 @@ func feedThreadCard(p PageProps, item model.FeedItem, collapsed bool) templ.Comp
 		var templ_7745c5c3_Var10 string
 		templ_7745c5c3_Var10, templ_7745c5c3_Err = templ.ResolveAttributeValue(boolDataAttr(item.IsRetweet))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 57, Col: 53}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 64, Col: 53}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var10)
 		if templ_7745c5c3_Err != nil {
@@ -227,7 +237,7 @@ func feedThreadCard(p PageProps, item model.FeedItem, collapsed bool) templ.Comp
 		var templ_7745c5c3_Var11 string
 		templ_7745c5c3_Var11, templ_7745c5c3_Err = templ.ResolveAttributeValue(boolDataAttr(item.IsSeen))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 58, Col: 44}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 65, Col: 44}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var11)
 		if templ_7745c5c3_Err != nil {
@@ -240,7 +250,7 @@ func feedThreadCard(p PageProps, item model.FeedItem, collapsed bool) templ.Comp
 		var templ_7745c5c3_Var12 string
 		templ_7745c5c3_Var12, templ_7745c5c3_Err = templ.ResolveAttributeValue(item.ChannelID)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 59, Col: 34}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 66, Col: 34}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var12)
 		if templ_7745c5c3_Err != nil {
@@ -253,7 +263,7 @@ func feedThreadCard(p PageProps, item model.FeedItem, collapsed bool) templ.Comp
 		var templ_7745c5c3_Var13 string
 		templ_7745c5c3_Var13, templ_7745c5c3_Err = templ.ResolveAttributeValue(feedSourceChannelID(item))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 60, Col: 52}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 67, Col: 52}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var13)
 		if templ_7745c5c3_Err != nil {
@@ -266,7 +276,7 @@ func feedThreadCard(p PageProps, item model.FeedItem, collapsed bool) templ.Comp
 		var templ_7745c5c3_Var14 string
 		templ_7745c5c3_Var14, templ_7745c5c3_Err = templ.ResolveAttributeValue(boolDataAttr(item.IsLiked))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 61, Col: 41}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 68, Col: 41}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var14)
 		if templ_7745c5c3_Err != nil {
@@ -279,7 +289,7 @@ func feedThreadCard(p PageProps, item model.FeedItem, collapsed bool) templ.Comp
 		var templ_7745c5c3_Var15 string
 		templ_7745c5c3_Var15, templ_7745c5c3_Err = templ.ResolveAttributeValue(boolDataAttr(item.IsBookmarked))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 62, Col: 51}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 69, Col: 51}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var15)
 		if templ_7745c5c3_Err != nil {
@@ -292,7 +302,7 @@ func feedThreadCard(p PageProps, item model.FeedItem, collapsed bool) templ.Comp
 		var templ_7745c5c3_Var16 string
 		templ_7745c5c3_Var16, templ_7745c5c3_Err = templ.ResolveAttributeValue(item.SourceHandle)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 63, Col: 40}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 70, Col: 40}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var16)
 		if templ_7745c5c3_Err != nil {
@@ -305,7 +315,7 @@ func feedThreadCard(p PageProps, item model.FeedItem, collapsed bool) templ.Comp
 		var templ_7745c5c3_Var17 string
 		templ_7745c5c3_Var17, templ_7745c5c3_Err = templ.ResolveAttributeValue(item.AuthorHandle)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 64, Col: 40}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 71, Col: 40}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var17)
 		if templ_7745c5c3_Err != nil {
@@ -318,7 +328,7 @@ func feedThreadCard(p PageProps, item model.FeedItem, collapsed bool) templ.Comp
 		var templ_7745c5c3_Var18 string
 		templ_7745c5c3_Var18, templ_7745c5c3_Err = templ.ResolveAttributeValue(authorLabel)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 65, Col: 33}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 72, Col: 33}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var18)
 		if templ_7745c5c3_Err != nil {
@@ -331,7 +341,7 @@ func feedThreadCard(p PageProps, item model.FeedItem, collapsed bool) templ.Comp
 		var templ_7745c5c3_Var19 string
 		templ_7745c5c3_Var19, templ_7745c5c3_Err = templ.ResolveAttributeValue(feedPublishedAtStr(item.PublishedAt))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 67, Col: 55}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 74, Col: 55}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var19)
 		if templ_7745c5c3_Err != nil {
@@ -344,7 +354,7 @@ func feedThreadCard(p PageProps, item model.FeedItem, collapsed bool) templ.Comp
 		var templ_7745c5c3_Var20 string
 		templ_7745c5c3_Var20, templ_7745c5c3_Err = templ.ResolveAttributeValue(feedPublishedAtStr(item.PublishedAt))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 68, Col: 60}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 75, Col: 60}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var20)
 		if templ_7745c5c3_Err != nil {
@@ -357,7 +367,7 @@ func feedThreadCard(p PageProps, item model.FeedItem, collapsed bool) templ.Comp
 		var templ_7745c5c3_Var21 string
 		templ_7745c5c3_Var21, templ_7745c5c3_Err = templ.ResolveAttributeValue(fmt.Sprintf("%d", len(item.Media)))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 69, Col: 55}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 76, Col: 55}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var21)
 		if templ_7745c5c3_Err != nil {
@@ -462,7 +472,7 @@ func feedLeafCard(p PageProps, item model.FeedItem) templ.Component {
 		var templ_7745c5c3_Var25 string
 		templ_7745c5c3_Var25, templ_7745c5c3_Err = templ.ResolveAttributeValue(item.TweetID)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 98, Col: 30}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 105, Col: 30}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var25)
 		if templ_7745c5c3_Err != nil {
@@ -475,7 +485,7 @@ func feedLeafCard(p PageProps, item model.FeedItem) templ.Component {
 		var templ_7745c5c3_Var26 string
 		templ_7745c5c3_Var26, templ_7745c5c3_Err = templ.ResolveAttributeValue(externalURL)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 99, Col: 30}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 106, Col: 30}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var26)
 		if templ_7745c5c3_Err != nil {
@@ -488,7 +498,7 @@ func feedLeafCard(p PageProps, item model.FeedItem) templ.Component {
 		var templ_7745c5c3_Var27 string
 		templ_7745c5c3_Var27, templ_7745c5c3_Err = templ.ResolveAttributeValue(item.ContentHash)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 100, Col: 38}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 107, Col: 38}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var27)
 		if templ_7745c5c3_Err != nil {
@@ -501,7 +511,7 @@ func feedLeafCard(p PageProps, item model.FeedItem) templ.Component {
 		var templ_7745c5c3_Var28 string
 		templ_7745c5c3_Var28, templ_7745c5c3_Err = templ.ResolveAttributeValue(boolDataAttr(item.IsRetweet))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 101, Col: 53}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 108, Col: 53}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var28)
 		if templ_7745c5c3_Err != nil {
@@ -514,7 +524,7 @@ func feedLeafCard(p PageProps, item model.FeedItem) templ.Component {
 		var templ_7745c5c3_Var29 string
 		templ_7745c5c3_Var29, templ_7745c5c3_Err = templ.ResolveAttributeValue(boolDataAttr(item.IsSeen))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 102, Col: 44}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 109, Col: 44}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var29)
 		if templ_7745c5c3_Err != nil {
@@ -527,7 +537,7 @@ func feedLeafCard(p PageProps, item model.FeedItem) templ.Component {
 		var templ_7745c5c3_Var30 string
 		templ_7745c5c3_Var30, templ_7745c5c3_Err = templ.ResolveAttributeValue(feedAlgoScore(item.AlgoInterestScore))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 103, Col: 62}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 110, Col: 62}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var30)
 		if templ_7745c5c3_Err != nil {
@@ -540,7 +550,7 @@ func feedLeafCard(p PageProps, item model.FeedItem) templ.Component {
 		var templ_7745c5c3_Var31 string
 		templ_7745c5c3_Var31, templ_7745c5c3_Err = templ.ResolveAttributeValue(item.ChannelID)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 104, Col: 34}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 111, Col: 34}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var31)
 		if templ_7745c5c3_Err != nil {
@@ -553,7 +563,7 @@ func feedLeafCard(p PageProps, item model.FeedItem) templ.Component {
 		var templ_7745c5c3_Var32 string
 		templ_7745c5c3_Var32, templ_7745c5c3_Err = templ.ResolveAttributeValue(feedSourceChannelID(item))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 105, Col: 52}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 112, Col: 52}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var32)
 		if templ_7745c5c3_Err != nil {
@@ -566,7 +576,7 @@ func feedLeafCard(p PageProps, item model.FeedItem) templ.Component {
 		var templ_7745c5c3_Var33 string
 		templ_7745c5c3_Var33, templ_7745c5c3_Err = templ.ResolveAttributeValue(boolDataAttr(item.IsLiked))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 106, Col: 41}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 113, Col: 41}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var33)
 		if templ_7745c5c3_Err != nil {
@@ -579,7 +589,7 @@ func feedLeafCard(p PageProps, item model.FeedItem) templ.Component {
 		var templ_7745c5c3_Var34 string
 		templ_7745c5c3_Var34, templ_7745c5c3_Err = templ.ResolveAttributeValue(boolDataAttr(item.IsBookmarked))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 107, Col: 51}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 114, Col: 51}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var34)
 		if templ_7745c5c3_Err != nil {
@@ -592,7 +602,7 @@ func feedLeafCard(p PageProps, item model.FeedItem) templ.Component {
 		var templ_7745c5c3_Var35 string
 		templ_7745c5c3_Var35, templ_7745c5c3_Err = templ.ResolveAttributeValue(item.SourceHandle)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 108, Col: 40}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 115, Col: 40}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var35)
 		if templ_7745c5c3_Err != nil {
@@ -605,7 +615,7 @@ func feedLeafCard(p PageProps, item model.FeedItem) templ.Component {
 		var templ_7745c5c3_Var36 string
 		templ_7745c5c3_Var36, templ_7745c5c3_Err = templ.ResolveAttributeValue(item.AuthorHandle)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 109, Col: 40}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 116, Col: 40}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var36)
 		if templ_7745c5c3_Err != nil {
@@ -623,7 +633,7 @@ func feedLeafCard(p PageProps, item model.FeedItem) templ.Component {
 			var templ_7745c5c3_Var37 string
 			templ_7745c5c3_Var37, templ_7745c5c3_Err = templ.ResolveAttributeValue(item.QuoteAuthorHandle)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 111, Col: 52}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 118, Col: 52}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var37)
 			if templ_7745c5c3_Err != nil {
@@ -641,7 +651,7 @@ func feedLeafCard(p PageProps, item model.FeedItem) templ.Component {
 		var templ_7745c5c3_Var38 string
 		templ_7745c5c3_Var38, templ_7745c5c3_Err = templ.ResolveAttributeValue(item.ChannelID)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 113, Col: 46}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 120, Col: 46}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var38)
 		if templ_7745c5c3_Err != nil {
@@ -654,7 +664,7 @@ func feedLeafCard(p PageProps, item model.FeedItem) templ.Component {
 		var templ_7745c5c3_Var39 string
 		templ_7745c5c3_Var39, templ_7745c5c3_Err = templ.ResolveAttributeValue(item.QuoteTweetID)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 114, Col: 46}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 121, Col: 46}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var39)
 		if templ_7745c5c3_Err != nil {
@@ -672,7 +682,7 @@ func feedLeafCard(p PageProps, item model.FeedItem) templ.Component {
 			var templ_7745c5c3_Var40 string
 			templ_7745c5c3_Var40, templ_7745c5c3_Err = templ.ResolveAttributeValue(item.QuoteChannelID)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 116, Col: 58}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 123, Col: 58}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var40)
 			if templ_7745c5c3_Err != nil {
@@ -690,7 +700,7 @@ func feedLeafCard(p PageProps, item model.FeedItem) templ.Component {
 		var templ_7745c5c3_Var41 string
 		templ_7745c5c3_Var41, templ_7745c5c3_Err = templ.ResolveAttributeValue(retweetersChannelIDsJSON(item.Retweeters))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 118, Col: 66}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 125, Col: 66}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var41)
 		if templ_7745c5c3_Err != nil {
@@ -703,7 +713,7 @@ func feedLeafCard(p PageProps, item model.FeedItem) templ.Component {
 		var templ_7745c5c3_Var42 string
 		templ_7745c5c3_Var42, templ_7745c5c3_Err = templ.ResolveAttributeValue(feedPublishedAtStr(item.PublishedAt))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 119, Col: 55}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 126, Col: 55}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var42)
 		if templ_7745c5c3_Err != nil {
@@ -716,7 +726,7 @@ func feedLeafCard(p PageProps, item model.FeedItem) templ.Component {
 		var templ_7745c5c3_Var43 string
 		templ_7745c5c3_Var43, templ_7745c5c3_Err = templ.ResolveAttributeValue(feedPublishedAtStr(item.PublishedAt))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 120, Col: 60}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 127, Col: 60}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var43)
 		if templ_7745c5c3_Err != nil {
@@ -729,7 +739,7 @@ func feedLeafCard(p PageProps, item model.FeedItem) templ.Component {
 		var templ_7745c5c3_Var44 string
 		templ_7745c5c3_Var44, templ_7745c5c3_Err = templ.ResolveAttributeValue(authorLabel)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 121, Col: 33}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 128, Col: 33}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var44)
 		if templ_7745c5c3_Err != nil {
@@ -742,7 +752,7 @@ func feedLeafCard(p PageProps, item model.FeedItem) templ.Component {
 		var templ_7745c5c3_Var45 string
 		templ_7745c5c3_Var45, templ_7745c5c3_Err = templ.ResolveAttributeValue(fmt.Sprintf("%d", len(item.Media)))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 123, Col: 55}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 130, Col: 55}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var45)
 		if templ_7745c5c3_Err != nil {
@@ -755,7 +765,7 @@ func feedLeafCard(p PageProps, item model.FeedItem) templ.Component {
 		var templ_7745c5c3_Var46 string
 		templ_7745c5c3_Var46, templ_7745c5c3_Err = templ.ResolveAttributeValue(fmt.Sprintf("%d", len(item.QuoteMedia)))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 124, Col: 66}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 131, Col: 66}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var46)
 		if templ_7745c5c3_Err != nil {
@@ -773,7 +783,7 @@ func feedLeafCard(p PageProps, item model.FeedItem) templ.Component {
 			var templ_7745c5c3_Var47 string
 			templ_7745c5c3_Var47, templ_7745c5c3_Err = templ.ResolveAttributeValue(toJSONAttr(item.TaggedAccounts))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 126, Col: 57}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 133, Col: 57}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var47)
 			if templ_7745c5c3_Err != nil {
@@ -792,7 +802,7 @@ func feedLeafCard(p PageProps, item model.FeedItem) templ.Component {
 			var templ_7745c5c3_Var48 string
 			templ_7745c5c3_Var48, templ_7745c5c3_Err = templ.ResolveAttributeValue("/api/feed/seen?tweet_id=" + item.TweetID)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 129, Col: 54}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 136, Col: 54}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var48)
 			if templ_7745c5c3_Err != nil {
@@ -888,7 +898,7 @@ func feedRepostLine(p PageProps, item model.FeedItem, entries []repostEntry) tem
 		var templ_7745c5c3_Var50 string
 		templ_7745c5c3_Var50, templ_7745c5c3_Err = templ.JoinStringErrs(" ")
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 162, Col: 7}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 169, Col: 7}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var50))
 		if templ_7745c5c3_Err != nil {
@@ -938,7 +948,7 @@ func feedRepostLine(p PageProps, item model.FeedItem, entries []repostEntry) tem
 			var templ_7745c5c3_Var51 string
 			templ_7745c5c3_Var51, templ_7745c5c3_Err = templ.JoinStringErrs(fmt.Sprintf("%d", len(hidden)))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 179, Col: 37}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 186, Col: 37}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var51))
 			if templ_7745c5c3_Err != nil {
@@ -951,7 +961,7 @@ func feedRepostLine(p PageProps, item model.FeedItem, entries []repostEntry) tem
 			var templ_7745c5c3_Var52 string
 			templ_7745c5c3_Var52, templ_7745c5c3_Err = templ.JoinStringErrs(L(p, "feed_repost_more", "more"))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 179, Col: 74}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 186, Col: 74}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var52))
 			if templ_7745c5c3_Err != nil {
@@ -969,7 +979,7 @@ func feedRepostLine(p PageProps, item model.FeedItem, entries []repostEntry) tem
 		var templ_7745c5c3_Var53 string
 		templ_7745c5c3_Var53, templ_7745c5c3_Err = templ.JoinStringErrs(" " + L(p, "feed_repost_suffix", "reposted"))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 181, Col: 82}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 188, Col: 82}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var53))
 		if templ_7745c5c3_Err != nil {
@@ -1021,7 +1031,7 @@ func feedRepostSep(p PageProps, i, total int, hasOverflow bool) templ.Component 
 			var templ_7745c5c3_Var55 string
 			templ_7745c5c3_Var55, templ_7745c5c3_Err = templ.JoinStringErrs(" " + L(p, "list_sep_and", "and") + " ")
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 194, Col: 74}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 201, Col: 74}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var55))
 			if templ_7745c5c3_Err != nil {
@@ -1072,7 +1082,7 @@ func feedRepostHiddenSep(p PageProps, i, total int) templ.Component {
 			var templ_7745c5c3_Var57 string
 			templ_7745c5c3_Var57, templ_7745c5c3_Err = templ.JoinStringErrs(" " + L(p, "list_sep_and", "and") + " ")
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 204, Col: 74}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 211, Col: 74}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var57))
 			if templ_7745c5c3_Err != nil {
@@ -1121,7 +1131,7 @@ func feedRepostLink(e repostEntry) templ.Component {
 			var templ_7745c5c3_Var59 templ.SafeURL
 			templ_7745c5c3_Var59, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL("/channels/" + e.ChannelID))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 214, Col: 51}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 221, Col: 51}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var59))
 			if templ_7745c5c3_Err != nil {
@@ -1134,7 +1144,7 @@ func feedRepostLink(e repostEntry) templ.Component {
 			var templ_7745c5c3_Var60 string
 			templ_7745c5c3_Var60, templ_7745c5c3_Err = templ.ResolveAttributeValue(e.ChannelID)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 215, Col: 39}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 222, Col: 39}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var60)
 			if templ_7745c5c3_Err != nil {
@@ -1147,7 +1157,7 @@ func feedRepostLink(e repostEntry) templ.Component {
 			var templ_7745c5c3_Var61 string
 			templ_7745c5c3_Var61, templ_7745c5c3_Err = templ.ResolveAttributeValue(e.Handle)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 216, Col: 32}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 223, Col: 32}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var61)
 			if templ_7745c5c3_Err != nil {
@@ -1160,7 +1170,7 @@ func feedRepostLink(e repostEntry) templ.Component {
 			var templ_7745c5c3_Var62 string
 			templ_7745c5c3_Var62, templ_7745c5c3_Err = templ.JoinStringErrs(e.Label)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 217, Col: 12}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 224, Col: 12}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var62))
 			if templ_7745c5c3_Err != nil {
@@ -1178,7 +1188,7 @@ func feedRepostLink(e repostEntry) templ.Component {
 			var templ_7745c5c3_Var63 string
 			templ_7745c5c3_Var63, templ_7745c5c3_Err = templ.ResolveAttributeValue(e.Handle)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 221, Col: 32}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 228, Col: 32}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var63)
 			if templ_7745c5c3_Err != nil {
@@ -1191,7 +1201,7 @@ func feedRepostLink(e repostEntry) templ.Component {
 			var templ_7745c5c3_Var64 string
 			templ_7745c5c3_Var64, templ_7745c5c3_Err = templ.JoinStringErrs(e.Label)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 222, Col: 12}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 229, Col: 12}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var64))
 			if templ_7745c5c3_Err != nil {
@@ -1240,7 +1250,7 @@ func feedHeader(p PageProps, item model.FeedItem, authorLabel string, pure bool)
 			var templ_7745c5c3_Var66 templ.SafeURL
 			templ_7745c5c3_Var66, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL("/channels/" + item.ChannelID))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 231, Col: 86}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 238, Col: 86}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var66))
 			if templ_7745c5c3_Err != nil {
@@ -1261,7 +1271,7 @@ func feedHeader(p PageProps, item model.FeedItem, authorLabel string, pure bool)
 			var templ_7745c5c3_Var67 string
 			templ_7745c5c3_Var67, templ_7745c5c3_Err = templ.JoinStringErrs(authorLabel)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 233, Col: 44}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 240, Col: 44}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var67))
 			if templ_7745c5c3_Err != nil {
@@ -1279,7 +1289,7 @@ func feedHeader(p PageProps, item model.FeedItem, authorLabel string, pure bool)
 			var templ_7745c5c3_Var68 templ.SafeURL
 			templ_7745c5c3_Var68, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL(externalURL))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 236, Col: 68}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 243, Col: 68}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var68))
 			if templ_7745c5c3_Err != nil {
@@ -1300,7 +1310,7 @@ func feedHeader(p PageProps, item model.FeedItem, authorLabel string, pure bool)
 			var templ_7745c5c3_Var69 string
 			templ_7745c5c3_Var69, templ_7745c5c3_Err = templ.JoinStringErrs(authorLabel)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 238, Col: 44}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 245, Col: 44}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var69))
 			if templ_7745c5c3_Err != nil {
@@ -1326,7 +1336,7 @@ func feedHeader(p PageProps, item model.FeedItem, authorLabel string, pure bool)
 			var templ_7745c5c3_Var70 string
 			templ_7745c5c3_Var70, templ_7745c5c3_Err = templ.JoinStringErrs(authorLabel)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 243, Col: 44}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 250, Col: 44}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var70))
 			if templ_7745c5c3_Err != nil {
@@ -1390,7 +1400,7 @@ func feedAvatar(p PageProps, avatarURL string, authorLabel string) templ.Compone
 			var templ_7745c5c3_Var72 string
 			templ_7745c5c3_Var72, templ_7745c5c3_Err = templ.ResolveAttributeValue(avatarURL)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 257, Col: 19}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 264, Col: 19}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var72)
 			if templ_7745c5c3_Err != nil {
@@ -1403,7 +1413,7 @@ func feedAvatar(p PageProps, avatarURL string, authorLabel string) templ.Compone
 			var templ_7745c5c3_Var73 string
 			templ_7745c5c3_Var73, templ_7745c5c3_Err = templ.ResolveAttributeValue(L(p, "content_description_channel_avatar", "Channel avatar"))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 259, Col: 70}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 266, Col: 70}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var73)
 			if templ_7745c5c3_Err != nil {
@@ -1422,7 +1432,7 @@ func feedAvatar(p PageProps, avatarURL string, authorLabel string) templ.Compone
 			var templ_7745c5c3_Var74 string
 			templ_7745c5c3_Var74, templ_7745c5c3_Err = templ.JoinStringErrs(strings.ToUpper(FirstChar(authorLabel)))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 265, Col: 101}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 272, Col: 101}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var74))
 			if templ_7745c5c3_Err != nil {
@@ -1440,7 +1450,7 @@ func feedAvatar(p PageProps, avatarURL string, authorLabel string) templ.Compone
 			var templ_7745c5c3_Var75 string
 			templ_7745c5c3_Var75, templ_7745c5c3_Err = templ.JoinStringErrs(strings.ToUpper(FirstChar(authorLabel)))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 267, Col: 79}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 274, Col: 79}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var75))
 			if templ_7745c5c3_Err != nil {
@@ -1491,7 +1501,7 @@ func feedAuthorAside(p PageProps, item model.FeedItem) templ.Component {
 			var templ_7745c5c3_Var77 string
 			templ_7745c5c3_Var77, templ_7745c5c3_Err = templ.JoinStringErrs("@" + item.AuthorHandle)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 277, Col: 60}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 284, Col: 60}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var77))
 			if templ_7745c5c3_Err != nil {
@@ -1510,7 +1520,7 @@ func feedAuthorAside(p PageProps, item model.FeedItem) templ.Component {
 			var templ_7745c5c3_Var78 string
 			templ_7745c5c3_Var78, templ_7745c5c3_Err = templ.ResolveAttributeValue(feedPublishedAtStr(item.PublishedAt))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 282, Col: 60}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 289, Col: 60}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var78)
 			if templ_7745c5c3_Err != nil {
@@ -1523,7 +1533,7 @@ func feedAuthorAside(p PageProps, item model.FeedItem) templ.Component {
 			var templ_7745c5c3_Var79 string
 			templ_7745c5c3_Var79, templ_7745c5c3_Err = templ.ResolveAttributeValue(feedPublishedAtStr(item.PublishedAt))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 283, Col: 47}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 290, Col: 47}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var79)
 			if templ_7745c5c3_Err != nil {
@@ -1536,7 +1546,7 @@ func feedAuthorAside(p PageProps, item model.FeedItem) templ.Component {
 			var templ_7745c5c3_Var80 string
 			templ_7745c5c3_Var80, templ_7745c5c3_Err = templ.JoinStringErrs(RelativeTimeText(p, item.PublishedAt))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 284, Col: 52}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 291, Col: 52}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var80))
 			if templ_7745c5c3_Err != nil {
@@ -1611,7 +1621,7 @@ func feedTranslatePill(p PageProps, field string, sourceLang string, active bool
 		var templ_7745c5c3_Var84 string
 		templ_7745c5c3_Var84, templ_7745c5c3_Err = templ.ResolveAttributeValue(field)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 301, Col: 37}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 308, Col: 37}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var84)
 		if templ_7745c5c3_Err != nil {
@@ -1624,7 +1634,7 @@ func feedTranslatePill(p PageProps, field string, sourceLang string, active bool
 		var templ_7745c5c3_Var85 string
 		templ_7745c5c3_Var85, templ_7745c5c3_Err = templ.ResolveAttributeValue(L(p, "feed_toggle_translation", "Toggle translation"))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 302, Col: 63}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 309, Col: 63}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var85)
 		if templ_7745c5c3_Err != nil {
@@ -1637,7 +1647,7 @@ func feedTranslatePill(p PageProps, field string, sourceLang string, active bool
 		var templ_7745c5c3_Var86 string
 		templ_7745c5c3_Var86, templ_7745c5c3_Err = templ.ResolveAttributeValue(L(p, "feed_toggle_translation", "Toggle translation"))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 303, Col: 68}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 310, Col: 68}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var86)
 		if templ_7745c5c3_Err != nil {
@@ -1650,7 +1660,7 @@ func feedTranslatePill(p PageProps, field string, sourceLang string, active bool
 		var templ_7745c5c3_Var87 string
 		templ_7745c5c3_Var87, templ_7745c5c3_Err = templ.JoinStringErrs(L(p, "feed_translate_icon_letter", "A"))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 309, Col: 151}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 316, Col: 151}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var87))
 		if templ_7745c5c3_Err != nil {
@@ -1664,7 +1674,7 @@ func feedTranslatePill(p PageProps, field string, sourceLang string, active bool
 			var templ_7745c5c3_Var88 string
 			templ_7745c5c3_Var88, templ_7745c5c3_Err = templ.JoinStringErrs(feedTranslateSourceLabel(sourceLang))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 317, Col: 41}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 324, Col: 41}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var88))
 			if templ_7745c5c3_Err != nil {
@@ -1784,7 +1794,7 @@ func feedTranslateControl(p PageProps, item model.FeedItem) templ.Component {
 		var templ_7745c5c3_Var93 string
 		templ_7745c5c3_Var93, templ_7745c5c3_Err = templ.ResolveAttributeValue(L(p, "action_translate", "Translate"))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 343, Col: 48}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 350, Col: 48}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var93)
 		if templ_7745c5c3_Err != nil {
@@ -1797,7 +1807,7 @@ func feedTranslateControl(p PageProps, item model.FeedItem) templ.Component {
 		var templ_7745c5c3_Var94 string
 		templ_7745c5c3_Var94, templ_7745c5c3_Err = templ.ResolveAttributeValue(L(p, "action_translate", "Translate"))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 344, Col: 53}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 351, Col: 53}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var94)
 		if templ_7745c5c3_Err != nil {
@@ -1810,7 +1820,7 @@ func feedTranslateControl(p PageProps, item model.FeedItem) templ.Component {
 		var templ_7745c5c3_Var95 string
 		templ_7745c5c3_Var95, templ_7745c5c3_Err = templ.JoinStringErrs(L(p, "feed_translate_icon_letter", "A"))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 350, Col: 152}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 357, Col: 152}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var95))
 		if templ_7745c5c3_Err != nil {
@@ -1823,7 +1833,7 @@ func feedTranslateControl(p PageProps, item model.FeedItem) templ.Component {
 		var templ_7745c5c3_Var96 string
 		templ_7745c5c3_Var96, templ_7745c5c3_Err = templ.ResolveAttributeValue(L(p, "feed_show_translation", "Show translation"))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 355, Col: 84}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 362, Col: 84}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var96)
 		if templ_7745c5c3_Err != nil {
@@ -1836,7 +1846,7 @@ func feedTranslateControl(p PageProps, item model.FeedItem) templ.Component {
 		var templ_7745c5c3_Var97 string
 		templ_7745c5c3_Var97, templ_7745c5c3_Err = templ.JoinStringErrs(feedTranslateLabel(item))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 356, Col: 30}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 363, Col: 30}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var97))
 		if templ_7745c5c3_Err != nil {
@@ -1878,7 +1888,7 @@ func feedCardMenu(p PageProps, item model.FeedItem, authorLabel string) templ.Co
 		var templ_7745c5c3_Var99 string
 		templ_7745c5c3_Var99, templ_7745c5c3_Err = templ.ResolveAttributeValue(L(p, "feed_post_actions", "Post actions"))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 363, Col: 122}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 370, Col: 122}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var99)
 		if templ_7745c5c3_Err != nil {
@@ -1891,7 +1901,7 @@ func feedCardMenu(p PageProps, item model.FeedItem, authorLabel string) templ.Co
 		var templ_7745c5c3_Var100 string
 		templ_7745c5c3_Var100, templ_7745c5c3_Err = templ.ResolveAttributeValue(L(p, "feed_post_actions", "Post actions"))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 363, Col: 179}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 370, Col: 179}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var100)
 		if templ_7745c5c3_Err != nil {
@@ -1904,7 +1914,7 @@ func feedCardMenu(p PageProps, item model.FeedItem, authorLabel string) templ.Co
 		var templ_7745c5c3_Var101 string
 		templ_7745c5c3_Var101, templ_7745c5c3_Err = templ.ResolveAttributeValue(feedSourceChannelID(item))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 369, Col: 52}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 376, Col: 52}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var101)
 		if templ_7745c5c3_Err != nil {
@@ -1917,7 +1927,7 @@ func feedCardMenu(p PageProps, item model.FeedItem, authorLabel string) templ.Co
 		var templ_7745c5c3_Var102 string
 		templ_7745c5c3_Var102, templ_7745c5c3_Err = templ.ResolveAttributeValue(authorLabel)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 370, Col: 33}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 377, Col: 33}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var102)
 		if templ_7745c5c3_Err != nil {
@@ -1930,7 +1940,7 @@ func feedCardMenu(p PageProps, item model.FeedItem, authorLabel string) templ.Co
 		var templ_7745c5c3_Var103 string
 		templ_7745c5c3_Var103, templ_7745c5c3_Err = templ.JoinStringErrs(L(p, "feed_turn_off_retweets", "Turn off retweets"))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 371, Col: 57}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 378, Col: 57}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var103))
 		if templ_7745c5c3_Err != nil {
@@ -1943,7 +1953,7 @@ func feedCardMenu(p PageProps, item model.FeedItem, authorLabel string) templ.Co
 		var templ_7745c5c3_Var104 string
 		templ_7745c5c3_Var104, templ_7745c5c3_Err = templ.ResolveAttributeValue(item.ChannelID)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 376, Col: 41}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 383, Col: 41}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var104)
 		if templ_7745c5c3_Err != nil {
@@ -1956,7 +1966,7 @@ func feedCardMenu(p PageProps, item model.FeedItem, authorLabel string) templ.Co
 		var templ_7745c5c3_Var105 string
 		templ_7745c5c3_Var105, templ_7745c5c3_Err = templ.ResolveAttributeValue(authorLabel)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 377, Col: 33}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 384, Col: 33}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var105)
 		if templ_7745c5c3_Err != nil {
@@ -1969,7 +1979,7 @@ func feedCardMenu(p PageProps, item model.FeedItem, authorLabel string) templ.Co
 		var templ_7745c5c3_Var106 string
 		templ_7745c5c3_Var106, templ_7745c5c3_Err = templ.JoinStringErrs(L(p, "feed_open_x_feed_settings", "Open X feed settings"))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 378, Col: 63}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 385, Col: 63}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var106))
 		if templ_7745c5c3_Err != nil {
@@ -1982,7 +1992,7 @@ func feedCardMenu(p PageProps, item model.FeedItem, authorLabel string) templ.Co
 		var templ_7745c5c3_Var107 string
 		templ_7745c5c3_Var107, templ_7745c5c3_Err = templ.ResolveAttributeValue(item.ChannelID)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 383, Col: 41}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 390, Col: 41}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var107)
 		if templ_7745c5c3_Err != nil {
@@ -1995,7 +2005,7 @@ func feedCardMenu(p PageProps, item model.FeedItem, authorLabel string) templ.Co
 		var templ_7745c5c3_Var108 string
 		templ_7745c5c3_Var108, templ_7745c5c3_Err = templ.ResolveAttributeValue(authorLabel)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 384, Col: 33}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 391, Col: 33}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var108)
 		if templ_7745c5c3_Err != nil {
@@ -2008,7 +2018,7 @@ func feedCardMenu(p PageProps, item model.FeedItem, authorLabel string) templ.Co
 		var templ_7745c5c3_Var109 string
 		templ_7745c5c3_Var109, templ_7745c5c3_Err = templ.JoinStringErrs(L(p, "feed_refresh_account", "Refresh account"))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 385, Col: 53}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 392, Col: 53}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var109))
 		if templ_7745c5c3_Err != nil {
@@ -2026,7 +2036,7 @@ func feedCardMenu(p PageProps, item model.FeedItem, authorLabel string) templ.Co
 			var templ_7745c5c3_Var110 string
 			templ_7745c5c3_Var110, templ_7745c5c3_Err = templ.ResolveAttributeValue("/api/feed/mute/" + item.AuthorHandle)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 391, Col: 52}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 398, Col: 52}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var110)
 			if templ_7745c5c3_Err != nil {
@@ -2039,7 +2049,7 @@ func feedCardMenu(p PageProps, item model.FeedItem, authorLabel string) templ.Co
 			var templ_7745c5c3_Var111 string
 			templ_7745c5c3_Var111, templ_7745c5c3_Err = templ.JoinStringErrs(L(p, "action_mute", "Mute"))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 393, Col: 34}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 400, Col: 34}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var111))
 			if templ_7745c5c3_Err != nil {
@@ -2052,7 +2062,7 @@ func feedCardMenu(p PageProps, item model.FeedItem, authorLabel string) templ.Co
 			var templ_7745c5c3_Var112 string
 			templ_7745c5c3_Var112, templ_7745c5c3_Err = templ.JoinStringErrs("@" + item.AuthorHandle)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 393, Col: 62}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 400, Col: 62}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var112))
 			if templ_7745c5c3_Err != nil {
@@ -2071,7 +2081,7 @@ func feedCardMenu(p PageProps, item model.FeedItem, authorLabel string) templ.Co
 			var templ_7745c5c3_Var113 string
 			templ_7745c5c3_Var113, templ_7745c5c3_Err = templ.ResolveAttributeValue("/api/feed/mute/" + item.QuoteAuthorHandle)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 400, Col: 57}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 407, Col: 57}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var113)
 			if templ_7745c5c3_Err != nil {
@@ -2084,7 +2094,7 @@ func feedCardMenu(p PageProps, item model.FeedItem, authorLabel string) templ.Co
 			var templ_7745c5c3_Var114 string
 			templ_7745c5c3_Var114, templ_7745c5c3_Err = templ.JoinStringErrs(L(p, "action_mute", "Mute"))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 402, Col: 34}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 409, Col: 34}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var114))
 			if templ_7745c5c3_Err != nil {
@@ -2097,7 +2107,7 @@ func feedCardMenu(p PageProps, item model.FeedItem, authorLabel string) templ.Co
 			var templ_7745c5c3_Var115 string
 			templ_7745c5c3_Var115, templ_7745c5c3_Err = templ.JoinStringErrs("@" + item.QuoteAuthorHandle)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 402, Col: 67}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 409, Col: 67}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var115))
 			if templ_7745c5c3_Err != nil {
@@ -2116,7 +2126,7 @@ func feedCardMenu(p PageProps, item model.FeedItem, authorLabel string) templ.Co
 			var templ_7745c5c3_Var116 string
 			templ_7745c5c3_Var116, templ_7745c5c3_Err = templ.ResolveAttributeValue(item.ChannelID)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 409, Col: 42}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 416, Col: 42}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var116)
 			if templ_7745c5c3_Err != nil {
@@ -2129,7 +2139,7 @@ func feedCardMenu(p PageProps, item model.FeedItem, authorLabel string) templ.Co
 			var templ_7745c5c3_Var117 string
 			templ_7745c5c3_Var117, templ_7745c5c3_Err = templ.ResolveAttributeValue(authorLabel)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 410, Col: 34}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 417, Col: 34}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var117)
 			if templ_7745c5c3_Err != nil {
@@ -2142,7 +2152,7 @@ func feedCardMenu(p PageProps, item model.FeedItem, authorLabel string) templ.Co
 			var templ_7745c5c3_Var118 string
 			templ_7745c5c3_Var118, templ_7745c5c3_Err = templ.JoinStringErrs(L(p, "action_unfollow_account", "Unfollow account"))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 411, Col: 58}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 418, Col: 58}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var118))
 			if templ_7745c5c3_Err != nil {
@@ -2160,7 +2170,7 @@ func feedCardMenu(p PageProps, item model.FeedItem, authorLabel string) templ.Co
 			var templ_7745c5c3_Var119 string
 			templ_7745c5c3_Var119, templ_7745c5c3_Err = templ.ResolveAttributeValue(item.ChannelID)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 417, Col: 42}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 424, Col: 42}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var119)
 			if templ_7745c5c3_Err != nil {
@@ -2173,7 +2183,7 @@ func feedCardMenu(p PageProps, item model.FeedItem, authorLabel string) templ.Co
 			var templ_7745c5c3_Var120 string
 			templ_7745c5c3_Var120, templ_7745c5c3_Err = templ.ResolveAttributeValue(authorLabel)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 418, Col: 34}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 425, Col: 34}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var120)
 			if templ_7745c5c3_Err != nil {
@@ -2186,7 +2196,7 @@ func feedCardMenu(p PageProps, item model.FeedItem, authorLabel string) templ.Co
 			var templ_7745c5c3_Var121 string
 			templ_7745c5c3_Var121, templ_7745c5c3_Err = templ.JoinStringErrs(L(p, "action_unfollow_account", "Unfollow account"))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 420, Col: 58}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 427, Col: 58}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var121))
 			if templ_7745c5c3_Err != nil {
@@ -2233,7 +2243,7 @@ func feedBodyText(p PageProps, item model.FeedItem) templ.Component {
 		var templ_7745c5c3_Var123 string
 		templ_7745c5c3_Var123, templ_7745c5c3_Err = templ.ResolveAttributeValue(item.Lang)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 431, Col: 23}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 438, Col: 23}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var123)
 		if templ_7745c5c3_Err != nil {
@@ -2261,7 +2271,7 @@ func feedBodyText(p PageProps, item model.FeedItem) templ.Component {
 			var templ_7745c5c3_Var124 string
 			templ_7745c5c3_Var124, templ_7745c5c3_Err = templ.ResolveAttributeValue(item.BodyText)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 442, Col: 38}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 449, Col: 38}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var124)
 			if templ_7745c5c3_Err != nil {
@@ -2300,7 +2310,7 @@ func feedBodyText(p PageProps, item model.FeedItem) templ.Component {
 		var templ_7745c5c3_Var125 string
 		templ_7745c5c3_Var125, templ_7745c5c3_Err = templ.JoinStringErrs(L(p, "action_read_more", "Read more"))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 455, Col: 139}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 462, Col: 139}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var125))
 		if templ_7745c5c3_Err != nil {
@@ -2353,7 +2363,7 @@ func feedMedia(p PageProps, item model.FeedItem) templ.Component {
 				var templ_7745c5c3_Var127 string
 				templ_7745c5c3_Var127, templ_7745c5c3_Err = templ.ResolveAttributeValue(streamURL)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 471, Col: 38}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 478, Col: 38}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var127)
 				if templ_7745c5c3_Err != nil {
@@ -2366,7 +2376,7 @@ func feedMedia(p PageProps, item model.FeedItem) templ.Component {
 				var templ_7745c5c3_Var128 string
 				templ_7745c5c3_Var128, templ_7745c5c3_Err = templ.ResolveAttributeValue("/api/media/slide/" + item.TweetID + "/0")
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 472, Col: 67}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 479, Col: 67}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var128)
 				if templ_7745c5c3_Err != nil {
@@ -2379,7 +2389,7 @@ func feedMedia(p PageProps, item model.FeedItem) templ.Component {
 				var templ_7745c5c3_Var129 string
 				templ_7745c5c3_Var129, templ_7745c5c3_Err = templ.ResolveAttributeValue(L(p, "action_open_media", "Open media"))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 475, Col: 56}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 482, Col: 56}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var129)
 				if templ_7745c5c3_Err != nil {
@@ -2397,7 +2407,7 @@ func feedMedia(p PageProps, item model.FeedItem) templ.Component {
 					var templ_7745c5c3_Var130 string
 					templ_7745c5c3_Var130, templ_7745c5c3_Err = templ.ResolveAttributeValue(item.Media[0].ThumbnailURL)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 478, Col: 133}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 485, Col: 133}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var130)
 					if templ_7745c5c3_Err != nil {
@@ -2410,7 +2420,7 @@ func feedMedia(p PageProps, item model.FeedItem) templ.Component {
 					var templ_7745c5c3_Var131 string
 					templ_7745c5c3_Var131, templ_7745c5c3_Err = templ.ResolveAttributeValue(streamURL)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 479, Col: 29}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 486, Col: 29}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var131)
 					if templ_7745c5c3_Err != nil {
@@ -2428,7 +2438,7 @@ func feedMedia(p PageProps, item model.FeedItem) templ.Component {
 					var templ_7745c5c3_Var132 string
 					templ_7745c5c3_Var132, templ_7745c5c3_Err = templ.ResolveAttributeValue(streamURL)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 483, Col: 29}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 490, Col: 29}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var132)
 					if templ_7745c5c3_Err != nil {
@@ -2446,7 +2456,7 @@ func feedMedia(p PageProps, item model.FeedItem) templ.Component {
 				var templ_7745c5c3_Var133 string
 				templ_7745c5c3_Var133, templ_7745c5c3_Err = templ.ResolveAttributeValue(L(p, "action_enter_fullscreen", "Enter fullscreen"))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 486, Col: 120}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 493, Col: 120}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var133)
 				if templ_7745c5c3_Err != nil {
@@ -2459,7 +2469,7 @@ func feedMedia(p PageProps, item model.FeedItem) templ.Component {
 				var templ_7745c5c3_Var134 string
 				templ_7745c5c3_Var134, templ_7745c5c3_Err = templ.ResolveAttributeValue(L(p, "player_seek_video", "Seek video"))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 487, Col: 122}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 494, Col: 122}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var134)
 				if templ_7745c5c3_Err != nil {
@@ -2478,7 +2488,7 @@ func feedMedia(p PageProps, item model.FeedItem) templ.Component {
 			var templ_7745c5c3_Var135 string
 			templ_7745c5c3_Var135, templ_7745c5c3_Err = templ.ResolveAttributeValue("/api/media/slide/" + item.TweetID + "/0")
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 497, Col: 66}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 504, Col: 66}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var135)
 			if templ_7745c5c3_Err != nil {
@@ -2491,7 +2501,7 @@ func feedMedia(p PageProps, item model.FeedItem) templ.Component {
 			var templ_7745c5c3_Var136 string
 			templ_7745c5c3_Var136, templ_7745c5c3_Err = templ.ResolveAttributeValue(L(p, "action_open_media", "Open media"))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 500, Col: 55}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 507, Col: 55}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var136)
 			if templ_7745c5c3_Err != nil {
@@ -2504,7 +2514,7 @@ func feedMedia(p PageProps, item model.FeedItem) templ.Component {
 			var templ_7745c5c3_Var137 string
 			templ_7745c5c3_Var137, templ_7745c5c3_Err = templ.ResolveAttributeValue("/api/media/slide/" + item.TweetID + "/0")
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 502, Col: 80}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 509, Col: 80}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var137)
 			if templ_7745c5c3_Err != nil {
@@ -2517,7 +2527,7 @@ func feedMedia(p PageProps, item model.FeedItem) templ.Component {
 			var templ_7745c5c3_Var138 string
 			templ_7745c5c3_Var138, templ_7745c5c3_Err = templ.ResolveAttributeValue(L(p, "feed_post_media", "Post media"))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 502, Col: 141}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 509, Col: 141}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var138)
 			if templ_7745c5c3_Err != nil {
@@ -2607,7 +2617,7 @@ func feedMediaTile(p PageProps, tweetID string, index int, m model.MediaRef, med
 			var templ_7745c5c3_Var142 string
 			templ_7745c5c3_Var142, templ_7745c5c3_Err = templ.ResolveAttributeValue(slideURL)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 530, Col: 33}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 537, Col: 33}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var142)
 			if templ_7745c5c3_Err != nil {
@@ -2625,7 +2635,7 @@ func feedMediaTile(p PageProps, tweetID string, index int, m model.MediaRef, med
 				var templ_7745c5c3_Var143 string
 				templ_7745c5c3_Var143, templ_7745c5c3_Err = templ.ResolveAttributeValue(tileStreamURL)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 532, Col: 42}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 539, Col: 42}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var143)
 				if templ_7745c5c3_Err != nil {
@@ -2644,7 +2654,7 @@ func feedMediaTile(p PageProps, tweetID string, index int, m model.MediaRef, med
 				var templ_7745c5c3_Var144 string
 				templ_7745c5c3_Var144, templ_7745c5c3_Err = templ.ResolveAttributeValue(slideURL)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 535, Col: 38}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 542, Col: 38}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var144)
 				if templ_7745c5c3_Err != nil {
@@ -2662,7 +2672,7 @@ func feedMediaTile(p PageProps, tweetID string, index int, m model.MediaRef, med
 			var templ_7745c5c3_Var145 string
 			templ_7745c5c3_Var145, templ_7745c5c3_Err = templ.ResolveAttributeValue(ariaLabel)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 539, Col: 25}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 546, Col: 25}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var145)
 			if templ_7745c5c3_Err != nil {
@@ -2681,7 +2691,7 @@ func feedMediaTile(p PageProps, tweetID string, index int, m model.MediaRef, med
 					var templ_7745c5c3_Var146 string
 					templ_7745c5c3_Var146, templ_7745c5c3_Err = templ.ResolveAttributeValue(m.ThumbnailURL)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 543, Col: 121}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 550, Col: 121}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var146)
 					if templ_7745c5c3_Err != nil {
@@ -2694,7 +2704,7 @@ func feedMediaTile(p PageProps, tweetID string, index int, m model.MediaRef, med
 					var templ_7745c5c3_Var147 string
 					templ_7745c5c3_Var147, templ_7745c5c3_Err = templ.ResolveAttributeValue(tileStreamURL)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 544, Col: 33}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 551, Col: 33}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var147)
 					if templ_7745c5c3_Err != nil {
@@ -2712,7 +2722,7 @@ func feedMediaTile(p PageProps, tweetID string, index int, m model.MediaRef, med
 					var templ_7745c5c3_Var148 string
 					templ_7745c5c3_Var148, templ_7745c5c3_Err = templ.ResolveAttributeValue(tileStreamURL)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 548, Col: 33}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 555, Col: 33}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var148)
 					if templ_7745c5c3_Err != nil {
@@ -2731,7 +2741,7 @@ func feedMediaTile(p PageProps, tweetID string, index int, m model.MediaRef, med
 				var templ_7745c5c3_Var149 string
 				templ_7745c5c3_Var149, templ_7745c5c3_Err = templ.ResolveAttributeValue(slideURL)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 552, Col: 48}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 559, Col: 48}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var149)
 				if templ_7745c5c3_Err != nil {
@@ -2744,7 +2754,7 @@ func feedMediaTile(p PageProps, tweetID string, index int, m model.MediaRef, med
 				var templ_7745c5c3_Var150 string
 				templ_7745c5c3_Var150, templ_7745c5c3_Err = templ.ResolveAttributeValue(fmt.Sprintf(L(p, "feed_post_media_index", "Post media %d"), index+1))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 552, Col: 140}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 559, Col: 140}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var150)
 				if templ_7745c5c3_Err != nil {
@@ -2763,7 +2773,7 @@ func feedMediaTile(p PageProps, tweetID string, index int, m model.MediaRef, med
 				var templ_7745c5c3_Var151 string
 				templ_7745c5c3_Var151, templ_7745c5c3_Err = templ.JoinStringErrs(fmt.Sprintf("%d", mediaCount-4))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 555, Col: 68}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 562, Col: 68}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var151))
 				if templ_7745c5c3_Err != nil {
@@ -2786,7 +2796,7 @@ func feedMediaTile(p PageProps, tweetID string, index int, m model.MediaRef, med
 			var templ_7745c5c3_Var152 string
 			templ_7745c5c3_Var152, templ_7745c5c3_Err = templ.ResolveAttributeValue(slideURL)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 564, Col: 33}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 571, Col: 33}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var152)
 			if templ_7745c5c3_Err != nil {
@@ -2799,7 +2809,7 @@ func feedMediaTile(p PageProps, tweetID string, index int, m model.MediaRef, med
 			var templ_7745c5c3_Var153 string
 			templ_7745c5c3_Var153, templ_7745c5c3_Err = templ.ResolveAttributeValue(ariaLabel)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 565, Col: 25}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 572, Col: 25}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var153)
 			if templ_7745c5c3_Err != nil {
@@ -2812,7 +2822,7 @@ func feedMediaTile(p PageProps, tweetID string, index int, m model.MediaRef, med
 			var templ_7745c5c3_Var154 string
 			templ_7745c5c3_Var154, templ_7745c5c3_Err = templ.ResolveAttributeValue(slideURL)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 567, Col: 47}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 574, Col: 47}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var154)
 			if templ_7745c5c3_Err != nil {
@@ -2825,7 +2835,7 @@ func feedMediaTile(p PageProps, tweetID string, index int, m model.MediaRef, med
 			var templ_7745c5c3_Var155 string
 			templ_7745c5c3_Var155, templ_7745c5c3_Err = templ.ResolveAttributeValue(fmt.Sprintf(L(p, "feed_post_media_index", "Post media %d"), index+1))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 567, Col: 139}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 574, Col: 139}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var155)
 			if templ_7745c5c3_Err != nil {
@@ -2843,7 +2853,7 @@ func feedMediaTile(p PageProps, tweetID string, index int, m model.MediaRef, med
 				var templ_7745c5c3_Var156 string
 				templ_7745c5c3_Var156, templ_7745c5c3_Err = templ.JoinStringErrs(fmt.Sprintf("%d", mediaCount-4))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 569, Col: 68}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 576, Col: 68}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var156))
 				if templ_7745c5c3_Err != nil {
@@ -2912,7 +2922,7 @@ func feedQuoteCard(p PageProps, item model.FeedItem) templ.Component {
 		var templ_7745c5c3_Var160 string
 		templ_7745c5c3_Var160, templ_7745c5c3_Err = templ.ResolveAttributeValue(item.QuoteTweetID)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 581, Col: 41}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 588, Col: 41}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var160)
 		if templ_7745c5c3_Err != nil {
@@ -2922,15 +2932,15 @@ func feedQuoteCard(p PageProps, item model.FeedItem) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		if item.QuoteCanonicalURL != "" {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 227, " data-quote-link=\"")
+		if item.QuoteChannelID != "" {
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 227, " data-quote-author-channel-id=\"")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 			var templ_7745c5c3_Var161 string
-			templ_7745c5c3_Var161, templ_7745c5c3_Err = templ.ResolveAttributeValue(item.QuoteCanonicalURL)
+			templ_7745c5c3_Var161, templ_7745c5c3_Err = templ.ResolveAttributeValue(item.QuoteChannelID)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 583, Col: 43}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 590, Col: 53}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var161)
 			if templ_7745c5c3_Err != nil {
@@ -2941,215 +2951,208 @@ func feedQuoteCard(p PageProps, item model.FeedItem) templ.Component {
 				return templ_7745c5c3_Err
 			}
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 229, " data-quote-liked=\"")
+		if item.QuoteAuthorHandle != "" {
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 229, " data-quote-author-handle=\"")
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			var templ_7745c5c3_Var162 string
+			templ_7745c5c3_Var162, templ_7745c5c3_Err = templ.ResolveAttributeValue(item.QuoteAuthorHandle)
+			if templ_7745c5c3_Err != nil {
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 593, Col: 52}
+			}
+			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var162)
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 230, "\"")
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+		}
+		if item.QuoteCanonicalURL != "" {
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 231, " data-quote-link=\"")
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			var templ_7745c5c3_Var163 string
+			templ_7745c5c3_Var163, templ_7745c5c3_Err = templ.ResolveAttributeValue(item.QuoteCanonicalURL)
+			if templ_7745c5c3_Err != nil {
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 596, Col: 43}
+			}
+			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var163)
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 232, "\"")
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+		}
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 233, " data-quote-liked=\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		var templ_7745c5c3_Var162 string
-		templ_7745c5c3_Var162, templ_7745c5c3_Err = templ.ResolveAttributeValue(boolDataAttr(item.QuoteIsLiked))
+		var templ_7745c5c3_Var164 string
+		templ_7745c5c3_Var164, templ_7745c5c3_Err = templ.ResolveAttributeValue(boolDataAttr(item.QuoteIsLiked))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 585, Col: 52}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 598, Col: 52}
 		}
-		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var162)
-		if templ_7745c5c3_Err != nil {
-			return templ_7745c5c3_Err
-		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 230, "\" data-quote-bookmarked=\"")
+		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var164)
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		var templ_7745c5c3_Var163 string
-		templ_7745c5c3_Var163, templ_7745c5c3_Err = templ.ResolveAttributeValue(boolDataAttr(item.QuoteIsBookmarked))
-		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 586, Col: 62}
-		}
-		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var163)
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 234, "\" data-quote-bookmarked=\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 231, "\"><div class=\"feed-quote-head\"><span class=\"feed-quote-avatar\">")
+		var templ_7745c5c3_Var165 string
+		templ_7745c5c3_Var165, templ_7745c5c3_Err = templ.ResolveAttributeValue(boolDataAttr(item.QuoteIsBookmarked))
+		if templ_7745c5c3_Err != nil {
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 599, Col: 62}
+		}
+		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var165)
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 235, "\"><div class=\"feed-quote-head\"><span class=\"feed-quote-avatar\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		if item.QuoteAuthorAvatarURL != "" {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 232, "<img class=\"feed-quote-avatar-image\" src=\"")
-			if templ_7745c5c3_Err != nil {
-				return templ_7745c5c3_Err
-			}
-			var templ_7745c5c3_Var164 string
-			templ_7745c5c3_Var164, templ_7745c5c3_Err = templ.ResolveAttributeValue(item.QuoteAuthorAvatarURL)
-			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 593, Col: 37}
-			}
-			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var164)
-			if templ_7745c5c3_Err != nil {
-				return templ_7745c5c3_Err
-			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 233, "\" loading=\"lazy\" alt=\"")
-			if templ_7745c5c3_Err != nil {
-				return templ_7745c5c3_Err
-			}
-			var templ_7745c5c3_Var165 string
-			templ_7745c5c3_Var165, templ_7745c5c3_Err = templ.ResolveAttributeValue(L(p, "feed_quoted_author_avatar", "Quoted author avatar"))
-			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 595, Col: 69}
-			}
-			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var165)
-			if templ_7745c5c3_Err != nil {
-				return templ_7745c5c3_Err
-			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 234, "\" onload=\"window.MpaSiteBase&&window.MpaSiteBase.avatarLoad(this)\" onerror=\"if(window.MpaSiteBase&&window.MpaSiteBase.avatarError(this))return; this.style.display='none'; this.nextElementSibling.style.display='inline-flex';\"> ")
-			if templ_7745c5c3_Err != nil {
-				return templ_7745c5c3_Err
-			}
-		}
-		if item.QuoteAuthorAvatarURL != "" {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 235, "<span class=\"feed-quote-avatar-fallback\" style=\"display:none;\">")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 236, "<img class=\"feed-quote-avatar-image\" src=\"")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 			var templ_7745c5c3_Var166 string
-			templ_7745c5c3_Var166, templ_7745c5c3_Err = templ.JoinStringErrs(strings.ToUpper(FirstChar(qLabel)))
+			templ_7745c5c3_Var166, templ_7745c5c3_Err = templ.ResolveAttributeValue(item.QuoteAuthorAvatarURL)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 601, Col: 104}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 606, Col: 37}
 			}
-			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var166))
-			if templ_7745c5c3_Err != nil {
-				return templ_7745c5c3_Err
-			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 236, "</span>")
+			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var166)
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-		} else {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 237, "<span class=\"feed-quote-avatar-fallback\">")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 237, "\" loading=\"lazy\" alt=\"")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 			var templ_7745c5c3_Var167 string
-			templ_7745c5c3_Var167, templ_7745c5c3_Err = templ.JoinStringErrs(strings.ToUpper(FirstChar(qLabel)))
+			templ_7745c5c3_Var167, templ_7745c5c3_Err = templ.ResolveAttributeValue(L(p, "feed_quoted_author_avatar", "Quoted author avatar"))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 603, Col: 82}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 608, Col: 69}
 			}
-			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var167))
+			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var167)
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 238, "</span>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 238, "\" onload=\"window.MpaSiteBase&&window.MpaSiteBase.avatarLoad(this)\" onerror=\"if(window.MpaSiteBase&&window.MpaSiteBase.avatarError(this))return; this.style.display='none'; this.nextElementSibling.style.display='inline-flex';\"> ")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 239, "</span> <span class=\"feed-quote-head-main\">")
-		if templ_7745c5c3_Err != nil {
-			return templ_7745c5c3_Err
-		}
-		if item.QuoteChannelID != "" {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 240, "<a class=\"feed-quote-author feed-quote-author-link\" href=\"")
+		if item.QuoteAuthorAvatarURL != "" {
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 239, "<span class=\"feed-quote-avatar-fallback\" style=\"display:none;\">")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			var templ_7745c5c3_Var168 templ.SafeURL
-			templ_7745c5c3_Var168, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL("/channels/" + item.QuoteChannelID))
+			var templ_7745c5c3_Var168 string
+			templ_7745c5c3_Var168, templ_7745c5c3_Err = templ.JoinStringErrs(strings.ToUpper(FirstChar(qLabel)))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 608, Col: 113}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 614, Col: 104}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var168))
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 241, "\">")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 240, "</span>")
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+		} else {
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 241, "<span class=\"feed-quote-avatar-fallback\">")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 			var templ_7745c5c3_Var169 string
-			templ_7745c5c3_Var169, templ_7745c5c3_Err = templ.JoinStringErrs(qLabel)
+			templ_7745c5c3_Var169, templ_7745c5c3_Err = templ.JoinStringErrs(strings.ToUpper(FirstChar(qLabel)))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 608, Col: 124}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 616, Col: 82}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var169))
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 242, "</a> ")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 242, "</span>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-		} else {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 243, "<span class=\"feed-quote-author\">")
+		}
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 243, "</span> <span class=\"feed-quote-head-main\">")
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		if item.QuoteChannelID != "" {
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 244, "<a class=\"feed-quote-author feed-quote-author-link\" href=\"")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			var templ_7745c5c3_Var170 string
-			templ_7745c5c3_Var170, templ_7745c5c3_Err = templ.JoinStringErrs(qLabel)
+			var templ_7745c5c3_Var170 templ.SafeURL
+			templ_7745c5c3_Var170, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL("/channels/" + item.QuoteChannelID))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 610, Col: 45}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 621, Col: 113}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var170))
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 244, "</span> ")
-			if templ_7745c5c3_Err != nil {
-				return templ_7745c5c3_Err
-			}
-		}
-		if item.QuoteAuthorHandle != "" {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 245, "<span class=\"feed-author-handle\">")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 245, "\">")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 			var templ_7745c5c3_Var171 string
-			templ_7745c5c3_Var171, templ_7745c5c3_Err = templ.JoinStringErrs("@" + item.QuoteAuthorHandle)
+			templ_7745c5c3_Var171, templ_7745c5c3_Err = templ.JoinStringErrs(qLabel)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 613, Col: 68}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 621, Col: 124}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var171))
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 246, "</span> ")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 246, "</a> ")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-		}
-		if item.QuotePublishedAt != nil {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 247, "<span class=\"feed-quote-date\" data-feed-date-raw=\"")
+		} else {
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 247, "<span class=\"feed-quote-author\">")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 			var templ_7745c5c3_Var172 string
-			templ_7745c5c3_Var172, templ_7745c5c3_Err = templ.ResolveAttributeValue(feedPublishedAtStr(item.QuotePublishedAt))
+			templ_7745c5c3_Var172, templ_7745c5c3_Err = templ.JoinStringErrs(qLabel)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 616, Col: 99}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 623, Col: 45}
 			}
-			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var172)
+			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var172))
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 248, "\" title=\"")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 248, "</span> ")
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+		}
+		if item.QuoteAuthorHandle != "" {
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 249, "<span class=\"feed-author-handle\">")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 			var templ_7745c5c3_Var173 string
-			templ_7745c5c3_Var173, templ_7745c5c3_Err = templ.ResolveAttributeValue(feedPublishedAtStr(item.QuotePublishedAt))
+			templ_7745c5c3_Var173, templ_7745c5c3_Err = templ.JoinStringErrs("@" + item.QuoteAuthorHandle)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 616, Col: 151}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 626, Col: 68}
 			}
-			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var173)
-			if templ_7745c5c3_Err != nil {
-				return templ_7745c5c3_Err
-			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 249, "\">&middot; ")
-			if templ_7745c5c3_Err != nil {
-				return templ_7745c5c3_Err
-			}
-			var templ_7745c5c3_Var174 string
-			templ_7745c5c3_Var174, templ_7745c5c3_Err = templ.JoinStringErrs(RelativeTimeText(p, item.QuotePublishedAt))
-			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 616, Col: 207}
-			}
-			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var174))
+			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var173))
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -3158,8 +3161,53 @@ func feedQuoteCard(p PageProps, item model.FeedItem) templ.Component {
 				return templ_7745c5c3_Err
 			}
 		}
+		if item.QuotePublishedAt != nil {
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 251, "<span class=\"feed-quote-date\" data-feed-date-raw=\"")
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			var templ_7745c5c3_Var174 string
+			templ_7745c5c3_Var174, templ_7745c5c3_Err = templ.ResolveAttributeValue(feedPublishedAtStr(item.QuotePublishedAt))
+			if templ_7745c5c3_Err != nil {
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 629, Col: 99}
+			}
+			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var174)
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 252, "\" title=\"")
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			var templ_7745c5c3_Var175 string
+			templ_7745c5c3_Var175, templ_7745c5c3_Err = templ.ResolveAttributeValue(feedPublishedAtStr(item.QuotePublishedAt))
+			if templ_7745c5c3_Err != nil {
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 629, Col: 151}
+			}
+			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var175)
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 253, "\">&middot; ")
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			var templ_7745c5c3_Var176 string
+			templ_7745c5c3_Var176, templ_7745c5c3_Err = templ.JoinStringErrs(RelativeTimeText(p, item.QuotePublishedAt))
+			if templ_7745c5c3_Err != nil {
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 629, Col: 207}
+			}
+			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var176))
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 254, "</span> ")
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+		}
 		if hasQuoteTranslatePill(item) {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 251, "<span class=\"feed-quote-date\">&middot;</span>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 255, "<span class=\"feed-quote-date\">&middot;</span>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -3168,115 +3216,115 @@ func feedQuoteCard(p PageProps, item model.FeedItem) templ.Component {
 				return templ_7745c5c3_Err
 			}
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 252, "</span> ")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 256, "</span> ")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		if item.QuoteChannelID != "" && item.QuoteAuthorHandle != "" && !item.QuoteChannelFollowed {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 253, "<button class=\"feed-follow-btn feed-quote-follow-btn\" type=\"button\" data-feed-follow-toggle data-feed-channel-id=\"")
-			if templ_7745c5c3_Err != nil {
-				return templ_7745c5c3_Err
-			}
-			var templ_7745c5c3_Var175 string
-			templ_7745c5c3_Var175, templ_7745c5c3_Err = templ.ResolveAttributeValue(item.QuoteChannelID)
-			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 628, Col: 47}
-			}
-			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var175)
-			if templ_7745c5c3_Err != nil {
-				return templ_7745c5c3_Err
-			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 254, "\" data-feed-handle=\"")
-			if templ_7745c5c3_Err != nil {
-				return templ_7745c5c3_Err
-			}
-			var templ_7745c5c3_Var176 string
-			templ_7745c5c3_Var176, templ_7745c5c3_Err = templ.ResolveAttributeValue(item.QuoteAuthorHandle)
-			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 629, Col: 46}
-			}
-			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var176)
-			if templ_7745c5c3_Err != nil {
-				return templ_7745c5c3_Err
-			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 255, "\" data-feed-label=\"")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 257, "<button class=\"feed-follow-btn feed-quote-follow-btn\" type=\"button\" data-feed-follow-toggle data-feed-channel-id=\"")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 			var templ_7745c5c3_Var177 string
-			templ_7745c5c3_Var177, templ_7745c5c3_Err = templ.ResolveAttributeValue(qLabel)
+			templ_7745c5c3_Var177, templ_7745c5c3_Err = templ.ResolveAttributeValue(item.QuoteChannelID)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 630, Col: 29}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 641, Col: 47}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var177)
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 256, "\" data-following=\"0\">")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 258, "\" data-feed-handle=\"")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 			var templ_7745c5c3_Var178 string
-			templ_7745c5c3_Var178, templ_7745c5c3_Err = templ.JoinStringErrs(L(p, "action_follow", "Follow"))
+			templ_7745c5c3_Var178, templ_7745c5c3_Err = templ.ResolveAttributeValue(item.QuoteAuthorHandle)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 632, Col: 39}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 642, Col: 46}
 			}
-			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var178))
-			if templ_7745c5c3_Err != nil {
-				return templ_7745c5c3_Err
-			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 257, "</button>")
+			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var178)
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 258, "</div>")
-		if templ_7745c5c3_Err != nil {
-			return templ_7745c5c3_Err
-		}
-		if item.QuoteBodyText != "" {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 259, "<div data-feed-text-container data-translate-field=\"quote\" data-lang=\"")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 259, "\" data-feed-label=\"")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 			var templ_7745c5c3_Var179 string
-			templ_7745c5c3_Var179, templ_7745c5c3_Err = templ.ResolveAttributeValue(item.QuoteLang)
+			templ_7745c5c3_Var179, templ_7745c5c3_Err = templ.ResolveAttributeValue(qLabel)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 639, Col: 31}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 643, Col: 29}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var179)
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 260, "\" data-target-lang=\"en\"")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 260, "\" data-following=\"0\">")
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			var templ_7745c5c3_Var180 string
+			templ_7745c5c3_Var180, templ_7745c5c3_Err = templ.JoinStringErrs(L(p, "action_follow", "Follow"))
+			if templ_7745c5c3_Err != nil {
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 645, Col: 39}
+			}
+			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var180))
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 261, "</button>")
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+		}
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 262, "</div>")
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		if item.QuoteBodyText != "" {
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 263, "<div data-feed-text-container data-translate-field=\"quote\" data-lang=\"")
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			var templ_7745c5c3_Var181 string
+			templ_7745c5c3_Var181, templ_7745c5c3_Err = templ.ResolveAttributeValue(item.QuoteLang)
+			if templ_7745c5c3_Err != nil {
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 652, Col: 31}
+			}
+			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var181)
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 264, "\" data-target-lang=\"en\"")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 			if item.QuoteTranslation != "" {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 261, " data-translated=\"1\"")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 265, " data-translated=\"1\"")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 262, ">")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 266, ">")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 			if item.QuoteTranslation != "" {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 263, "<div class=\"feed-quote-text feed-text-clamp\" data-feed-text-clamp data-feed-clamp-lines=\"4\" data-original-text=\"")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 267, "<div class=\"feed-quote-text feed-text-clamp\" data-feed-text-clamp data-feed-clamp-lines=\"4\" data-original-text=\"")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				var templ_7745c5c3_Var180 string
-				templ_7745c5c3_Var180, templ_7745c5c3_Err = templ.ResolveAttributeValue(item.QuoteBodyText)
+				var templ_7745c5c3_Var182 string
+				templ_7745c5c3_Var182, templ_7745c5c3_Err = templ.ResolveAttributeValue(item.QuoteBodyText)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 650, Col: 45}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 663, Col: 45}
 				}
-				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var180)
+				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var182)
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 264, "\">")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 268, "\">")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
@@ -3284,12 +3332,12 @@ func feedQuoteCard(p PageProps, item model.FeedItem) templ.Component {
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 265, "</div>")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 269, "</div>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 			} else {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 266, "<div class=\"feed-quote-text feed-text-clamp\" data-feed-text-clamp data-feed-clamp-lines=\"4\">")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 270, "<div class=\"feed-quote-text feed-text-clamp\" data-feed-text-clamp data-feed-clamp-lines=\"4\">")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
@@ -3297,25 +3345,25 @@ func feedQuoteCard(p PageProps, item model.FeedItem) templ.Component {
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 267, "</div>")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 271, "</div>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 268, "<button class=\"feed-text-toggle hidden\" type=\"button\" data-feed-text-toggle aria-expanded=\"false\">")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 272, "<button class=\"feed-text-toggle hidden\" type=\"button\" data-feed-text-toggle aria-expanded=\"false\">")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			var templ_7745c5c3_Var181 string
-			templ_7745c5c3_Var181, templ_7745c5c3_Err = templ.JoinStringErrs(L(p, "action_read_more", "Read more"))
+			var templ_7745c5c3_Var183 string
+			templ_7745c5c3_Var183, templ_7745c5c3_Err = templ.JoinStringErrs(L(p, "action_read_more", "Read more"))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 663, Col: 141}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 676, Col: 141}
 			}
-			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var181))
+			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var183))
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 269, "</button></div>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 273, "</button></div>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -3324,7 +3372,7 @@ func feedQuoteCard(p PageProps, item model.FeedItem) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 270, "</div>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 274, "</div>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -3348,163 +3396,163 @@ func feedQuoteMedia(p PageProps, item model.FeedItem, qMediaCount int) templ.Com
 			}()
 		}
 		ctx = templ.InitializeContext(ctx)
-		templ_7745c5c3_Var182 := templ.GetChildren(ctx)
-		if templ_7745c5c3_Var182 == nil {
-			templ_7745c5c3_Var182 = templ.NopComponent
+		templ_7745c5c3_Var184 := templ.GetChildren(ctx)
+		if templ_7745c5c3_Var184 == nil {
+			templ_7745c5c3_Var184 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
 		if qMediaCount == 1 && item.QuoteMedia[0].Type != "photo" && item.QuoteMediaStreamURL != "" {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 271, "<div class=\"feed-media-wrap\" data-feed-media data-feed-media-kind=\"video\" data-feed-media-stream=\"")
-			if templ_7745c5c3_Err != nil {
-				return templ_7745c5c3_Err
-			}
-			var templ_7745c5c3_Var183 string
-			templ_7745c5c3_Var183, templ_7745c5c3_Err = templ.ResolveAttributeValue(item.QuoteMediaStreamURL)
-			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 676, Col: 52}
-			}
-			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var183)
-			if templ_7745c5c3_Err != nil {
-				return templ_7745c5c3_Err
-			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 272, "\" role=\"button\" tabindex=\"0\" aria-label=\"")
-			if templ_7745c5c3_Err != nil {
-				return templ_7745c5c3_Err
-			}
-			var templ_7745c5c3_Var184 string
-			templ_7745c5c3_Var184, templ_7745c5c3_Err = templ.ResolveAttributeValue(L(p, "action_open_media", "Open media"))
-			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 679, Col: 55}
-			}
-			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var184)
-			if templ_7745c5c3_Err != nil {
-				return templ_7745c5c3_Err
-			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 273, "\"><video class=\"feed-media-video\" muted playsinline loop preload=\"none\" data-feed-inline-video><source src=\"")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 275, "<div class=\"feed-media-wrap\" data-feed-media data-feed-media-kind=\"video\" data-feed-media-stream=\"")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 			var templ_7745c5c3_Var185 string
 			templ_7745c5c3_Var185, templ_7745c5c3_Err = templ.ResolveAttributeValue(item.QuoteMediaStreamURL)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 682, Col: 42}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 689, Col: 52}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var185)
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 274, "\" type=\"video/mp4\"></video><button class=\"feed-video-expand-btn\" type=\"button\" aria-label=\"")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 276, "\" role=\"button\" tabindex=\"0\" aria-label=\"")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 			var templ_7745c5c3_Var186 string
-			templ_7745c5c3_Var186, templ_7745c5c3_Err = templ.ResolveAttributeValue(L(p, "action_enter_fullscreen", "Enter fullscreen"))
+			templ_7745c5c3_Var186, templ_7745c5c3_Err = templ.ResolveAttributeValue(L(p, "action_open_media", "Open media"))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 684, Col: 119}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 692, Col: 55}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var186)
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 275, "\" data-feed-video-expand>&#x2922;</button><div class=\"feed-video-progress\" data-feed-progress role=\"slider\" aria-label=\"")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 277, "\"><video class=\"feed-media-video\" muted playsinline loop preload=\"none\" data-feed-inline-video><source src=\"")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 			var templ_7745c5c3_Var187 string
-			templ_7745c5c3_Var187, templ_7745c5c3_Err = templ.ResolveAttributeValue(L(p, "player_seek_video", "Seek video"))
+			templ_7745c5c3_Var187, templ_7745c5c3_Err = templ.ResolveAttributeValue(item.QuoteMediaStreamURL)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 685, Col: 121}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 695, Col: 42}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var187)
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 276, "\" tabindex=\"0\"><div class=\"feed-video-progress-fill\" data-feed-progress-fill></div></div></div>")
-			if templ_7745c5c3_Err != nil {
-				return templ_7745c5c3_Err
-			}
-		} else if qMediaCount == 1 {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 277, "<div class=\"feed-media-wrap\" data-feed-media data-feed-media-kind=\"image\" data-feed-media-url=\"")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 278, "\" type=\"video/mp4\"></video><button class=\"feed-video-expand-btn\" type=\"button\" aria-label=\"")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 			var templ_7745c5c3_Var188 string
-			templ_7745c5c3_Var188, templ_7745c5c3_Err = templ.ResolveAttributeValue("/api/media/slide/" + item.QuoteTweetID + "/0")
+			templ_7745c5c3_Var188, templ_7745c5c3_Err = templ.ResolveAttributeValue(L(p, "action_enter_fullscreen", "Enter fullscreen"))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 694, Col: 71}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 697, Col: 119}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var188)
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 278, "\" role=\"button\" tabindex=\"0\" aria-label=\"")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 279, "\" data-feed-video-expand>&#x2922;</button><div class=\"feed-video-progress\" data-feed-progress role=\"slider\" aria-label=\"")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 			var templ_7745c5c3_Var189 string
-			templ_7745c5c3_Var189, templ_7745c5c3_Err = templ.ResolveAttributeValue(L(p, "action_open_media", "Open media"))
+			templ_7745c5c3_Var189, templ_7745c5c3_Err = templ.ResolveAttributeValue(L(p, "player_seek_video", "Seek video"))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 697, Col: 55}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 698, Col: 121}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var189)
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 279, "\"><img class=\"feed-media-image\" src=\"")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 280, "\" tabindex=\"0\"><div class=\"feed-video-progress-fill\" data-feed-progress-fill></div></div></div>")
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+		} else if qMediaCount == 1 {
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 281, "<div class=\"feed-media-wrap\" data-feed-media data-feed-media-kind=\"image\" data-feed-media-url=\"")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 			var templ_7745c5c3_Var190 string
 			templ_7745c5c3_Var190, templ_7745c5c3_Err = templ.ResolveAttributeValue("/api/media/slide/" + item.QuoteTweetID + "/0")
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 699, Col: 85}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 707, Col: 71}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var190)
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 280, "\" loading=\"lazy\" alt=\"")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 282, "\" role=\"button\" tabindex=\"0\" aria-label=\"")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 			var templ_7745c5c3_Var191 string
-			templ_7745c5c3_Var191, templ_7745c5c3_Err = templ.ResolveAttributeValue(L(p, "feed_quoted_post_media", "Quoted post media"))
+			templ_7745c5c3_Var191, templ_7745c5c3_Err = templ.ResolveAttributeValue(L(p, "action_open_media", "Open media"))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 699, Col: 160}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 710, Col: 55}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var191)
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 281, "\"></div>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 283, "\"><img class=\"feed-media-image\" src=\"")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-		} else if qMediaCount > 1 {
-			qVisible := mediaGridCount(qMediaCount)
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 282, "<div class=\"feed-media-wrap feed-media-wrap-grid\">")
+			var templ_7745c5c3_Var192 string
+			templ_7745c5c3_Var192, templ_7745c5c3_Err = templ.ResolveAttributeValue("/api/media/slide/" + item.QuoteTweetID + "/0")
+			if templ_7745c5c3_Err != nil {
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 712, Col: 85}
+			}
+			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var192)
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			var templ_7745c5c3_Var192 = []any{fmt.Sprintf("feed-media-grid count-%d", qVisible)}
-			templ_7745c5c3_Err = templ.RenderCSSItems(ctx, templ_7745c5c3_Buffer, templ_7745c5c3_Var192...)
-			if templ_7745c5c3_Err != nil {
-				return templ_7745c5c3_Err
-			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 283, "<div class=\"")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 284, "\" loading=\"lazy\" alt=\"")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 			var templ_7745c5c3_Var193 string
-			templ_7745c5c3_Var193, templ_7745c5c3_Err = templ.ResolveAttributeValue(templ.CSSClasses(templ_7745c5c3_Var192).String())
+			templ_7745c5c3_Var193, templ_7745c5c3_Err = templ.ResolveAttributeValue(L(p, "feed_quoted_post_media", "Quoted post media"))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 1, Col: 0}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 712, Col: 160}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var193)
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 284, "\">")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 285, "\"></div>")
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+		} else if qMediaCount > 1 {
+			qVisible := mediaGridCount(qMediaCount)
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 286, "<div class=\"feed-media-wrap feed-media-wrap-grid\">")
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			var templ_7745c5c3_Var194 = []any{fmt.Sprintf("feed-media-grid count-%d", qVisible)}
+			templ_7745c5c3_Err = templ.RenderCSSItems(ctx, templ_7745c5c3_Buffer, templ_7745c5c3_Var194...)
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 287, "<div class=\"")
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			var templ_7745c5c3_Var195 string
+			templ_7745c5c3_Var195, templ_7745c5c3_Err = templ.ResolveAttributeValue(templ.CSSClasses(templ_7745c5c3_Var194).String())
+			if templ_7745c5c3_Err != nil {
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 1, Col: 0}
+			}
+			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var195)
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 288, "\">")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -3516,25 +3564,25 @@ func feedQuoteMedia(p PageProps, item model.FeedItem, qMediaCount int) templ.Com
 					}
 				}
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 285, "</div></div>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 289, "</div></div>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		} else if item.QuoteBodyText == "" {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 286, "<div class=\"feed-quote-unavailable\">")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 290, "<div class=\"feed-quote-unavailable\">")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			var templ_7745c5c3_Var194 string
-			templ_7745c5c3_Var194, templ_7745c5c3_Err = templ.JoinStringErrs(L(p, "feed_quoted_post", "Quoted post"))
+			var templ_7745c5c3_Var196 string
+			templ_7745c5c3_Var196, templ_7745c5c3_Err = templ.JoinStringErrs(L(p, "feed_quoted_post", "Quoted post"))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 713, Col: 79}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 726, Col: 79}
 			}
-			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var194))
+			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var196))
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 287, "</div>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 291, "</div>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -3559,9 +3607,9 @@ func feedQuoteMediaTile(p PageProps, quoteTweetID string, index int, qm model.Me
 			}()
 		}
 		ctx = templ.InitializeContext(ctx)
-		templ_7745c5c3_Var195 := templ.GetChildren(ctx)
-		if templ_7745c5c3_Var195 == nil {
-			templ_7745c5c3_Var195 = templ.NopComponent
+		templ_7745c5c3_Var197 := templ.GetChildren(ctx)
+		if templ_7745c5c3_Var197 == nil {
+			templ_7745c5c3_Var197 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
 		slideURL := fmt.Sprintf("/api/media/slide/%s/%d", quoteTweetID, index)
@@ -3571,261 +3619,261 @@ func feedQuoteMediaTile(p PageProps, quoteTweetID string, index int, qm model.Me
 			if tileStreamURL == "" || strings.HasPrefix(tileStreamURL, "/api/media/slide/") {
 				tileStreamURL = slideURL
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 288, " <div class=\"feed-media-tile\" data-feed-media data-feed-media-kind=\"video\" data-feed-media-url=\"")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 292, " <div class=\"feed-media-tile\" data-feed-media data-feed-media-kind=\"video\" data-feed-media-url=\"")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			var templ_7745c5c3_Var196 string
-			templ_7745c5c3_Var196, templ_7745c5c3_Err = templ.ResolveAttributeValue(slideURL)
+			var templ_7745c5c3_Var198 string
+			templ_7745c5c3_Var198, templ_7745c5c3_Err = templ.ResolveAttributeValue(slideURL)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 729, Col: 33}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 742, Col: 33}
 			}
-			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var196)
+			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var198)
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 289, "\"")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 293, "\"")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 			if tileStreamURL != "" {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 290, " data-feed-media-stream=\"")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 294, " data-feed-media-stream=\"")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				var templ_7745c5c3_Var197 string
-				templ_7745c5c3_Var197, templ_7745c5c3_Err = templ.ResolveAttributeValue(tileStreamURL)
+				var templ_7745c5c3_Var199 string
+				templ_7745c5c3_Var199, templ_7745c5c3_Err = templ.ResolveAttributeValue(tileStreamURL)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 731, Col: 42}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 744, Col: 42}
 				}
-				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var197)
+				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var199)
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 291, "\"")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 295, "\"")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 			}
 			if tileStreamURL != "" && qm.Type == "video" {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 292, " data-feed-media-preview=\"")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 296, " data-feed-media-preview=\"")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				var templ_7745c5c3_Var198 string
-				templ_7745c5c3_Var198, templ_7745c5c3_Err = templ.ResolveAttributeValue(slideURL)
+				var templ_7745c5c3_Var200 string
+				templ_7745c5c3_Var200, templ_7745c5c3_Err = templ.ResolveAttributeValue(slideURL)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 734, Col: 38}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 747, Col: 38}
 				}
-				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var198)
+				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var200)
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 293, "\"")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 297, "\"")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 294, " role=\"button\" tabindex=\"0\" aria-label=\"")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 298, " role=\"button\" tabindex=\"0\" aria-label=\"")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			var templ_7745c5c3_Var199 string
-			templ_7745c5c3_Var199, templ_7745c5c3_Err = templ.ResolveAttributeValue(ariaLabel)
+			var templ_7745c5c3_Var201 string
+			templ_7745c5c3_Var201, templ_7745c5c3_Err = templ.ResolveAttributeValue(ariaLabel)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 738, Col: 25}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 751, Col: 25}
 			}
-			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var199)
+			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var201)
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 295, "\">")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 299, "\">")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 			if tileStreamURL != "" {
 				if qm.ThumbnailURL != "" && qm.Type == "video" {
-					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 296, "<video class=\"feed-media-video\" muted playsinline loop preload=\"none\" data-feed-inline-video poster=\"")
-					if templ_7745c5c3_Err != nil {
-						return templ_7745c5c3_Err
-					}
-					var templ_7745c5c3_Var200 string
-					templ_7745c5c3_Var200, templ_7745c5c3_Err = templ.ResolveAttributeValue(qm.ThumbnailURL)
-					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 742, Col: 122}
-					}
-					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var200)
-					if templ_7745c5c3_Err != nil {
-						return templ_7745c5c3_Err
-					}
-					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 297, "\"><source src=\"")
-					if templ_7745c5c3_Err != nil {
-						return templ_7745c5c3_Err
-					}
-					var templ_7745c5c3_Var201 string
-					templ_7745c5c3_Var201, templ_7745c5c3_Err = templ.ResolveAttributeValue(tileStreamURL)
-					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 743, Col: 33}
-					}
-					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var201)
-					if templ_7745c5c3_Err != nil {
-						return templ_7745c5c3_Err
-					}
-					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 298, "\" type=\"video/mp4\"></video>")
-					if templ_7745c5c3_Err != nil {
-						return templ_7745c5c3_Err
-					}
-				} else {
-					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 299, "<video class=\"feed-media-video\" muted playsinline loop preload=\"none\" data-feed-inline-video><source src=\"")
+					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 300, "<video class=\"feed-media-video\" muted playsinline loop preload=\"none\" data-feed-inline-video poster=\"")
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
 					}
 					var templ_7745c5c3_Var202 string
-					templ_7745c5c3_Var202, templ_7745c5c3_Err = templ.ResolveAttributeValue(tileStreamURL)
+					templ_7745c5c3_Var202, templ_7745c5c3_Err = templ.ResolveAttributeValue(qm.ThumbnailURL)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 747, Col: 33}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 755, Col: 122}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var202)
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
 					}
-					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 300, "\" type=\"video/mp4\"></video>")
+					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 301, "\"><source src=\"")
+					if templ_7745c5c3_Err != nil {
+						return templ_7745c5c3_Err
+					}
+					var templ_7745c5c3_Var203 string
+					templ_7745c5c3_Var203, templ_7745c5c3_Err = templ.ResolveAttributeValue(tileStreamURL)
+					if templ_7745c5c3_Err != nil {
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 756, Col: 33}
+					}
+					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var203)
+					if templ_7745c5c3_Err != nil {
+						return templ_7745c5c3_Err
+					}
+					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 302, "\" type=\"video/mp4\"></video>")
+					if templ_7745c5c3_Err != nil {
+						return templ_7745c5c3_Err
+					}
+				} else {
+					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 303, "<video class=\"feed-media-video\" muted playsinline loop preload=\"none\" data-feed-inline-video><source src=\"")
+					if templ_7745c5c3_Err != nil {
+						return templ_7745c5c3_Err
+					}
+					var templ_7745c5c3_Var204 string
+					templ_7745c5c3_Var204, templ_7745c5c3_Err = templ.ResolveAttributeValue(tileStreamURL)
+					if templ_7745c5c3_Err != nil {
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 760, Col: 33}
+					}
+					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var204)
+					if templ_7745c5c3_Err != nil {
+						return templ_7745c5c3_Err
+					}
+					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 304, "\" type=\"video/mp4\"></video>")
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
 					}
 				}
 			} else {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 301, "<img class=\"feed-media-image\" src=\"")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 305, "<img class=\"feed-media-image\" src=\"")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				var templ_7745c5c3_Var203 string
-				templ_7745c5c3_Var203, templ_7745c5c3_Err = templ.ResolveAttributeValue(slideURL)
+				var templ_7745c5c3_Var205 string
+				templ_7745c5c3_Var205, templ_7745c5c3_Err = templ.ResolveAttributeValue(slideURL)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 751, Col: 48}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 764, Col: 48}
 				}
-				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var203)
-				if templ_7745c5c3_Err != nil {
-					return templ_7745c5c3_Err
-				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 302, "\" loading=\"lazy\" alt=\"")
+				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var205)
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				var templ_7745c5c3_Var204 string
-				templ_7745c5c3_Var204, templ_7745c5c3_Err = templ.ResolveAttributeValue(fmt.Sprintf(L(p, "feed_quoted_post_media_index", "Quoted post media %d"), index+1))
-				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 751, Col: 154}
-				}
-				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var204)
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 306, "\" loading=\"lazy\" alt=\"")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 303, "\"> ")
+				var templ_7745c5c3_Var206 string
+				templ_7745c5c3_Var206, templ_7745c5c3_Err = templ.ResolveAttributeValue(fmt.Sprintf(L(p, "feed_quoted_post_media_index", "Quoted post media %d"), index+1))
+				if templ_7745c5c3_Err != nil {
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 764, Col: 154}
+				}
+				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var206)
+				if templ_7745c5c3_Err != nil {
+					return templ_7745c5c3_Err
+				}
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 307, "\"> ")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 			}
 			if index == 3 && qMediaCount > 4 {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 304, "<span class=\"feed-media-more\">+")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 308, "<span class=\"feed-media-more\">+")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				var templ_7745c5c3_Var205 string
-				templ_7745c5c3_Var205, templ_7745c5c3_Err = templ.JoinStringErrs(fmt.Sprintf("%d", qMediaCount-4))
+				var templ_7745c5c3_Var207 string
+				templ_7745c5c3_Var207, templ_7745c5c3_Err = templ.JoinStringErrs(fmt.Sprintf("%d", qMediaCount-4))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 754, Col: 69}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 767, Col: 69}
 				}
-				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var205))
+				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var207))
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 305, "</span>")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 309, "</span>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 306, "</div>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 310, "</div>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		} else {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 307, "<button class=\"feed-media-tile\" type=\"button\" data-feed-media data-feed-media-kind=\"image\" data-feed-media-url=\"")
-			if templ_7745c5c3_Err != nil {
-				return templ_7745c5c3_Err
-			}
-			var templ_7745c5c3_Var206 string
-			templ_7745c5c3_Var206, templ_7745c5c3_Err = templ.ResolveAttributeValue(slideURL)
-			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 763, Col: 33}
-			}
-			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var206)
-			if templ_7745c5c3_Err != nil {
-				return templ_7745c5c3_Err
-			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 308, "\" aria-label=\"")
-			if templ_7745c5c3_Err != nil {
-				return templ_7745c5c3_Err
-			}
-			var templ_7745c5c3_Var207 string
-			templ_7745c5c3_Var207, templ_7745c5c3_Err = templ.ResolveAttributeValue(ariaLabel)
-			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 764, Col: 25}
-			}
-			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var207)
-			if templ_7745c5c3_Err != nil {
-				return templ_7745c5c3_Err
-			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 309, "\"><img class=\"feed-media-image\" src=\"")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 311, "<button class=\"feed-media-tile\" type=\"button\" data-feed-media data-feed-media-kind=\"image\" data-feed-media-url=\"")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 			var templ_7745c5c3_Var208 string
 			templ_7745c5c3_Var208, templ_7745c5c3_Err = templ.ResolveAttributeValue(slideURL)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 766, Col: 47}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 776, Col: 33}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var208)
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 310, "\" loading=\"lazy\" alt=\"")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 312, "\" aria-label=\"")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 			var templ_7745c5c3_Var209 string
-			templ_7745c5c3_Var209, templ_7745c5c3_Err = templ.ResolveAttributeValue(fmt.Sprintf(L(p, "feed_quoted_post_media_index", "Quoted post media %d"), index+1))
+			templ_7745c5c3_Var209, templ_7745c5c3_Err = templ.ResolveAttributeValue(ariaLabel)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 766, Col: 153}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 777, Col: 25}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var209)
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 311, "\"> ")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 313, "\"><img class=\"feed-media-image\" src=\"")
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			var templ_7745c5c3_Var210 string
+			templ_7745c5c3_Var210, templ_7745c5c3_Err = templ.ResolveAttributeValue(slideURL)
+			if templ_7745c5c3_Err != nil {
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 779, Col: 47}
+			}
+			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var210)
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 314, "\" loading=\"lazy\" alt=\"")
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			var templ_7745c5c3_Var211 string
+			templ_7745c5c3_Var211, templ_7745c5c3_Err = templ.ResolveAttributeValue(fmt.Sprintf(L(p, "feed_quoted_post_media_index", "Quoted post media %d"), index+1))
+			if templ_7745c5c3_Err != nil {
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 779, Col: 153}
+			}
+			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var211)
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 315, "\"> ")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 			if index == 3 && qMediaCount > 4 {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 312, "<span class=\"feed-media-more\">+")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 316, "<span class=\"feed-media-more\">+")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				var templ_7745c5c3_Var210 string
-				templ_7745c5c3_Var210, templ_7745c5c3_Err = templ.JoinStringErrs(fmt.Sprintf("%d", qMediaCount-4))
+				var templ_7745c5c3_Var212 string
+				templ_7745c5c3_Var212, templ_7745c5c3_Err = templ.JoinStringErrs(fmt.Sprintf("%d", qMediaCount-4))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 768, Col: 69}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 781, Col: 69}
 				}
-				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var210))
+				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var212))
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 313, "</span>")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 317, "</span>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 314, "</button>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 318, "</button>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -3850,93 +3898,93 @@ func feedTaggedAccounts(p PageProps, item model.FeedItem) templ.Component {
 			}()
 		}
 		ctx = templ.InitializeContext(ctx)
-		templ_7745c5c3_Var211 := templ.GetChildren(ctx)
-		if templ_7745c5c3_Var211 == nil {
-			templ_7745c5c3_Var211 = templ.NopComponent
+		templ_7745c5c3_Var213 := templ.GetChildren(ctx)
+		if templ_7745c5c3_Var213 == nil {
+			templ_7745c5c3_Var213 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 315, "<button class=\"feed-tagged-row feed-tagged-multi\" type=\"button\" data-tagged=\"")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 319, "<button class=\"feed-tagged-row feed-tagged-multi\" type=\"button\" data-tagged=\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		var templ_7745c5c3_Var212 string
-		templ_7745c5c3_Var212, templ_7745c5c3_Err = templ.ResolveAttributeValue(toJSONAttr(item.TaggedAccounts))
+		var templ_7745c5c3_Var214 string
+		templ_7745c5c3_Var214, templ_7745c5c3_Err = templ.ResolveAttributeValue(toJSONAttr(item.TaggedAccounts))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 775, Col: 110}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 788, Col: 110}
 		}
-		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var212)
+		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var214)
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 316, "\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 320, "\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		for i, ta := range item.TaggedAccounts {
 			if i > 0 {
-				var templ_7745c5c3_Var213 string
-				templ_7745c5c3_Var213, templ_7745c5c3_Err = templ.JoinStringErrs(" ")
-				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 778, Col: 9}
-				}
-				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var213))
-				if templ_7745c5c3_Err != nil {
-					return templ_7745c5c3_Err
-				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 317, " <span class=\"feed-tagged-sep\">")
-				if templ_7745c5c3_Err != nil {
-					return templ_7745c5c3_Err
-				}
-				var templ_7745c5c3_Var214 string
-				templ_7745c5c3_Var214, templ_7745c5c3_Err = templ.JoinStringErrs(L(p, "list_sep_and", "and"))
-				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 779, Col: 63}
-				}
-				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var214))
-				if templ_7745c5c3_Err != nil {
-					return templ_7745c5c3_Err
-				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 318, "</span> ")
-				if templ_7745c5c3_Err != nil {
-					return templ_7745c5c3_Err
-				}
 				var templ_7745c5c3_Var215 string
 				templ_7745c5c3_Var215, templ_7745c5c3_Err = templ.JoinStringErrs(" ")
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 780, Col: 9}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 791, Col: 9}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var215))
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 319, " ")
-			if templ_7745c5c3_Err != nil {
-				return templ_7745c5c3_Err
-			}
-			if ta.DisplayName != "" {
-				var templ_7745c5c3_Var216 string
-				templ_7745c5c3_Var216, templ_7745c5c3_Err = templ.JoinStringErrs(ta.DisplayName)
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 321, " <span class=\"feed-tagged-sep\">")
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 783, Col: 20}
+					return templ_7745c5c3_Err
+				}
+				var templ_7745c5c3_Var216 string
+				templ_7745c5c3_Var216, templ_7745c5c3_Err = templ.JoinStringErrs(L(p, "list_sep_and", "and"))
+				if templ_7745c5c3_Err != nil {
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 792, Col: 63}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var216))
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-			} else {
-				var templ_7745c5c3_Var217 string
-				templ_7745c5c3_Var217, templ_7745c5c3_Err = templ.JoinStringErrs(ta.Handle)
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 322, "</span> ")
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 785, Col: 15}
+					return templ_7745c5c3_Err
+				}
+				var templ_7745c5c3_Var217 string
+				templ_7745c5c3_Var217, templ_7745c5c3_Err = templ.JoinStringErrs(" ")
+				if templ_7745c5c3_Err != nil {
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 793, Col: 9}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var217))
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 			}
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 323, " ")
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			if ta.DisplayName != "" {
+				var templ_7745c5c3_Var218 string
+				templ_7745c5c3_Var218, templ_7745c5c3_Err = templ.JoinStringErrs(ta.DisplayName)
+				if templ_7745c5c3_Err != nil {
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 796, Col: 20}
+				}
+				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var218))
+				if templ_7745c5c3_Err != nil {
+					return templ_7745c5c3_Err
+				}
+			} else {
+				var templ_7745c5c3_Var219 string
+				templ_7745c5c3_Var219, templ_7745c5c3_Err = templ.JoinStringErrs(ta.Handle)
+				if templ_7745c5c3_Err != nil {
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 798, Col: 15}
+				}
+				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var219))
+				if templ_7745c5c3_Err != nil {
+					return templ_7745c5c3_Err
+				}
+			}
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 320, "</button>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 324, "</button>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -3960,39 +4008,39 @@ func feedActions(p PageProps, item model.FeedItem) templ.Component {
 			}()
 		}
 		ctx = templ.InitializeContext(ctx)
-		templ_7745c5c3_Var218 := templ.GetChildren(ctx)
-		if templ_7745c5c3_Var218 == nil {
-			templ_7745c5c3_Var218 = templ.NopComponent
+		templ_7745c5c3_Var220 := templ.GetChildren(ctx)
+		if templ_7745c5c3_Var220 == nil {
+			templ_7745c5c3_Var220 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
 		externalURL := feedExternalURL(item)
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 321, "<div class=\"feed-actions\" data-feed-index=\"0\"><button class=\"feed-action-btn\" type=\"button\" data-feed-action=\"share\" title=\"")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 325, "<div class=\"feed-actions\" data-feed-index=\"0\"><button class=\"feed-action-btn\" type=\"button\" data-feed-action=\"share\" title=\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		var templ_7745c5c3_Var219 string
-		templ_7745c5c3_Var219, templ_7745c5c3_Err = templ.ResolveAttributeValue(L(p, "action_copy_link", "Copy link"))
+		var templ_7745c5c3_Var221 string
+		templ_7745c5c3_Var221, templ_7745c5c3_Err = templ.ResolveAttributeValue(L(p, "action_copy_link", "Copy link"))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 794, Col: 118}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 807, Col: 118}
 		}
-		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var219)
-		if templ_7745c5c3_Err != nil {
-			return templ_7745c5c3_Err
-		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 322, "\" aria-label=\"")
+		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var221)
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		var templ_7745c5c3_Var220 string
-		templ_7745c5c3_Var220, templ_7745c5c3_Err = templ.ResolveAttributeValue(L(p, "action_copy_link", "Copy link"))
-		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 794, Col: 171}
-		}
-		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var220)
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 326, "\" aria-label=\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 323, "\"><svg width=\"20\" height=\"20\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><path d=\"M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8\"></path> <polyline points=\"16 6 12 2 8 6\"></polyline> <line x1=\"12\" y1=\"2\" x2=\"12\" y2=\"15\"></line></svg></button>")
+		var templ_7745c5c3_Var222 string
+		templ_7745c5c3_Var222, templ_7745c5c3_Err = templ.ResolveAttributeValue(L(p, "action_copy_link", "Copy link"))
+		if templ_7745c5c3_Err != nil {
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 807, Col: 171}
+		}
+		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var222)
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 327, "\"><svg width=\"20\" height=\"20\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><path d=\"M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8\"></path> <polyline points=\"16 6 12 2 8 6\"></polyline> <line x1=\"12\" y1=\"2\" x2=\"12\" y2=\"15\"></line></svg></button>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -4000,154 +4048,154 @@ func feedActions(p PageProps, item model.FeedItem) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		var templ_7745c5c3_Var221 = []any{"feed-action-btn", templ.KV("active", item.IsBookmarked)}
-		templ_7745c5c3_Err = templ.RenderCSSItems(ctx, templ_7745c5c3_Buffer, templ_7745c5c3_Var221...)
+		var templ_7745c5c3_Var223 = []any{"feed-action-btn", templ.KV("active", item.IsBookmarked)}
+		templ_7745c5c3_Err = templ.RenderCSSItems(ctx, templ_7745c5c3_Buffer, templ_7745c5c3_Var223...)
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 324, "<button class=\"")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 328, "<button class=\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		var templ_7745c5c3_Var222 string
-		templ_7745c5c3_Var222, templ_7745c5c3_Err = templ.ResolveAttributeValue(templ.CSSClasses(templ_7745c5c3_Var221).String())
+		var templ_7745c5c3_Var224 string
+		templ_7745c5c3_Var224, templ_7745c5c3_Err = templ.ResolveAttributeValue(templ.CSSClasses(templ_7745c5c3_Var223).String())
 		if templ_7745c5c3_Err != nil {
 			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 1, Col: 0}
 		}
-		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var222)
+		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var224)
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 325, "\" type=\"button\" data-feed-action=\"bookmark\"")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 329, "\" type=\"button\" data-feed-action=\"bookmark\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		if item.IsBookmarked {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 326, " title=\"")
-			if templ_7745c5c3_Err != nil {
-				return templ_7745c5c3_Err
-			}
-			var templ_7745c5c3_Var223 string
-			templ_7745c5c3_Var223, templ_7745c5c3_Err = templ.ResolveAttributeValue(L(p, "action_unbookmark", "Unbookmark"))
-			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 807, Col: 51}
-			}
-			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var223)
-			if templ_7745c5c3_Err != nil {
-				return templ_7745c5c3_Err
-			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 327, "\" aria-label=\"")
-			if templ_7745c5c3_Err != nil {
-				return templ_7745c5c3_Err
-			}
-			var templ_7745c5c3_Var224 string
-			templ_7745c5c3_Var224, templ_7745c5c3_Err = templ.ResolveAttributeValue(L(p, "action_unbookmark", "Unbookmark"))
-			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 808, Col: 56}
-			}
-			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var224)
-			if templ_7745c5c3_Err != nil {
-				return templ_7745c5c3_Err
-			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 328, "\"")
-			if templ_7745c5c3_Err != nil {
-				return templ_7745c5c3_Err
-			}
-		} else {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 329, " title=\"")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 330, " title=\"")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 			var templ_7745c5c3_Var225 string
-			templ_7745c5c3_Var225, templ_7745c5c3_Err = templ.ResolveAttributeValue(L(p, "action_bookmark", "Bookmark"))
+			templ_7745c5c3_Var225, templ_7745c5c3_Err = templ.ResolveAttributeValue(L(p, "action_unbookmark", "Unbookmark"))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 810, Col: 47}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 820, Col: 51}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var225)
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 330, "\" aria-label=\"")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 331, "\" aria-label=\"")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 			var templ_7745c5c3_Var226 string
-			templ_7745c5c3_Var226, templ_7745c5c3_Err = templ.ResolveAttributeValue(L(p, "action_bookmark", "Bookmark"))
+			templ_7745c5c3_Var226, templ_7745c5c3_Err = templ.ResolveAttributeValue(L(p, "action_unbookmark", "Unbookmark"))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 811, Col: 52}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 821, Col: 56}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var226)
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 331, "\"")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 332, "\"")
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+		} else {
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 333, " title=\"")
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			var templ_7745c5c3_Var227 string
+			templ_7745c5c3_Var227, templ_7745c5c3_Err = templ.ResolveAttributeValue(L(p, "action_bookmark", "Bookmark"))
+			if templ_7745c5c3_Err != nil {
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 823, Col: 47}
+			}
+			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var227)
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 334, "\" aria-label=\"")
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			var templ_7745c5c3_Var228 string
+			templ_7745c5c3_Var228, templ_7745c5c3_Err = templ.ResolveAttributeValue(L(p, "action_bookmark", "Bookmark"))
+			if templ_7745c5c3_Err != nil {
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 824, Col: 52}
+			}
+			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var228)
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 335, "\"")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 332, "><svg width=\"20\" height=\"20\" viewBox=\"0 0 24 24\" fill=\"")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 336, "><svg width=\"20\" height=\"20\" viewBox=\"0 0 24 24\" fill=\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		var templ_7745c5c3_Var227 string
-		templ_7745c5c3_Var227, templ_7745c5c3_Err = templ.ResolveAttributeValue(heartFill(item.IsBookmarked))
+		var templ_7745c5c3_Var229 string
+		templ_7745c5c3_Var229, templ_7745c5c3_Err = templ.ResolveAttributeValue(heartFill(item.IsBookmarked))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 814, Col: 86}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 827, Col: 86}
 		}
-		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var227)
+		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var229)
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 333, "\" stroke=\"currentColor\" stroke-width=\"2\"><path d=\"M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z\"></path></svg></button> ")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 337, "\" stroke=\"currentColor\" stroke-width=\"2\"><path d=\"M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z\"></path></svg></button> ")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		if externalURL != "" {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 334, "<a class=\"feed-action-btn\" data-feed-action=\"openx\" href=\"")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 338, "<a class=\"feed-action-btn\" data-feed-action=\"openx\" href=\"")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			var templ_7745c5c3_Var228 templ.SafeURL
-			templ_7745c5c3_Var228, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL(externalURL))
+			var templ_7745c5c3_Var230 templ.SafeURL
+			templ_7745c5c3_Var230, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL(externalURL))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 822, Col: 37}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 835, Col: 37}
 			}
-			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var228))
-			if templ_7745c5c3_Err != nil {
-				return templ_7745c5c3_Err
-			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 335, "\" target=\"_blank\" rel=\"noopener noreferrer\" title=\"")
+			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var230))
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			var templ_7745c5c3_Var229 string
-			templ_7745c5c3_Var229, templ_7745c5c3_Err = templ.ResolveAttributeValue(L(p, "action_open_on_x", "Open on X"))
-			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 825, Col: 49}
-			}
-			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var229)
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 339, "\" target=\"_blank\" rel=\"noopener noreferrer\" title=\"")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 336, "\" aria-label=\"")
+			var templ_7745c5c3_Var231 string
+			templ_7745c5c3_Var231, templ_7745c5c3_Err = templ.ResolveAttributeValue(L(p, "action_open_on_x", "Open on X"))
+			if templ_7745c5c3_Err != nil {
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 838, Col: 49}
+			}
+			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var231)
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			var templ_7745c5c3_Var230 string
-			templ_7745c5c3_Var230, templ_7745c5c3_Err = templ.ResolveAttributeValue(L(p, "action_open_on_x", "Open on X"))
-			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 826, Col: 54}
-			}
-			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var230)
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 340, "\" aria-label=\"")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 337, "\"><svg width=\"18\" height=\"18\" viewBox=\"0 0 24 24\" fill=\"currentColor\"><path d=\"M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-4.714-6.231-5.401 6.231H2.746l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z\"></path></svg></a>")
+			var templ_7745c5c3_Var232 string
+			templ_7745c5c3_Var232, templ_7745c5c3_Err = templ.ResolveAttributeValue(L(p, "action_open_on_x", "Open on X"))
+			if templ_7745c5c3_Err != nil {
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 839, Col: 54}
+			}
+			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var232)
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 341, "\"><svg width=\"18\" height=\"18\" viewBox=\"0 0 24 24\" fill=\"currentColor\"><path d=\"M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-4.714-6.231-5.401 6.231H2.746l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z\"></path></svg></a>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 338, "</div>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 342, "</div>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -4171,127 +4219,127 @@ func feedFallbackForms(p PageProps, item model.FeedItem) templ.Component {
 			}()
 		}
 		ctx = templ.InitializeContext(ctx)
-		templ_7745c5c3_Var231 := templ.GetChildren(ctx)
-		if templ_7745c5c3_Var231 == nil {
-			templ_7745c5c3_Var231 = templ.NopComponent
+		templ_7745c5c3_Var233 := templ.GetChildren(ctx)
+		if templ_7745c5c3_Var233 == nil {
+			templ_7745c5c3_Var233 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 339, "<div class=\"feed-action-fallback-forms\" style=\"display:none;\"><form method=\"post\" action=\"")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 343, "<div class=\"feed-action-fallback-forms\" style=\"display:none;\"><form method=\"post\" action=\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		var templ_7745c5c3_Var232 templ.SafeURL
-		templ_7745c5c3_Var232, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL("/actions/feed/" + item.TweetID + "/like"))
+		var templ_7745c5c3_Var234 templ.SafeURL
+		templ_7745c5c3_Var234, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL("/actions/feed/" + item.TweetID + "/like"))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 838, Col: 87}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 851, Col: 87}
 		}
-		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var232))
-		if templ_7745c5c3_Err != nil {
-			return templ_7745c5c3_Err
-		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 340, "\" class=\"action-form\" data-feed-action-form=\"like\"><input type=\"hidden\" name=\"source_handle\" value=\"")
+		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var234))
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		var templ_7745c5c3_Var233 string
-		templ_7745c5c3_Var233, templ_7745c5c3_Err = templ.ResolveAttributeValue(item.SourceHandle)
-		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 839, Col: 70}
-		}
-		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var233)
-		if templ_7745c5c3_Err != nil {
-			return templ_7745c5c3_Err
-		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 341, "\"> <input type=\"hidden\" name=\"author_handle\" value=\"")
-		if templ_7745c5c3_Err != nil {
-			return templ_7745c5c3_Err
-		}
-		var templ_7745c5c3_Var234 string
-		templ_7745c5c3_Var234, templ_7745c5c3_Err = templ.ResolveAttributeValue(item.AuthorHandle)
-		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 840, Col: 70}
-		}
-		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var234)
-		if templ_7745c5c3_Err != nil {
-			return templ_7745c5c3_Err
-		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 342, "\"> <input type=\"hidden\" name=\"body_text\" value=\"")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 344, "\" class=\"action-form\" data-feed-action-form=\"like\"><input type=\"hidden\" name=\"source_handle\" value=\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var235 string
-		templ_7745c5c3_Var235, templ_7745c5c3_Err = templ.ResolveAttributeValue(item.BodyText)
+		templ_7745c5c3_Var235, templ_7745c5c3_Err = templ.ResolveAttributeValue(item.SourceHandle)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 841, Col: 62}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 852, Col: 70}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var235)
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 343, "\"> <button type=\"submit\" data-feed-action-button=\"like\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 345, "\"> <input type=\"hidden\" name=\"author_handle\" value=\"")
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		var templ_7745c5c3_Var236 string
+		templ_7745c5c3_Var236, templ_7745c5c3_Err = templ.ResolveAttributeValue(item.AuthorHandle)
+		if templ_7745c5c3_Err != nil {
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 853, Col: 70}
+		}
+		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var236)
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 346, "\"> <input type=\"hidden\" name=\"body_text\" value=\"")
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		var templ_7745c5c3_Var237 string
+		templ_7745c5c3_Var237, templ_7745c5c3_Err = templ.ResolveAttributeValue(item.BodyText)
+		if templ_7745c5c3_Err != nil {
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 854, Col: 62}
+		}
+		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var237)
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 347, "\"> <button type=\"submit\" data-feed-action-button=\"like\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		if item.IsLiked {
-			var templ_7745c5c3_Var236 string
-			templ_7745c5c3_Var236, templ_7745c5c3_Err = templ.JoinStringErrs(L(p, "action_unlike", "Unlike"))
+			var templ_7745c5c3_Var238 string
+			templ_7745c5c3_Var238, templ_7745c5c3_Err = templ.JoinStringErrs(L(p, "action_unlike", "Unlike"))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 844, Col: 38}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 857, Col: 38}
 			}
-			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var236))
+			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var238))
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		} else {
-			var templ_7745c5c3_Var237 string
-			templ_7745c5c3_Var237, templ_7745c5c3_Err = templ.JoinStringErrs(L(p, "action_like", "Like"))
-			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 846, Col: 34}
-			}
-			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var237))
-			if templ_7745c5c3_Err != nil {
-				return templ_7745c5c3_Err
-			}
-		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 344, "</button></form><form method=\"post\" action=\"")
-		if templ_7745c5c3_Err != nil {
-			return templ_7745c5c3_Err
-		}
-		var templ_7745c5c3_Var238 templ.SafeURL
-		templ_7745c5c3_Var238, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL("/actions/feed/" + item.TweetID + "/bookmark"))
-		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 850, Col: 91}
-		}
-		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var238))
-		if templ_7745c5c3_Err != nil {
-			return templ_7745c5c3_Err
-		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 345, "\" class=\"action-form\" data-feed-action-form=\"bookmark\"><button type=\"submit\" data-feed-action-button=\"bookmark\">")
-		if templ_7745c5c3_Err != nil {
-			return templ_7745c5c3_Err
-		}
-		if item.IsBookmarked {
 			var templ_7745c5c3_Var239 string
-			templ_7745c5c3_Var239, templ_7745c5c3_Err = templ.JoinStringErrs(L(p, "action_unbookmark", "Unbookmark"))
+			templ_7745c5c3_Var239, templ_7745c5c3_Err = templ.JoinStringErrs(L(p, "action_like", "Like"))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 853, Col: 46}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 859, Col: 34}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var239))
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-		} else {
-			var templ_7745c5c3_Var240 string
-			templ_7745c5c3_Var240, templ_7745c5c3_Err = templ.JoinStringErrs(L(p, "action_bookmark", "Bookmark"))
+		}
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 348, "</button></form><form method=\"post\" action=\"")
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		var templ_7745c5c3_Var240 templ.SafeURL
+		templ_7745c5c3_Var240, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL("/actions/feed/" + item.TweetID + "/bookmark"))
+		if templ_7745c5c3_Err != nil {
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 863, Col: 91}
+		}
+		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var240))
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 349, "\" class=\"action-form\" data-feed-action-form=\"bookmark\"><button type=\"submit\" data-feed-action-button=\"bookmark\">")
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		if item.IsBookmarked {
+			var templ_7745c5c3_Var241 string
+			templ_7745c5c3_Var241, templ_7745c5c3_Err = templ.JoinStringErrs(L(p, "action_unbookmark", "Unbookmark"))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 855, Col: 42}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 866, Col: 46}
 			}
-			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var240))
+			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var241))
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+		} else {
+			var templ_7745c5c3_Var242 string
+			templ_7745c5c3_Var242, templ_7745c5c3_Err = templ.JoinStringErrs(L(p, "action_bookmark", "Bookmark"))
+			if templ_7745c5c3_Err != nil {
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/feed_item.templ`, Line: 868, Col: 42}
+			}
+			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var242))
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 346, "</button></form></div>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 350, "</button></form></div>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}

@@ -117,6 +117,11 @@ func TestFeedItemThreadCollapsesOlderAncestors(t *testing.T) {
 	if !strings.Contains(html, `data-feed-thread-more`) || !strings.Contains(html, `Load more replies`) {
 		t.Fatalf("load-more replies control missing: %s", html)
 	}
+	buttonAt := strings.Index(html, `data-feed-thread-more`)
+	visibleParentAt := strings.Index(html, `data-tweet-id="parent_1"`)
+	if buttonAt < 0 || visibleParentAt < 0 || buttonAt > visibleParentAt {
+		t.Fatalf("load-more control should render before visible latest replies; button=%d parent=%d html=%s", buttonAt, visibleParentAt, html)
+	}
 }
 
 func TestFeedItemRendersSingleVideoFromSlideEndpointWhenStreamMissing(t *testing.T) {
@@ -171,6 +176,34 @@ func TestFeedItemQuoteVideoTileUsesItsOwnSlideEndpoint(t *testing.T) {
 	}
 	if strings.Contains(html, `<source src="/api/media/slide/quote_1/0" type="video/mp4">`) {
 		t.Fatalf("quote video tile reused the first slide stream: %s", html)
+	}
+}
+
+func TestFeedItemQuoteCardCarriesHoverIdentity(t *testing.T) {
+	item := model.FeedItem{
+		TweetID:                "parent_1",
+		AuthorHandle:           "sample_author",
+		BodyText:               "parent body",
+		QuoteTweetID:           "quote_1",
+		QuoteAuthorHandle:      "sample_quote",
+		QuoteAuthorDisplayName: "Sample Quote",
+		QuoteChannelID:         "twitter_sample_quote",
+		QuoteBodyText:          "quote body",
+	}
+
+	var buf bytes.Buffer
+	if err := FeedItem(PageProps{}, item).Render(context.Background(), &buf); err != nil {
+		t.Fatalf("render feed item: %v", err)
+	}
+	html := buf.String()
+	for _, want := range []string{
+		`data-quote-author-channel-id="twitter_sample_quote"`,
+		`data-quote-author-handle="sample_quote"`,
+		`class="feed-quote-author feed-quote-author-link" href="/channels/twitter_sample_quote"`,
+	} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("missing %q in html: %s", want, html)
+		}
 	}
 }
 

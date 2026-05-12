@@ -499,6 +499,8 @@ func TestProfileHoverOwnsStaticProfileCardFollowWhenFeedBundleAbsent(t *testing.
 		"data-feed-menu-action=\"unfollow\"",
 		"MpaSiteBase.syncChannelFollowState",
 		"js/dist/feed.js",
+		"data-quote-author-channel-id",
+		"CHANNELS_HREF_RE",
 	}
 	for _, check := range checks {
 		if !strings.Contains(src, check) {

@@ -45,6 +45,16 @@
 			return h ? 'twitter_' + h : null;
 		}
 		if (el.matches('a.feed-quote-author-link, .feed-quote-avatar')) {
+			const quote = el.closest('[data-quote-author-channel-id], [data-quote-author-handle]');
+			const cid = quote?.getAttribute('data-quote-author-channel-id');
+			if (cid) return cid;
+			if (el.matches('a.feed-quote-author-link')) {
+				const href = el.getAttribute('href') || '';
+				const m = href.match(CHANNELS_HREF_RE);
+				if (m) return m[1] + '_' + m[2];
+			}
+			const localHandle = quote?.getAttribute('data-quote-author-handle')?.toLowerCase();
+			if (localHandle) return 'twitter_' + localHandle;
 			const art = el.closest('[data-quote-author-handle]');
 			const h = art?.getAttribute('data-quote-author-handle')?.toLowerCase();
 			return h ? 'twitter_' + h : null;
