@@ -706,7 +706,8 @@ func (s *Server) handleVideoCommentsRefresh(w http.ResponseWriter, r *http.Reque
 	if err != nil {
 		slog.Error("AddComments", "video", videoID, "err", err)
 	}
-	s.queueYouTubeCommentAuthorAvatars(parsed)
+	// yt-dlp already returns commenter thumbnails with comments. Commenters are
+	// not navigable Igloo profiles, so keep them out of channel_profiles.
 
 	// If fetch returned nothing but had comments before, log warning
 	if saved == 0 && len(oldComments) > 0 {
@@ -736,32 +737,6 @@ func (s *Server) handleVideoCommentsRefresh(w http.ResponseWriter, r *http.Reque
 		"comments": comments,
 		"count":    len(comments),
 	})
-}
-
-func (s *Server) queueYouTubeCommentAuthorAvatars(comments []db.CommentInput) {
-	if len(comments) == 0 {
-		return
-	}
-	if n, err := s.db.SeedYouTubeCommentAuthorProfiles(); err != nil {
-		slog.Warn("SeedYouTubeCommentAuthorProfiles", "err", err)
-	} else if n > 0 {
-		slog.Info("seeded_youtube_comment_author_profiles", "count", n)
-	}
-	if s.requestAvatar == nil {
-		return
-	}
-	seen := map[string]struct{}{}
-	for _, comment := range comments {
-		channelID := model.YouTubeCommentAuthorChannelID(comment.AuthorID)
-		if channelID == "" {
-			continue
-		}
-		if _, ok := seen[channelID]; ok {
-			continue
-		}
-		seen[channelID] = struct{}{}
-		s.requestAvatar(channelID)
-	}
 }
 
 // stringFromAny safely extracts a string from an any value.

@@ -917,35 +917,6 @@ func TestAndroidSyncCanonicalVideoURL(t *testing.T) {
 	}
 }
 
-func TestAndroidSyncPublishesYouTubeCommentAuthorAvatar(t *testing.T) {
-	srv := newAndroidSyncTestServer(t)
-	dataDir := srv.cfg.DataDir
-	commenterID := "youtube_UCcommenter123"
-	mustWriteFile(t, filepath.Join(dataDir, "thumbnails", "avatars", commenterID+".jpg"), []byte{0xff, 0xd8, 0xff, 0xdb, 0x00, 0x43})
-
-	assets, _, err := srv.buildAndroidSyncAssets("", db.AndroidSyncDesiredSets{
-		Tweets: map[string]struct{}{},
-		Videos: map[string]struct{}{},
-		Channels: map[string]struct{}{
-			commenterID: {},
-		},
-	})
-	if err != nil {
-		t.Fatalf("build assets: %v", err)
-	}
-	assetID := db.BuildManifestAssetID("youtube", "channel", commenterID, "avatar", 0)
-	for _, asset := range assets {
-		if asset.AssetID != assetID {
-			continue
-		}
-		if asset.State != "ready" || asset.AssetKind != "avatar" || asset.ServerURL != "/api/media/avatar/"+commenterID {
-			t.Fatalf("comment avatar asset mismatch: %+v", asset)
-		}
-		return
-	}
-	t.Fatalf("comment author avatar asset missing from %+v", assets)
-}
-
 func TestAndroidSyncLatestCreatesGenerationDuringFreshSourceDrift(t *testing.T) {
 	srv := newAndroidSyncTestServer(t)
 	dataDir := srv.cfg.DataDir

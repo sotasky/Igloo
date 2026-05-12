@@ -17,7 +17,7 @@ import (
 // AndroidSyncMaterializerVersion is part of the generation source hash. Bump
 // it when server-side asset materialization semantics change and Android needs
 // a fresh immutable generation even if the source rows did not change.
-const AndroidSyncMaterializerVersion = 29
+const AndroidSyncMaterializerVersion = 30
 
 // AndroidSyncDesiredSets is the server-owned content boundary for one
 // Android generation. The web materializer uses it to filter assets and build
@@ -205,18 +205,8 @@ func (db *DB) ListAndroidSyncDesiredSets(username string, settings AndroidRetent
 
 			UNION
 			SELECT channel_id FROM content_videos
-
-			UNION
-			SELECT DISTINCT CASE
-				WHEN vc.author_id GLOB 'youtube_UC*' THEN vc.author_id
-				WHEN vc.author_id GLOB 'UC*' THEN 'youtube_' || vc.author_id
-				ELSE ''
-			END AS channel_id
-			FROM video_comments vc
-			INNER JOIN videos v ON v.video_id = vc.video_id
-			WHERE COALESCE(vc.platform, 'youtube') = 'youtube'
-			  AND COALESCE(vc.author_id, '') != ''
-			  AND v.video_id IN (SELECT cv.video_id FROM content_videos cv)
+			-- YouTube comment author thumbnails remain on video_comments
+			-- attachments; commenter authors are not synced as channels.
 		)
 			SELECT DISTINCT ac.channel_id
 			FROM avatar_channels ac

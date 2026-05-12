@@ -87,11 +87,6 @@ func (m *Manager) runProfileRefreshLoop(ctx context.Context) {
 				} else if n > 0 {
 					log.Printf("[profile] seeded %d synthetic twitter avatar profile rows", n)
 				}
-				if n, err := m.db.SeedYouTubeCommentAuthorProfiles(); err != nil {
-					log.Printf("[profile] SeedYouTubeCommentAuthorProfiles: %v", err)
-				} else if n > 0 {
-					log.Printf("[profile] seeded %d youtube comment author profile rows", n)
-				}
 				lastFeedAvatarSeed = time.Now()
 			}
 			feedWorked := m.refreshFeedProfileCompletenessBatch(ctx, fetchprofile.Fetch, avDir, bnDir, feedProfileBatchPerTick)

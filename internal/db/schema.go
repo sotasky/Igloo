@@ -658,6 +658,12 @@ func EnsureSchemaWithOptions(conn *sql.DB, opts EnsureSchemaOptions) error {
 	}
 	reportPhase(opts.Phase, "schema.legacy_table_repairs", phaseStart)
 
+	phaseStart = time.Now()
+	if err := cleanupYouTubeCommentAuthorProfilesOnce(conn); err != nil {
+		return err
+	}
+	reportPhase(opts.Phase, "schema.youtube_comment_profile_cleanup", phaseStart)
+
 	// Backfill: seed sync_seq for existing rows that have no value yet.
 	phaseStart = time.Now()
 	if err := backfillSyncSeqOnce(conn); err != nil {
@@ -787,6 +793,38 @@ func cleanupLegacyAndroidSyncGenerations(conn *sql.DB) error {
 			SELECT COUNT(*)
 			FROM android_sync_generations
 			WHERE generation_id LIKE 'android-v3-%'
+		`)
+	}
+	return nil
+}
+
+func cleanupYouTubeCommentAuthorProfilesOnce(conn *sql.DB) error {
+	ran, err := runSchemaMigrationOnce(conn, "remove_youtube_comment_author_profiles", func(tx *sql.Tx) error {
+		// These rows were previously derived from video_comments. yt-dlp already
+		// stores commenter thumbnails on the comment rows, and commenters are not
+		// clickable Igloo profiles, so profile/avatar workers should ignore them.
+		_, err := tx.Exec(`
+			DELETE FROM channel_profiles
+			WHERE platform = 'youtube'
+			  AND NOT EXISTS (SELECT 1 FROM channels c WHERE c.channel_id = channel_profiles.channel_id)
+			  AND NOT EXISTS (SELECT 1 FROM videos v WHERE v.channel_id = channel_profiles.channel_id)
+			  AND NOT EXISTS (SELECT 1 FROM channel_follows cf WHERE cf.channel_id = channel_profiles.channel_id)
+			  AND NOT EXISTS (SELECT 1 FROM channel_stars cs WHERE cs.channel_id = channel_profiles.channel_id)
+		`)
+		return err
+	})
+	if err != nil {
+		return err
+	}
+	if !ran {
+		warnIfRows(conn, "remove_youtube_comment_author_profiles", `
+			SELECT COUNT(*)
+			FROM channel_profiles
+			WHERE platform = 'youtube'
+			  AND NOT EXISTS (SELECT 1 FROM channels c WHERE c.channel_id = channel_profiles.channel_id)
+			  AND NOT EXISTS (SELECT 1 FROM videos v WHERE v.channel_id = channel_profiles.channel_id)
+			  AND NOT EXISTS (SELECT 1 FROM channel_follows cf WHERE cf.channel_id = channel_profiles.channel_id)
+			  AND NOT EXISTS (SELECT 1 FROM channel_stars cs WHERE cs.channel_id = channel_profiles.channel_id)
 		`)
 	}
 	return nil

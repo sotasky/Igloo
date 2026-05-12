@@ -63,15 +63,10 @@ func CommentAuthorInitialText(p PageProps, c model.Comment) string {
 	return "U"
 }
 
-// CommentAuthorAvatarURL resolves YouTube commenter avatars through the local
-// profile media endpoint when yt-dlp provided a canonical channel ID.
+// CommentAuthorAvatarURL uses the thumbnail yt-dlp already returned with the
+// comment. YouTube commenters are not navigable Igloo profiles, so they should
+// not enter channel_profiles or local avatar recovery.
 func CommentAuthorAvatarURL(c model.Comment) string {
-	platform := strings.ToLower(strings.TrimSpace(c.Platform))
-	if platform == "" || platform == "youtube" {
-		if channelID := model.YouTubeCommentAuthorChannelID(c.AuthorID); channelID != "" {
-			return "/api/media/avatar/" + channelID
-		}
-	}
 	return strings.TrimSpace(c.AuthorThumbnail)
 }
 

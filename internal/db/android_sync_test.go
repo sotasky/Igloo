@@ -532,8 +532,8 @@ func TestAndroidSyncDesiredSetsKeepOldFollowedYouTubeMetadata(t *testing.T) {
 	if _, ok := sets.MediaVideos["old_youtube"]; ok {
 		t.Fatalf("old followed YouTube video should not request full media outside retention")
 	}
-	if _, ok := sets.Channels["youtube_UColdcommenter"]; !ok {
-		t.Fatalf("old YouTube comment author should stay desired for avatar sync")
+	if _, ok := sets.Channels["youtube_UColdcommenter"]; ok {
+		t.Fatalf("YouTube comment author should not be desired as a channel")
 	}
 }
 
@@ -567,7 +567,7 @@ func TestAndroidSyncDesiredSetsDoNotProtectViewedMoments(t *testing.T) {
 	}
 }
 
-func TestAndroidSyncDesiredSetsIncludeYouTubeCommentAuthors(t *testing.T) {
+func TestAndroidSyncDesiredSetsExcludeYouTubeCommentAuthors(t *testing.T) {
 	d := openWritableTestDB(t)
 	settings := AndroidRetentionSettings{FeedDays: 3, YoutubeDays: 2, MomentsDays: 90}
 	nowMs := int64(10 * 24 * 60 * 60 * 1000)
@@ -603,7 +603,7 @@ func TestAndroidSyncDesiredSetsIncludeYouTubeCommentAuthors(t *testing.T) {
 	if err != nil {
 		t.Fatalf("desired sets: %v", err)
 	}
-	if _, ok := sets.Channels["youtube_UCcommenter123"]; !ok {
-		t.Fatalf("comment author channel missing from desired channels: %+v", sets.Channels)
+	if _, ok := sets.Channels["youtube_UCcommenter123"]; ok {
+		t.Fatalf("comment author should not be a desired channel: %+v", sets.Channels)
 	}
 }

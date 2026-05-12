@@ -954,12 +954,16 @@ func TestListFeedAvatarProfileIDsIncludesThreadAndRepostIdentities(t *testing.T)
 	if _, err := d.conn.Exec(`
 		INSERT INTO video_comments (
 			video_id, comment_id, author_name, author_id, author_thumbnail, text, published_at, platform, fetched_at
-		) VALUES ('video_1', 'comment_1', 'Video Commenter', 'UCcommenter123', 'https://youtube.example/avatar.jpg', 'hello', 1, 'youtube', 1)
+		) VALUES ('video_1', 'comment_1', 'Video Commenter', 'UCexamplecommenter123', 'https://youtube.example/avatar.jpg', 'hello', 1, 'youtube', 1)
 	`); err != nil {
 		t.Fatalf("seed video comments: %v", err)
 	}
-	if _, err := d.SeedYouTubeCommentAuthorProfiles(); err != nil {
-		t.Fatalf("SeedYouTubeCommentAuthorProfiles: %v", err)
+	if err := d.UpsertChannelProfile(model.ChannelProfile{
+		ChannelID: "youtube_example_commenter",
+		Platform:  "youtube",
+		Handle:    "example_commenter",
+	}); err != nil {
+		t.Fatalf("seed legacy youtube commenter profile: %v", err)
 	}
 
 	got, err := d.ListFeedAvatarProfileIDs()
@@ -968,15 +972,14 @@ func TestListFeedAvatarProfileIDsIncludesThreadAndRepostIdentities(t *testing.T)
 	}
 	wantSynthetic := model.SyntheticTwitterAvatarChannelID(avatarURL)
 	want := map[string]bool{
-		"twitter_author_a":       true,
-		"twitter_author_b":       true,
-		"twitter_quote_a":        true,
-		"twitter_reply_parent":   true,
-		"twitter_legacy_rt":      true,
-		"twitter_source_rt":      true,
-		"twitter_reposter_c":     true,
-		wantSynthetic:            true,
-		"youtube_UCcommenter123": true,
+		"twitter_author_a":     true,
+		"twitter_author_b":     true,
+		"twitter_quote_a":      true,
+		"twitter_reply_parent": true,
+		"twitter_legacy_rt":    true,
+		"twitter_source_rt":    true,
+		"twitter_reposter_c":   true,
+		wantSynthetic:          true,
 	}
 	if len(got) != len(want) {
 		t.Fatalf("feed avatar profile ids = %v, want %v", got, want)
@@ -1317,40 +1320,65 @@ func TestListFeedAvatarProfileIDsIncludesFreshStoredAvatarRecovery(t *testing.T)
 	}
 }
 
-func TestSeedYouTubeCommentAuthorProfiles(t *testing.T) {
+func TestYouTubeCommentAuthorsDoNotSeedProfiles(t *testing.T) {
 	d := openWritableTestDB(t)
 	if _, err := d.conn.Exec(`
 		INSERT INTO video_comments (
 			video_id, comment_id, author_name, author_id, author_thumbnail, text, published_at, platform, fetched_at
 		) VALUES
-			('video_1', 'comment_1', 'Video Commenter', 'UCcommenter123', 'https://youtube.example/avatar.jpg', 'hello', 1, 'youtube', 1),
+			('video_1', 'comment_1', 'Video Commenter', 'UCexamplecommenter123', 'https://youtube.example/avatar.jpg', 'hello', 1, 'youtube', 1),
 			('video_1', 'comment_2', 'Handle Only', '@handle', 'https://youtube.example/skip.jpg', 'skip', 1, 'youtube', 1)
 	`); err != nil {
 		t.Fatalf("seed video comments: %v", err)
 	}
 
-	n, err := d.SeedYouTubeCommentAuthorProfiles()
-	if err != nil {
-		t.Fatalf("SeedYouTubeCommentAuthorProfiles: %v", err)
+	if n, err := d.SeedChannelProfileRows(); err != nil {
+		t.Fatalf("SeedChannelProfileRows: %v", err)
+	} else if n != 0 {
+		t.Fatalf("youtube commenters should not seed profile rows, got %d", n)
 	}
-	if n != 1 {
-		t.Fatalf("expected one seeded commenter profile, got %d", n)
-	}
-	got, err := d.GetChannelProfile("youtube_UCcommenter123")
+	got, err := d.GetChannelProfile("youtube_example_commenter")
 	if err != nil {
 		t.Fatalf("GetChannelProfile: %v", err)
 	}
-	if got == nil {
-		t.Fatal("expected youtube commenter profile")
+	if got != nil {
+		t.Fatalf("youtube commenter profile should not be created: %+v", got)
 	}
-	if got.Platform != "youtube" || got.Handle != "UCcommenter123" || got.DisplayName != "Video Commenter" {
-		t.Fatalf("seeded profile mismatch: %+v", got)
+}
+
+func TestCleanupYouTubeCommentAuthorProfilesKeepsRealChannels(t *testing.T) {
+	d := openWritableTestDB(t)
+	for _, p := range []model.ChannelProfile{
+		{ChannelID: "youtube_example_commenter", Platform: "youtube"},
+		{ChannelID: "youtube_example_followed", Platform: "youtube"},
+		{ChannelID: "youtube_example_videoowner", Platform: "youtube"},
+	} {
+		if err := d.UpsertChannelProfile(p); err != nil {
+			t.Fatalf("seed profile %s: %v", p.ChannelID, err)
+		}
 	}
-	if got.AvatarURL != "https://youtube.example/avatar.jpg" {
-		t.Fatalf("avatar_url = %q", got.AvatarURL)
+	if _, err := d.conn.Exec(`
+		INSERT INTO channels (channel_id, name, platform) VALUES ('youtube_example_followed', 'Followed', 'youtube');
+		INSERT INTO channel_follows (user_id, channel_id, followed_at) VALUES ('', 'youtube_example_followed', 1);
+		INSERT INTO videos (video_id, channel_id, title, published_at) VALUES ('video_1', 'youtube_example_videoowner', 'Video', 1);
+	`); err != nil {
+		t.Fatalf("seed protected channels: %v", err)
 	}
-	if skipped, _ := d.GetChannelProfile("youtube_@handle"); skipped != nil {
-		t.Fatalf("handle-only author id should not seed profile: %+v", skipped)
+	if _, err := d.conn.Exec(`DELETE FROM schema_migrations WHERE name = 'remove_youtube_comment_author_profiles'`); err != nil {
+		t.Fatalf("reset cleanup migration: %v", err)
+	}
+
+	if err := cleanupYouTubeCommentAuthorProfilesOnce(d.conn); err != nil {
+		t.Fatalf("cleanupYouTubeCommentAuthorProfilesOnce: %v", err)
+	}
+	if got, _ := d.GetChannelProfile("youtube_example_commenter"); got != nil {
+		t.Fatalf("comment-only profile survived cleanup: %+v", got)
+	}
+	if got, _ := d.GetChannelProfile("youtube_example_followed"); got == nil {
+		t.Fatal("followed channel profile was removed")
+	}
+	if got, _ := d.GetChannelProfile("youtube_example_videoowner"); got == nil {
+		t.Fatal("video owner profile was removed")
 	}
 }
 

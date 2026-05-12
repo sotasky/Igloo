@@ -303,6 +303,13 @@ func (db *DB) nextChannelProfileRefreshCandidate(ttl time.Duration, platform str
 			WHERE tombstone = 0
 			  AND (? = '' OR platform = ?)
 			  AND (
+			       platform != 'youtube'
+			       OR EXISTS (SELECT 1 FROM channels c WHERE c.channel_id = channel_profiles.channel_id)
+			       OR EXISTS (SELECT 1 FROM videos v WHERE v.channel_id = channel_profiles.channel_id)
+			       OR EXISTS (SELECT 1 FROM channel_follows cf WHERE cf.channel_id = channel_profiles.channel_id)
+			       OR EXISTS (SELECT 1 FROM channel_stars cs WHERE cs.channel_id = channel_profiles.channel_id)
+			  )
+			  AND (
 			       (
 			           (next_retry_at = 0 OR next_retry_at < ?)
 			           AND (fetched_at = 0 OR fetched_at < ?)
@@ -467,18 +474,6 @@ func (db *DB) ListFeedAvatarProfileIDs() ([]string, error) {
 
 			UNION
 
-			SELECT CASE
-				WHEN author_id GLOB 'youtube_UC*' THEN author_id
-				WHEN author_id GLOB 'UC*' THEN 'youtube_' || author_id
-				ELSE ''
-			END AS channel_id,
-			MAX(COALESCE(published_at, 0), COALESCE(fetched_at, 0)) AS seen_at
-			FROM video_comments
-			WHERE COALESCE(platform, 'youtube') = 'youtube'
-			  AND COALESCE(author_id, '') != ''
-
-			UNION
-
 			SELECT v.channel_id,
 			       MAX(COALESCE(v.published_at, 0), COALESCE(v.downloaded_at, 0)) AS seen_at
 			FROM videos v
@@ -505,11 +500,21 @@ func (db *DB) ListFeedAvatarProfileIDs() ([]string, error) {
 
 			UNION
 
+			-- YouTube comment authors intentionally stay out of the profile
+			-- worker. Comments carry author_thumbnail directly, and Igloo has
+			-- no clickable commenter profile surface to keep ready.
 			SELECT channel_id,
 			       COALESCE(fetched_at, 0) AS seen_at
 			FROM channel_profiles
 			WHERE platform IN ('twitter', 'youtube', 'tiktok', 'instagram')
 			  AND COALESCE(tombstone, 0) = 0
+			  AND (
+			       platform != 'youtube'
+			       OR EXISTS (SELECT 1 FROM channels c WHERE c.channel_id = channel_profiles.channel_id)
+			       OR EXISTS (SELECT 1 FROM videos v WHERE v.channel_id = channel_profiles.channel_id)
+			       OR EXISTS (SELECT 1 FROM channel_follows cf WHERE cf.channel_id = channel_profiles.channel_id)
+			       OR EXISTS (SELECT 1 FROM channel_stars cs WHERE cs.channel_id = channel_profiles.channel_id)
+			  )
 		),
 		feed_profiles AS (
 			SELECT channel_id, MAX(seen_at) AS last_seen_at
@@ -539,101 +544,6 @@ func (db *DB) ListFeedAvatarProfileIDs() ([]string, error) {
 		}
 	}
 	return ids, rows.Err()
-}
-
-// SeedYouTubeCommentAuthorProfiles creates lightweight profile rows for
-// commenter channels discovered by yt-dlp. The thumbnail URL is enough for the
-// avatar worker to cache the image without making Android hit YouTube directly.
-func (db *DB) SeedYouTubeCommentAuthorProfiles() (int, error) {
-	rows, err := db.conn.Query(`
-		SELECT DISTINCT COALESCE(author_id, ''), COALESCE(author_name, ''), COALESCE(author_thumbnail, '')
-		FROM video_comments
-		WHERE COALESCE(platform, 'youtube') = 'youtube'
-		  AND COALESCE(author_id, '') != ''
-	`)
-	if err != nil {
-		return 0, err
-	}
-	defer rows.Close()
-
-	type seedRow struct {
-		channelID string
-		handle    string
-		name      string
-		avatarURL string
-	}
-	byChannel := map[string]seedRow{}
-	for rows.Next() {
-		var authorID, authorName, avatarURL string
-		if err := rows.Scan(&authorID, &authorName, &avatarURL); err != nil {
-			return 0, err
-		}
-		channelID := youtubeCommentAuthorChannelID(authorID)
-		if channelID == "" {
-			continue
-		}
-		row := seedRow{
-			channelID: channelID,
-			handle:    strings.TrimPrefix(channelID, "youtube_"),
-			name:      strings.TrimSpace(authorName),
-			avatarURL: httpURLOrEmpty(avatarURL),
-		}
-		if existing, ok := byChannel[channelID]; ok {
-			if existing.avatarURL != "" {
-				row.avatarURL = existing.avatarURL
-			}
-			if existing.name != "" {
-				row.name = existing.name
-			}
-		}
-		byChannel[channelID] = row
-	}
-	if err := rows.Err(); err != nil {
-		return 0, err
-	}
-	if len(byChannel) == 0 {
-		return 0, nil
-	}
-
-	var inserted int
-	err = db.WithWrite(func(tx *sql.Tx) error {
-		for _, row := range byChannel {
-			res, err := tx.Exec(`
-				INSERT INTO channel_profiles (channel_id, platform, handle, display_name, avatar_url)
-				VALUES (?, 'youtube', ?, ?, ?)
-				ON CONFLICT(channel_id) DO UPDATE SET
-					platform = excluded.platform,
-					handle = COALESCE(NULLIF(channel_profiles.handle, ''), excluded.handle),
-					display_name = COALESCE(NULLIF(channel_profiles.display_name, ''), excluded.display_name),
-					avatar_url = COALESCE(NULLIF(channel_profiles.avatar_url, ''), excluded.avatar_url)
-				WHERE channel_profiles.platform != excluded.platform
-				   OR (COALESCE(channel_profiles.handle, '') = '' AND COALESCE(excluded.handle, '') != '')
-				   OR (COALESCE(channel_profiles.display_name, '') = '' AND COALESCE(excluded.display_name, '') != '')
-				   OR (COALESCE(channel_profiles.avatar_url, '') = '' AND COALESCE(excluded.avatar_url, '') != '')
-			`, row.channelID, nilIfEmpty(row.handle), nilIfEmpty(row.name), nilIfEmpty(row.avatarURL))
-			if err != nil {
-				return err
-			}
-			if n, _ := res.RowsAffected(); n > 0 {
-				inserted += int(n)
-			}
-		}
-		return nil
-	})
-	return inserted, err
-}
-
-func youtubeCommentAuthorChannelID(authorID string) string {
-	return model.YouTubeCommentAuthorChannelID(authorID)
-}
-
-func httpURLOrEmpty(raw string) string {
-	raw = strings.TrimSpace(raw)
-	lower := strings.ToLower(raw)
-	if strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://") {
-		return raw
-	}
-	return ""
 }
 
 // SeedChannelProfileRowsForFeedItems inserts lightweight Twitter profile rows

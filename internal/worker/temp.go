@@ -203,7 +203,8 @@ func (m *Manager) DownloadTemp(ctx context.Context, rawURL string, saveChannel b
 		log.Printf("[temp] comments fetch failed for %s: %v", videoID, commentsErr)
 	} else if len(comments) > 0 {
 		inserted, _ := m.db.AddComments(videoID, comments, platform)
-		m.queueYouTubeCommentAuthorAvatars(comments)
+		// yt-dlp already returns commenter thumbnails with comments; do not promote
+		// commenters into channel_profiles or avatar recovery.
 		log.Printf("[temp] fetched %d comments for %s", inserted, videoID)
 	}
 

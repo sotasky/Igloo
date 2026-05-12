@@ -173,11 +173,6 @@ func (m *Manager) StartAll() {
 	} else if n > 0 {
 		log.Printf("[worker] seeded %d synthetic twitter avatar profile rows", n)
 	}
-	if n, err := m.db.SeedYouTubeCommentAuthorProfiles(); err != nil {
-		log.Printf("[worker] SeedYouTubeCommentAuthorProfiles: %v", err)
-	} else if n > 0 {
-		log.Printf("[worker] seeded %d youtube comment author profile rows", n)
-	}
 
 	m.migrateMediaPaths()
 
