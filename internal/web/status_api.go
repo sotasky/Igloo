@@ -773,7 +773,7 @@ func (s *Server) buildFeedSources() ([]components.FeedSourceEntry, string) {
 			entry.DisplayStatus = "ok"
 		}
 		if entry.Status == "unknown" {
-			entry.DisplayStatus = "failing"
+			entry.DisplayStatus = "pending"
 		}
 		sources = append(sources, entry)
 	}

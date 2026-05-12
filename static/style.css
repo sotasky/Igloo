@@ -8824,7 +8824,8 @@ body.shorts-mode .sidebar {
 }
 #logs-modal .feed-source-table .feed-row-failing,
 #logs-modal .feed-source-table .feed-row-degraded { background: rgba(var(--accent-primary-rgb), 0.04); }
-#logs-modal .feed-source-table .feed-row-cooling { background: rgba(var(--text-primary-rgb), 0.03); }
+#logs-modal .feed-source-table .feed-row-cooling,
+#logs-modal .feed-source-table .feed-row-pending { background: rgba(var(--text-primary-rgb), 0.03); }
 
 #logs-modal .feed-last-ok-stale { color: var(--status-error); }
 

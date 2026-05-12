@@ -1297,7 +1297,7 @@ func FeedSourceDotClass(status string) string {
 	switch status {
 	case "ok":
 		return "ok"
-	case "cooling":
+	case "cooling", "pending":
 		return "wn"
 	default:
 		return "er"
