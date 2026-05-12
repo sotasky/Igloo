@@ -13,7 +13,7 @@ function cssVar(name) {
 
 test("player subtitles use separate offsets for normal and fullscreen states", () => {
   assert.equal(cssVar("--player-subtitles-offset-idle"), 36);
-  assert.equal(cssVar("--player-subtitles-offset-controls"), 176);
+  assert.equal(cssVar("--player-subtitles-offset-controls"), 72);
   assert.equal(cssVar("--player-subtitles-offset-fullscreen-idle"), 52);
   assert.equal(cssVar("--player-subtitles-offset-fullscreen-controls"), 104);
   assert.match(css, /--player-subtitles-font-size:\s*clamp\(22px,\s*1\.6vw,\s*34px\);/);

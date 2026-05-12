@@ -782,7 +782,7 @@ if (root && video) {
             var controlsVisible = controllerControlsVisible(controller)
             if (isFs && controlsVisible) return readSubtitleOffsetPx('--player-subtitles-offset-fullscreen-controls', 104)
             if (isFs) return readSubtitleOffsetPx('--player-subtitles-offset-fullscreen-idle', 52)
-            if (controlsVisible) return readSubtitleOffsetPx('--player-subtitles-offset-controls', 176)
+            if (controlsVisible) return readSubtitleOffsetPx('--player-subtitles-offset-controls', 72)
             return readSubtitleOffsetPx('--player-subtitles-offset-idle', 36)
           }
           function ensureSubtitleOverlay() {
