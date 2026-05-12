@@ -16,7 +16,7 @@
     "ready_asset_count": 0,
     "retention": {
       "feed_days": 7,
-      "materializer_version": 29,
+      "materializer_version": 30,
       "moments_days": 7,
       "story_hours": 48,
       "youtube_days": 7

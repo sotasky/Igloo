@@ -19,6 +19,7 @@ var schemaTableLifecycles = map[string]schemaTableLifecycle{
 	"android_sync_generations":    schemaLifecycleDerivedCache,
 	"android_sync_health_reports": schemaLifecycleDiagnostic,
 	"android_sync_items":          schemaLifecycleDerivedCache,
+	"assets":                      schemaLifecycleDerivedCache,
 	"auth_refresh_tokens":         schemaLifecycleSecurityState,
 	"auth_sessions":               schemaLifecycleSecurityState,
 	"bookmark_categories":         schemaLifecycleUserState,

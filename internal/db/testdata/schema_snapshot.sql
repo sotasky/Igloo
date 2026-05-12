@@ -25,6 +25,15 @@ CREATE UNIQUE INDEX idx_android_sync_items_identity ON android_sync_items(genera
 -- index: idx_android_sync_items_page on android_sync_items
 CREATE INDEX idx_android_sync_items_page ON android_sync_items(generation_id, seq);
 
+-- index: idx_assets_claim on assets
+CREATE INDEX idx_assets_claim ON assets(state, next_attempt_at_ms, updated_at_ms);
+
+-- index: idx_assets_kind_state on assets
+CREATE INDEX idx_assets_kind_state ON assets(asset_kind, state);
+
+-- index: idx_assets_owner on assets
+CREATE INDEX idx_assets_owner ON assets(owner_kind, owner_id, asset_kind, media_index);
+
 -- index: idx_auth_refresh_session on auth_refresh_tokens
 CREATE INDEX idx_auth_refresh_session ON auth_refresh_tokens(session_id);
 
@@ -54,6 +63,9 @@ CREATE INDEX idx_channels_platform ON channels(platform);
 
 -- index: idx_channels_sync_seq on channels
 CREATE INDEX idx_channels_sync_seq ON channels(sync_seq);
+
+-- index: idx_download_queue_ready on download_queue
+CREATE INDEX idx_download_queue_ready ON download_queue(status, next_attempt_at_ms, lease_until_ms, priority, added_at);
 
 -- index: idx_downloader_operations_recent on downloader_operations
 CREATE INDEX idx_downloader_operations_recent ON downloader_operations(started_at_ms DESC, id DESC);
@@ -87,6 +99,9 @@ CREATE INDEX idx_feed_items_sync_seq ON feed_items(sync_seq);
 
 -- index: idx_feed_items_unscored on feed_items
 CREATE INDEX idx_feed_items_unscored ON feed_items(algo_scored_at) WHERE algo_scored_at = 0;
+
+-- index: idx_feed_media_jobs_ready on feed_media_jobs
+CREATE INDEX idx_feed_media_jobs_ready ON feed_media_jobs(status, next_attempt_at_ms, lease_until_ms, priority, updated_at);
 
 -- index: idx_feed_media_jobs_status_tweet on feed_media_jobs
 CREATE INDEX idx_feed_media_jobs_status_tweet ON feed_media_jobs(status, tweet_id);
@@ -157,6 +172,9 @@ CREATE TABLE android_sync_health_reports ( id INTEGER PRIMARY KEY AUTOINCREMENT,
 -- table: android_sync_items on android_sync_items
 CREATE TABLE android_sync_items ( generation_id TEXT NOT NULL, seq INTEGER NOT NULL, item_kind TEXT NOT NULL, item_id TEXT NOT NULL, payload_json TEXT NOT NULL, PRIMARY KEY (generation_id, seq), FOREIGN KEY (generation_id) REFERENCES android_sync_generations(generation_id) ON DELETE CASCADE );
 
+-- table: assets on assets
+CREATE TABLE assets ( id INTEGER PRIMARY KEY AUTOINCREMENT, asset_id TEXT UNIQUE NOT NULL, asset_kind TEXT NOT NULL, owner_kind TEXT NOT NULL, owner_id TEXT NOT NULL, media_index INTEGER NOT NULL DEFAULT 0, source_url TEXT NOT NULL DEFAULT '', file_path TEXT NOT NULL DEFAULT '', content_type TEXT NOT NULL DEFAULT '', size_bytes INTEGER NOT NULL DEFAULT 0, sha256 TEXT NOT NULL DEFAULT '', state TEXT NOT NULL DEFAULT 'queued', required_reason TEXT NOT NULL DEFAULT '', last_error_kind TEXT NOT NULL DEFAULT '', last_error TEXT NOT NULL DEFAULT '', attempts INTEGER NOT NULL DEFAULT 0, next_attempt_at_ms INTEGER NOT NULL DEFAULT 0, created_at_ms INTEGER NOT NULL DEFAULT 0, updated_at_ms INTEGER NOT NULL DEFAULT 0, UNIQUE(asset_kind, owner_kind, owner_id, media_index) );
+
 -- table: auth_refresh_tokens on auth_refresh_tokens
 CREATE TABLE auth_refresh_tokens ( token_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, issued_at_ms INTEGER NOT NULL, expires_at_ms INTEGER NOT NULL, consumed_at_ms INTEGER, FOREIGN KEY (session_id) REFERENCES auth_sessions(session_id) ON DELETE CASCADE );
 
@@ -188,7 +206,7 @@ CREATE TABLE channel_stars ( user_id TEXT NOT NULL, channel_id TEXT NOT NULL, st
 CREATE TABLE channels ( id INTEGER PRIMARY KEY AUTOINCREMENT, channel_id TEXT UNIQUE NOT NULL, source_id TEXT, name TEXT NOT NULL, url TEXT, platform TEXT, quality TEXT, last_checked INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL DEFAULT 0 , sync_seq INTEGER DEFAULT 0);
 
 -- table: download_queue on download_queue
-CREATE TABLE download_queue ( video_id TEXT PRIMARY KEY, channel_id TEXT NOT NULL, title TEXT DEFAULT '', published_at_ms INTEGER NOT NULL DEFAULT 0, status TEXT DEFAULT 'pending', priority INTEGER DEFAULT 0, error TEXT DEFAULT '', retry_count INTEGER DEFAULT 0, added_at INTEGER NOT NULL DEFAULT 0, started_at INTEGER NOT NULL DEFAULT 0, completed_at INTEGER NOT NULL DEFAULT 0 );
+CREATE TABLE download_queue ( video_id TEXT PRIMARY KEY, channel_id TEXT NOT NULL, title TEXT DEFAULT '', published_at_ms INTEGER NOT NULL DEFAULT 0, status TEXT DEFAULT 'pending', priority INTEGER DEFAULT 0, error TEXT DEFAULT '', retry_count INTEGER DEFAULT 0, lease_owner TEXT NOT NULL DEFAULT '', lease_until_ms INTEGER NOT NULL DEFAULT 0, next_attempt_at_ms INTEGER NOT NULL DEFAULT 0, last_error_kind TEXT NOT NULL DEFAULT '', last_error_strategy TEXT NOT NULL DEFAULT '', tool TEXT NOT NULL DEFAULT '', cookie_label TEXT NOT NULL DEFAULT '', added_at INTEGER NOT NULL DEFAULT 0, started_at INTEGER NOT NULL DEFAULT 0, completed_at INTEGER NOT NULL DEFAULT 0 );
 
 -- table: downloader_operations on downloader_operations
 CREATE TABLE downloader_operations ( id INTEGER PRIMARY KEY AUTOINCREMENT, operation TEXT NOT NULL, platform TEXT NOT NULL, subject TEXT NOT NULL DEFAULT '', tool TEXT NOT NULL, started_at_ms INTEGER NOT NULL, ended_at_ms INTEGER NOT NULL, status TEXT NOT NULL, error_kind TEXT NOT NULL DEFAULT '', error TEXT NOT NULL DEFAULT '', cookie_label TEXT NOT NULL DEFAULT '', elapsed_ms INTEGER NOT NULL DEFAULT 0, item_count INTEGER NOT NULL DEFAULT 0, media_count INTEGER NOT NULL DEFAULT 0, file_count INTEGER NOT NULL DEFAULT 0, bytes INTEGER NOT NULL DEFAULT 0, summary_json TEXT NOT NULL DEFAULT '' );
@@ -203,7 +221,7 @@ CREATE TABLE feed_items ( tweet_id TEXT PRIMARY KEY, source_handle TEXT, author_
 CREATE TABLE feed_likes ( username TEXT NOT NULL, tweet_id TEXT NOT NULL, source_handle TEXT, author_handle TEXT, author_display_name TEXT, body_text TEXT, link TEXT, canonical_x_link TEXT, published_at INTEGER NOT NULL DEFAULT 0, media_url TEXT, avatar_url TEXT, media_json TEXT, platform TEXT, quote_payload_json TEXT, liked_at INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (username, tweet_id) );
 
 -- table: feed_media_jobs on feed_media_jobs
-CREATE TABLE feed_media_jobs ( tweet_id TEXT PRIMARY KEY, tweet_url TEXT, source_handle TEXT, status TEXT DEFAULT 'queued', media_kind TEXT, slide_count INTEGER DEFAULT 0, retry_count INTEGER DEFAULT 0, priority INTEGER DEFAULT 0, last_error TEXT, created_at INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL DEFAULT 0 );
+CREATE TABLE feed_media_jobs ( tweet_id TEXT PRIMARY KEY, tweet_url TEXT, source_handle TEXT, status TEXT DEFAULT 'queued', media_kind TEXT, slide_count INTEGER DEFAULT 0, retry_count INTEGER DEFAULT 0, priority INTEGER DEFAULT 0, last_error TEXT, lease_owner TEXT NOT NULL DEFAULT '', lease_until_ms INTEGER NOT NULL DEFAULT 0, next_attempt_at_ms INTEGER NOT NULL DEFAULT 0, last_error_kind TEXT NOT NULL DEFAULT '', tool TEXT NOT NULL DEFAULT '', cookie_label TEXT NOT NULL DEFAULT '', started_at_ms INTEGER NOT NULL DEFAULT 0, completed_at_ms INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL DEFAULT 0 );
 
 -- table: feed_rank_snapshot on feed_rank_snapshot
 CREATE TABLE feed_rank_snapshot ( username TEXT NOT NULL, tweet_id TEXT NOT NULL, rank_position INTEGER NOT NULL, base_score REAL NOT NULL, decay_factor REAL NOT NULL, freshness_bonus REAL NOT NULL, jitter REAL NOT NULL, diversity_demoted_by REAL NOT NULL DEFAULT 0, final_score REAL NOT NULL, computed_at INTEGER NOT NULL, PRIMARY KEY (username, tweet_id) );
