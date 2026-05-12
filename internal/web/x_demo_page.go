@@ -18,7 +18,7 @@ func (s *Server) handlePageXDemo(w http.ResponseWriter, r *http.Request) {
 		username = user.Username
 	}
 
-	items, err := s.db.ListFeedItemsBySourceID(xDemoSourceID, 80)
+	items, err := s.db.ListFeedItemsBySourceID(xDemoSourceID, 1000)
 	if err != nil {
 		slog.Error("ListFeedItemsBySourceID", "source", xDemoSourceID, "err", err)
 		http.Error(w, "Failed to load X demo feed", http.StatusInternalServerError)
