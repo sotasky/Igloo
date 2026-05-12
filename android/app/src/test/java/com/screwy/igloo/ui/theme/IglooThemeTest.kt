@@ -34,6 +34,7 @@ class IglooThemeTest {
                 "ayu-dark",
                 "github-dark",
                 "github-light",
+                "green-eyes",
                 "nord",
                 "gruvbox-dark",
                 "tokyo-night",

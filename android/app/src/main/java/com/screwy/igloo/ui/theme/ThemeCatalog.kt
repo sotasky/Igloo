@@ -93,6 +93,15 @@ private val ThemeCatalog = listOf(
         surface0 = "#f6f8fa", base = "#ffffff", mantle = "#f6f8fa", crust = "#f0f3f6",
     ),
     ThemeSpec(
+        id = "green-eyes", label = "Green Eyes", catppuccin = false, dark = true, defaultAccent = "#a0d57a",
+        red = "#ffb4ab", maroon = "#ffdad6", peach = "#d9e7ca", yellow = "#bdcbaf", green = "#a0d57a",
+        teal = "#a0cfce", sky = "#bbecea", sapphire = "#a0cfce", blue = "#a0cfce", mauve = "#bdcbaf",
+        pink = "#d9e7ca", lavender = "#bdcbaf", rosewater = "#d9e7ca", flamingo = "#ffdad6",
+        text = "#e3e3dc", subtext1 = "#c4c8bb", subtext0 = "#a7ab9f", overlay2 = "#8e9286",
+        overlay1 = "#6a6e63", overlay0 = "#44483e", surface2 = "#343531", surface1 = "#292b26",
+        surface0 = "#1e201c", base = "#121410", mantle = "#1a1c18", crust = "#0b0d09",
+    ),
+    ThemeSpec(
         id = "nord", label = "Nord", catppuccin = false, dark = true, defaultAccent = "#88c0d0",
         red = "#bf616a", maroon = "#d08770", peach = "#d08770", yellow = "#ebcb8b", green = "#a3be8c",
         teal = "#8fbcbb", sky = "#88c0d0", sapphire = "#81a1c1", blue = "#5e81ac", mauve = "#b48ead",
