@@ -196,6 +196,19 @@ func TestKagiTranslateArgsUseKnownSourceLanguage(t *testing.T) {
 	if strings.Contains(got, "\x00--from\x00") {
 		t.Fatalf("kagi args should not pass private-use source language: %q", got)
 	}
+
+	longContext := strings.Repeat("x", kagiContextMaxRunes+20)
+	gotArgs := kagiTranslateArgs("bonjour", "en", longContext, "fr")
+	for i, arg := range gotArgs {
+		if arg != "--context" || i+1 >= len(gotArgs) {
+			continue
+		}
+		if len([]rune(gotArgs[i+1])) != kagiContextMaxRunes {
+			t.Fatalf("context length = %d, want %d", len([]rune(gotArgs[i+1])), kagiContextMaxRunes)
+		}
+		return
+	}
+	t.Fatalf("missing --context in kagi args: %#v", gotArgs)
 }
 
 func TestKagiMessageNeedsCooldown(t *testing.T) {

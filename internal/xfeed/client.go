@@ -11,6 +11,7 @@ import (
 
 	"github.com/screwys/igloo/internal/download"
 	"github.com/screwys/igloo/internal/fxtwitter"
+	"github.com/screwys/igloo/internal/language"
 	"github.com/screwys/igloo/internal/model"
 )
 
@@ -241,7 +242,7 @@ func feedItemFromFallbackTweet(tweet *fxtwitter.Tweet, sourceHandle string) Feed
 		CanonicalTweetID:  tweet.ID,
 	}
 	item.IsReply = item.ReplyToStatus != "" || item.ReplyToHandle != ""
-	if item.Lang == "" || item.Lang == "qme" || item.Lang == "zxx" {
+	if language.IsUnknown(item.Lang) {
 		item.Lang = DetectLang(item.BodyText)
 	}
 	if tweet.Quote != nil {
@@ -267,7 +268,7 @@ func applyFallbackQuote(item *FeedItem, quote *fxtwitter.Tweet) {
 	item.QuoteAuthorAvatarURL = model.CleanFeedAvatarURL(quote.AuthorAvatarURL)
 	item.QuoteBodyText = stripTrailingTcoURL(quote.Text)
 	item.QuoteLang = quote.Lang
-	if item.QuoteLang == "" || item.QuoteLang == "qme" || item.QuoteLang == "zxx" {
+	if language.IsUnknown(item.QuoteLang) {
 		item.QuoteLang = DetectLang(item.QuoteBodyText)
 	}
 	item.QuotePublishedAt = timePtr(quote.CreatedAt)

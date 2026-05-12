@@ -53,6 +53,20 @@ func InSet(value string, set map[string]bool) bool {
 	return false
 }
 
+func IsUnknown(value string) bool {
+	raw := strings.ToLower(strings.TrimSpace(value))
+	if raw == "" {
+		return true
+	}
+	raw = strings.ReplaceAll(raw, "_", "-")
+	switch raw {
+	case "und", "unknown", "qam", "qct", "qht", "qme", "qst", "zxx":
+		return true
+	default:
+		return strings.HasPrefix(raw, "q") && len(raw) == 3
+	}
+}
+
 func Equivalents(value string) []string {
 	raw := clean(value)
 	if raw == "" {

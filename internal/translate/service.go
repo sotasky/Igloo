@@ -25,7 +25,10 @@ import (
 	"github.com/screwys/igloo/internal/settings"
 )
 
-const kagiProviderCooldownDuration = 5 * time.Minute
+const (
+	kagiProviderCooldownDuration = 5 * time.Minute
+	kagiContextMaxRunes          = 500
+)
 
 var (
 	// Combined token regex: URL first (most specific), then mention, then hashtag.
@@ -46,6 +49,7 @@ var (
 var (
 	kagiCooldownMu    sync.Mutex
 	kagiCooldownUntil time.Time
+	kagiCallMu        sync.Mutex
 )
 
 type Result struct {
@@ -140,7 +144,7 @@ func FeedText(ctx context.Context, database *db.DB, tweetID, field, targetLang s
 	if !hasTranslatableContent(cleanSource) {
 		return nil, ErrNoText
 	}
-	if sourceLanguageMatchesTarget(detectedLang, targetLang) {
+	if !language.IsUnknown(detectedLang) && sourceLanguageMatchesTarget(detectedLang, targetLang) {
 		return nil, AlreadyTargetLanguageError{SourceLang: language.DisplayName(detectedLang)}
 	}
 
@@ -344,6 +348,9 @@ func translateTextWithDB(ctx context.Context, database *db.DB, text, targetLang,
 
 // kagiTranslate calls the kagi CLI to translate text and returns the result.
 func kagiTranslate(ctx context.Context, text, targetLang, contextHint, sourceLangHint string) (*Result, error) {
+	kagiCallMu.Lock()
+	defer kagiCallMu.Unlock()
+
 	args := kagiTranslateArgs(text, targetLang, contextHint, sourceLangHint)
 	cmd := exec.CommandContext(ctx, "kagi", args...)
 
@@ -401,10 +408,23 @@ func kagiTranslateArgs(text, targetLang, contextHint, sourceLangHint string) []s
 	if sourceLang := kagiSourceLanguage(sourceLangHint); sourceLang != "" {
 		args = append(args, "--from", sourceLang, "--predicted-language", sourceLang)
 	}
+	contextHint = clampKagiContext(contextHint)
 	if contextHint != "" {
 		args = append(args, "--context", contextHint)
 	}
 	return append(args, text)
+}
+
+func clampKagiContext(contextHint string) string {
+	contextHint = strings.TrimSpace(contextHint)
+	if contextHint == "" {
+		return ""
+	}
+	runes := []rune(contextHint)
+	if len(runes) <= kagiContextMaxRunes {
+		return contextHint
+	}
+	return strings.TrimSpace(string(runes[:kagiContextMaxRunes]))
 }
 
 func kagiSourceLanguage(sourceLangHint string) string {
@@ -413,9 +433,10 @@ func kagiSourceLanguage(sourceLangHint string) string {
 		return ""
 	}
 	sourceLang = strings.ReplaceAll(sourceLang, "_", "-")
-	switch sourceLang {
-	case "und", "unknown", "qam", "qct", "qht", "qme", "zxx":
+	if language.IsUnknown(sourceLang) {
 		return ""
+	}
+	switch sourceLang {
 	case "in":
 		return "id"
 	case "iw":

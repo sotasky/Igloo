@@ -266,18 +266,14 @@ func TestTranslateBackgroundContinuesAfterCandidateProviderError(t *testing.T) {
 	if thirdErr != nil {
 		t.Fatalf("third runTranslateBackgroundBatch: %v", thirdErr)
 	}
-	if thirdTranslated != 1 {
-		t.Fatalf("third translated = %d, want 1", thirdTranslated)
+	if thirdTranslated != 0 {
+		t.Fatalf("third translated = %d, want 0 while retry is delayed", thirdTranslated)
 	}
-	if requests != 3 {
-		t.Fatalf("provider requests after third batch = %d, want 3", requests)
+	if requests != 2 {
+		t.Fatalf("provider requests after third batch = %d, want 2 while retry is delayed", requests)
 	}
-	got, src, err = d.GetTranslation("tweet-provider-error", "body", "en")
-	if err != nil {
-		t.Fatalf("GetTranslation recovered candidate: %v", err)
-	}
-	if got != "recovered text" || src != "Chinese" {
-		t.Fatalf("recovered translation = (%q, %q), want (recovered text, Chinese)", got, src)
+	if _, _, err := d.GetTranslation("tweet-provider-error", "body", "en"); err != sql.ErrNoRows {
+		t.Fatalf("GetTranslation delayed retry candidate err = %v, want sql.ErrNoRows", err)
 	}
 }
 

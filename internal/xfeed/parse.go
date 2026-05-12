@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/screwys/igloo/internal/download"
+	"github.com/screwys/igloo/internal/language"
 	"github.com/screwys/igloo/internal/model"
 	"github.com/taruti/langdetect"
 )
@@ -259,7 +260,7 @@ func feedItemFromMeta(d map[string]any, fallbackSourceHandle string, media []mod
 		CanonicalTweetID:       canonicalTweetID,
 	}
 	item.IsReply = item.ReplyToStatus != "" || item.ReplyToHandle != ""
-	if item.Lang == "" || item.Lang == "qme" || item.Lang == "zxx" {
+	if language.IsUnknown(item.Lang) {
 		item.Lang = DetectLang(body)
 	}
 	if isRetweet {
@@ -291,7 +292,7 @@ func applyQuote(item *FeedItem, quote map[string]any, media []model.MediaRef) {
 	item.QuoteAuthorAvatarURL = authorAvatar(quote)
 	item.QuoteBodyText = qbody
 	item.QuoteLang = firstString(quote, "lang")
-	if item.QuoteLang == "" || item.QuoteLang == "qme" || item.QuoteLang == "zxx" {
+	if language.IsUnknown(item.QuoteLang) {
 		item.QuoteLang = DetectLang(qbody)
 	}
 	item.QuotePublishedAt = firstTime(quote, "date", "created_at", "timestamp")

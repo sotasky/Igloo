@@ -168,8 +168,7 @@ func runTranslateBackgroundBatch(ctx context.Context, database *db.DB, cfg trans
 		return 0, nil
 	}
 
-	candidates, err := database.ListTranslationCandidates(cfg.target, cfg.skip, translateBackgroundScanLimit)
-	if err != nil {
+	if _, err := database.EnqueueTranslationCandidates(cfg.target, cfg.skip, translateBackgroundScanLimit); err != nil {
 		return 0, err
 	}
 
@@ -177,7 +176,7 @@ func runTranslateBackgroundBatch(ctx context.Context, database *db.DB, cfg trans
 	failures := 0
 	attempted := 0
 	var lastErr error
-	for _, candidate := range candidates {
+	for translated < translateBackgroundBatchSize {
 		if translated >= translateBackgroundBatchSize {
 			break
 		}
@@ -185,13 +184,12 @@ func runTranslateBackgroundBatch(ctx context.Context, database *db.DB, cfg trans
 			return translated, err
 		}
 
-		key := translateBackgroundCandidateKey(candidate, cfg.target)
-		if shouldSkipTranslateBackgroundCandidate(skipped, key, candidate.SourceText) {
-			continue
+		job, err := database.ClaimTranslationJob(cfg.target, time.Now().UnixMilli())
+		if err != nil {
+			return translated, err
 		}
-		if !shouldAutoTranslateCandidate(candidate.SourceLang, candidate.SourceText, cfg.target, cfg.skipSet) {
-			skipped[key] = translateBackgroundSkip{sourceText: candidate.SourceText}
-			continue
+		if job == nil {
+			break
 		}
 
 		if attempted > 0 && cfg.delay > 0 {
@@ -204,17 +202,37 @@ func runTranslateBackgroundBatch(ctx context.Context, database *db.DB, cfg trans
 			}
 		}
 		attempted++
+		candidate := db.TranslationCandidate{
+			TweetID:       job.TweetID,
+			Field:         job.Field,
+			SourceText:    job.SourceText,
+			SourceLang:    job.SourceLang,
+			BodyText:      job.BodyText,
+			QuoteBodyText: job.QuoteBodyText,
+		}
+		key := translateBackgroundCandidateKey(candidate, cfg.target)
+		if shouldSkipTranslateBackgroundCandidate(skipped, key, candidate.SourceText) {
+			_ = database.SkipTranslationJob(job.TweetID, job.Field, job.TargetLang, "locally skipped")
+			continue
+		}
+		if !shouldAutoTranslateCandidate(candidate.SourceLang, candidate.SourceText, cfg.target, cfg.skipSet) {
+			skipped[key] = translateBackgroundSkip{sourceText: candidate.SourceText}
+			_ = database.SkipTranslationJob(job.TweetID, job.Field, job.TargetLang, "not eligible")
+			continue
+		}
 		wrote, err := translateAndCacheBackgroundCandidate(ctx, database, cfg, candidate)
 		if err != nil {
 			if errors.Is(err, context.Canceled) || (errors.Is(err, context.DeadlineExceeded) && ctx.Err() != nil) {
 				return translated, err
 			}
 			if errors.Is(err, ErrProviderRateLimited) {
+				_ = database.RetryTranslationJob(job.TweetID, job.Field, job.TargetLang, "rate_limited", err.Error(), translateBackgroundRateLimitDelay)
 				return translated, err
 			}
 			failures++
 			lastErr = err
 			skipped[key] = translateBackgroundSkip{sourceText: candidate.SourceText, retryable: true}
+			_ = database.RetryTranslationJob(job.TweetID, job.Field, job.TargetLang, "provider_error", err.Error(), translateBackgroundErrorDelay)
 			if failures >= translateBackgroundMaxErrors {
 				break
 			}
@@ -223,9 +241,11 @@ func runTranslateBackgroundBatch(ctx context.Context, database *db.DB, cfg trans
 		if wrote {
 			translated++
 			delete(skipped, key)
+			_ = database.CompleteTranslationJob(job.TweetID, job.Field, job.TargetLang)
 			continue
 		}
 		skipped[key] = translateBackgroundSkip{sourceText: candidate.SourceText}
+		_ = database.SkipTranslationJob(job.TweetID, job.Field, job.TargetLang, "no translation written")
 	}
 	if translated == 0 && lastErr != nil {
 		return translated, lastErr
@@ -301,7 +321,7 @@ func shouldAutoTranslateCandidate(sourceLang, sourceText, targetLang string, ski
 	if targetLang == "" {
 		targetLang = "en"
 	}
-	if strings.TrimSpace(sourceLang) != "" {
+	if !language.IsUnknown(sourceLang) {
 		if sourceLanguageMatchesTarget(sourceLang, targetLang) || language.InSet(sourceLang, skipSet) {
 			return false
 		}

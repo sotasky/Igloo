@@ -40,3 +40,28 @@ func TestInSetAcceptsNamesAndCodes(t *testing.T) {
 		t.Fatal("kr should not match ko skip set")
 	}
 }
+
+func TestIsUnknown(t *testing.T) {
+	cases := []struct {
+		value string
+		want  bool
+	}{
+		{"", true},
+		{"und", true},
+		{"unknown", true},
+		{"qme", true},
+		{"qam", true},
+		{"qct", true},
+		{"qht", true},
+		{"qst", true},
+		{"zxx", true},
+		{"ko", false},
+		{"en-US", false},
+		{"Korean", false},
+	}
+	for _, tc := range cases {
+		if got := IsUnknown(tc.value); got != tc.want {
+			t.Fatalf("IsUnknown(%q) = %v, want %v", tc.value, got, tc.want)
+		}
+	}
+}

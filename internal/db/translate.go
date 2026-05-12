@@ -184,6 +184,10 @@ func (db *DB) SetTranslation(tweetID, field, sourceLang, targetLang, text string
 				(tweet_id, field, source_lang, target_lang, translated_text, translated_at)
 			VALUES (?, ?, ?, ?, ?, ?)
 		`, tweetID, field, sourceLang, targetLang, text, time.Now().UnixMilli())
+		if err != nil {
+			return err
+		}
+		_, err = tx.Exec(`UPDATE feed_items SET sync_seq = ? WHERE tweet_id = ?`, db.NextSyncSeq(), tweetID)
 		return err
 	})
 }

@@ -158,6 +158,75 @@ func TestListTranslationCandidates(t *testing.T) {
 	}
 }
 
+func TestTranslationJobsClaimAndComplete(t *testing.T) {
+	d := openWritableTestDB(t)
+	base := time.Unix(1_700_000_000, 0)
+	if _, err := d.UpsertFeedItems([]model.FeedItem{{
+		TweetID:      "job_candidate",
+		AuthorHandle: "sample_author_job",
+		BodyText:     "안녕하세요",
+		Lang:         "ko",
+		PublishedAt:  &base,
+	}}); err != nil {
+		t.Fatalf("UpsertFeedItems: %v", err)
+	}
+	n, err := d.EnqueueTranslationCandidates("en", nil, 10)
+	if err != nil {
+		t.Fatalf("EnqueueTranslationCandidates: %v", err)
+	}
+	if n == 0 {
+		t.Fatalf("EnqueueTranslationCandidates enqueued 0 rows")
+	}
+	job, err := d.ClaimTranslationJob("en", time.Now().UnixMilli())
+	if err != nil {
+		t.Fatalf("ClaimTranslationJob: %v", err)
+	}
+	if job == nil || job.TweetID != "job_candidate" || job.Field != "body" || job.SourceLang != "ko" {
+		t.Fatalf("job = %#v", job)
+	}
+	if err := d.SetTranslation(job.TweetID, job.Field, job.SourceLang, job.TargetLang, "hello"); err != nil {
+		t.Fatalf("SetTranslation: %v", err)
+	}
+	if err := d.CompleteTranslationJob(job.TweetID, job.Field, job.TargetLang); err != nil {
+		t.Fatalf("CompleteTranslationJob: %v", err)
+	}
+	next, err := d.ClaimTranslationJob("en", time.Now().UnixMilli())
+	if err != nil {
+		t.Fatalf("ClaimTranslationJob after complete: %v", err)
+	}
+	if next != nil {
+		t.Fatalf("next job = %#v, want nil", next)
+	}
+}
+
+func TestSetTranslationBumpsFeedSyncSeq(t *testing.T) {
+	d := openWritableTestDB(t)
+	now := time.Now()
+	if _, err := d.UpsertFeedItems([]model.FeedItem{{
+		TweetID:      "translation_sync",
+		AuthorHandle: "sample_author_sync",
+		BodyText:     "안녕하세요",
+		Lang:         "ko",
+		PublishedAt:  &now,
+	}}); err != nil {
+		t.Fatalf("UpsertFeedItems: %v", err)
+	}
+	var before int64
+	if err := d.QueryRow(`SELECT sync_seq FROM feed_items WHERE tweet_id = ?`, "translation_sync").Scan(&before); err != nil {
+		t.Fatalf("read initial sync_seq: %v", err)
+	}
+	if err := d.SetTranslation("translation_sync", "body", "ko", "en", "hello"); err != nil {
+		t.Fatalf("SetTranslation: %v", err)
+	}
+	var after int64
+	if err := d.QueryRow(`SELECT sync_seq FROM feed_items WHERE tweet_id = ?`, "translation_sync").Scan(&after); err != nil {
+		t.Fatalf("read updated sync_seq: %v", err)
+	}
+	if after <= before {
+		t.Fatalf("sync_seq after translation = %d, want > %d", after, before)
+	}
+}
+
 func timePtr(t time.Time) *time.Time {
 	return &t
 }

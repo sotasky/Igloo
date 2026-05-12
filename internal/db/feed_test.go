@@ -389,6 +389,43 @@ func TestUpsertFeedItemsPreservesFetchedAtOnRefetch(t *testing.T) {
 	}
 }
 
+func TestUpsertFeedItemsRepairsUnknownLanguages(t *testing.T) {
+	d := openWritableTestDB(t)
+	now := time.Now()
+	if _, err := d.UpsertFeedItems([]model.FeedItem{{
+		TweetID:       "lang_repair",
+		AuthorHandle:  "sample_author_a",
+		BodyText:      "안녕하세요",
+		Lang:          "qme",
+		QuoteTweetID:  "quote_a",
+		QuoteBodyText: "你好",
+		QuoteLang:     "und",
+		PublishedAt:   &now,
+	}}); err != nil {
+		t.Fatalf("initial upsert: %v", err)
+	}
+	if _, err := d.UpsertFeedItems([]model.FeedItem{{
+		TweetID:       "lang_repair",
+		AuthorHandle:  "sample_author_a",
+		BodyText:      "안녕하세요",
+		Lang:          "ko",
+		QuoteTweetID:  "quote_a",
+		QuoteBodyText: "你好",
+		QuoteLang:     "zh",
+		PublishedAt:   &now,
+	}}); err != nil {
+		t.Fatalf("repair upsert: %v", err)
+	}
+
+	var lang, quoteLang string
+	if err := d.QueryRow(`SELECT COALESCE(lang,''), COALESCE(quote_lang,'') FROM feed_items WHERE tweet_id = ?`, "lang_repair").Scan(&lang, &quoteLang); err != nil {
+		t.Fatalf("read repaired langs: %v", err)
+	}
+	if lang != "ko" || quoteLang != "zh" {
+		t.Fatalf("langs = (%q, %q), want (ko, zh)", lang, quoteLang)
+	}
+}
+
 func TestUpsertFeedItemsRejectsStatusUndefinedAvatarURLs(t *testing.T) {
 	d := openWritableTestDB(t)
 	now := time.Now()

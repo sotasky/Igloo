@@ -901,6 +901,17 @@ func (db *DB) UpsertFeedItems(items []model.FeedItem) (int, error) {
 					WHEN excluded.body_text IS NULL OR excluded.body_text = '' THEN feed_items.body_text
 					ELSE excluded.body_text
 				END,
+				lang = CASE
+					WHEN excluded.lang IS NOT NULL
+						AND excluded.lang != ''
+						AND (
+							feed_items.lang IS NULL
+							OR feed_items.lang = ''
+							OR LOWER(feed_items.lang) IN ('und','unknown','qam','qct','qht','qme','qst','zxx')
+							OR (LOWER(feed_items.lang) GLOB 'q??' AND length(feed_items.lang) = 3)
+						) THEN excluded.lang
+					ELSE feed_items.lang
+				END,
 				media_json = COALESCE(excluded.media_json, feed_items.media_json),
 				quote_tweet_id = CASE
 					WHEN feed_items.quote_tweet_id IS NULL THEN excluded.quote_tweet_id
@@ -941,6 +952,14 @@ func (db *DB) UpsertFeedItems(items []model.FeedItem) (int, error) {
 				END,
 				quote_lang = CASE
 					WHEN feed_items.quote_tweet_id IS NULL THEN COALESCE(excluded.quote_lang, feed_items.quote_lang)
+					WHEN excluded.quote_lang IS NOT NULL
+						AND excluded.quote_lang != ''
+						AND (
+							feed_items.quote_lang IS NULL
+							OR feed_items.quote_lang = ''
+							OR LOWER(feed_items.quote_lang) IN ('und','unknown','qam','qct','qht','qme','qst','zxx')
+							OR (LOWER(feed_items.quote_lang) GLOB 'q??' AND length(feed_items.quote_lang) = 3)
+						) THEN excluded.quote_lang
 					ELSE feed_items.quote_lang
 				END,
 				quote_media_json = CASE

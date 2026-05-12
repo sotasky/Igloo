@@ -227,28 +227,12 @@ export function handleTranslateAction(card, actionBtn) {
 }
 
 export function queueBackgroundTranslations(scope) {
-  if (!autoTranslateAvailable() || translateAutoMode !== 'background') return
-  var root = scope || document
-  root.querySelectorAll('[data-feed-item][data-tweet-id]').forEach(function (card) {
-    if (!(card instanceof Element)) return
-    if (card.dataset.feedTranslateBackground === '1') return
-    card.dataset.feedTranslateBackground = '1'
-    translateCard(card)
-  })
+  // Background translation is owned by the server worker. The browser should
+  // not fan out provider calls for every rendered card.
 }
 
 // Lazy auto-translate observer: fires before cards enter view.
 var translateObserver = null
 export function getTranslateObserver() {
-  if (!autoTranslateAvailable() || translateAutoMode !== 'lazy') return null
-  if (translateObserver) return translateObserver
-  translateObserver = new IntersectionObserver(function (entries) {
-    entries.forEach(function (entry) {
-      if (!entry.isIntersecting) return
-      var card = entry.target
-      translateCard(card)
-      translateObserver.unobserve(card)
-    })
-  }, { rootMargin: String(translateLookahead * 420) + 'px 0px ' + String(translateLookahead * 420) + 'px 0px' })
-  return translateObserver
+  return null
 }

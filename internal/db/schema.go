@@ -442,6 +442,22 @@ func EnsureSchemaWithOptions(conn *sql.DB, opts EnsureSchemaOptions) error {
 			PRIMARY KEY (tweet_id, field, target_lang)
 		)`,
 
+		`CREATE TABLE IF NOT EXISTS translation_jobs (
+			tweet_id        TEXT NOT NULL,
+			field           TEXT NOT NULL,
+			target_lang     TEXT NOT NULL,
+			source_hash     TEXT NOT NULL DEFAULT '',
+			status          TEXT NOT NULL DEFAULT 'queued',
+			priority        INTEGER NOT NULL DEFAULT 0,
+			attempts        INTEGER NOT NULL DEFAULT 0,
+			next_attempt_at INTEGER NOT NULL DEFAULT 0,
+			last_error_kind TEXT NOT NULL DEFAULT '',
+			last_error      TEXT NOT NULL DEFAULT '',
+			created_at      INTEGER NOT NULL DEFAULT 0,
+			updated_at      INTEGER NOT NULL DEFAULT 0,
+			PRIMARY KEY (tweet_id, field, target_lang)
+		)`,
+
 		`CREATE TABLE IF NOT EXISTS channel_queue (
 			channel_id TEXT PRIMARY KEY,
 			status     TEXT    DEFAULT 'pending',
@@ -609,6 +625,7 @@ func EnsureSchemaWithOptions(conn *sql.DB, opts EnsureSchemaOptions) error {
 	conn.Exec("CREATE INDEX IF NOT EXISTS idx_media_files_type_id ON media_files(owner_type, id)")
 	conn.Exec("CREATE INDEX IF NOT EXISTS idx_media_files_type_owner ON media_files(owner_type, owner_id, media_index)")
 	conn.Exec("CREATE INDEX IF NOT EXISTS idx_feed_media_jobs_status_tweet ON feed_media_jobs(status, tweet_id)")
+	conn.Exec("CREATE INDEX IF NOT EXISTS idx_translation_jobs_ready ON translation_jobs(status, next_attempt_at, priority, updated_at)")
 	conn.Exec("CREATE INDEX IF NOT EXISTS idx_feed_items_author_lower ON feed_items(LOWER(author_handle))")
 	conn.Exec("CREATE INDEX IF NOT EXISTS idx_feed_items_media_author ON feed_items(author_handle COLLATE NOCASE, published_at DESC) WHERE media_json IS NOT NULL AND media_json != '' AND media_json != '[]' AND is_retweet = 0")
 	conn.Exec("CREATE INDEX IF NOT EXISTS idx_bookmarks_user_date ON bookmarks(user_id, bookmarked_at DESC)")
