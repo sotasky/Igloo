@@ -135,17 +135,17 @@ func TestDeleteChannel(t *testing.T) {
 		t.Fatalf("AddChannel: %v", err)
 	}
 
-	if err := d.DeleteChannel("del_ch_001"); err != nil {
+	if err := d.DeleteChannel("sample_del_ch_001"); err != nil {
 		t.Fatalf("DeleteChannel: %v", err)
 	}
 
 	// Verify gone
-	if _, err := d.GetChannelByID("del_ch_001"); err == nil {
+	if _, err := d.GetChannelByID("sample_del_ch_001"); err == nil {
 		t.Fatal("GetChannelByID should error after deletion")
 	}
 
 	// Delete non-existent channel should error
-	if err := d.DeleteChannel("del_ch_001"); err == nil {
+	if err := d.DeleteChannel("sample_del_ch_001"); err == nil {
 		t.Fatal("DeleteChannel of already-deleted channel should error")
 	}
 }
@@ -219,13 +219,13 @@ func TestExportConfig(t *testing.T) {
 	// Verify the new channel appears in subscriptions
 	found := false
 	for _, ch := range cfg.Subscriptions {
-		if ch.ChannelID == "export_ch_001" {
+		if ch.ChannelID == "sample_export_ch_001" {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Error("ExportConfig: expected export_ch_001 in Subscriptions")
+		t.Error("ExportConfig: expected sample_export_ch_001 in Subscriptions")
 	}
 
 	// Verify settings are exported
@@ -368,7 +368,7 @@ func TestImportConfigPreservesFullExportStateTimestamps(t *testing.T) {
 	if likedAt != 1710000001000 || updatedAt != 1710000002000 || likePublishedAt != 1709000000000 {
 		t.Fatalf("like timestamps = liked:%d updated:%d published:%d", likedAt, updatedAt, likePublishedAt)
 	}
-	if sourceHandle != "source" || canonicalLink == "" || mediaJSON == "" || quoteJSON == "" {
+	if sourceHandle != "sample_source" || canonicalLink == "" || mediaJSON == "" || quoteJSON == "" {
 		t.Fatalf("like metadata = source:%q canonical:%q media:%q quote:%q", sourceHandle, canonicalLink, mediaJSON, quoteJSON)
 	}
 
@@ -408,7 +408,7 @@ func TestImportConfigRepairsExistingZeroBookmarkTimestamps(t *testing.T) {
 	}
 	if err := d.ExecRaw(`
 		INSERT INTO bookmarks (user_id, video_id, category_id, bookmarked_at)
-		VALUES ('alice', 'existing_bookmark', 0, 0)
+		VALUES ('alice', 'sample_existing_bookmark', 0, 0)
 	`); err != nil {
 		t.Fatalf("seed bookmark: %v", err)
 	}
@@ -451,17 +451,20 @@ func TestImportConfigRepairsExistingZeroBookmarkTimestamps(t *testing.T) {
 func TestImportConfigRepairsExistingBookmarkedTikTokPublishDate(t *testing.T) {
 	d := openWritableTestDB(t)
 
-	if err := d.ExecRaw(`
+	const videoID = "9000000000000000000" // igloo-hygiene: allow-social-fixture synthetic TikTok snowflake
+	const wantPublishedAt int64 = 2095475792000
+
+	if _, err := d.conn.Exec(`
 		INSERT INTO videos (video_id, channel_id, title, duration, published_at, sync_seq)
-		VALUES ('7447476403618024737', 'tiktok_awesome0day', 'Old title', 0, 0, 0)
-	`); err != nil {
+		VALUES (?, ?, 'Old title', 0, 0, 0)
+	`, videoID, "tiktok_sample_awesome0day"); err != nil {
 		t.Fatalf("seed video: %v", err)
 	}
 
 	cfg := ConfigExport{
 		Version: 1,
 		BookmarkedVideos: []BookmarkedVideoExport{{
-			VideoID:      "sample_7447476403618024737",
+			VideoID:      videoID,
 			ChannelID:    "tiktok_sample_awesome0day",
 			Title:        "Restored title",
 			BookmarkedAt: 1710000000000,
@@ -475,12 +478,12 @@ func TestImportConfigRepairsExistingBookmarkedTikTokPublishDate(t *testing.T) {
 	if err := d.QueryRow(`
 		SELECT published_at, sync_seq
 		FROM videos
-		WHERE video_id = 'sample_7447476403618024737'
-	`).Scan(&publishedAt, &syncSeq); err != nil {
+		WHERE video_id = ?
+	`, videoID).Scan(&publishedAt, &syncSeq); err != nil {
 		t.Fatalf("read video: %v", err)
 	}
-	if publishedAt != 1734000724000 {
-		t.Fatalf("published_at = %d, want 1734000724000", publishedAt)
+	if publishedAt != wantPublishedAt {
+		t.Fatalf("published_at = %d, want %d", publishedAt, wantPublishedAt)
 	}
 	if syncSeq <= 0 {
 		t.Fatalf("sync_seq = %d, want bumped", syncSeq)
@@ -575,13 +578,13 @@ func TestImportConfigPublishesImportedRowsToDelta(t *testing.T) {
 	cfg := ConfigExport{
 		Version: 1,
 		Subscriptions: []ChannelExport{{
-			ChannelID: "youtube_sample_UCimported",
+			ChannelID: "youtube_UCexampleImported",
 			Name:      "Imported Channel",
 			Platform:  "youtube",
 		}},
 		BookmarkedVideos: []BookmarkedVideoExport{{
 			VideoID:     "sample_imported_video",
-			ChannelID:   "youtube_sample_UCimported",
+			ChannelID:   "youtube_UCexampleImported",
 			Title:       "Imported Video",
 			Platform:    "youtube",
 			Duration:    42,
@@ -596,14 +599,14 @@ func TestImportConfigPublishesImportedRowsToDelta(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListChannelsForDelta: %v", err)
 	}
-	if !hasChannelID(channels, "youtube_UCimported") {
+	if !hasChannelID(channels, "youtube_UCexampleImported") {
 		t.Fatalf("imported channel missing from delta: %#v", channels)
 	}
 	videos, _, err := d.ListVideosForDelta([]string{"youtube"}, 0, 500)
 	if err != nil {
 		t.Fatalf("ListVideosForDelta: %v", err)
 	}
-	if !hasVideoID(videos, "imported_video") {
+	if !hasVideoID(videos, "sample_imported_video") {
 		t.Fatalf("imported video missing from delta: %#v", videos)
 	}
 }
