@@ -201,6 +201,12 @@ type BookmarkedVideoExport struct {
 	BookmarkedAt  int64  `json:"bookmarked_at,omitempty"`
 }
 
+// FeedSeenExport is a compact feed seen row for full data export.
+type FeedSeenExport struct {
+	TweetID string `json:"tweet_id"`
+	SeenAt  int64  `json:"seen_at,omitempty"`
+}
+
 // ConfigExport is the config snapshot for export/import.
 type ConfigExport struct {
 	Version            int                     `json:"version"`
@@ -212,6 +218,7 @@ type ConfigExport struct {
 	Settings           map[string]string       `json:"settings"`
 	LikedPosts         []LikedPostExport       `json:"liked_posts,omitempty"`
 	BookmarkedVideos   []BookmarkedVideoExport `json:"bookmarked_videos,omitempty"`
+	FeedSeen           []FeedSeenExport        `json:"feed_seen,omitempty"`
 }
 
 // resolveUserID returns the first user_id that has data, checking the given
@@ -377,6 +384,27 @@ func (db *DB) ExportFullData(userID string) (ConfigExport, error) {
 		cfg.LikedPosts = append(cfg.LikedPosts, lp)
 	}
 	if err := likeRows.Err(); err != nil {
+		return cfg, err
+	}
+
+	seenRows, err := db.conn.Query(`
+		SELECT tweet_id, COALESCE(seen_at,0)
+		FROM feed_seen
+		WHERE username = ?
+		ORDER BY seen_at DESC
+	`, userID)
+	if err != nil {
+		return cfg, fmt.Errorf("export feed seen: %w", err)
+	}
+	defer seenRows.Close()
+	for seenRows.Next() {
+		var seen FeedSeenExport
+		if err := seenRows.Scan(&seen.TweetID, &seen.SeenAt); err != nil {
+			return cfg, err
+		}
+		cfg.FeedSeen = append(cfg.FeedSeen, seen)
+	}
+	if err := seenRows.Err(); err != nil {
 		return cfg, err
 	}
 
@@ -700,6 +728,24 @@ func (db *DB) ImportConfig(cfg ConfigExport, userID string, replace bool) (Impor
 					nilIfEmpty(lp.QuotePayloadJSON), lp.LikedAt, updatedAt); err != nil {
 					return err
 				}
+			}
+		}
+
+		for _, seen := range cfg.FeedSeen {
+			if strings.TrimSpace(seen.TweetID) == "" {
+				continue
+			}
+			seenAt := seen.SeenAt
+			if seenAt <= 0 {
+				seenAt = time.Now().UnixMilli()
+			}
+			if _, err := tx.Exec(`
+				INSERT INTO feed_seen (username, tweet_id, seen_at)
+				VALUES (?, ?, ?)
+				ON CONFLICT(username, tweet_id) DO UPDATE SET
+					seen_at = MAX(feed_seen.seen_at, excluded.seen_at)
+			`, userID, seen.TweetID, seenAt); err != nil {
+				return err
 			}
 		}
 

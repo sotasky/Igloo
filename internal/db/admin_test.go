@@ -110,7 +110,7 @@ func TestAddChannelDuplicate(t *testing.T) {
 	d := openWritableTestDB(t)
 
 	ch := model.Channel{
-		ChannelID: "dup_ch_001",
+		ChannelID: "sample_dup_ch_001",
 		Name:      "Dup Channel",
 		Platform:  "youtube",
 	}
@@ -127,7 +127,7 @@ func TestDeleteChannel(t *testing.T) {
 	d := openWritableTestDB(t)
 
 	ch := model.Channel{
-		ChannelID: "del_ch_001",
+		ChannelID: "sample_del_ch_001",
 		Name:      "Delete Me",
 		Platform:  "youtube",
 	}
@@ -187,7 +187,7 @@ func TestExportConfig(t *testing.T) {
 
 	// Add a channel
 	ch := model.Channel{
-		ChannelID:    "export_ch_001",
+		ChannelID:    "sample_export_ch_001",
 		Name:         "Export Test Channel",
 		Platform:     "youtube",
 		IsSubscribed: true,
@@ -278,7 +278,7 @@ func TestImportConfigPreservesDefaultCategoryBookmarkLabel(t *testing.T) {
 	cfg := ConfigExport{
 		Version: 1,
 		Bookmarks: []BookmarkExport{
-			{VideoID: "default_bookmark", CustomTitle: "Saved Label"},
+			{VideoID: "sample_default_bookmark", CustomTitle: "Saved Label"},
 		},
 	}
 	result, err := d.ImportConfig(cfg, "alice", false)
@@ -307,7 +307,7 @@ func TestImportConfigPreservesFullExportStateTimestamps(t *testing.T) {
 			Name: "Saved",
 		}},
 		Bookmarks: []BookmarkExport{{
-			VideoID:        "stateful_bookmark",
+			VideoID:        "sample_stateful_bookmark",
 			CategoryName:   "Saved",
 			CustomTitle:    "clips",
 			AccountHandles: "@author",
@@ -315,21 +315,25 @@ func TestImportConfigPreservesFullExportStateTimestamps(t *testing.T) {
 			BookmarkedAt:   1710000000000,
 		}},
 		LikedPosts: []LikedPostExport{{
-			TweetID:          "stateful_like",
-			SourceHandle:     "source",
-			AuthorHandle:     "author",
+			TweetID:          "sample_stateful_like",
+			SourceHandle:     "sample_source",
+			AuthorHandle:     "sample_author",
 			BodyText:         "liked text",
 			Platform:         "twitter",
 			PublishedAtMs:    1709000000000,
-			CanonicalXLink:   "https://x.com/author/status/stateful_like",
+			CanonicalXLink:   "https://x.com/sample_author/status/stateful_like",
 			MediaJSON:        `[{"type":"photo"}]`,
-			QuotePayloadJSON: `{"tweet_id":"quote"}`,
+			QuotePayloadJSON: `{"tweet_id":"sample_quote"}`,
 			LikedAt:          1710000001000,
 			UpdatedAt:        1710000002000,
 		}},
+		FeedSeen: []FeedSeenExport{{
+			TweetID: "sample_stateful_seen",
+			SeenAt:  1710000002500,
+		}},
 		BookmarkedVideos: []BookmarkedVideoExport{{
-			VideoID:       "stateful_video",
-			ChannelID:     "youtube_UCstateful",
+			VideoID:       "sample_stateful_video",
+			ChannelID:     "youtube_sample_UCstateful",
 			Title:         "Stateful Video",
 			PublishedAtMs: 1708000000000,
 			BookmarkedAt:  1710000003000,
@@ -343,7 +347,7 @@ func TestImportConfigPreservesFullExportStateTimestamps(t *testing.T) {
 	var accountHandles, mediaIndices string
 	if err := d.QueryRow(`
 		SELECT bookmarked_at, COALESCE(account_handles,''), COALESCE(media_indices,'')
-		FROM bookmarks WHERE user_id = 'alice' AND video_id = 'stateful_bookmark'
+		FROM bookmarks WHERE user_id = 'alice' AND video_id = 'sample_stateful_bookmark'
 	`).Scan(&bookmarkedAt, &accountHandles, &mediaIndices); err != nil {
 		t.Fatalf("read bookmark: %v", err)
 	}
@@ -357,7 +361,7 @@ func TestImportConfigPreservesFullExportStateTimestamps(t *testing.T) {
 		SELECT liked_at, updated_at, published_at, COALESCE(source_handle,''),
 		       COALESCE(canonical_x_link,''), COALESCE(media_json,''),
 		       COALESCE(quote_payload_json,'')
-		FROM feed_likes WHERE username = 'alice' AND tweet_id = 'stateful_like'
+		FROM feed_likes WHERE username = 'alice' AND tweet_id = 'sample_stateful_like'
 	`).Scan(&likedAt, &updatedAt, &likePublishedAt, &sourceHandle, &canonicalLink, &mediaJSON, &quoteJSON); err != nil {
 		t.Fatalf("read like: %v", err)
 	}
@@ -368,12 +372,24 @@ func TestImportConfigPreservesFullExportStateTimestamps(t *testing.T) {
 		t.Fatalf("like metadata = source:%q canonical:%q media:%q quote:%q", sourceHandle, canonicalLink, mediaJSON, quoteJSON)
 	}
 
+	var seenAt int64
+	if err := d.QueryRow(`
+		SELECT seen_at
+		FROM feed_seen
+		WHERE username = 'alice' AND tweet_id = 'sample_stateful_seen'
+	`).Scan(&seenAt); err != nil {
+		t.Fatalf("read feed seen: %v", err)
+	}
+	if seenAt != 1710000002500 {
+		t.Fatalf("seen_at = %d, want 1710000002500", seenAt)
+	}
+
 	var videoPublishedAt, videoBookmarkedAt int64
 	if err := d.QueryRow(`
 		SELECT v.published_at, b.bookmarked_at
 		FROM videos v
 		JOIN bookmarks b ON b.video_id = v.video_id
-		WHERE b.user_id = 'alice' AND v.video_id = 'stateful_video'
+		WHERE b.user_id = 'alice' AND v.video_id = 'sample_stateful_video'
 	`).Scan(&videoPublishedAt, &videoBookmarkedAt); err != nil {
 		t.Fatalf("read bookmarked video: %v", err)
 	}
@@ -403,13 +419,13 @@ func TestImportConfigRepairsExistingZeroBookmarkTimestamps(t *testing.T) {
 			Name: "Saved",
 		}},
 		Bookmarks: []BookmarkExport{{
-			VideoID:      "existing_bookmark",
+			VideoID:      "sample_existing_bookmark",
 			CategoryName: "Saved",
 			CustomTitle:  "Recovered title",
 			BookmarkedAt: 1710000000000,
 		}},
 		BookmarkedVideos: []BookmarkedVideoExport{{
-			VideoID:      "existing_bookmark",
+			VideoID:      "sample_existing_bookmark",
 			CategoryName: "Saved",
 			BookmarkedAt: 1710000001000,
 		}},
@@ -423,7 +439,7 @@ func TestImportConfigRepairsExistingZeroBookmarkTimestamps(t *testing.T) {
 	if err := d.QueryRow(`
 		SELECT category_id, COALESCE(custom_title, ''), bookmarked_at
 		FROM bookmarks
-		WHERE user_id = 'alice' AND video_id = 'existing_bookmark'
+		WHERE user_id = 'alice' AND video_id = 'sample_existing_bookmark'
 	`).Scan(&categoryID, &customTitle, &bookmarkedAt); err != nil {
 		t.Fatalf("read bookmark: %v", err)
 	}
@@ -445,8 +461,8 @@ func TestImportConfigRepairsExistingBookmarkedTikTokPublishDate(t *testing.T) {
 	cfg := ConfigExport{
 		Version: 1,
 		BookmarkedVideos: []BookmarkedVideoExport{{
-			VideoID:      "7447476403618024737",
-			ChannelID:    "tiktok_awesome0day",
+			VideoID:      "sample_7447476403618024737",
+			ChannelID:    "tiktok_sample_awesome0day",
 			Title:        "Restored title",
 			BookmarkedAt: 1710000000000,
 		}},
@@ -459,7 +475,7 @@ func TestImportConfigRepairsExistingBookmarkedTikTokPublishDate(t *testing.T) {
 	if err := d.QueryRow(`
 		SELECT published_at, sync_seq
 		FROM videos
-		WHERE video_id = '7447476403618024737'
+		WHERE video_id = 'sample_7447476403618024737'
 	`).Scan(&publishedAt, &syncSeq); err != nil {
 		t.Fatalf("read video: %v", err)
 	}
@@ -504,10 +520,16 @@ func TestExportFullDataCarriesStateTimestampsAndMetadata(t *testing.T) {
 			 quote_payload_json, liked_at, updated_at)
 		VALUES
 			('alice', 'export_like', 'source', 'author', 'Author',
-			 'liked text', 'https://x.com/author/status/export_like', 1706000000000,
-			 '[{"type":"photo"}]', 'twitter', '{"tweet_id":"quote"}', 1712000000000, 1712000001000)
+			 'liked text', 'https://x.com/sample_author/status/export_like', 1706000000000,
+			 '[{"type":"photo"}]', 'twitter', '{"tweet_id":"sample_quote"}', 1712000000000, 1712000001000)
 	`); err != nil {
 		t.Fatalf("seed like: %v", err)
+	}
+	if err := d.ExecRaw(`
+		INSERT INTO feed_seen (username, tweet_id, seen_at)
+		VALUES ('alice', 'export_seen', 1713000000000)
+	`); err != nil {
+		t.Fatalf("seed seen: %v", err)
 	}
 
 	cfg, err := d.ExportFullData("alice")
@@ -531,6 +553,13 @@ func TestExportFullDataCarriesStateTimestampsAndMetadata(t *testing.T) {
 	if lp.SourceHandle != "source" || lp.CanonicalXLink == "" || lp.MediaJSON == "" || lp.QuotePayloadJSON == "" {
 		t.Fatalf("exported like metadata = %#v", lp)
 	}
+	if len(cfg.FeedSeen) != 1 {
+		t.Fatalf("feed seen = %d, want 1", len(cfg.FeedSeen))
+	}
+	seen := cfg.FeedSeen[0]
+	if seen.TweetID != "export_seen" || seen.SeenAt != 1713000000000 {
+		t.Fatalf("exported seen = %#v", seen)
+	}
 	if len(cfg.BookmarkedVideos) != 1 {
 		t.Fatalf("bookmarked videos = %d, want 1", len(cfg.BookmarkedVideos))
 	}
@@ -546,13 +575,13 @@ func TestImportConfigPublishesImportedRowsToDelta(t *testing.T) {
 	cfg := ConfigExport{
 		Version: 1,
 		Subscriptions: []ChannelExport{{
-			ChannelID: "youtube_UCimported",
+			ChannelID: "youtube_sample_UCimported",
 			Name:      "Imported Channel",
 			Platform:  "youtube",
 		}},
 		BookmarkedVideos: []BookmarkedVideoExport{{
-			VideoID:     "imported_video",
-			ChannelID:   "youtube_UCimported",
+			VideoID:     "sample_imported_video",
+			ChannelID:   "youtube_sample_UCimported",
 			Title:       "Imported Video",
 			Platform:    "youtube",
 			Duration:    42,
