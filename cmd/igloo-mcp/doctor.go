@@ -204,8 +204,19 @@ func countFiles(dir string) int {
 	return count
 }
 
-var sensitiveValueRE = regexp.MustCompile(`(?i)\b(cookie|token|secret|password|passphrase|authorization|api[_-]?key)=([^ \t\r\n,;]+)`)
+var sensitiveMaskers = []struct {
+	re   *regexp.Regexp
+	repl string
+}{
+	{regexp.MustCompile(`(?i)\b(cookie|token|secret|password|passphrase|authorization|api[_-]?key)=([^ \t\r\n,;]+)`), "$1=***"},
+	{regexp.MustCompile(`(?im)\b(authorization)\s*:\s*[^\r\n]+`), "$1: ***"},
+	{regexp.MustCompile(`(?im)\b(set-cookie|cookie)\s*:\s*[^\r\n]+`), "$1: ***"},
+	{regexp.MustCompile(`(?im)\b([A-Za-z0-9_-]*(?:token|secret|password|passphrase|api[_-]?key)[A-Za-z0-9_-]*)\s*:\s*([^ \t\r\n,;]+)`), "$1: ***"},
+}
 
 func maskSensitive(s string) string {
-	return sensitiveValueRE.ReplaceAllString(s, "$1=***")
+	for _, masker := range sensitiveMaskers {
+		s = masker.re.ReplaceAllString(s, masker.repl)
+	}
+	return s
 }

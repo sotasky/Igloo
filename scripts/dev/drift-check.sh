@@ -32,11 +32,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
 
 echo "[drift] generating templ components..."
-if command -v templ >/dev/null 2>&1; then
-  templ generate
-else
-  go run github.com/a-h/templ/cmd/templ@v0.3.1020 generate
-fi
+go run github.com/a-h/templ/cmd/templ@v0.3.1020 generate
 
 echo "[drift] bundling static assets..."
 go run ./cmd/igloo-assets

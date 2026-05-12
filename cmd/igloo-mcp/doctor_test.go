@@ -86,6 +86,45 @@ func TestDoctorStatusReportsLocalHealthAndMasksSecrets(t *testing.T) {
 	}
 }
 
+func TestMaskSensitiveMasksHeaderAndColonSecrets(t *testing.T) {
+	input := strings.Join([]string{
+		"Authorization: Bearer auth-header-secret",
+		"Cookie: session=cookie-secret; theme=dark",
+		"Set-Cookie: session=set-cookie-secret; Path=/; HttpOnly",
+		"access_token: colon-token-secret",
+		"api-key: colon-api-secret",
+		"token=key-value-token-secret cookie=key-value-cookie-secret",
+	}, "\n")
+
+	masked := maskSensitive(input)
+	for _, secret := range []string{
+		"auth-header-secret",
+		"cookie-secret",
+		"set-cookie-secret",
+		"colon-token-secret",
+		"colon-api-secret",
+		"key-value-token-secret",
+		"key-value-cookie-secret",
+	} {
+		if strings.Contains(masked, secret) {
+			t.Fatalf("maskSensitive leaked %q in:\n%s", secret, masked)
+		}
+	}
+	for _, want := range []string{
+		"Authorization: ***",
+		"Cookie: ***",
+		"Set-Cookie: ***",
+		"access_token: ***",
+		"api-key: ***",
+		"token=***",
+		"cookie=***",
+	} {
+		if !strings.Contains(masked, want) {
+			t.Fatalf("maskSensitive missing %q in:\n%s", want, masked)
+		}
+	}
+}
+
 func resetTestServerDB(t *testing.T) {
 	t.Helper()
 	serverDBMu.Lock()

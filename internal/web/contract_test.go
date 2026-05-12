@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -134,6 +135,146 @@ func TestAndroidSyncProfilePayloadUsesChannelProfiles(t *testing.T) {
 	}
 	if profile["display_name"] != "Fresh Profile Name" || profile["avatar_url"] != "https://cdn.example.invalid/fresh-profile.jpg" {
 		t.Fatalf("profile attachment = %#v, want channel_profiles values", profile)
+	}
+}
+
+func TestAndroidSyncContractFixtureUsesSingleUserFollowState(t *testing.T) {
+	srv := newAndroidSyncTestServer(t)
+	seedAndroidContractRows(t, srv)
+
+	items, _, err := srv.buildAndroidSyncItems("alice", db.AndroidSyncDesiredSets{
+		Tweets: map[string]struct{}{
+			"sample_tweet_sync": {},
+		},
+		Videos: map[string]struct{}{},
+		Channels: map[string]struct{}{
+			"twitter_sample_channel": {},
+		},
+	})
+	if err != nil {
+		t.Fatalf("buildAndroidSyncItems: %v", err)
+	}
+
+	for _, item := range items {
+		if item.ItemKind != "channels" || item.ItemID != "twitter_sample_channel" {
+			continue
+		}
+		var bundle deltaBundle
+		if err := json.Unmarshal(item.PayloadJSON, &bundle); err != nil {
+			t.Fatalf("decode channel payload: %v", err)
+		}
+		rows := userStateRows(t, bundle, "channel_follows")
+		if len(rows) != 1 || rows[0]["followed"] != true {
+			t.Fatalf("contract fixture follow state = %#v, want followed single-user row", rows)
+		}
+		return
+	}
+	t.Fatalf("contract channel item missing from Android sync items: %+v", items)
+}
+
+func TestContractGoldenNormalizationRejectsMissingOrWrongStableFields(t *testing.T) {
+	tests := []struct {
+		name      string
+		normalize func() error
+	}{
+		{
+			name: "missing generation_id",
+			normalize: func() error {
+				return normalizeAndroidSyncLatestGenerationFields(map[string]any{
+					"created_at_ms":  float64(1_700_000_000_000),
+					"source_version": "contract-source",
+				})
+			},
+		},
+		{
+			name: "wrong generation_id type",
+			normalize: func() error {
+				return normalizeAndroidSyncLatestGenerationFields(map[string]any{
+					"generation_id":  float64(123),
+					"created_at_ms":  float64(1_700_000_000_000),
+					"source_version": "contract-source",
+				})
+			},
+		},
+		{
+			name: "missing created_at_ms",
+			normalize: func() error {
+				return normalizeAndroidSyncLatestGenerationFields(map[string]any{
+					"generation_id":  "android-sync-contract",
+					"source_version": "contract-source",
+				})
+			},
+		},
+		{
+			name: "wrong created_at_ms type",
+			normalize: func() error {
+				return normalizeAndroidSyncLatestGenerationFields(map[string]any{
+					"generation_id":  "android-sync-contract",
+					"created_at_ms":  "1700000000000",
+					"source_version": "contract-source",
+				})
+			},
+		},
+		{
+			name: "missing source_version",
+			normalize: func() error {
+				return normalizeAndroidSyncLatestGenerationFields(map[string]any{
+					"generation_id": "android-sync-contract",
+					"created_at_ms": float64(1_700_000_000_000),
+				})
+			},
+		},
+		{
+			name: "wrong source_version type",
+			normalize: func() error {
+				return normalizeAndroidSyncLatestGenerationFields(map[string]any{
+					"generation_id":  "android-sync-contract",
+					"created_at_ms":  float64(1_700_000_000_000),
+					"source_version": false,
+				})
+			},
+		},
+		{
+			name: "missing sync_version",
+			normalize: func() error {
+				return normalizeMutationSuccessFields(map[string]any{"ok": true})
+			},
+		},
+		{
+			name: "wrong sync_version type",
+			normalize: func() error {
+				return normalizeMutationSuccessFields(map[string]any{
+					"ok":           true,
+					"sync_version": "1",
+				})
+			},
+		},
+		{
+			name: "missing snapshot_at",
+			normalize: func() error {
+				return normalizeAndroidSyncItemsPageFields(contractItemsPageWithPrimary("bookmark_metadata", map[string]any{
+					"version": float64(1),
+				}))
+			},
+		},
+		{
+			name: "wrong snapshot_at type",
+			normalize: func() error {
+				return normalizeAndroidSyncItemsPageFields(contractItemsPageWithPrimary("feed_rank", map[string]any{
+					"row_count":   float64(0),
+					"rows":        []any{},
+					"snapshot_at": "1700000000000",
+				}))
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := tt.normalize(); err == nil {
+				t.Fatalf("normalization accepted %s", tt.name)
+			}
+		})
 	}
 }
 
@@ -320,10 +461,13 @@ func buildAndroidSyncLatestGenerationContract(t *testing.T) any {
 	seedAndroidContractRows(t, srv)
 
 	body := requestJSON(t, srv, "GET", "/api/android/sync/generation/latest?feed_days=7&youtube_days=7&moments_days=7&story_hours=48", "alice", nil)
-	gen := body["generation"].(map[string]any)
-	gen["generation_id"] = "<generated>"
-	gen["created_at_ms"] = float64(0)
-	gen["source_version"] = "<source-version>"
+	gen, err := contractObjectField(body, "generation")
+	if err != nil {
+		t.Fatalf("generation contract: %v", err)
+	}
+	if err := normalizeAndroidSyncLatestGenerationFields(gen); err != nil {
+		t.Fatalf("generation contract: %v", err)
+	}
 	return map[string]any{"generation": gen}
 }
 
@@ -350,7 +494,9 @@ func buildAndroidSyncItemsPageContract(t *testing.T) any {
 	storeContractGeneration(t, srv, counts, items, nil)
 
 	body := requestJSON(t, srv, "GET", "/api/android/sync/generation/android-sync-contract/items", "alice", nil)
-	normalizeAndroidSyncItemsPage(body)
+	if err := normalizeAndroidSyncItemsPageFields(body); err != nil {
+		t.Fatalf("android sync items contract: %v", err)
+	}
 	return body
 }
 
@@ -401,7 +547,7 @@ func seedAndroidContractRows(t *testing.T, srv *testServer) {
 	}
 	if err := srv.db.ExecRaw(`
 		INSERT INTO channel_follows (user_id, channel_id, followed_at)
-		VALUES ('alice', 'twitter_sample_channel', ?)
+		VALUES ('', 'twitter_sample_channel', ?)
 	`, now); err != nil {
 		t.Fatalf("insert channel follow: %v", err)
 	}
@@ -494,7 +640,9 @@ func buildMutationEnvelopeContract(t *testing.T) any {
 		"action":        "set",
 		"updated_at_ms": 1_700_000_003_000,
 	})
-	success["sync_version"] = float64(1)
+	if err := normalizeMutationSuccessFields(success); err != nil {
+		t.Fatalf("mutation success contract: %v", err)
+	}
 
 	errorBody := requestJSON(t, srv, "POST", "/api/mutations/like", "alice", map[string]any{
 		"tweet_id":      "sample_tweet_like",
@@ -593,18 +741,69 @@ func assertGoldenJSON(t *testing.T, name string, got any) {
 	}
 }
 
-func normalizeAndroidSyncItemsPage(body map[string]any) {
-	items, _ := body["items"].([]any)
-	for _, raw := range items {
-		item, _ := raw.(map[string]any)
+func normalizeAndroidSyncLatestGenerationFields(gen map[string]any) error {
+	if _, err := contractStringField(gen, "generation_id"); err != nil {
+		return err
+	}
+	if _, err := contractNumberField(gen, "created_at_ms"); err != nil {
+		return err
+	}
+	if _, err := contractStringField(gen, "source_version"); err != nil {
+		return err
+	}
+	gen["generation_id"] = "<generated>"
+	gen["created_at_ms"] = float64(0)
+	gen["source_version"] = "<source-version>"
+	return nil
+}
+
+func normalizeMutationSuccessFields(success map[string]any) error {
+	if _, err := contractNumberField(success, "sync_version"); err != nil {
+		return err
+	}
+	success["sync_version"] = float64(1)
+	return nil
+}
+
+func normalizeAndroidSyncItemsPageFields(body map[string]any) error {
+	items, err := contractArrayField(body, "items")
+	if err != nil {
+		return err
+	}
+	for i, raw := range items {
+		item, ok := raw.(map[string]any)
+		if !ok {
+			return fmt.Errorf("items[%d] = %T, want object", i, raw)
+		}
+		if _, err := contractNumberField(item, "seq"); err != nil {
+			return fmt.Errorf("items[%d]: %w", i, err)
+		}
 		switch item["item_kind"] {
 		case "bookmark_metadata":
-			payload, _ := item["payload"].(map[string]any)
-			primary, _ := payload["primary"].(map[string]any)
+			payload, err := contractObjectField(item, "payload")
+			if err != nil {
+				return fmt.Errorf("items[%d] bookmark_metadata: %w", i, err)
+			}
+			primary, err := contractObjectField(payload, "primary")
+			if err != nil {
+				return fmt.Errorf("items[%d] bookmark_metadata: %w", i, err)
+			}
+			if _, err := contractNumberField(primary, "snapshot_at"); err != nil {
+				return fmt.Errorf("items[%d] bookmark_metadata: %w", i, err)
+			}
 			primary["snapshot_at"] = float64(0)
 		case "feed_rank":
-			payload, _ := item["payload"].(map[string]any)
-			primary, _ := payload["primary"].(map[string]any)
+			payload, err := contractObjectField(item, "payload")
+			if err != nil {
+				return fmt.Errorf("items[%d] feed_rank: %w", i, err)
+			}
+			primary, err := contractObjectField(payload, "primary")
+			if err != nil {
+				return fmt.Errorf("items[%d] feed_rank: %w", i, err)
+			}
+			if _, err := contractNumberField(primary, "snapshot_at"); err != nil {
+				return fmt.Errorf("items[%d] feed_rank: %w", i, err)
+			}
 			primary["snapshot_at"] = float64(0)
 		default:
 			continue
@@ -615,6 +814,69 @@ func normalizeAndroidSyncItemsPage(body map[string]any) {
 		right := items[j].(map[string]any)
 		return left["seq"].(float64) < right["seq"].(float64)
 	})
+	return nil
+}
+
+func contractItemsPageWithPrimary(kind string, primary map[string]any) map[string]any {
+	return map[string]any{
+		"items": []any{
+			map[string]any{
+				"item_kind": kind,
+				"seq":       float64(1),
+				"payload": map[string]any{
+					"primary": primary,
+				},
+			},
+		},
+	}
+}
+
+func contractArrayField(obj map[string]any, key string) ([]any, error) {
+	value, ok := obj[key]
+	if !ok {
+		return nil, fmt.Errorf("%s missing", key)
+	}
+	out, ok := value.([]any)
+	if !ok {
+		return nil, fmt.Errorf("%s = %T, want array", key, value)
+	}
+	return out, nil
+}
+
+func contractObjectField(obj map[string]any, key string) (map[string]any, error) {
+	value, ok := obj[key]
+	if !ok {
+		return nil, fmt.Errorf("%s missing", key)
+	}
+	out, ok := value.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("%s = %T, want object", key, value)
+	}
+	return out, nil
+}
+
+func contractStringField(obj map[string]any, key string) (string, error) {
+	value, ok := obj[key]
+	if !ok {
+		return "", fmt.Errorf("%s missing", key)
+	}
+	out, ok := value.(string)
+	if !ok {
+		return "", fmt.Errorf("%s = %T, want string", key, value)
+	}
+	return out, nil
+}
+
+func contractNumberField(obj map[string]any, key string) (float64, error) {
+	value, ok := obj[key]
+	if !ok {
+		return 0, fmt.Errorf("%s missing", key)
+	}
+	out, ok := value.(float64)
+	if !ok {
+		return 0, fmt.Errorf("%s = %T, want number", key, value)
+	}
+	return out, nil
 }
 
 func countReadyAssets(assets []model.AndroidSyncAsset) int {

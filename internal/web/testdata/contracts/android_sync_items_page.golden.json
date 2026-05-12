@@ -55,7 +55,7 @@
             "channel_follows": [
               {
                 "channel_id": "twitter_sample_channel",
-                "followed": false
+                "followed": true
               }
             ],
             "channel_stars": [
@@ -128,7 +128,7 @@
             "channel_follows": [
               {
                 "channel_id": "twitter_sample_channel",
-                "followed": false
+                "followed": true
               }
             ],
             "channel_stars": [
@@ -153,7 +153,7 @@
           }
         },
         "primary": {
-          "algo_interest_score": 2.197224577336219,
+          "algo_interest_score": 7.197224577336219,
           "author_avatar_url": "/api/media/avatar/twitter_sample_channel",
           "author_display_name": "Inline Stale Name",
           "author_handle": "sample_channel",
