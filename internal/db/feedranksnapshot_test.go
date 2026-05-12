@@ -359,20 +359,20 @@ func TestListPreDiversityRanked_StarredHighAffinityFiveHoursOldStaysNearTop(t *t
 	now := time.Now()
 
 	if _, err := d.conn.Exec(
-		`INSERT INTO channel_follows (user_id, channel_id, followed_at) VALUES ('', 'twitter_takomayuyi', ?)`,
+		`INSERT INTO channel_follows (user_id, channel_id, followed_at) VALUES ('', 'twitter_sample_target', ?)`,
 		now.Add(-7*24*time.Hour).UnixMilli(),
 	); err != nil {
 		t.Fatalf("follow target: %v", err)
 	}
 	if _, err := d.conn.Exec(
-		`INSERT INTO channel_stars (user_id, channel_id, starred_at) VALUES ('', 'twitter_takomayuyi', ?)`,
+		`INSERT INTO channel_stars (user_id, channel_id, starred_at) VALUES ('', 'twitter_sample_target', ?)`,
 		now.Add(-7*24*time.Hour).UnixMilli(),
 	); err != nil {
 		t.Fatalf("star target: %v", err)
 	}
 	if _, err := d.conn.Exec(`INSERT INTO feed_items
 			(tweet_id, author_handle, source_handle, body_text, published_at, algo_interest, algo_scored_at)
-			VALUES ('prior_target_seen', 'Takomayuyi', 'Takomayuyi', 'body', ?, 37.59, 1)`,
+			VALUES ('prior_target_seen', 'sample_target', 'sample_target', 'body', ?, 37.59, 1)`,
 		now.Add(-72*time.Hour).UnixMilli(),
 	); err != nil {
 		t.Fatalf("insert prior target: %v", err)
@@ -385,7 +385,7 @@ func TestListPreDiversityRanked_StarredHighAffinityFiveHoursOldStaysNearTop(t *t
 	}
 	if _, err := d.conn.Exec(`INSERT INTO feed_items
 			(tweet_id, author_handle, source_handle, body_text, published_at, algo_interest, algo_scored_at)
-			VALUES ('target_high_affinity', 'Takomayuyi', 'Takomayuyi', 'body', ?, 37.59, 1)`,
+			VALUES ('target_high_affinity', 'sample_target', 'sample_target', 'body', ?, 37.59, 1)`,
 		now.Add(-5*time.Hour).UnixMilli(),
 	); err != nil {
 		t.Fatalf("insert target: %v", err)

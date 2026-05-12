@@ -33,15 +33,11 @@ var (
 
 	allowMarker = "igloo-hygiene: allow-social-fixture"
 
-	// This gates the current legacy backlog without hiding new additions. Remove
-	// or shrink it as older fixtures move to sample_* names.
-	knownSocialFixtureDebtFingerprint = "edb2940e28282e4742c6021df947d8fff60678b5647014622a8bc7e9bfc40bea"
-	knownSocialFixtureDebtFindings    = 1684
+	baselinePath = "internal/releasehygiene/social_fixture_baseline.txt"
 
 	rawIdentityRe = regexp.MustCompile(`(?i)\b(ChannelID|channel_id|channelId|ReposterChannelID|reposter_channel_id|reposterChannelId|ownerId|owner_id|SourceID|source_id|sourceId|SourceHandle|source_handle|sourceHandle|AuthorHandle|author_handle|authorHandle|QuoteAuthorHandle|quote_author_handle|RetweetedByHandle|retweeted_by_handle|ReposterHandle|reposter_handle|account_handles|accountHandles|TweetID|tweet_id|tweetId|VideoID|video_id|videoId|Handle|handle)"?\s*[:=]\s*["']@?([A-Za-z0-9_.@,-]+)["']`)
 
 	identityContextRe = regexp.MustCompile(`(?i)(ChannelID|channel_id|channelId|ownerId|owner_id|SourceID|source_id|sourceId|VideoID|video_id|videoId|TweetID|tweet_id|tweetId|AuthorHandle|author_handle|authorHandle|QuoteAuthorHandle|quote_author_handle|RetweetedByHandle|retweeted_by_handle|ReposterChannelID|reposter_channel_id|ReposterHandle|reposter_handle|SourceHandle|source_handle|sourceHandle|profile_url|profileUrl|canonical_url|canonicalUrl|tweetUrl|TweetURL|url|URL|Handle|handle|account_handles|accountHandles|/channels/|/api/media/(?:avatar|banner)/)`)
-	sqlStringRe       = regexp.MustCompile(`'([^']*)'`)
 
 	urlRules = []urlRule{
 		{
@@ -119,12 +115,42 @@ func TestSocialFixtureIdentitiesUseSampleNames(t *testing.T) {
 	if len(findings) == 0 {
 		return
 	}
-	fingerprint := socialFixtureDebtFingerprint(findings)
-	if fingerprint == knownSocialFixtureDebtFingerprint && len(findings) == knownSocialFixtureDebtFindings {
-		t.Logf("known legacy social fixture debt remains: %d findings, fingerprint %s; new generic social identities must use sample_* names", len(findings), fingerprint)
+	sortFindings(findings)
+	if os.Getenv("IGLOO_UPDATE_SOCIAL_FIXTURE_BASELINE") == "1" {
+		writeBaseline(t, root, findings)
 		return
 	}
 
+	baseline := readBaseline(t, root)
+	newFindings, staleBaseline := compareBaseline(findings, baseline)
+	if len(newFindings) == 0 && staleBaseline == 0 {
+		t.Logf("known legacy social fixture debt remains: %d findings; new generic social identities must use sample_* names", len(findings))
+		return
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "social fixture identities must use obvious sample/test names; prefer sample_* values or add %q with a reason for intentional exceptions\n", allowMarker)
+	if len(newFindings) > 0 {
+		fmt.Fprintf(&b, "new findings: %d\n", len(newFindings))
+		for i, f := range newFindings {
+			if i >= 80 {
+				fmt.Fprintf(&b, "... and %d more\n", len(newFindings)-i)
+				break
+			}
+			fmt.Fprintf(&b, "%s:%d: %s (%s)\n", f.path, f.line, f.value, f.reason)
+		}
+	}
+	if staleBaseline > 0 {
+		if len(newFindings) > 0 {
+			b.WriteByte('\n')
+		}
+		fmt.Fprintf(&b, "baseline has %d stale entries; regenerate it after intentional fixture cleanup with:\n", staleBaseline)
+		fmt.Fprintf(&b, "IGLOO_UPDATE_SOCIAL_FIXTURE_BASELINE=1 go test ./internal/releasehygiene -run TestSocialFixtureIdentitiesUseSampleNames -count=1\n")
+	}
+	t.Fatal(b.String())
+}
+
+func sortFindings(findings []finding) {
 	sort.Slice(findings, func(i, j int) bool {
 		if findings[i].path != findings[j].path {
 			return findings[i].path < findings[j].path
@@ -132,20 +158,104 @@ func TestSocialFixtureIdentitiesUseSampleNames(t *testing.T) {
 		if findings[i].line != findings[j].line {
 			return findings[i].line < findings[j].line
 		}
-		return findings[i].value < findings[j].value
+		if findings[i].value != findings[j].value {
+			return findings[i].value < findings[j].value
+		}
+		return findings[i].reason < findings[j].reason
 	})
+}
+
+func readBaseline(t *testing.T, root string) map[string]int {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(root, baselinePath))
+	if err != nil {
+		t.Fatalf("read %s: %v", baselinePath, err)
+	}
+	counts := map[string]int{}
+	for lineNo, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if !regexp.MustCompile(`^[a-f0-9]{64}$`).MatchString(line) {
+			t.Fatalf("%s:%d: invalid baseline hash %q", baselinePath, lineNo+1, line)
+		}
+		counts[line]++
+	}
+	return counts
+}
+
+func writeBaseline(t *testing.T, root string, findings []finding) {
+	t.Helper()
+	hashes := make([]string, 0, len(findings))
+	for _, finding := range findings {
+		hashes = append(hashes, findingBaselineHash(finding))
+	}
+	sort.Strings(hashes)
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "social fixture identities must use obvious sample/test names; prefer sample_* values or add %q with a reason for intentional exceptions\n", allowMarker)
-	fmt.Fprintf(&b, "current findings: %d, fingerprint: %s\n", len(findings), fingerprint)
-	for i, f := range findings {
-		if i >= 200 {
-			fmt.Fprintf(&b, "... and %d more\n", len(findings)-i)
-			break
-		}
-		fmt.Fprintf(&b, "%s:%d: %s (%s)\n", f.path, f.line, f.value, f.reason)
+	b.WriteString("# Generated by:\n")
+	b.WriteString("# IGLOO_UPDATE_SOCIAL_FIXTURE_BASELINE=1 go test ./internal/releasehygiene -run TestSocialFixtureIdentitiesUseSampleNames -count=1\n")
+	b.WriteString("# Each line is a SHA-256 hash of path, value, and reason for known legacy fixture debt.\n")
+	for _, hash := range hashes {
+		b.WriteString(hash)
+		b.WriteByte('\n')
 	}
-	t.Fatal(b.String())
+	if err := os.WriteFile(filepath.Join(root, baselinePath), []byte(b.String()), 0o644); err != nil {
+		t.Fatalf("write %s: %v", baselinePath, err)
+	}
+	t.Logf("wrote %d baseline entries to %s", len(hashes), baselinePath)
+}
+
+func compareBaseline(findings []finding, baseline map[string]int) ([]finding, int) {
+	remaining := make(map[string]int, len(baseline))
+	for hash, count := range baseline {
+		remaining[hash] = count
+	}
+
+	var newFindings []finding
+	for _, finding := range findings {
+		hash := findingBaselineHash(finding)
+		if remaining[hash] > 0 {
+			remaining[hash]--
+			continue
+		}
+		newFindings = append(newFindings, finding)
+	}
+
+	stale := 0
+	for _, count := range remaining {
+		stale += count
+	}
+	return newFindings, stale
+}
+
+func findingBaselineHash(f finding) string {
+	sum := sha256.Sum256([]byte(f.path + "\x00" + f.value + "\x00" + f.reason))
+	return fmt.Sprintf("%x", sum[:])
+}
+
+func TestSocialFixtureBaselineCatchesNewFindings(t *testing.T) {
+	baseline := map[string]int{}
+	old := finding{path: "example_test.go", line: 1, value: "twitter_old", reason: "social handle/source literal"}
+	baseline[findingBaselineHash(old)] = 1
+
+	newFinding := finding{path: "example_test.go", line: 2, value: "twitter_new", reason: "social handle/source literal"}
+	got, stale := compareBaseline([]finding{old, newFinding}, baseline)
+	if stale != 0 {
+		t.Fatalf("stale = %d, want 0", stale)
+	}
+	if len(got) != 1 || got[0] != newFinding {
+		t.Fatalf("new findings = %+v, want %+v", got, newFinding)
+	}
+
+	got, stale = compareBaseline(nil, baseline)
+	if len(got) != 0 {
+		t.Fatalf("new findings after cleanup = %+v, want none", got)
+	}
+	if stale != 1 {
+		t.Fatalf("stale after cleanup = %d, want 1", stale)
+	}
 }
 
 func TestSocialFixtureScannerExamples(t *testing.T) {
@@ -158,15 +268,15 @@ func TestSocialFixtureScannerExamples(t *testing.T) {
 			name: "x channel fixture needs sample marker",
 			content: `
 if err := srv.db.AddChannel(model.Channel{
-	ChannelID: "twitter__me_moe",
-	SourceID:  "_me_moe",
-	Name:      "_me_moe",
-	URL:       "https://x.com/_me_moe",
+	ChannelID: "twitter__specific_handle",
+	SourceID:  "_specific_handle",
+	Name:      "_specific_handle",
+	URL:       "https://x.com/_specific_handle",
 	Platform:  "twitter",
 }); err != nil {
 	t.Fatal(err)
 }`,
-			wantValues: []string{"_me_moe", "twitter__me_moe"},
+			wantValues: []string{"_specific_handle", "twitter__specific_handle"},
 		},
 		{
 			name: "generic author and tweet IDs still need sample marker",
@@ -186,20 +296,31 @@ items := []model.FeedItem{
 			content: `
 if _, err := d.conn.Exec(` + "`" + `
 	INSERT INTO videos (video_id, channel_id, title, duration, published_at, sync_seq)
-	VALUES ('7447476403618024737', 'tiktok_awesome0day', 'Old title', 0, 0, 0)
+	VALUES ('7777777777777777777', 'tiktok_specific0day', 'Old title', 0, 0, 0)
 ` + "`" + `); err != nil {
 	t.Fatal(err)
 }`,
-			wantValues: []string{"7447476403618024737", "tiktok_awesome0day"},
+			wantValues: []string{"7777777777777777777", "tiktok_specific0day"},
+		},
+		{
+			name: "sql author handles need sample identities too",
+			content: `
+if _, err := d.conn.Exec(` + "`" + `
+	INSERT INTO feed_items (tweet_id, author_handle, source_handle, body_text, published_at)
+	VALUES ('prior_target_seen', 'SpecificHandle', 'SpecificHandle', 'body', ?)
+` + "`" + `); err != nil {
+	t.Fatal(err)
+}`,
+			wantValues: []string{"SpecificHandle"},
 		},
 		{
 			name: "sample prefix cannot preserve a real-looking handle tail",
 			content: `
 channel := model.Channel{
-	ChannelID: "tiktok_sample_awesome0day",
+	ChannelID: "tiktok_sample_specific0day",
 	Platform:  "tiktok",
 }`,
-			wantValues: []string{"tiktok_sample_awesome0day"},
+			wantValues: []string{"tiktok_sample_specific0day"},
 		},
 		{
 			name: "sample fixtures are accepted",
@@ -264,20 +385,8 @@ func scanFile(path, content string) []finding {
 				}
 			}
 		}
-		if isFixturePath(path) && hasSQLValuesContext(lines, i) {
-			for _, match := range sqlStringRe.FindAllStringSubmatch(line, -1) {
-				if len(match) < 2 {
-					continue
-				}
-				value := strings.TrimSpace(match[1])
-				platform, ok := shouldCheckSQLIdentityLiteral(lines, i, value)
-				if !ok {
-					continue
-				}
-				if reason, ok := socialIdentityFindingReason(platform, value, "SQL social identity literal"); ok {
-					findings = append(findings, finding{path: path, line: i + 1, value: value, reason: reason})
-				}
-			}
+		if isFixturePath(path) && strings.Contains(strings.ToLower(line), "values") {
+			findings = append(findings, scanSQLInsertValues(path, lines, i)...)
 		}
 		if isFixturePath(path) && hasIdentityContext(lines, i) {
 			for _, match := range rawIdentityRe.FindAllStringSubmatch(line, -1) {
@@ -300,26 +409,6 @@ func scanFile(path, content string) []finding {
 		}
 	}
 	return findings
-}
-
-func socialFixtureDebtFingerprint(findings []finding) string {
-	counts := make(map[string]int, len(findings))
-	for _, f := range findings {
-		counts[f.path+"\x00"+f.value+"\x00"+f.reason]++
-	}
-
-	keys := make([]string, 0, len(counts))
-	for key := range counts {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-
-	var b strings.Builder
-	for _, key := range keys {
-		fmt.Fprintf(&b, "%s\x00%d\n", key, counts[key])
-	}
-	sum := sha256.Sum256([]byte(b.String()))
-	return fmt.Sprintf("%x", sum[:])
 }
 
 func uniqueFindingValues(findings []finding) []string {
@@ -437,18 +526,6 @@ func hasIdentityContext(lines []string, idx int) bool {
 	return false
 }
 
-func hasSQLValuesContext(lines []string, idx int) bool {
-	start := max(0, idx-3)
-	end := min(len(lines), idx+4)
-	window := strings.ToLower(strings.Join(lines[start:end], "\n"))
-	return strings.Contains(window, "values") &&
-		(strings.Contains(window, "tiktok") ||
-			strings.Contains(window, "twitter") ||
-			strings.Contains(window, "instagram") ||
-			strings.Contains(window, "youtube") ||
-			strings.Contains(window, "x.com"))
-}
-
 func splitRawIdentityValues(value string) []string {
 	value = strings.Trim(value, `"'`)
 	parts := strings.FieldsFunc(value, func(r rune) bool {
@@ -464,37 +541,139 @@ func splitRawIdentityValues(value string) []string {
 	return out
 }
 
-func shouldCheckSQLIdentityLiteral(lines []string, idx int, value string) (string, bool) {
-	if !looksConcreteIdentity(value) {
-		return "", false
+func scanSQLInsertValues(path string, lines []string, idx int) []finding {
+	start := max(0, idx-8)
+	end := min(len(lines), idx+4)
+	window := strings.Join(lines[start:end], "\n")
+
+	columns, values, ok := extractSQLInsertColumnsAndValues(window)
+	if !ok {
+		return nil
 	}
-	normalized := strings.ToLower(strings.Trim(value, ` "'@`))
-	for _, platform := range []string{"twitter", "x", "tiktok", "instagram", "youtube"} {
-		if strings.HasPrefix(normalized, platform+"_") {
-			if platform == "x" {
-				return "twitter", true
-			}
-			return platform, true
+
+	var findings []finding
+	for i, column := range columns {
+		if i >= len(values) {
+			break
+		}
+		value, ok := trimSQLStringLiteral(values[i])
+		if !ok || !looksConcreteIdentity(value) {
+			continue
+		}
+		platform, reason, ok := sqlIdentityColumn(column, value)
+		if !ok {
+			continue
+		}
+		if reason, ok := socialIdentityFindingReason(platform, value, reason); ok {
+			findings = append(findings, finding{path: path, line: idx + 1, value: value, reason: reason})
 		}
 	}
-	if !looksSocialPostID(normalized) {
-		return "", false
-	}
-	return socialPlatformContext(lines, idx), socialPlatformContext(lines, idx) != ""
+	return findings
 }
 
-func socialPlatformContext(lines []string, idx int) string {
-	start := max(0, idx-3)
-	end := min(len(lines), idx+4)
-	window := strings.ToLower(strings.Join(lines[start:end], "\n"))
+func extractSQLInsertColumnsAndValues(sql string) ([]string, []string, bool) {
+	lower := strings.ToLower(sql)
+	valuesIdx := strings.Index(lower, "values")
+	if valuesIdx < 0 {
+		return nil, nil, false
+	}
+	beforeValues := sql[:valuesIdx]
+	valuesPart := sql[valuesIdx+len("values"):]
+
+	colClose := strings.LastIndex(beforeValues, ")")
+	if colClose < 0 {
+		return nil, nil, false
+	}
+	colOpen := strings.LastIndex(beforeValues[:colClose], "(")
+	if colOpen < 0 {
+		return nil, nil, false
+	}
+
+	valueOpen := strings.Index(valuesPart, "(")
+	if valueOpen < 0 {
+		return nil, nil, false
+	}
+	valueClose := findSQLListClose(valuesPart, valueOpen)
+	if valueClose < 0 {
+		return nil, nil, false
+	}
+
+	return splitSQLList(beforeValues[colOpen+1 : colClose]), splitSQLList(valuesPart[valueOpen+1 : valueClose]), true
+}
+
+func findSQLListClose(s string, open int) int {
+	inQuote := false
+	for i := open + 1; i < len(s); i++ {
+		switch s[i] {
+		case '\'':
+			if inQuote && i+1 < len(s) && s[i+1] == '\'' {
+				i++
+				continue
+			}
+			inQuote = !inQuote
+		case ')':
+			if !inQuote {
+				return i
+			}
+		}
+	}
+	return -1
+}
+
+func splitSQLList(s string) []string {
+	var parts []string
+	start := 0
+	inQuote := false
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '\'':
+			if inQuote && i+1 < len(s) && s[i+1] == '\'' {
+				i++
+				continue
+			}
+			inQuote = !inQuote
+		case ',':
+			if !inQuote {
+				parts = append(parts, strings.TrimSpace(s[start:i]))
+				start = i + 1
+			}
+		}
+	}
+	parts = append(parts, strings.TrimSpace(s[start:]))
+	return parts
+}
+
+func trimSQLStringLiteral(value string) (string, bool) {
+	value = strings.TrimSpace(value)
+	if len(value) < 2 || value[0] != '\'' || value[len(value)-1] != '\'' {
+		return "", false
+	}
+	return strings.ReplaceAll(value[1:len(value)-1], "''", "'"), true
+}
+
+func sqlIdentityColumn(column, value string) (platform, reason string, ok bool) {
+	column = strings.ToLower(strings.Trim(column, ` "[]`))
+	normalized := strings.ToLower(strings.Trim(value, ` "'@`))
+	switch column {
+	case "channel_id", "source_id", "source_handle", "author_handle", "quote_author_handle", "retweeted_by_handle", "reposter_handle", "reposter_channel_id":
+		return socialPlatformFromValue(normalized), "SQL " + column + " literal", true
+	case "tweet_id", "video_id":
+		if looksSocialPostID(normalized) {
+			return socialPlatformFromValue(normalized), "SQL " + column + " literal", true
+		}
+	}
+	return "", "", false
+}
+
+func socialPlatformFromValue(value string) string {
 	switch {
-	case strings.Contains(window, "tiktok"):
+	case strings.HasPrefix(value, "tiktok_"):
 		return "tiktok"
-	case strings.Contains(window, "instagram"):
+	case strings.HasPrefix(value, "instagram_"):
 		return "instagram"
-	case strings.Contains(window, "youtube"):
+	case strings.HasPrefix(value, "youtube_"):
 		return "youtube"
-	case strings.Contains(window, "twitter") || strings.Contains(window, "x.com"):
+	case strings.HasPrefix(value, "twitter_") || strings.HasPrefix(value, "x_"):
 		return "twitter"
 	default:
 		return ""
@@ -638,7 +817,7 @@ func allowedSampleTailToken(token string) bool {
 		"missing", "muted", "new", "newer", "old", "older", "one", "parent",
 		"photo", "post", "profile", "quote", "reply", "repost", "reposter",
 		"root", "second", "seen", "slide", "slides", "slideshow", "source",
-		"star", "starred", "story", "test", "tweet", "two", "unfollowed",
+		"star", "starred", "story", "target", "test", "tweet", "two", "unfollowed",
 		"unseen", "user", "video":
 		return true
 	}
