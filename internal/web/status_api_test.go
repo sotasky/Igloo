@@ -30,10 +30,10 @@ func TestTwitterSourceHandleFallsBackToChannelID(t *testing.T) {
 func TestBuildFeedSourcesShowsNeverIngestedChannelAsPending(t *testing.T) {
 	srv := newTestServer(t)
 	if err := srv.db.AddChannel(model.Channel{
-		ChannelID:    "twitter__me_moe",
-		SourceID:     "_me_moe",
-		Name:         "_me_moe",
-		URL:          "https://x.com/_me_moe",
+		ChannelID:    "twitter__sample_handle",
+		SourceID:     "_sample_handle",
+		Name:         "_sample_handle",
+		URL:          "https://x.com/_sample_handle",
 		Platform:     "twitter",
 		IsSubscribed: true,
 	}); err != nil {
@@ -42,7 +42,7 @@ func TestBuildFeedSourcesShowsNeverIngestedChannelAsPending(t *testing.T) {
 
 	sources, _ := srv.buildFeedSources()
 	for _, source := range sources {
-		if source.Handle != "_me_moe" {
+		if source.Handle != "_sample_handle" {
 			continue
 		}
 		if source.Status != "unknown" || source.DisplayStatus != "pending" {
@@ -50,5 +50,5 @@ func TestBuildFeedSourcesShowsNeverIngestedChannelAsPending(t *testing.T) {
 		}
 		return
 	}
-	t.Fatalf("_me_moe source missing from diagnostics: %#v", sources)
+	t.Fatalf("_sample_handle source missing from diagnostics: %#v", sources)
 }

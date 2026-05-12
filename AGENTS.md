@@ -27,6 +27,10 @@ If profile media only becomes ready after hover/page render, treat that as a pip
 
 - Keep changes scoped. Do not mix unrelated cleanup, formatting, generated churn, or private workflow notes into product work.
 - Use generic names in tests, docs, examples, comments, and commits.
+  Do not commit real handles, usernames, channel IDs, post IDs, or local data
+  values from bug reports or runtime state. Preserve the shape of the case with
+  generic equivalents instead, such as `_sample_handle` for a leading-underscore
+  X handle.
 - Do not clear local state before a network call succeeds.
 - Destructive UI actions need product confirmation: Igloo modal on web, Compose `AlertDialog` on Android.
 - One-off repair/backfill utilities must not become normal startup behavior.
