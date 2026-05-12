@@ -135,6 +135,8 @@ function buildHarness({
   followHandles = [],
   localList = [],
   failDownloads = [],
+  pathname = "/home",
+  unsafeWindow = {},
   twitterChannels = [
     {
       channel_id: "twitter_alice",
@@ -170,12 +172,12 @@ function buildHarness({
     location: {
       hostname: "x.com",
       origin: "https://x.com",
-      pathname: "/home",
+      pathname,
     },
     window: {
       addEventListener() {},
     },
-    unsafeWindow: {},
+    unsafeWindow,
     document: {
       body,
       head,
@@ -543,6 +545,32 @@ test("login menu prompts for API URL before credentials and removes manual beare
   assert.ok(
     harness.requests.includes("https://localhost:5001/api/auth/login"),
     `expected login request over configured HTTPS base, got ${harness.requests.join(", ")}`,
+  );
+});
+
+test("stays idle on X auth routes", async () => {
+  class FakeXMLHttpRequest {
+    open() {}
+  }
+  const nativeOpen = FakeXMLHttpRequest.prototype.open;
+  const nativeFetch = function fetch() {};
+  const harness = buildHarness({
+    pathname: "/login",
+    unsafeWindow: {
+      XMLHttpRequest: FakeXMLHttpRequest,
+      fetch: nativeFetch,
+    },
+  });
+
+  runScript(harness);
+  await drainMicrotasks();
+
+  assert.equal(harness.requests.length, 0);
+  assert.equal(FakeXMLHttpRequest.prototype.open, nativeOpen);
+  assert.equal(harness.context.unsafeWindow.fetch, nativeFetch);
+  assert.equal(
+    typeof harness.menu.get("Login Dashboard (Store Token)"),
+    "function",
   );
 });
 
