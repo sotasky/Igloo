@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -32,6 +35,33 @@ func TestDownloaderReportEndpointsRequireAdmin(t *testing.T) {
 				t.Fatalf("status = %d, want 403; body = %s", rec.Code, rec.Body.String())
 			}
 		})
+	}
+}
+
+func TestDownloaderReportDirUsesIglooDataTmpAndPrunesOldRuns(t *testing.T) {
+	srv := newTestServer(t)
+	base := filepath.Join(srv.cfg.DataDir, "tmp", "downloader-reports")
+	if err := os.MkdirAll(base, 0o755); err != nil {
+		t.Fatalf("mkdir base: %v", err)
+	}
+	oldDir := filepath.Join(base, "run-old")
+	if err := os.MkdirAll(oldDir, 0o755); err != nil {
+		t.Fatalf("mkdir old: %v", err)
+	}
+	oldTime := time.Now().Add(-48 * time.Hour)
+	if err := os.Chtimes(oldDir, oldTime, oldTime); err != nil {
+		t.Fatalf("chtimes old: %v", err)
+	}
+
+	dir, err := srv.createDownloaderReportDir()
+	if err != nil {
+		t.Fatalf("createDownloaderReportDir: %v", err)
+	}
+	if !strings.HasPrefix(dir, base+string(os.PathSeparator)) {
+		t.Fatalf("report dir = %q, want under %q", dir, base)
+	}
+	if _, err := os.Stat(oldDir); !os.IsNotExist(err) {
+		t.Fatalf("old report dir was not pruned, stat err = %v", err)
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -143,7 +144,7 @@ func (s *Server) handleDownloaderOperations(w http.ResponseWriter, r *http.Reque
 
 func (s *Server) runDownloaderReport(ctx context.Context) downloaderReport {
 	start := time.Now()
-	tempDir, err := os.MkdirTemp("", "igloo-downloader-report-*")
+	tempDir, err := s.createDownloaderReportDir()
 	report := downloaderReport{StartedAtMs: start.UnixMilli(), TempDir: tempDir, Status: "pass"}
 	if err != nil {
 		report.Status = "fail"
@@ -180,6 +181,53 @@ func (s *Server) runDownloaderReport(ctx context.Context) downloaderReport {
 		}
 	}
 	return report
+}
+
+func (s *Server) createDownloaderReportDir() (string, error) {
+	baseDir := filepath.Join(os.TempDir(), "igloo", "downloader-reports")
+	if s != nil && s.cfg != nil && strings.TrimSpace(s.cfg.DataDir) != "" {
+		baseDir = filepath.Join(s.cfg.DataDir, "tmp", "downloader-reports")
+	}
+	if err := os.MkdirAll(baseDir, 0o755); err != nil {
+		return "", err
+	}
+	pruneDownloaderReportDirs(baseDir, 3, 24*time.Hour)
+	return os.MkdirTemp(baseDir, "run-*")
+}
+
+func pruneDownloaderReportDirs(baseDir string, keep int, maxAge time.Duration) {
+	entries, err := os.ReadDir(baseDir)
+	if err != nil {
+		return
+	}
+	type reportDir struct {
+		path    string
+		modTime time.Time
+	}
+	var dirs []reportDir
+	for _, entry := range entries {
+		if !entry.IsDir() || !strings.HasPrefix(entry.Name(), "run-") {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		dirs = append(dirs, reportDir{
+			path:    filepath.Join(baseDir, entry.Name()),
+			modTime: info.ModTime(),
+		})
+	}
+	sort.Slice(dirs, func(i, j int) bool {
+		return dirs[i].modTime.After(dirs[j].modTime)
+	})
+	cutoff := time.Now().Add(-maxAge)
+	for i, dir := range dirs {
+		if i < keep && dir.modTime.After(cutoff) {
+			continue
+		}
+		_ = os.RemoveAll(dir.path)
+	}
 }
 
 func (s *Server) addYouTubeReportRows(ctx context.Context, dl *download.Downloader, tempDir string, report *downloaderReport) {
