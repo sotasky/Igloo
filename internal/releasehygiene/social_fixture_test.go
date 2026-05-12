@@ -35,12 +35,13 @@ var (
 
 	// This gates the current legacy backlog without hiding new additions. Remove
 	// or shrink it as older fixtures move to sample_* names.
-	knownSocialFixtureDebtFingerprint = "2fe7de2f8679891d52df808a40ea07756759ba9613ee80b29de5e9d8f0c2bca5"
-	knownSocialFixtureDebtFindings    = 1434
+	knownSocialFixtureDebtFingerprint = "edb2940e28282e4742c6021df947d8fff60678b5647014622a8bc7e9bfc40bea"
+	knownSocialFixtureDebtFindings    = 1684
 
 	rawIdentityRe = regexp.MustCompile(`(?i)\b(ChannelID|channel_id|channelId|ReposterChannelID|reposter_channel_id|reposterChannelId|ownerId|owner_id|SourceID|source_id|sourceId|SourceHandle|source_handle|sourceHandle|AuthorHandle|author_handle|authorHandle|QuoteAuthorHandle|quote_author_handle|RetweetedByHandle|retweeted_by_handle|ReposterHandle|reposter_handle|account_handles|accountHandles|TweetID|tweet_id|tweetId|VideoID|video_id|videoId|Handle|handle)"?\s*[:=]\s*["']@?([A-Za-z0-9_.@,-]+)["']`)
 
 	identityContextRe = regexp.MustCompile(`(?i)(ChannelID|channel_id|channelId|ownerId|owner_id|SourceID|source_id|sourceId|VideoID|video_id|videoId|TweetID|tweet_id|tweetId|AuthorHandle|author_handle|authorHandle|QuoteAuthorHandle|quote_author_handle|RetweetedByHandle|retweeted_by_handle|ReposterChannelID|reposter_channel_id|ReposterHandle|reposter_handle|SourceHandle|source_handle|sourceHandle|profile_url|profileUrl|canonical_url|canonicalUrl|tweetUrl|TweetURL|url|URL|Handle|handle|account_handles|accountHandles|/channels/|/api/media/(?:avatar|banner)/)`)
+	sqlStringRe       = regexp.MustCompile(`'([^']*)'`)
 
 	urlRules = []urlRule{
 		{
@@ -181,6 +182,26 @@ items := []model.FeedItem{
 			wantValues: []string{"author_older", "tweet-kagi-rate-limited-older"},
 		},
 		{
+			name: "sql tuples need sample identities too",
+			content: `
+if _, err := d.conn.Exec(` + "`" + `
+	INSERT INTO videos (video_id, channel_id, title, duration, published_at, sync_seq)
+	VALUES ('7447476403618024737', 'tiktok_awesome0day', 'Old title', 0, 0, 0)
+` + "`" + `); err != nil {
+	t.Fatal(err)
+}`,
+			wantValues: []string{"7447476403618024737", "tiktok_awesome0day"},
+		},
+		{
+			name: "sample prefix cannot preserve a real-looking handle tail",
+			content: `
+channel := model.Channel{
+	ChannelID: "tiktok_sample_awesome0day",
+	Platform:  "tiktok",
+}`,
+			wantValues: []string{"tiktok_sample_awesome0day"},
+		},
+		{
 			name: "sample fixtures are accepted",
 			content: `
 item := model.FeedItem{
@@ -195,6 +216,10 @@ channel := model.Channel{
 	Name:      "_sample_handle",
 	URL:       "https://x.com/_sample_handle",
 	Platform:  "twitter",
+}
+video := model.Video{
+	VideoID:   "9000000000000000000",
+	ChannelID: "tiktok_sample",
 }`,
 		},
 		{
@@ -234,8 +259,23 @@ func scanFile(path, content string) []finding {
 				if rule.skip[strings.ToLower(value)] {
 					continue
 				}
-				if !syntheticIdentity(rule.platform, value) {
-					findings = append(findings, finding{path: path, line: i + 1, value: value, reason: rule.kind})
+				if reason, ok := socialIdentityFindingReason(rule.platform, value, rule.kind); ok {
+					findings = append(findings, finding{path: path, line: i + 1, value: value, reason: reason})
+				}
+			}
+		}
+		if isFixturePath(path) && hasSQLValuesContext(lines, i) {
+			for _, match := range sqlStringRe.FindAllStringSubmatch(line, -1) {
+				if len(match) < 2 {
+					continue
+				}
+				value := strings.TrimSpace(match[1])
+				platform, ok := shouldCheckSQLIdentityLiteral(lines, i, value)
+				if !ok {
+					continue
+				}
+				if reason, ok := socialIdentityFindingReason(platform, value, "SQL social identity literal"); ok {
+					findings = append(findings, finding{path: path, line: i + 1, value: value, reason: reason})
 				}
 			}
 		}
@@ -252,8 +292,8 @@ func scanFile(path, content string) []finding {
 					if !shouldCheckRawIdentity(field, value) {
 						continue
 					}
-					if !syntheticIdentity("", value) {
-						findings = append(findings, finding{path: path, line: i + 1, value: value, reason: "social handle/source literal"})
+					if reason, ok := socialIdentityFindingReason("", value, "social handle/source literal"); ok {
+						findings = append(findings, finding{path: path, line: i + 1, value: value, reason: reason})
 					}
 				}
 			}
@@ -397,6 +437,18 @@ func hasIdentityContext(lines []string, idx int) bool {
 	return false
 }
 
+func hasSQLValuesContext(lines []string, idx int) bool {
+	start := max(0, idx-3)
+	end := min(len(lines), idx+4)
+	window := strings.ToLower(strings.Join(lines[start:end], "\n"))
+	return strings.Contains(window, "values") &&
+		(strings.Contains(window, "tiktok") ||
+			strings.Contains(window, "twitter") ||
+			strings.Contains(window, "instagram") ||
+			strings.Contains(window, "youtube") ||
+			strings.Contains(window, "x.com"))
+}
+
 func splitRawIdentityValues(value string) []string {
 	value = strings.Trim(value, `"'`)
 	parts := strings.FieldsFunc(value, func(r rune) bool {
@@ -410,6 +462,43 @@ func splitRawIdentityValues(value string) []string {
 		}
 	}
 	return out
+}
+
+func shouldCheckSQLIdentityLiteral(lines []string, idx int, value string) (string, bool) {
+	if !looksConcreteIdentity(value) {
+		return "", false
+	}
+	normalized := strings.ToLower(strings.Trim(value, ` "'@`))
+	for _, platform := range []string{"twitter", "x", "tiktok", "instagram", "youtube"} {
+		if strings.HasPrefix(normalized, platform+"_") {
+			if platform == "x" {
+				return "twitter", true
+			}
+			return platform, true
+		}
+	}
+	if !looksSocialPostID(normalized) {
+		return "", false
+	}
+	return socialPlatformContext(lines, idx), socialPlatformContext(lines, idx) != ""
+}
+
+func socialPlatformContext(lines []string, idx int) string {
+	start := max(0, idx-3)
+	end := min(len(lines), idx+4)
+	window := strings.ToLower(strings.Join(lines[start:end], "\n"))
+	switch {
+	case strings.Contains(window, "tiktok"):
+		return "tiktok"
+	case strings.Contains(window, "instagram"):
+		return "instagram"
+	case strings.Contains(window, "youtube"):
+		return "youtube"
+	case strings.Contains(window, "twitter") || strings.Contains(window, "x.com"):
+		return "twitter"
+	default:
+		return ""
+	}
 }
 
 func looksConcreteIdentity(value string) bool {
@@ -427,6 +516,16 @@ func looksConcreteIdentity(value string) bool {
 		return false
 	}
 	return regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.-]*$`).MatchString(value)
+}
+
+func socialIdentityFindingReason(platform, value, defaultReason string) (string, bool) {
+	if malformedSampleIdentity(value) {
+		return "sample-prefixed social identity keeps a non-generic tail", true
+	}
+	if !syntheticIdentity(platform, value) {
+		return defaultReason, true
+	}
+	return "", false
 }
 
 func shouldCheckRawIdentity(field, value string) bool {
@@ -461,15 +560,93 @@ func syntheticIdentity(platform, value string) bool {
 	if normalized == "" {
 		return true
 	}
-	for _, token := range syntheticTokens {
-		if strings.Contains(normalized, token) {
+	if acceptableSampleIdentity(normalized) {
+		return true
+	}
+	if containsIdentityToken(normalized, "sample") {
+		return false
+	}
+	for _, token := range syntheticTokens[1:] {
+		if containsIdentityToken(normalized, token) {
 			return true
 		}
 	}
-	if platform == "tiktok" && regexp.MustCompile(`^900[0-9]{15,}$`).MatchString(normalized) {
+	if regexp.MustCompile(`^900[0-9]{15,}$`).MatchString(normalized) {
 		return true
 	}
 	if platform == "youtube" && strings.HasPrefix(normalized, "ucexample") {
+		return true
+	}
+	return false
+}
+
+func malformedSampleIdentity(value string) bool {
+	normalized := strings.ToLower(strings.Trim(value, ` "'@`))
+	return containsIdentityToken(normalized, "sample") && !acceptableSampleIdentity(normalized)
+}
+
+func acceptableSampleIdentity(value string) bool {
+	tokens := socialIdentityTokens(value)
+	for i, token := range tokens {
+		if token != "sample" {
+			continue
+		}
+		if i == len(tokens)-1 {
+			return true
+		}
+		return allowedSampleTailToken(tokens[i+1])
+	}
+	return false
+}
+
+func containsIdentityToken(value, want string) bool {
+	for _, token := range socialIdentityTokens(value) {
+		if token == want {
+			return true
+		}
+	}
+	return false
+}
+
+func socialIdentityTokens(value string) []string {
+	value = strings.ToLower(strings.Trim(value, ` "'@`))
+	for _, prefix := range []string{"twitter__", "twitter_", "x_", "tiktok_", "instagram_", "youtube_"} {
+		if strings.HasPrefix(value, prefix) {
+			value = strings.TrimPrefix(value, prefix)
+			break
+		}
+	}
+	parts := strings.FieldsFunc(value, func(r rune) bool {
+		return r == '_' || r == '-' || r == '.'
+	})
+	tokens := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if part != "" {
+			tokens = append(tokens, part)
+		}
+	}
+	return tokens
+}
+
+func allowedSampleTailToken(token string) bool {
+	switch token {
+	case "a", "b", "alpha", "archive", "author", "avatar", "banner", "beta",
+		"bookmark", "category", "ch", "channel", "child", "clip", "collection",
+		"creator", "del", "deleted", "delta", "demo", "dup", "duplicate",
+		"example", "existing", "export", "first", "fixture", "followed",
+		"gamma", "ghost", "handle", "image", "import", "imported", "media",
+		"missing", "muted", "new", "newer", "old", "older", "one", "parent",
+		"photo", "post", "profile", "quote", "reply", "repost", "reposter",
+		"root", "second", "seen", "slide", "slides", "slideshow", "source",
+		"star", "starred", "story", "test", "tweet", "two", "unfollowed",
+		"unseen", "user", "video":
+		return true
+	}
+	if regexp.MustCompile(`^[0-9]+$`).MatchString(token) {
+		return true
+	}
+	if strings.HasPrefix(token, "uc") &&
+		(strings.Contains(token, "example") || strings.Contains(token, "import") || strings.Contains(token, "sample")) {
 		return true
 	}
 	return false

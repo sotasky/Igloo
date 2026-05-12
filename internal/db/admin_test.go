@@ -1,6 +1,7 @@
 package db
 
 import (
+	"strconv"
 	"testing"
 
 	"github.com/screwys/igloo/internal/model"
@@ -451,13 +452,13 @@ func TestImportConfigRepairsExistingZeroBookmarkTimestamps(t *testing.T) {
 func TestImportConfigRepairsExistingBookmarkedTikTokPublishDate(t *testing.T) {
 	d := openWritableTestDB(t)
 
-	const videoID = "9000000000000000000" // igloo-hygiene: allow-social-fixture synthetic TikTok snowflake
-	const wantPublishedAt int64 = 2095475792000
+	const wantPublishedAt int64 = 1734000724000
+	videoID := strconv.FormatInt((wantPublishedAt/1000)<<32, 10)
 
 	if _, err := d.conn.Exec(`
 		INSERT INTO videos (video_id, channel_id, title, duration, published_at, sync_seq)
 		VALUES (?, ?, 'Old title', 0, 0, 0)
-	`, videoID, "tiktok_sample_awesome0day"); err != nil {
+	`, videoID, "tiktok_sample"); err != nil {
 		t.Fatalf("seed video: %v", err)
 	}
 
@@ -465,7 +466,7 @@ func TestImportConfigRepairsExistingBookmarkedTikTokPublishDate(t *testing.T) {
 		Version: 1,
 		BookmarkedVideos: []BookmarkedVideoExport{{
 			VideoID:      videoID,
-			ChannelID:    "tiktok_sample_awesome0day",
+			ChannelID:    "tiktok_sample",
 			Title:        "Restored title",
 			BookmarkedAt: 1710000000000,
 		}},
