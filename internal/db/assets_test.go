@@ -187,6 +187,98 @@ func TestBackfillAssetsFromExistingPaths(t *testing.T) {
 	}
 }
 
+func TestReconcileAssetInventoryFromExistingPathsIsBoundedAndDryRun(t *testing.T) {
+	d := openWritableTestDB(t)
+
+	existingRelPath := filepath.Join("media", "twitter", "sample", "sample_tweet_reconcile_existing.jpg")
+	firstRelPath := filepath.Join("media", "twitter", "sample", "sample_tweet_reconcile_first.jpg")
+	secondRelPath := filepath.Join("media", "twitter", "sample", "sample_tweet_reconcile_second.jpg")
+	writeDBTestFile(t, filepath.Join(d.dataDir, existingRelPath), []byte("existing-media"))
+	writeDBTestFile(t, filepath.Join(d.dataDir, firstRelPath), []byte("first-media"))
+	writeDBTestFile(t, filepath.Join(d.dataDir, secondRelPath), []byte("second-media"))
+
+	if err := d.ExecRaw(`
+		INSERT INTO media_files (owner_type, owner_id, media_index, file_path, media_type, source_url, file_size)
+		VALUES
+			('feed_media', 'sample_tweet_reconcile_existing', 0, ?, 'photo', 'https://example.test/existing.jpg', 14),
+			('feed_media', 'sample_tweet_reconcile_first', 0, ?, 'photo', 'https://example.test/first.jpg', 11),
+			('feed_media', 'sample_tweet_reconcile_second', 0, ?, 'photo', 'https://example.test/second.jpg', 12)
+	`, existingRelPath, firstRelPath, secondRelPath); err != nil {
+		t.Fatalf("insert media_files: %v", err)
+	}
+	existingID := BuildManifestAssetID("twitter", "tweet", "sample_tweet_reconcile_existing", "post_media", 0)
+	if err := d.UpsertAsset(Asset{
+		AssetID:    existingID,
+		AssetKind:  "post_media",
+		OwnerKind:  "tweet",
+		OwnerID:    "sample_tweet_reconcile_existing",
+		MediaIndex: 0,
+		FilePath:   existingRelPath,
+		State:      AssetStateReady,
+	}, 1000); err != nil {
+		t.Fatalf("seed existing asset: %v", err)
+	}
+
+	firstID := BuildManifestAssetID("twitter", "tweet", "sample_tweet_reconcile_first", "post_media", 0)
+	secondID := BuildManifestAssetID("twitter", "tweet", "sample_tweet_reconcile_second", "post_media", 0)
+	dry, err := d.ReconcileAssetInventoryFromExistingPaths(AssetInventoryReconcileOptions{
+		NowMs:  5000,
+		Limit:  1,
+		DryRun: true,
+	})
+	if err != nil {
+		t.Fatalf("dry run reconcile: %v", err)
+	}
+	if dry.Candidates != 1 || dry.Written != 0 || !dry.LimitReached || dry.SkippedExisting != 1 {
+		t.Fatalf("dry run result = %+v", dry)
+	}
+	if dry.ByKind["post_media"].Ready != 1 {
+		t.Fatalf("dry run by-kind result = %+v", dry.ByKind["post_media"])
+	}
+	if got, err := d.GetAsset(firstID, "post_media"); err != nil || got != nil {
+		t.Fatalf("dry run wrote first asset: got=%+v err=%v", got, err)
+	}
+
+	first, err := d.ReconcileAssetInventoryFromExistingPaths(AssetInventoryReconcileOptions{
+		NowMs: 6000,
+		Limit: 1,
+	})
+	if err != nil {
+		t.Fatalf("first reconcile: %v", err)
+	}
+	if first.Candidates != 1 || first.Written != 1 || !first.LimitReached || first.SkippedExisting != 1 {
+		t.Fatalf("first reconcile result = %+v", first)
+	}
+	gotFirst, err := d.GetAsset(firstID, "post_media")
+	if err != nil {
+		t.Fatalf("get first asset: %v", err)
+	}
+	if gotFirst == nil || gotFirst.FilePath != firstRelPath || gotFirst.State != AssetStateReady {
+		t.Fatalf("first asset mismatch: %+v", gotFirst)
+	}
+	if got, err := d.GetAsset(secondID, "post_media"); err != nil || got != nil {
+		t.Fatalf("first reconcile wrote second asset: got=%+v err=%v", got, err)
+	}
+
+	second, err := d.ReconcileAssetInventoryFromExistingPaths(AssetInventoryReconcileOptions{
+		NowMs: 7000,
+		Limit: 1,
+	})
+	if err != nil {
+		t.Fatalf("second reconcile: %v", err)
+	}
+	if second.Candidates != 1 || second.Written != 1 || !second.LimitReached || second.SkippedExisting != 2 {
+		t.Fatalf("second reconcile result = %+v", second)
+	}
+	gotSecond, err := d.GetAsset(secondID, "post_media")
+	if err != nil {
+		t.Fatalf("get second asset: %v", err)
+	}
+	if gotSecond == nil || gotSecond.FilePath != secondRelPath || gotSecond.State != AssetStateReady {
+		t.Fatalf("second asset mismatch: %+v", gotSecond)
+	}
+}
+
 func TestBackfillAssetsFromExistingPathsPreservesRetryStateUntilFileReady(t *testing.T) {
 	d := openWritableTestDB(t)
 	missingRelPath := filepath.Join("media", "twitter", "sample", "retry_missing.jpg")

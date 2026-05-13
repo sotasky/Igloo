@@ -315,28 +315,161 @@ func (db *DB) RefreshAssetFileState(assetID, assetKind string, nowMs int64) erro
 	})
 }
 
-// BackfillAssetsFromExistingPaths creates inventory rows from the legacy media
-// path columns and conventional cache directories. It is safe to run repeatedly.
+// AssetInventoryReconcileOptions controls the explicit legacy-path to assets
+// reconciliation pass. The default behavior reconciles missing inventory rows
+// only; it is intended for one-off maintenance commands, not startup work.
+type AssetInventoryReconcileOptions struct {
+	NowMs  int64 `json:"now_ms"`
+	Limit  int   `json:"limit"`
+	DryRun bool  `json:"dry_run"`
+}
+
+// AssetInventoryReconcileKindResult reports reconciliation work for one asset
+// kind.
+type AssetInventoryReconcileKindResult struct {
+	Candidates    int `json:"candidates"`
+	Written       int `json:"written"`
+	Ready         int `json:"ready"`
+	Queued        int `json:"queued"`
+	ServerMissing int `json:"server_missing"`
+}
+
+// AssetInventoryReconcileResult reports bounded legacy-path reconciliation.
+type AssetInventoryReconcileResult struct {
+	DryRun          bool                                         `json:"dry_run"`
+	Limit           int                                          `json:"limit"`
+	LimitReached    bool                                         `json:"limit_reached"`
+	Candidates      int                                          `json:"candidates"`
+	Written         int                                          `json:"written"`
+	SkippedExisting int                                          `json:"skipped_existing"`
+	ByKind          map[string]AssetInventoryReconcileKindResult `json:"by_kind"`
+}
+
+// BackfillAssetsFromExistingPaths creates or refreshes inventory rows from the
+// legacy media path columns and conventional cache directories. It is safe to
+// run repeatedly, but intentionally remains an explicit call instead of startup
+// behavior.
 func (db *DB) BackfillAssetsFromExistingPaths(nowMs int64) (int, error) {
-	if nowMs <= 0 {
-		nowMs = time.Now().UnixMilli()
+	result, err := db.backfillAssetsFromExistingPaths(AssetInventoryReconcileOptions{
+		NowMs: nowMs,
+	}, true)
+	if err != nil {
+		return result.Written, err
 	}
-	total := 0
-	for _, fn := range []func(int64) (int, error){
+	return result.Written, nil
+}
+
+// ReconcileAssetInventoryFromExistingPaths populates missing assets rows from
+// legacy media path columns and conventional cache directories. Existing rows
+// are skipped so a small limit makes progress on inventory parity.
+func (db *DB) ReconcileAssetInventoryFromExistingPaths(opts AssetInventoryReconcileOptions) (AssetInventoryReconcileResult, error) {
+	return db.backfillAssetsFromExistingPaths(opts, false)
+}
+
+func (db *DB) backfillAssetsFromExistingPaths(opts AssetInventoryReconcileOptions, includeExisting bool) (AssetInventoryReconcileResult, error) {
+	run := newAssetInventoryReconcileRun(db, opts, includeExisting)
+	for _, fn := range []func(*assetInventoryReconcileRun) error{
 		db.backfillMediaFileAssets,
 		db.backfillVideoAssets,
 		db.backfillProfileAssets,
 	} {
-		n, err := fn(nowMs)
-		if err != nil {
-			return total, err
+		if run.exhausted() {
+			break
 		}
-		total += n
+		if err := fn(run); err != nil {
+			return run.result, err
+		}
 	}
-	return total, nil
+	return run.result, nil
 }
 
-func (db *DB) backfillMediaFileAssets(nowMs int64) (int, error) {
+type assetInventoryReconcileRun struct {
+	db              *DB
+	nowMs           int64
+	limit           int
+	dryRun          bool
+	includeExisting bool
+	result          AssetInventoryReconcileResult
+}
+
+func newAssetInventoryReconcileRun(db *DB, opts AssetInventoryReconcileOptions, includeExisting bool) *assetInventoryReconcileRun {
+	nowMs := opts.NowMs
+	if nowMs <= 0 {
+		nowMs = time.Now().UnixMilli()
+	}
+	limit := opts.Limit
+	if limit < 0 {
+		limit = 0
+	}
+	return &assetInventoryReconcileRun{
+		db:              db,
+		nowMs:           nowMs,
+		limit:           limit,
+		dryRun:          opts.DryRun,
+		includeExisting: includeExisting,
+		result: AssetInventoryReconcileResult{
+			DryRun: opts.DryRun,
+			Limit:  limit,
+			ByKind: map[string]AssetInventoryReconcileKindResult{},
+		},
+	}
+}
+
+func (run *assetInventoryReconcileRun) exhausted() bool {
+	return run.limit > 0 && run.result.Candidates >= run.limit
+}
+
+func (run *assetInventoryReconcileRun) handle(asset Asset) error {
+	if run.exhausted() {
+		return nil
+	}
+	asset = run.db.assetFromLegacyPath(asset)
+	asset = normalizeAsset(asset, run.nowMs)
+	existing, err := run.db.getAssetByOwnerIdentity(asset.AssetKind, asset.OwnerKind, asset.OwnerID, asset.MediaIndex)
+	if err != nil {
+		return err
+	}
+	if existing != nil && !run.includeExisting {
+		run.result.SkippedExisting++
+		return nil
+	}
+	run.recordCandidate(asset)
+	if run.dryRun {
+		return nil
+	}
+	if err := run.db.upsertBackfilledAsset(asset, run.nowMs); err != nil {
+		return err
+	}
+	run.recordWritten(asset)
+	return nil
+}
+
+func (run *assetInventoryReconcileRun) recordCandidate(asset Asset) {
+	run.result.Candidates++
+	byKind := run.result.ByKind[asset.AssetKind]
+	byKind.Candidates++
+	switch asset.State {
+	case AssetStateReady:
+		byKind.Ready++
+	case AssetStateServerMissing:
+		byKind.ServerMissing++
+	case AssetStateQueued:
+		byKind.Queued++
+	}
+	run.result.ByKind[asset.AssetKind] = byKind
+	if run.exhausted() {
+		run.result.LimitReached = true
+	}
+}
+
+func (run *assetInventoryReconcileRun) recordWritten(asset Asset) {
+	run.result.Written++
+	byKind := run.result.ByKind[asset.AssetKind]
+	byKind.Written++
+	run.result.ByKind[asset.AssetKind] = byKind
+}
+
+func (db *DB) backfillMediaFileAssets(run *assetInventoryReconcileRun) error {
 	rows, err := db.conn.Query(`
 		SELECT owner_id, COALESCE(media_type, ''), media_index,
 		       COALESCE(file_size, 0), COALESCE(file_path, ''), COALESCE(source_url, '')
@@ -345,22 +478,24 @@ func (db *DB) backfillMediaFileAssets(nowMs int64) (int, error) {
 		ORDER BY id ASC
 	`)
 	if err != nil {
-		return 0, err
+		return err
 	}
 	defer rows.Close()
 
-	count := 0
 	for rows.Next() {
+		if run.exhausted() {
+			return nil
+		}
 		var ownerID, mediaType, filePath, sourceURL string
 		var mediaIndex int
 		var fileSize int64
 		if err := rows.Scan(&ownerID, &mediaType, &mediaIndex, &fileSize, &filePath, &sourceURL); err != nil {
-			return count, err
+			return err
 		}
 		if manifestSkipsFile(filePath) {
 			continue
 		}
-		asset := db.assetFromLegacyPath(Asset{
+		asset := Asset{
 			AssetID:        BuildManifestAssetID("twitter", "tweet", ownerID, "post_media", mediaIndex),
 			AssetKind:      "post_media",
 			OwnerKind:      "tweet",
@@ -372,15 +507,17 @@ func (db *DB) backfillMediaFileAssets(nowMs int64) (int, error) {
 			SizeBytes:      fileSize,
 			State:          AssetStateQueued,
 			RequiredReason: "backfill",
-		})
-		if err := db.upsertBackfilledAsset(asset, nowMs); err != nil {
-			return count, err
 		}
-		count++
+		if err := run.handle(asset); err != nil {
+			return err
+		}
 
 		if mediaIndex == 0 && (mediaType == "video" || mediaType == "gif" || !manifestUsesImageTransport(filePath, mediaType)) {
+			if run.exhausted() {
+				return nil
+			}
 			thumbRel := filepath.Join("thumbnails", "generated", ownerID+".jpg")
-			thumb := db.assetFromLegacyPath(Asset{
+			thumb := Asset{
 				AssetID:        BuildManifestAssetID("twitter", "tweet", ownerID, "post_thumbnail", 0),
 				AssetKind:      "post_thumbnail",
 				OwnerKind:      "tweet",
@@ -389,17 +526,16 @@ func (db *DB) backfillMediaFileAssets(nowMs int64) (int, error) {
 				ContentType:    "image/jpeg",
 				State:          AssetStateQueued,
 				RequiredReason: "backfill",
-			})
-			if err := db.upsertBackfilledAsset(thumb, nowMs); err != nil {
-				return count, err
 			}
-			count++
+			if err := run.handle(thumb); err != nil {
+				return err
+			}
 		}
 	}
-	return count, rows.Err()
+	return rows.Err()
 }
 
-func (db *DB) backfillVideoAssets(nowMs int64) (int, error) {
+func (db *DB) backfillVideoAssets(run *assetInventoryReconcileRun) error {
 	rows, err := db.conn.Query(`
 		SELECT video_id, COALESCE(channel_id, ''), COALESCE(thumbnail_path, ''),
 		       COALESCE(file_path, ''), COALESCE(file_size, 0), COALESCE(dearrow_thumb_path, '')
@@ -407,16 +543,18 @@ func (db *DB) backfillVideoAssets(nowMs int64) (int, error) {
 		ORDER BY id ASC
 	`)
 	if err != nil {
-		return 0, err
+		return err
 	}
 	defer rows.Close()
 
-	count := 0
 	for rows.Next() {
+		if run.exhausted() {
+			return nil
+		}
 		var videoID, channelID, thumbnailPath, filePath, dearrowPath string
 		var fileSize int64
 		if err := rows.Scan(&videoID, &channelID, &thumbnailPath, &filePath, &fileSize, &dearrowPath); err != nil {
-			return count, err
+			return err
 		}
 		platform := videoPlatformFromChannelID(channelID)
 		if platform == "" {
@@ -459,14 +597,15 @@ func (db *DB) backfillVideoAssets(nowMs int64) (int, error) {
 			if strings.TrimSpace(asset.FilePath) == "" {
 				continue
 			}
-			asset = db.assetFromLegacyPath(asset)
-			if err := db.upsertBackfilledAsset(asset, nowMs); err != nil {
-				return count, err
+			if err := run.handle(asset); err != nil {
+				return err
 			}
-			count++
+			if run.exhausted() {
+				return nil
+			}
 		}
 		if subtitleRel := db.findSubtitleRelativePath(filePath); subtitleRel != "" {
-			asset := db.assetFromLegacyPath(Asset{
+			asset := Asset{
 				AssetID:        BuildManifestAssetID(platform, ownerKind, videoID, "subtitle", 0),
 				AssetKind:      "subtitle",
 				OwnerKind:      ownerKind,
@@ -475,11 +614,13 @@ func (db *DB) backfillVideoAssets(nowMs int64) (int, error) {
 				ContentType:    "text/vtt",
 				State:          AssetStateQueued,
 				RequiredReason: "backfill",
-			})
-			if err := db.upsertBackfilledAsset(asset, nowMs); err != nil {
-				return count, err
 			}
-			count++
+			if err := run.handle(asset); err != nil {
+				return err
+			}
+			if run.exhausted() {
+				return nil
+			}
 		}
 		for _, preview := range []struct {
 			name        string
@@ -489,11 +630,14 @@ func (db *DB) backfillVideoAssets(nowMs int64) (int, error) {
 			{name: "track.json", assetKind: "preview_track_json", contentType: "application/json"},
 			{name: "sprite.jpg", assetKind: "preview_sprite", contentType: "image/jpeg"},
 		} {
+			if run.exhausted() {
+				return nil
+			}
 			rel := filepath.Join("thumbnails", "previews", videoID, preview.name)
 			if _, err := os.Stat(resolveManifestDataPath(db.dataDir, rel)); err != nil {
 				continue
 			}
-			asset := db.assetFromLegacyPath(Asset{
+			asset := Asset{
 				AssetID:        BuildManifestAssetID(platform, ownerKind, videoID, preview.assetKind, 0),
 				AssetKind:      preview.assetKind,
 				OwnerKind:      ownerKind,
@@ -502,17 +646,16 @@ func (db *DB) backfillVideoAssets(nowMs int64) (int, error) {
 				ContentType:    preview.contentType,
 				State:          AssetStateQueued,
 				RequiredReason: "backfill",
-			})
-			if err := db.upsertBackfilledAsset(asset, nowMs); err != nil {
-				return count, err
 			}
-			count++
+			if err := run.handle(asset); err != nil {
+				return err
+			}
 		}
 	}
-	return count, rows.Err()
+	return rows.Err()
 }
 
-func (db *DB) backfillProfileAssets(nowMs int64) (int, error) {
+func (db *DB) backfillProfileAssets(run *assetInventoryReconcileRun) error {
 	rows, err := db.conn.Query(`
 		SELECT channel_id, COALESCE(platform, ''), COALESCE(avatar_url, ''), COALESCE(banner_url, '')
 		FROM channel_profiles
@@ -520,15 +663,17 @@ func (db *DB) backfillProfileAssets(nowMs int64) (int, error) {
 		ORDER BY rowid ASC
 	`)
 	if err != nil {
-		return 0, err
+		return err
 	}
 	defer rows.Close()
 
-	count := 0
 	for rows.Next() {
+		if run.exhausted() {
+			return nil
+		}
 		var channelID, platform, avatarURL, bannerURL string
 		if err := rows.Scan(&channelID, &platform, &avatarURL, &bannerURL); err != nil {
-			return count, err
+			return err
 		}
 		if platform == "" {
 			platform = videoPlatformFromChannelID(channelID)
@@ -563,14 +708,15 @@ func (db *DB) backfillProfileAssets(nowMs int64) (int, error) {
 			if asset.FilePath == "" && asset.SourceURL == "" {
 				continue
 			}
-			asset = db.assetFromLegacyPath(asset)
-			if err := db.upsertBackfilledAsset(asset, nowMs); err != nil {
-				return count, err
+			if err := run.handle(asset); err != nil {
+				return err
 			}
-			count++
+			if run.exhausted() {
+				return nil
+			}
 		}
 	}
-	return count, rows.Err()
+	return rows.Err()
 }
 
 func (db *DB) upsertBackfilledAsset(asset Asset, nowMs int64) error {
