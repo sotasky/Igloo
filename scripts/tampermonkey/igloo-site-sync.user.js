@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Igloo Site Sync
 // @namespace    local.igloo.site.sync
-// @version      8.0.19
+// @version      8.0.21
 // @author       screwys
 // @description  Follow X, TikTok, Instagram, and YouTube channels in Igloo; includes the full X media workflow.
 // @homepageURL  https://github.com/screwys/Igloo
@@ -9,6 +9,7 @@
 // @updateURL    https://raw.githubusercontent.com/screwys/Igloo/main/scripts/tampermonkey/igloo-site-sync.user.js
 // @downloadURL  https://raw.githubusercontent.com/screwys/Igloo/main/scripts/tampermonkey/igloo-site-sync.user.js
 // @match        https://x.com/*
+// @match        https://x.co/*
 // @match        https://twitter.com/*
 // @match        https://www.tiktok.com/*
 // @match        https://www.instagram.com/*
@@ -34,7 +35,7 @@
 
 (function () {
   "use strict";
-  const SCRIPT_VERSION = "8.0.19";
+  const SCRIPT_VERSION = "8.0.21";
 
   const SETTINGS = {
     apiBase: "xsync_api_base",
@@ -148,14 +149,15 @@
   const pageWindow =
     typeof unsafeWindow !== "undefined" ? unsafeWindow : window;
   const X_MEDIA_CACHE_LIMIT = 500;
-  const X_MEDIA_GRAPHQL_PATH_RE =
-    /^(?:\/i\/api)?\/graphql\/[^/]+\/(TweetDetail|TweetResultByRestId|UserTweets|UserMedia|HomeTimeline|HomeLatestTimeline|UserTweetsAndReplies|UserHighlightsTweets|UserArticlesTweets|Bookmarks|Likes|CommunitiesExploreTimeline|ListLatestTweetsTimeline|SearchTimeline)$/;
+  const X_MEDIA_GRAPHQL_PATH_RE = /^(?:\/i\/api)?\/graphql\/[^/]+\/[^/?#]+$/;
   const cachedXImageMediaByTweetId = new Map();
   const cachedXVideoUrlsByTweetId = new Map();
+  const cachedXVideoUrlsByMediaId = new Map();
 
   function currentPlatform() {
     const host = location.hostname.toLowerCase();
-    if (host === "x.com" || host === "twitter.com") return "twitter";
+    if (host === "x.com" || host === "x.co" || host === "twitter.com")
+      return "twitter";
     if (host === "www.tiktok.com" || host === "tiktok.com") return "tiktok";
     if (host === "www.instagram.com" || host === "instagram.com")
       return "instagram";
@@ -248,6 +250,25 @@
     }
   }
 
+  function videoMediaIdFromUrl(rawUrl) {
+    if (!rawUrl) return "";
+    try {
+      const url = new URL(rawUrl, location.origin);
+      const match = url.pathname.match(
+        /\/(?:amplify_video|amplify_video_thumb|ext_tw_video|ext_tw_video_thumb|tweet_video|tweet_video_thumb)\/(\d+)(?:\/|$)/,
+      );
+      return match ? match[1] : "";
+    } catch (_) {
+      return "";
+    }
+  }
+
+  function videoQualityScore(rawUrl) {
+    const match = String(rawUrl || "").match(/\/(\d+)x(\d+)\//);
+    if (!match) return 0;
+    return Number(match[1] || 0) * Number(match[2] || 0);
+  }
+
   function imageExtFromUrl(rawUrl) {
     try {
       const url = new URL(rawUrl, location.origin);
@@ -284,15 +305,39 @@
     return cachedXVideoUrlsByTweetId.get(String(tweetId || "")) || [];
   }
 
+  function cachedVideoUrlsForMediaId(mediaId) {
+    return cachedXVideoUrlsByMediaId.get(String(mediaId || "")) || [];
+  }
+
+  function normalizeVideoUrls(urls) {
+    return Array.from(new Set((urls || []).filter(isVideoTwimgMp4Url))).sort(
+      (a, b) => videoQualityScore(b) - videoQualityScore(a),
+    );
+  }
+
+  function rememberCachedVideoUrlsForMediaId(mediaId, urls) {
+    const id = String(mediaId || "");
+    const nextUrls = normalizeVideoUrls(urls);
+    if (!id || !nextUrls.length) return false;
+
+    const existing = cachedVideoUrlsForMediaId(id);
+    const merged = normalizeVideoUrls([...nextUrls, ...existing]);
+    const changed =
+      merged.length !== existing.length ||
+      merged.some((url, i) => url !== existing[i]);
+    cachedXVideoUrlsByMediaId.delete(id);
+    cachedXVideoUrlsByMediaId.set(id, merged);
+    trimCacheMap(cachedXVideoUrlsByMediaId);
+    return changed;
+  }
+
   function rememberCachedVideoUrls(tweetId, urls) {
     const id = String(tweetId || "");
-    const nextUrls = Array.from(
-      new Set((urls || []).filter(isVideoTwimgMp4Url)),
-    );
+    const nextUrls = normalizeVideoUrls(urls);
     if (!id || !nextUrls.length) return false;
 
     const existing = cachedVideoUrlsForTweet(id);
-    const merged = Array.from(new Set([...nextUrls, ...existing]));
+    const merged = normalizeVideoUrls([...nextUrls, ...existing]);
     const changed =
       merged.length !== existing.length ||
       merged.some((url, i) => url !== existing[i]);
@@ -300,6 +345,43 @@
     cachedXVideoUrlsByTweetId.set(id, merged);
     trimCacheMap(cachedXVideoUrlsByTweetId);
     return changed;
+  }
+
+  function extractVideoUrlsFromText(text) {
+    const urls = [];
+    const seen = new Set();
+    const normalized = String(text || "")
+      .replace(/\\u0026/g, "&")
+      .replace(/\\\//g, "/")
+      .replace(/%3A/gi, ":")
+      .replace(/%2F/gi, "/")
+      .replace(/%3F/gi, "?")
+      .replace(/%3D/gi, "=")
+      .replace(/%26/gi, "&")
+      .replace(/&amp;/g, "&");
+    const re = /https?:\/\/video\.twimg\.com\/[^"'\\\s<>]+?\.mp4(?:\?[^"'\\\s<>]*)?/gi;
+    let match;
+    while ((match = re.exec(normalized))) {
+      let url = match[0];
+      try {
+        url = new URL(url).href;
+      } catch (_) {
+        continue;
+      }
+      if (!isVideoTwimgMp4Url(url) || seen.has(url)) continue;
+      seen.add(url);
+      urls.push(url);
+    }
+    return urls;
+  }
+
+  function cacheVideoUrlsByMediaIdFromText(text) {
+    let cached = 0;
+    extractVideoUrlsFromText(text).forEach((url) => {
+      const mediaId = videoMediaIdFromUrl(url);
+      if (rememberCachedVideoUrlsForMediaId(mediaId, [url])) cached += 1;
+    });
+    return cached;
   }
 
   function cachedImageMediaForTweet(tweetId) {
@@ -365,7 +447,9 @@
       ) {
         return;
       }
-      urls.push(...bestMp4VariantUrls(item));
+      const variantUrls = bestMp4VariantUrls(item);
+      urls.push(...variantUrls);
+      rememberCachedVideoUrlsForMediaId(item?.id_str || item?.id, variantUrls);
     });
     return rememberCachedVideoUrls(tweetId, urls);
   }
@@ -391,16 +475,17 @@
 
   function cacheTweetMediaFromApiResponse(body) {
     let json = body;
+    let cached = 0;
     if (typeof body === "string") {
       if (!body.trim()) return 0;
+      cached += cacheVideoUrlsByMediaIdFromText(body);
       try {
         json = JSON.parse(body);
       } catch (_) {
-        return 0;
+        return cached;
       }
     }
 
-    let cached = 0;
     const seen = new Set();
     function visit(value) {
       if (!value || typeof value !== "object" || seen.has(value)) return;
@@ -427,6 +512,58 @@
     } catch (_) {
       return false;
     }
+  }
+
+  function videoMediaIdFromElement(node) {
+    const candidates = [];
+    function add(value) {
+      if (value) candidates.push(value);
+    }
+    if (node) {
+      add(node.currentSrc);
+      add(node.src);
+      add(node.poster);
+      add(node.getAttribute && node.getAttribute("src"));
+      add(node.getAttribute && node.getAttribute("poster"));
+    }
+    const root =
+      (node?.closest &&
+        node.closest(
+          '[data-testid="videoPlayer"], [data-testid="videoComponent"], [data-testid="tweetPhoto"]',
+        )) ||
+      node;
+    if (root?.querySelectorAll) {
+      root.querySelectorAll("video, source, img").forEach((el) => {
+        add(el.currentSrc);
+        add(el.src);
+        add(el.poster);
+        add(el.getAttribute("src"));
+        add(el.getAttribute("poster"));
+      });
+    }
+    for (const candidate of candidates) {
+      const mediaId = videoMediaIdFromUrl(candidate);
+      if (mediaId) return mediaId;
+    }
+    return "";
+  }
+
+  function performanceVideoUrlsForMediaId(mediaId) {
+    const id = String(mediaId || "");
+    if (
+      !id ||
+      typeof performance === "undefined" ||
+      typeof performance.getEntriesByType !== "function"
+    )
+      return [];
+    const urls = performance
+      .getEntriesByType("resource")
+      .map((entry) => String(entry.name || ""))
+      .filter(
+        (url) => isVideoTwimgMp4Url(url) && videoMediaIdFromUrl(url) === id,
+      );
+    if (urls.length) rememberCachedVideoUrlsForMediaId(id, urls);
+    return normalizeVideoUrls(urls);
   }
 
   function fetchInputUrl(input) {
@@ -895,6 +1032,10 @@
     return [...images, ...videos];
   }
 
+  function bestVideoUrlForMedia(media) {
+    return directVideoDownloadCandidates(media)[0] || "";
+  }
+
   function collectTweetMediaItems(article) {
     const parentInfo = extractTweetUrl(article);
     if (!parentInfo) return [];
@@ -939,14 +1080,16 @@
         );
         if (seenVideos.has(owner.tweetId)) return;
         seenVideos.add(owner.tweetId);
+        const mediaId = videoMediaIdFromElement(node);
         const item = {
           kind: "video",
           tweetId: owner.tweetId,
           tweetUrl: owner.url,
+          mediaId,
           ext: ".mp4",
           domOrder: items.length,
         };
-        const cachedUrl = cachedVideoUrlsForTweet(owner.tweetId)[0];
+        const cachedUrl = bestVideoUrlForMedia(item);
         if (cachedUrl) item.url = cachedUrl;
         items.push(item);
       });
@@ -1801,6 +1944,9 @@
   }
 
   // ── Download: direct browser staging ───────────────────────────────────────
+  // X media downloads must stay standalone. Do not add a server downloader
+  // fallback such as /api/tweet-media-dl here; the local API is only used to
+  // move files that GM_download already saved into the browser staging folder.
   function downloadImageToStaging(media, stagingName) {
     return new Promise((resolve) => {
       GM_download({
@@ -1823,12 +1969,12 @@
 
   function directVideoDownloadCandidates(media) {
     if (!media || typeof media !== "object") return [];
-    return Array.from(
-      new Set([
-        ...(isVideoTwimgMp4Url(media.url) ? [media.url] : []),
-        ...cachedVideoUrlsForTweet(media.tweetId),
-      ]),
-    );
+    return normalizeVideoUrls([
+      ...(isVideoTwimgMp4Url(media.url) ? [media.url] : []),
+      ...cachedVideoUrlsForTweet(media.tweetId),
+      ...cachedVideoUrlsForMediaId(media.mediaId),
+      ...performanceVideoUrlsForMediaId(media.mediaId),
+    ]);
   }
 
   function parseResponseHeaders(rawHeaders) {
@@ -1850,6 +1996,7 @@
       GM_xmlhttpRequest({
         method: "HEAD",
         url,
+        headers: { Referer: "https://x.com/" },
         timeout: 15000,
         onload(resp) {
           const headers = parseResponseHeaders(resp.responseHeaders || "");
@@ -1897,6 +2044,7 @@
         GM_download({
           url,
           name: stagingName,
+          headers: { Referer: "https://x.com/" },
           onload() {
             resolve({ ok: true, url });
           },
@@ -1941,6 +2089,27 @@
     };
   }
 
+  function downloadErrorText(err) {
+    if (!err) return "download failed";
+    if (typeof err === "string") return err;
+    if (err.error) return String(err.error);
+    if (err.message) return String(err.message);
+    try {
+      return JSON.stringify(err);
+    } catch (_) {
+      return "download failed";
+    }
+  }
+
+  function mediaFailureLabel(media, err) {
+    const owner = media?.tweetId ? "tweet " + media.tweetId : "media";
+    const detail = downloadErrorText(err);
+    if (detail === "no_cached_video_url") {
+      return owner + ": direct video URL not found";
+    }
+    return owner + ": " + detail;
+  }
+
   function makeDownloadRunId() {
     return (
       Date.now().toString(36) +
@@ -1978,7 +2147,7 @@
             staged.staging_name,
           );
           if (!directResp.ok) {
-            failed.push(media.tweetId || staged.staging_name);
+            failed.push(mediaFailureLabel(media, directResp.error));
             continue;
           }
           const moveResp = await moveStagedMedia(handle, label, categoryId, [
@@ -1987,14 +2156,16 @@
           if (moveResp.ok && moveResp.json && moveResp.json.success) {
             moved.push(...(moveResp.json.moved || []));
           } else {
-            failed.push(media.tweetId || staged.staging_name);
+            failed.push(mediaFailureLabel(media, moveResp.json || moveResp));
           }
           continue;
         }
 
         const dlResp = await downloadImageToStaging(media, staged.staging_name);
         if (!dlResp.ok) {
-          failed.push(staged.staging_name);
+          failed.push(
+            staged.staging_name + ": " + downloadErrorText(dlResp.error),
+          );
           continue;
         }
         const moveResp = await moveStagedMedia(handle, label, categoryId, [
@@ -2003,7 +2174,7 @@
         if (moveResp.ok && moveResp.json && moveResp.json.success) {
           moved.push(...(moveResp.json.moved || []));
         } else {
-          failed.push(staged.staging_name);
+          failed.push(staged.staging_name + ": move failed");
         }
       }
       onComplete(mediaDownloadResult(moved, failed));
@@ -2071,7 +2242,11 @@
                 return;
               }
               setDlButtonState(dlBtn, "error");
-              showToast("Download failed: move error");
+              const firstFailure = (resp.json?.failed || [])[0];
+              showToast(
+                "Download failed" +
+                  (firstFailure ? ": " + firstFailure : ""),
+              );
             },
           );
         } else {
