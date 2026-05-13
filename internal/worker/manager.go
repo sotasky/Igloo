@@ -19,6 +19,7 @@ import (
 	"github.com/screwys/igloo/internal/download"
 	"github.com/screwys/igloo/internal/model"
 	"github.com/screwys/igloo/internal/sponsorblock"
+	"github.com/screwys/igloo/internal/xfeed"
 )
 
 // WorkerStatus holds last-known state for a named worker.
@@ -38,9 +39,10 @@ type Manager struct {
 	ctx              context.Context
 	cancel           context.CancelFunc
 	wg               sync.WaitGroup
-	feedMediaKick    chan struct{}       // buffered(1): coalescing kick
-	downloadKick     chan struct{}       // buffered(1): coalescing kick for download pool
-	avatarRequest    chan string         // buffered(256): on-demand avatar/profile fetch requests
+	feedMediaKick    chan struct{} // buffered(1): coalescing kick
+	downloadKick     chan struct{} // buffered(1): coalescing kick for download pool
+	avatarRequest    chan string   // buffered(256): on-demand avatar/profile fetch requests
+	xStatusEnrich    chan xfeed.StatusEnrichmentRequest
 	previewChan      chan PreviewRequest // buffered(256): FIFO preview queue
 	ingestKick       chan struct{}       // buffered(1): trigger immediate ingest
 	feedScoringKick  chan struct{}       // buffered(1): trigger immediate scoring
@@ -70,6 +72,8 @@ type Manager struct {
 
 	replyResolver *ReplyResolver
 	xFeedFetcher  xFeedFetcher
+	xStatusMu     sync.Mutex
+	xStatusQueued map[string]time.Time
 
 	// dearrowFetcher is the configured DeArrow orchestrator. Nil means DeArrow
 	// fetching is disabled (e.g. unit tests that don't care about it).
@@ -105,6 +109,7 @@ func NewManager(database *db.DB, cfg *config.Config) *Manager {
 		feedMediaKick:   make(chan struct{}, 1),
 		downloadKick:    make(chan struct{}, 1),
 		avatarRequest:   make(chan string, 256),
+		xStatusEnrich:   make(chan xfeed.StatusEnrichmentRequest, 1024),
 		previewChan:     make(chan PreviewRequest, 256),
 		ingestKick:      make(chan struct{}, 1),
 		feedScoringKick: make(chan struct{}, 1),
@@ -112,6 +117,7 @@ func NewManager(database *db.DB, cfg *config.Config) *Manager {
 		activity:        NewActivityRing(200),
 		dlActivity:      NewActivityRing(100),
 		feedActivity:    NewActivityRing(200),
+		xStatusQueued:   make(map[string]time.Time),
 	}
 	m.dearrowFetcher = &dearrow.Fetcher{
 		Client:   dearrow.NewClient(dearrow.DefaultBaseURL),
@@ -181,6 +187,7 @@ func (m *Manager) StartAll() {
 	m.startOnce("feed_bootstrap", m.runFeedBootstrap)
 	m.startOnce("ranked_queue_warmup", m.runRankedQueueWarmup)
 	m.launch(xIngestWorkerName, m.runXIngestLoop)
+	m.launch("x_status_enrichment", m.runXStatusEnrichmentLoop)
 	m.launch("feed_media", m.runFeedMediaWorker)
 	m.launch("profile_refresh", m.runProfileRefreshLoop)
 	m.launch("dearrow", m.runDearrowWorker)

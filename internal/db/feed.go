@@ -931,29 +931,19 @@ func (db *DB) UpsertFeedItems(items []model.FeedItem) (int, error) {
 					ELSE feed_items.canonical_url
 				END,
 				quote_tweet_id = CASE
-					WHEN feed_items.quote_tweet_id IS NULL THEN excluded.quote_tweet_id
+					WHEN COALESCE(feed_items.quote_tweet_id, '') = '' THEN excluded.quote_tweet_id
 					ELSE feed_items.quote_tweet_id
 				END,
 				quote_author_handle = CASE
-					WHEN feed_items.quote_tweet_id IS NULL THEN COALESCE(excluded.quote_author_handle, feed_items.quote_author_handle)
+					WHEN COALESCE(feed_items.quote_author_handle, '') = '' THEN COALESCE(excluded.quote_author_handle, feed_items.quote_author_handle)
 					ELSE feed_items.quote_author_handle
 				END,
 				quote_author_display_name = CASE
-					WHEN feed_items.quote_tweet_id IS NULL THEN COALESCE(excluded.quote_author_display_name, feed_items.quote_author_display_name)
+					WHEN COALESCE(feed_items.quote_author_display_name, '') = '' THEN COALESCE(excluded.quote_author_display_name, feed_items.quote_author_display_name)
 					ELSE feed_items.quote_author_display_name
 				END,
 				quote_author_avatar_url = CASE
-					WHEN feed_items.quote_tweet_id IS NULL THEN CASE
-						WHEN excluded.quote_author_avatar_url IS NOT NULL THEN excluded.quote_author_avatar_url
-						WHEN LOWER(COALESCE(feed_items.quote_author_avatar_url, '')) LIKE '%/status/undefined%' THEN NULL
-						WHEN (
-							LOWER(COALESCE(feed_items.quote_author_avatar_url, '')) LIKE 'https://x.com/%/status/%'
-							OR LOWER(COALESCE(feed_items.quote_author_avatar_url, '')) LIKE 'http://x.com/%/status/%'
-							OR LOWER(COALESCE(feed_items.quote_author_avatar_url, '')) LIKE 'https://twitter.com/%/status/%'
-							OR LOWER(COALESCE(feed_items.quote_author_avatar_url, '')) LIKE 'http://twitter.com/%/status/%'
-						) THEN NULL
-						ELSE feed_items.quote_author_avatar_url
-					END
+					WHEN COALESCE(feed_items.quote_author_avatar_url, '') = '' THEN COALESCE(excluded.quote_author_avatar_url, feed_items.quote_author_avatar_url)
 					WHEN LOWER(COALESCE(feed_items.quote_author_avatar_url, '')) LIKE '%/status/undefined%' THEN excluded.quote_author_avatar_url
 					WHEN (
 						LOWER(COALESCE(feed_items.quote_author_avatar_url, '')) LIKE 'https://x.com/%/status/%'
@@ -964,11 +954,11 @@ func (db *DB) UpsertFeedItems(items []model.FeedItem) (int, error) {
 					ELSE feed_items.quote_author_avatar_url
 				END,
 				quote_body_text = CASE
-					WHEN feed_items.quote_tweet_id IS NULL THEN COALESCE(excluded.quote_body_text, feed_items.quote_body_text)
+					WHEN COALESCE(feed_items.quote_body_text, '') = '' THEN COALESCE(excluded.quote_body_text, feed_items.quote_body_text)
 					ELSE feed_items.quote_body_text
 				END,
 				quote_lang = CASE
-					WHEN feed_items.quote_tweet_id IS NULL THEN COALESCE(excluded.quote_lang, feed_items.quote_lang)
+					WHEN COALESCE(feed_items.quote_lang, '') = '' THEN COALESCE(excluded.quote_lang, feed_items.quote_lang)
 					WHEN excluded.quote_lang IS NOT NULL
 						AND excluded.quote_lang != ''
 						AND (
@@ -980,7 +970,7 @@ func (db *DB) UpsertFeedItems(items []model.FeedItem) (int, error) {
 					ELSE feed_items.quote_lang
 				END,
 				quote_media_json = CASE
-					WHEN feed_items.quote_tweet_id IS NULL THEN COALESCE(excluded.quote_media_json, feed_items.quote_media_json)
+					WHEN COALESCE(feed_items.quote_media_json, '') = '' THEN COALESCE(excluded.quote_media_json, feed_items.quote_media_json)
 					ELSE feed_items.quote_media_json
 				END,
 				views = COALESCE(excluded.views, feed_items.views),

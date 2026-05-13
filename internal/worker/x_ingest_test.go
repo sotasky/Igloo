@@ -9,11 +9,13 @@ import (
 
 	"github.com/screwys/igloo/internal/db"
 	"github.com/screwys/igloo/internal/model"
+	"github.com/screwys/igloo/internal/xfeed"
 )
 
 type fakeXFeedFetcher struct {
 	timeline func(context.Context, string, int) ([]model.FeedItem, error)
 	source   func(context.Context, string, int) ([]model.FeedItem, error)
+	status   func(context.Context, string, string) (xfeed.ParseResult, error)
 }
 
 func (f fakeXFeedFetcher) FetchTimeline(ctx context.Context, handle string, limit int) ([]model.FeedItem, error) {
@@ -22,6 +24,13 @@ func (f fakeXFeedFetcher) FetchTimeline(ctx context.Context, handle string, limi
 
 func (f fakeXFeedFetcher) FetchSource(ctx context.Context, rawURL string, limit int) ([]model.FeedItem, error) {
 	return f.source(ctx, rawURL, limit)
+}
+
+func (f fakeXFeedFetcher) FetchStatus(ctx context.Context, handle, tweetID string) (xfeed.ParseResult, error) {
+	if f.status != nil {
+		return f.status(ctx, handle, tweetID)
+	}
+	return xfeed.ParseResult{}, errors.New("unexpected status fetch")
 }
 
 func TestDownloadNewAuthorAvatars_QueuesProfileFallbackForPlaceholderURL(t *testing.T) {
@@ -265,6 +274,96 @@ func TestFetchOneChannelRecordsFailureBackoff(t *testing.T) {
 	}
 	if state.NextRetryAt <= float64(time.Now().Unix()) {
 		t.Fatalf("next_retry_at = %f, want future", state.NextRetryAt)
+	}
+}
+
+func TestXStatusEnrichmentUpsertsMissingQuoteParent(t *testing.T) {
+	d := newTestWorkerDB(t)
+	m := &Manager{
+		db:  d,
+		cfg: testCfg(t.TempDir()),
+		xFeedFetcher: fakeXFeedFetcher{
+			status: func(_ context.Context, handle, tweetID string) (xfeed.ParseResult, error) {
+				if handle != "sample_source" || tweetID != "9000000000000000100" {
+					t.Fatalf("status fetch = %s/%s", handle, tweetID)
+				}
+				return xfeed.ParseResult{Items: []model.FeedItem{{
+					TweetID:           "9000000000000000100",
+					SourceHandle:      "sample_source",
+					AuthorHandle:      "sample_source",
+					BodyText:          "parent quote text",
+					QuoteTweetID:      "9000000000000000200",
+					QuoteAuthorHandle: "sample_quote",
+					QuoteBodyText:     "quoted text",
+					ContentHash:       "hash-parent",
+					CanonicalTweetID:  "9000000000000000100",
+				}}}, nil
+			},
+		},
+	}
+
+	m.runOneXStatusEnrichment(context.Background(), xfeed.StatusEnrichmentRequest{
+		Kind: xfeed.StatusEnrichmentMissingQuoteParent,
+		Ref:  xfeed.StatusRef{Handle: "sample_source", TweetID: "9000000000000000100"},
+	})
+
+	got, err := d.GetFeedItemByTweetID("9000000000000000100")
+	if err != nil {
+		t.Fatalf("GetFeedItemByTweetID: %v", err)
+	}
+	if got == nil || got.QuoteTweetID != "9000000000000000200" || got.QuoteBodyText != "quoted text" {
+		t.Fatalf("parent enrichment = %+v", got)
+	}
+}
+
+func TestXStatusEnrichmentFillsRetweetQuoteFields(t *testing.T) {
+	d := newTestWorkerDB(t)
+	if _, err := d.UpsertFeedItems([]model.FeedItem{{
+		TweetID:          "9000000000000000400",
+		SourceHandle:     "sample_source",
+		AuthorHandle:     "sample_author",
+		BodyText:         "original parent text",
+		IsRetweet:        true,
+		CanonicalTweetID: "9000000000000000300",
+		ContentHash:      "hash-retweet",
+	}}); err != nil {
+		t.Fatalf("seed retweet: %v", err)
+	}
+	m := &Manager{
+		db:  d,
+		cfg: testCfg(t.TempDir()),
+		xFeedFetcher: fakeXFeedFetcher{
+			status: func(_ context.Context, handle, tweetID string) (xfeed.ParseResult, error) {
+				if handle != "sample_author" || tweetID != "9000000000000000300" {
+					t.Fatalf("status fetch = %s/%s", handle, tweetID)
+				}
+				return xfeed.ParseResult{Items: []model.FeedItem{{
+					TweetID:           "9000000000000000300",
+					SourceHandle:      "sample_author",
+					AuthorHandle:      "sample_author",
+					BodyText:          "original parent text",
+					QuoteTweetID:      "9000000000000000500",
+					QuoteAuthorHandle: "sample_quote",
+					QuoteBodyText:     "quote fallback text",
+					ContentHash:       "hash-original",
+					CanonicalTweetID:  "9000000000000000300",
+				}}}, nil
+			},
+		},
+	}
+
+	m.runOneXStatusEnrichment(context.Background(), xfeed.StatusEnrichmentRequest{
+		Kind:          xfeed.StatusEnrichmentRetweetQuote,
+		Ref:           xfeed.StatusRef{Handle: "sample_author", TweetID: "9000000000000000300"},
+		TargetTweetID: "9000000000000000400",
+	})
+
+	got, err := d.GetFeedItemByTweetID("9000000000000000400")
+	if err != nil {
+		t.Fatalf("GetFeedItemByTweetID: %v", err)
+	}
+	if got == nil || got.QuoteTweetID != "9000000000000000500" || got.QuoteBodyText != "quote fallback text" {
+		t.Fatalf("retweet enrichment = %+v", got)
 	}
 }
 

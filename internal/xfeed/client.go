@@ -24,12 +24,26 @@ type TweetFallback interface {
 	FetchTweet(ctx context.Context, handle, tweetID string) (*fxtwitter.Tweet, error)
 }
 
+type StatusEnrichmentKind string
+
+const (
+	StatusEnrichmentMissingQuoteParent StatusEnrichmentKind = "missing_quote_parent"
+	StatusEnrichmentRetweetQuote       StatusEnrichmentKind = "retweet_quote"
+)
+
+type StatusEnrichmentRequest struct {
+	Kind          StatusEnrichmentKind
+	Ref           StatusRef
+	TargetTweetID string
+}
+
 // Client fetches X/Twitter timelines through gallery-dl.
 type Client struct {
-	Runner        Runner
-	CookiePool    *CookiePool
-	TweetFallback TweetFallback
-	OperationSink download.OperationSink
+	Runner               Runner
+	CookiePool           *CookiePool
+	TweetFallback        TweetFallback
+	StatusEnrichmentSink func(StatusEnrichmentRequest)
+	OperationSink        download.OperationSink
 }
 
 // NewClient returns a gallery-dl backed X feed client.
@@ -120,6 +134,10 @@ func (c *Client) enrichStatuses(ctx context.Context, parsed *ParseResult) error 
 			continue
 		}
 		seen[key] = true
+		c.deferStatusEnrichment(StatusEnrichmentRequest{
+			Kind: StatusEnrichmentMissingQuoteParent,
+			Ref:  ref,
+		})
 		if fallback, ok := c.fallbackFeedItem(ctx, ref.Handle, ref.TweetID); ok {
 			parsed.Merge(ParseResult{Items: []FeedItem{fallback}})
 			if parent := parsed.Find(ref.TweetID); parent != nil && parent.QuoteTweetID != "" {
@@ -156,6 +174,12 @@ func (c *Client) enrichStatuses(ctx context.Context, parsed *ParseResult) error 
 			continue
 		}
 		seen[key] = true
+		ref := StatusRef{Handle: item.AuthorHandle, TweetID: item.CanonicalTweetID}
+		c.deferStatusEnrichment(StatusEnrichmentRequest{
+			Kind:          StatusEnrichmentRetweetQuote,
+			Ref:           ref,
+			TargetTweetID: item.TweetID,
+		})
 		if fallback, ok := c.fallbackFeedItem(ctx, item.AuthorHandle, item.CanonicalTweetID); ok && fallback.QuoteTweetID != "" {
 			copyQuoteFields(item, fallback)
 			continue
@@ -172,6 +196,16 @@ func (c *Client) enrichStatuses(ctx context.Context, parsed *ParseResult) error 
 		}
 	}
 	return nil
+}
+
+func (c *Client) deferStatusEnrichment(req StatusEnrichmentRequest) {
+	if c == nil || c.StatusEnrichmentSink == nil {
+		return
+	}
+	if !ValidHandle(req.Ref.Handle) || !ValidTweetID(req.Ref.TweetID) {
+		return
+	}
+	c.StatusEnrichmentSink(req)
 }
 
 func (c *Client) fallbackFeedItem(ctx context.Context, handle, tweetID string) (FeedItem, bool) {

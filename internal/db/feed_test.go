@@ -516,6 +516,46 @@ func TestUpsertFeedItemsRepairsUnknownLanguages(t *testing.T) {
 	}
 }
 
+func TestUpsertFeedItemsFillsMissingQuoteFields(t *testing.T) {
+	d := openWritableTestDB(t)
+	now := time.Now()
+	if _, err := d.UpsertFeedItems([]model.FeedItem{{
+		TweetID:          "quote_fill",
+		AuthorHandle:     "sample_author",
+		BodyText:         "post",
+		QuoteTweetID:     "9000000000000000500",
+		CanonicalTweetID: "quote_fill",
+		PublishedAt:      &now,
+	}}); err != nil {
+		t.Fatalf("initial upsert: %v", err)
+	}
+	if _, err := d.UpsertFeedItems([]model.FeedItem{{
+		TweetID:                "quote_fill",
+		AuthorHandle:           "sample_author",
+		BodyText:               "post",
+		QuoteTweetID:           "9000000000000000500",
+		QuoteAuthorHandle:      "sample_quote",
+		QuoteAuthorDisplayName: "Sample Quote",
+		QuoteBodyText:          "quoted text",
+		QuoteMediaJSON:         `[{"url":"https://pbs.twimg.com/media/sample.jpg","type":"photo"}]`,
+		CanonicalTweetID:       "quote_fill",
+		PublishedAt:            &now,
+	}}); err != nil {
+		t.Fatalf("fill quote upsert: %v", err)
+	}
+
+	var handle, display, body, media string
+	if err := d.QueryRow(`
+		SELECT COALESCE(quote_author_handle,''), COALESCE(quote_author_display_name,''),
+		       COALESCE(quote_body_text,''), COALESCE(quote_media_json,'')
+		FROM feed_items WHERE tweet_id = ?`, "quote_fill").Scan(&handle, &display, &body, &media); err != nil {
+		t.Fatalf("read quote fields: %v", err)
+	}
+	if handle != "sample_quote" || display != "Sample Quote" || body != "quoted text" || media == "" {
+		t.Fatalf("quote fields = handle:%q display:%q body:%q media:%q", handle, display, body, media)
+	}
+}
+
 func TestUpsertFeedItemsRejectsStatusUndefinedAvatarURLs(t *testing.T) {
 	d := openWritableTestDB(t)
 	now := time.Now()

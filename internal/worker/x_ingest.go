@@ -25,6 +25,7 @@ const (
 type xFeedFetcher interface {
 	FetchTimeline(ctx context.Context, handle string, limit int) ([]model.FeedItem, error)
 	FetchSource(ctx context.Context, rawURL string, limit int) ([]model.FeedItem, error)
+	FetchStatus(ctx context.Context, handle, tweetID string) (xfeed.ParseResult, error)
 }
 
 // runXIngestLoop runs periodic X ingest. It fires immediately on start, then
@@ -73,6 +74,7 @@ func (m *Manager) xFeedClient() xFeedFetcher {
 	}
 	client := xfeed.NewClient(cookiesDir)
 	client.OperationSink = m.db
+	client.StatusEnrichmentSink = m.RequestXStatusEnrichment
 	m.xFeedFetcher = client
 	return m.xFeedFetcher
 }

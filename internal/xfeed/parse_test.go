@@ -233,10 +233,23 @@ func TestClientFetchTimelineUsesFXTwitterBeforeGalleryDLForMissingQuoteParent(t 
 		}, nil
 	}}
 
-	client := &Client{Runner: runner, TweetFallback: fallback}
+	var deferred []StatusEnrichmentRequest
+	client := &Client{
+		Runner:        runner,
+		TweetFallback: fallback,
+		StatusEnrichmentSink: func(req StatusEnrichmentRequest) {
+			deferred = append(deferred, req)
+		},
+	}
 	items, err := client.FetchTimeline(context.Background(), "sample_source", 1)
 	if err != nil {
 		t.Fatalf("FetchTimeline: %v", err)
+	}
+	if len(deferred) != 1 ||
+		deferred[0].Kind != StatusEnrichmentMissingQuoteParent ||
+		deferred[0].Ref.Handle != "sample_source" ||
+		deferred[0].Ref.TweetID != "9000000000000000100" {
+		t.Fatalf("deferred status enrichment = %#v", deferred)
 	}
 	if len(items) != 1 {
 		t.Fatalf("items = %#v", items)
@@ -286,10 +299,24 @@ func TestClientFetchTimelineUsesFXTwitterBeforeGalleryDLForRetweetQuote(t *testi
 		}, nil
 	}}
 
-	client := &Client{Runner: runner, TweetFallback: fallback}
+	var deferred []StatusEnrichmentRequest
+	client := &Client{
+		Runner:        runner,
+		TweetFallback: fallback,
+		StatusEnrichmentSink: func(req StatusEnrichmentRequest) {
+			deferred = append(deferred, req)
+		},
+	}
 	items, err := client.FetchTimeline(context.Background(), "sample_source", 1)
 	if err != nil {
 		t.Fatalf("FetchTimeline: %v", err)
+	}
+	if len(deferred) != 1 ||
+		deferred[0].Kind != StatusEnrichmentRetweetQuote ||
+		deferred[0].Ref.Handle != "sample_author" ||
+		deferred[0].Ref.TweetID != "9000000000000000300" ||
+		deferred[0].TargetTweetID != "9000000000000000400" {
+		t.Fatalf("deferred status enrichment = %#v", deferred)
 	}
 	if len(items) != 1 {
 		t.Fatalf("items = %#v", items)
