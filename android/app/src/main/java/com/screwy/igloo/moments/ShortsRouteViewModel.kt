@@ -28,7 +28,9 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -51,7 +53,8 @@ class ShortsRouteViewModel(
     )
 
     private val baseUrl = baseUrlProvider.baseUrl()
-    private val activeVideoId = MutableStateFlow(startVideoId.trim())
+    private val initialVideoId = startVideoId.trim()
+    private val activeVideoId = MutableStateFlow(initialVideoId)
     val currentVideoId: StateFlow<String> = activeVideoId.asStateFlow()
     private val momentsCursorScope: String =
         if (playlistSpec.type == ShortsPlaylistType.Moments) "following" else "all"
@@ -302,9 +305,12 @@ class ShortsRouteViewModel(
             .map { rows -> rows.map(::toPlayerMomentItem) }
         ShortsPlaylistType.StoryTray -> prefs.storiesWindowHours()
             .flatMapLatest { hours ->
-                db.momentReadDao().storyTrayPlaylistFlow(
-                    cutoffMs = storyCutoffMillis(hours),
-                )
+                flow {
+                    val rows = db.momentReadDao()
+                        .storyTrayPlaylistFlow(cutoffMs = storyCutoffMillis(hours))
+                        .first()
+                    emit(rotateStoryTrayPlaylist(rows, initialVideoId))
+                }
             }
             .map { rows -> rows.map(::toPlayerMomentItem) }
         ShortsPlaylistType.Bookmarks -> db.bookmarkReadDao()
@@ -357,6 +363,17 @@ class ShortsRouteViewModel(
 
     private fun storyCutoffMillis(hours: Int): Long =
         System.currentTimeMillis() - PreferencesRepo.Defaults.normalizeStoriesWindowHours(hours) * 3_600_000L
+
+    private fun rotateStoryTrayPlaylist(
+        rows: List<DbMomentItem>,
+        startVideoId: String,
+    ): List<DbMomentItem> {
+        val anchorChannelId = rows.firstOrNull { it.video.videoId == startVideoId }?.video?.channelId
+            ?: return rows
+        val anchorIndex = rows.indexOfFirst { it.video.channelId == anchorChannelId }
+        if (anchorIndex <= 0) return rows
+        return rows.drop(anchorIndex) + rows.take(anchorIndex)
+    }
 
     private fun StoryChannelItem.startVideoId(): String =
         firstUnseenVideoId.takeIf { it.isNotBlank() } ?: firstVideoId
