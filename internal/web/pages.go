@@ -1099,6 +1099,44 @@ func (s *Server) handlePageFeed(w http.ResponseWriter, r *http.Request) {
 	components.FeedPage(p, items, hasMore, nextPageURL, true, true, nil, feedHeadAnchor).Render(r.Context(), w)
 }
 
+func (s *Server) handlePageThread(w http.ResponseWriter, r *http.Request) {
+	tweetID := r.PathValue("tweetID")
+	if tweetID == "" {
+		http.NotFound(w, r)
+		return
+	}
+	chain, err := s.db.GetThreadChain(tweetID)
+	if err != nil {
+		slog.Error("GetThreadChain", "tweet_id", tweetID, "err", err)
+		http.Error(w, "thread query failed", http.StatusInternalServerError)
+		return
+	}
+	if len(chain) == 0 {
+		http.NotFound(w, r)
+		return
+	}
+
+	username := ""
+	if user := userFromContext(r.Context()); user != nil {
+		username = user.Username
+	}
+	chain = feed.EnrichFeedItemsPreserveRows(s.db, chain, username)
+
+	p := s.pageProps(w, r)
+	p.PageTitle = "Thread"
+	p.ActiveNav = "feed"
+	p.ESBundle = "js/dist/feed.js"
+	p.Sidebar = s.mustBuildSidebar(r)
+
+	returnHref := r.URL.Query().Get("return")
+	if returnHref == "" || !strings.HasPrefix(returnHref, "/") || strings.HasPrefix(returnHref, "//") {
+		returnHref = "/feed"
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	components.ThreadPage(p, chain, returnHref).Render(r.Context(), w)
+}
+
 func (s *Server) handlePageLiked(w http.ResponseWriter, r *http.Request) {
 	user := userFromContext(r.Context())
 	if user == nil {

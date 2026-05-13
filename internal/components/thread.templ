@@ -1,0 +1,27 @@
+package components
+
+import "github.com/screwys/igloo/internal/model"
+
+templ ThreadPage(p PageProps, items []model.FeedItem, returnHref string) {
+	@Base(p) {
+		<div class="thread-page-shell">
+			<a class="thread-back-link" href={ templ.SafeURL(returnHref) } data-thread-back-link>{ L(p, "thread_back_to_feed", "<- Feed") }</a>
+			<div id="feed-list" class="feed-list thread-page-feed-list" data-thread-page>
+				if len(items) > 0 {
+					<div class="feed-thread feed-thread-page" data-feed-thread data-leaf-tweet-id={ items[len(items)-1].TweetID }>
+						for i, item := range items {
+							if i < len(items)-1 {
+								@feedThreadCard(p, stripThreadNoise(item), false)
+							} else {
+								@feedLeafCard(p, stripThreadNoise(item))
+							}
+						}
+					</div>
+				} else {
+					<div class="empty-state"><h3>{ L(p, "thread_unavailable", "Thread unavailable") }</h3></div>
+				}
+			</div>
+		</div>
+		@RetweetersDialog(p)
+	}
+}

@@ -296,6 +296,52 @@ func TestListPreDiversityRanked_SetsReplyPenalty(t *testing.T) {
 	}
 }
 
+func TestListPreDiversityRankedSetsConversationKey(t *testing.T) {
+	d := openWritableTestDB(t)
+	publishedAt := time.Now().Add(-1 * time.Hour).UnixMilli()
+
+	for _, row := range []struct {
+		id       string
+		author   string
+		parentID string
+		isReply  int
+	}{
+		{id: "sample_root", author: "sample_root_author"},
+		{id: "sample_mid", author: "sample_author", parentID: "sample_root", isReply: 1},
+		{id: "sample_leaf", author: "sample_author", parentID: "sample_mid", isReply: 1},
+		{id: "sample_solo", author: "sample_author"},
+	} {
+		if _, err := d.conn.Exec(`INSERT INTO feed_items
+				(tweet_id, author_handle, body_text, published_at, algo_interest, algo_scored_at, is_reply, reply_to_status)
+				VALUES (?, ?, 'body', ?, 10, 1, ?, ?)`,
+			row.id, row.author, publishedAt, row.isReply, row.parentID,
+		); err != nil {
+			t.Fatalf("insert %s: %v", row.id, err)
+		}
+	}
+
+	rows, err := d.ListPreDiversityRanked("")
+	if err != nil {
+		t.Fatalf("ListPreDiversityRanked: %v", err)
+	}
+	keyByID := map[string]string{}
+	for _, row := range rows {
+		keyByID[row.TweetID] = row.ConversationKey
+	}
+	if got := keyByID["sample_leaf"]; got != "sample_root" {
+		t.Fatalf("leaf conversation key = %q, want sample_root", got)
+	}
+	if got := keyByID["sample_mid"]; got != "sample_root" {
+		t.Fatalf("mid conversation key = %q, want sample_root", got)
+	}
+	if got := keyByID["sample_root"]; got != "sample_root" {
+		t.Fatalf("root conversation key = %q, want sample_root", got)
+	}
+	if got := keyByID["sample_solo"]; got != "sample_solo" {
+		t.Fatalf("solo conversation key = %q, want sample_solo", got)
+	}
+}
+
 func TestListPreDiversityRanked_StarredUsesSharedAbsenceAfterRecentAuthorSeen(t *testing.T) {
 	d := openWritableTestDB(t)
 	user := "alice"

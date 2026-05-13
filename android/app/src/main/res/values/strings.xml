@@ -230,7 +230,6 @@
     <string name="feed_quoted_post_media_index">Quoted post media %d</string>
     <string name="feed_refresh_account">Refresh account</string>
     <string name="feed_replying_to">Replying to @%1$s</string>
-    <string name="feed_thread_load_more_replies">Load more replies</string>
     <string name="feed_repost_more">more</string>
     <string name="feed_repost_suffix">reposted</string>
     <string name="feed_reposted_by">Reposted by</string>
@@ -240,6 +239,10 @@
     <string name="feed_reposted_someone">Someone reposted</string>
     <string name="feed_show_translation">Show translation</string>
     <string name="feed_tagged_in_this_post">Tagged in this post</string>
+    <string name="feed_thread_capsule">%1$d posts across %2$d people</string>
+    <string name="feed_thread_load_more_replies">Load more replies</string>
+    <string name="feed_thread_open_capsule_a11y">Open thread with %1$d posts across %2$d people</string>
+    <string name="feed_thread_open_inline">open thread</string>
     <string name="feed_toggle_translation">Toggle translation</string>
     <string name="feed_translate_icon_letter">A</string>
     <string name="feed_turn_off_reposts">Turn off reposts</string>
@@ -344,7 +347,6 @@
     <string name="logs_ring_fail">fail</string>
     <string name="logs_ring_ok">ok</string>
     <string name="logs_ring_watched">watched</string>
-    <string name="logs_x_ingest_status">X ingest: %s</string>
     <string name="logs_segments">Segments</string>
     <string name="logs_server_log">Server Log</string>
     <string name="logs_since_timestamp">since %s</string>
@@ -402,6 +404,7 @@
     <string name="logs_wal_tables_detail">WAL %1$s MB · %2$d tables</string>
     <string name="logs_warnings_count">%d warnings</string>
     <string name="logs_workers_errors">Workers &amp; Errors</string>
+    <string name="logs_x_ingest_status">X ingest: %s</string>
     <string name="media_type_image">Single image</string>
     <string name="media_type_slideshow">Slideshow</string>
     <string name="media_type_video">Video</string>
@@ -730,6 +733,7 @@
     <string name="temp_download_title_cancelled">Download cancelled</string>
     <string name="temp_download_title_downloading">Downloading...</string>
     <string name="temp_download_title_failed">Download failed</string>
+    <string name="thread_back_to_feed">&lt;- Feed</string>
     <string name="thread_unavailable">Thread unavailable</string>
     <string name="time_days_ago">%1$dd ago</string>
     <string name="time_days_from_now">%1$dd from now</string>

@@ -48,10 +48,13 @@ func newTestServer(t *testing.T) *testServer {
 
 	cfg := &config.Config{SecretKey: "test-key", DataDir: t.TempDir()}
 	s := &Server{
-		db:            d,
-		cfg:           cfg,
-		store:         sessions.NewCookieStore([]byte("test-key")),
-		workers:       worker.NewManager(d, cfg),
+		db:      d,
+		cfg:     cfg,
+		store:   sessions.NewCookieStore([]byte("test-key")),
+		workers: worker.NewManager(d, cfg),
+		staticV: func(path string) string {
+			return "/static/" + path + "?v=test"
+		},
 		i18n:          i18n.NewCatalog(),
 		profileFlight: newProfileFlight(),
 	}
@@ -71,6 +74,7 @@ func newTestServer(t *testing.T) *testServer {
 	s.registerChannelAPIRoutes(mux)
 	s.registerThreadAPIRoutes(mux)
 	s.registerI18NAPIRoutes(mux)
+	mux.HandleFunc("GET /thread/{tweetID}", s.handlePageThread)
 	mux.HandleFunc("GET /api/media/thumbnail/{videoID}", s.handleThumbnail)
 	mux.HandleFunc("GET /api/media/avatar/{channelID}", s.handleChannelAvatar)
 

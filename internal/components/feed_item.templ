@@ -17,20 +17,8 @@ templ FeedItem(p PageProps, item model.FeedItem) {
 					@feedRepostLine(p, item, repostList)
 				</div>
 			}
-			for i, ancestor := range item.ThreadChain {
-				if i < visibleAncestorStart {
-					@feedThreadCard(p, stripThreadNoise(ancestor), true)
-				}
-			}
-			if visibleAncestorStart > 0 {
-				<div class="feed-thread-more-wrap" data-feed-thread-more-wrap>
-					<button
-						class="feed-thread-more"
-						type="button"
-						data-feed-thread-more
-						data-i18n="feed_thread_load_more_replies"
-					>{ L(p, "feed_thread_load_more_replies", "Load more replies") }</button>
-				</div>
+			if threadCapsuleVisible(item.ThreadChain) {
+				@feedThreadCapsule(p, item)
 			}
 			for i, ancestor := range item.ThreadChain {
 				if i >= visibleAncestorStart {
@@ -42,6 +30,27 @@ templ FeedItem(p PageProps, item model.FeedItem) {
 	} else {
 		@feedLeafCard(p, item)
 	}
+}
+
+templ feedThreadCapsule(p PageProps, item model.FeedItem) {
+	<a
+		class="feed-thread-capsule"
+		href={ templ.SafeURL("/thread/" + item.TweetID) }
+		data-feed-thread-capsule
+		data-feed-thread-open
+		data-thread-tweet-id={ item.TweetID }
+		aria-label={ LF(p, "feed_thread_open_capsule_a11y", "Open thread with %1$d posts across %2$d people", threadCapsulePostCount(item), threadCapsulePeopleCount(item)) }
+	>
+		<span class="feed-thread-capsule-avatars" aria-hidden="true">
+			for i := 0; i < 3 && i < threadCapsulePeopleCount(item); i++ {
+				<span class="feed-thread-capsule-dot"></span>
+			}
+		</span>
+		<span class="feed-thread-capsule-text">
+			{ LF(p, "feed_thread_capsule", "%1$d posts across %2$d people", threadCapsulePostCount(item), threadCapsulePeopleCount(item)) }
+			<span class="feed-thread-capsule-open">{ " - " + L(p, "feed_thread_open_inline", "open thread") }</span>
+		</span>
+	</a>
 }
 
 // feedThreadCard renders an ancestor in a thread chain. Same as FeedItem but

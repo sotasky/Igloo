@@ -12,10 +12,11 @@ import (
 // Tunables — match the curve and weights previously used in static/js/src/feed/rerank.js
 // so behavior is comparable while we migrate.
 const (
-	diversityWindow     = 6    // recent-author window for MMR demotion
-	diversityAuthorPen  = 5.0  // demote if author seen in last N
-	diversitySourcePen  = 2.5  // demote if source_handle seen in last N
-	jitterRangePerTweet = 0.38 // total spread; per-tweet jitter is centered in ±half
+	diversityWindow          = 6    // recent-author window for MMR demotion
+	diversityAuthorPen       = 5.0  // demote if author seen in last N
+	diversitySourcePen       = 2.5  // demote if source_handle seen in last N
+	diversityConversationPen = 7.5  // demote if conversation root seen in last N
+	jitterRangePerTweet      = 0.38 // total spread; per-tweet jitter is centered in ±half
 )
 
 // BuildSnapshot turns a pre-diversity ranked list into the final snapshot rows
@@ -29,12 +30,13 @@ func BuildSnapshot(in []db.PreDiversitySnapshotRow, now time.Time) []db.Snapshot
 	hourSalt := strconv.FormatInt(now.Truncate(time.Hour).Unix(), 10)
 
 	type cand struct {
-		row         db.PreDiversitySnapshotRow
-		authorLower string
-		sourceLower string
-		jitter      float64
-		base        float64 // base*decay + freshness + jitter (pre-diversity)
-		used        bool
+		row               db.PreDiversitySnapshotRow
+		authorLower       string
+		sourceLower       string
+		conversationLower string
+		jitter            float64
+		base              float64 // base*decay + freshness + jitter (pre-diversity)
+		used              bool
 	}
 
 	cands := make([]cand, len(in))
@@ -46,11 +48,12 @@ func BuildSnapshot(in []db.PreDiversitySnapshotRow, now time.Time) []db.Snapshot
 			score = 0
 		}
 		cands[i] = cand{
-			row:         r,
-			authorLower: strings.ToLower(r.AuthorHandle),
-			sourceLower: strings.ToLower(r.SourceHandle),
-			jitter:      j,
-			base:        score + j,
+			row:               r,
+			authorLower:       strings.ToLower(r.AuthorHandle),
+			sourceLower:       strings.ToLower(r.SourceHandle),
+			conversationLower: strings.ToLower(r.ConversationKey),
+			jitter:            j,
+			base:              score + j,
 		}
 		order[i] = i
 	}
@@ -68,6 +71,7 @@ func BuildSnapshot(in []db.PreDiversitySnapshotRow, now time.Time) []db.Snapshot
 	out := make([]db.SnapshotRow, 0, len(cands))
 	var recentAuthors recentWindow
 	var recentSources recentWindow
+	var recentConversations recentWindow
 
 	for pos := 1; pos <= len(cands); pos++ {
 		bestIdx := -1
@@ -89,6 +93,10 @@ func BuildSnapshot(in []db.PreDiversitySnapshotRow, now time.Time) []db.Snapshot
 			if cands[i].sourceLower != "" && recentSources.contains(cands[i].sourceLower) {
 				s -= diversitySourcePen
 				demoted += diversitySourcePen
+			}
+			if cands[i].conversationLower != "" && recentConversations.contains(cands[i].conversationLower) {
+				s -= diversityConversationPen
+				demoted += diversityConversationPen
 			}
 			if bestIdx < 0 || s > bestScore || (s == bestScore && i < bestIdx) {
 				bestScore = s
@@ -115,6 +123,7 @@ func BuildSnapshot(in []db.PreDiversitySnapshotRow, now time.Time) []db.Snapshot
 
 		recentAuthors.push(c.authorLower)
 		recentSources.push(c.sourceLower)
+		recentConversations.push(c.conversationLower)
 	}
 	return out
 }

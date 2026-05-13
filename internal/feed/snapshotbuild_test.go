@@ -48,6 +48,24 @@ func TestBuildSnapshot_DiversityBreaksAuthorClumps(t *testing.T) {
 	}
 }
 
+func TestBuildSnapshot_DiversityBreaksConversationClumps(t *testing.T) {
+	in := []db.PreDiversitySnapshotRow{
+		{TweetID: "reply_a", AuthorHandle: "sample_author_a", SourceHandle: "sample_source_a", ConversationKey: "sample_root", BaseScore: 30, DecayFactor: 1},
+		{TweetID: "reply_b", AuthorHandle: "sample_author_b", SourceHandle: "sample_source_b", ConversationKey: "sample_root", BaseScore: 29, DecayFactor: 1},
+		{TweetID: "other", AuthorHandle: "sample_author_c", SourceHandle: "sample_source_c", ConversationKey: "other", BaseScore: 28.5, DecayFactor: 1},
+	}
+	out := BuildSnapshot(in, time.Unix(0, 0))
+	if out[0].TweetID != "reply_a" {
+		t.Fatalf("position 1 = %q, want reply_a", out[0].TweetID)
+	}
+	if out[1].TweetID != "other" {
+		t.Fatalf("position 2 = %q, want other after conversation diversity", out[1].TweetID)
+	}
+	if out[2].DiversityDemotedBy != diversityConversationPen {
+		t.Fatalf("reply_b demotion = %.1f, want %.1f", out[2].DiversityDemotedBy, diversityConversationPen)
+	}
+}
+
 func TestBuildSnapshot_EmptyInput(t *testing.T) {
 	out := BuildSnapshot(nil, time.Unix(0, 0))
 	if out != nil {
@@ -202,6 +220,7 @@ func buildSnapshotExhaustiveForTest(in []db.PreDiversitySnapshotRow, now time.Ti
 	out := make([]db.SnapshotRow, 0, len(cands))
 	recentAuthors := make([]string, 0, diversityWindow)
 	recentSources := make([]string, 0, diversityWindow)
+	recentConversations := make([]string, 0, diversityWindow)
 
 	for pos := 1; pos <= len(cands); pos++ {
 		bestIdx := -1
@@ -220,6 +239,10 @@ func buildSnapshotExhaustiveForTest(in []db.PreDiversitySnapshotRow, now time.Ti
 			if cands[i].row.SourceHandle != "" && containsLower(recentSources, cands[i].row.SourceHandle) {
 				s -= diversitySourcePen
 				demoted += diversitySourcePen
+			}
+			if cands[i].row.ConversationKey != "" && containsLower(recentConversations, cands[i].row.ConversationKey) {
+				s -= diversityConversationPen
+				demoted += diversityConversationPen
 			}
 			if s > bestScore {
 				bestScore = s
@@ -246,6 +269,7 @@ func buildSnapshotExhaustiveForTest(in []db.PreDiversitySnapshotRow, now time.Ti
 
 		recentAuthors = pushWindow(recentAuthors, strings.ToLower(c.row.AuthorHandle), diversityWindow)
 		recentSources = pushWindow(recentSources, strings.ToLower(c.row.SourceHandle), diversityWindow)
+		recentConversations = pushWindow(recentConversations, strings.ToLower(c.row.ConversationKey), diversityWindow)
 	}
 	return out
 }
@@ -263,12 +287,13 @@ func syntheticSnapshotRows(n int) []db.PreDiversitySnapshotRow {
 	rows := make([]db.PreDiversitySnapshotRow, n)
 	for i := 0; i < n; i++ {
 		rows[i] = db.PreDiversitySnapshotRow{
-			TweetID:        fmt.Sprintf("tw_%04d", i),
-			AuthorHandle:   fmt.Sprintf("author_%02d", i%17),
-			SourceHandle:   fmt.Sprintf("source_%02d", (i/3)%11),
-			BaseScore:      200 - float64(i%80)*0.07 - float64(i/80)*0.5,
-			DecayFactor:    1 - float64(i%5)*0.03,
-			FreshnessBonus: float64((i*7)%13) * 0.21,
+			TweetID:         fmt.Sprintf("tw_%04d", i),
+			AuthorHandle:    fmt.Sprintf("author_%02d", i%17),
+			SourceHandle:    fmt.Sprintf("source_%02d", (i/3)%11),
+			ConversationKey: fmt.Sprintf("conversation_%02d", (i/2)%23),
+			BaseScore:       200 - float64(i%80)*0.07 - float64(i/80)*0.5,
+			DecayFactor:     1 - float64(i%5)*0.03,
+			FreshnessBonus:  float64((i*7)%13) * 0.21,
 		}
 	}
 	return rows

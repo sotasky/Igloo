@@ -84,6 +84,7 @@ func NewServer(database *db.DB, cfg *config.Config, workers *worker.Manager, sta
 	mux.HandleFunc("GET /", s.handleIndex)
 	mux.HandleFunc("GET /channels", s.handlePageChannels)
 	mux.HandleFunc("GET /feed", s.handlePageFeed)
+	mux.HandleFunc("GET /thread/{tweetID}", s.handlePageThread)
 	mux.HandleFunc("GET /liked", s.handlePageLiked)
 	mux.HandleFunc("GET /shorts", s.handlePageShorts)
 	mux.HandleFunc("GET /channels/{channelID}", s.handlePageChannel)

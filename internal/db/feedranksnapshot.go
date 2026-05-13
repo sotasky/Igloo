@@ -303,13 +303,14 @@ func (db *DB) SnapshotComputedAt(username string) (int64, error) {
 // PreDiversitySnapshotRow holds one item with its score breakdown,
 // before diversity MMR and jitter are applied in Go.
 type PreDiversitySnapshotRow struct {
-	TweetID        string
-	AuthorHandle   string
-	SourceHandle   string
-	BaseScore      float64
-	DecayFactor    float64
-	FreshnessBonus float64
-	ReplyPenalty   float64
+	TweetID         string
+	AuthorHandle    string
+	SourceHandle    string
+	ConversationKey string
+	BaseScore       float64
+	DecayFactor     float64
+	FreshnessBonus  float64
+	ReplyPenalty    float64
 }
 
 // ListPreDiversityRanked returns every eligible feed item with its score
@@ -373,15 +374,40 @@ func (db *DB) ListPreDiversityRankedContext(ctx context.Context, username string
 	decaySQL := feedDecaySQL()
 	freshnessSQL := feedFreshnessSQL()
 
-	query := fmt.Sprintf(`
+	conversationRootSQL := `
+WITH RECURSIVE conversation_chain(seed_id, tweet_id, parent_id, depth) AS (
+	SELECT tweet_id, tweet_id, reply_to_status, 0
+	FROM feed_items
+	UNION ALL
+	SELECT c.seed_id, parent.tweet_id, parent.reply_to_status, c.depth + 1
+	FROM conversation_chain c
+	JOIN feed_items parent ON parent.tweet_id = c.parent_id
+	WHERE c.parent_id IS NOT NULL
+	  AND c.parent_id != ''
+	  AND c.depth < 50
+),
+conversation_root AS (
+	SELECT seed_id AS tweet_id, tweet_id AS conversation_key
+	FROM (
+		SELECT seed_id, tweet_id, depth,
+		       ROW_NUMBER() OVER (PARTITION BY seed_id ORDER BY depth DESC) AS rn
+		FROM conversation_chain
+	)
+	WHERE rn = 1
+)
+`
+
+	query := fmt.Sprintf(conversationRootSQL+`
 			SELECT fi.tweet_id,
 				       fi.author_handle,
 				       COALESCE(fi.source_handle,''),
+				       COALESCE(cr.conversation_key, fi.tweet_id) AS conversation_key,
 				       %s AS base,
 				       %s AS decay,
 				       %s AS freshness,
 				       %s AS reply_penalty
 				%s
+			LEFT JOIN conversation_root cr ON cr.tweet_id = fi.tweet_id
 			%s
 			ORDER BY MAX(0, base * decay + freshness - reply_penalty) DESC, fi.tweet_id DESC
 			LIMIT %d
@@ -397,7 +423,7 @@ func (db *DB) ListPreDiversityRankedContext(ctx context.Context, username string
 	for rows.Next() {
 		var r PreDiversitySnapshotRow
 		if err := rows.Scan(&r.TweetID, &r.AuthorHandle, &r.SourceHandle,
-			&r.BaseScore, &r.DecayFactor, &r.FreshnessBonus, &r.ReplyPenalty); err != nil {
+			&r.ConversationKey, &r.BaseScore, &r.DecayFactor, &r.FreshnessBonus, &r.ReplyPenalty); err != nil {
 			return nil, err
 		}
 		out = append(out, r)

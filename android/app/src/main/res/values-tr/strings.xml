@@ -229,7 +229,6 @@
     <string name="feed_quoted_post_media_index">Alıntılanan gönderi medyası %d</string>
     <string name="feed_refresh_account">Hesabı güncelle</string>
     <string name="feed_replying_to">@%1$s kullanıcısına yanıt veriliyor</string>
-    <string name="feed_thread_load_more_replies">Daha fazla yanıt yükle</string>
     <string name="feed_repost_more">kişi daha</string>
     <string name="feed_repost_suffix">yeniden paylaştı</string>
     <string name="feed_reposted_by">Yeniden paylaşanlar</string>
@@ -239,6 +238,10 @@
     <string name="feed_reposted_someone">Biri yeniden paylaştı</string>
     <string name="feed_show_translation">Çeviriyi göster</string>
     <string name="feed_tagged_in_this_post">Bu gönderide etiketlendi</string>
+    <string name="feed_thread_capsule">%1$d gönderi, %2$d kişi</string>
+    <string name="feed_thread_load_more_replies">Daha fazla yanıt yükle</string>
+    <string name="feed_thread_open_capsule_a11y">%1$d gönderi ve %2$d kişiden oluşan gönderi dizisini aç</string>
+    <string name="feed_thread_open_inline">gönderi dizisini aç</string>
     <string name="feed_toggle_translation">Çeviriyi göster/gizle</string>
     <string name="feed_translate_icon_letter">A</string>
     <string name="feed_turn_off_reposts">Yeniden paylaşımları gizle</string>
@@ -343,7 +346,6 @@
     <string name="logs_ring_fail">başarısız</string>
     <string name="logs_ring_ok">tamam</string>
     <string name="logs_ring_watched">izlendi</string>
-    <string name="logs_x_ingest_status">X alımı: %s</string>
     <string name="logs_segments">Bölümler</string>
     <string name="logs_server_log">Sunucu kayıtları</string>
     <string name="logs_since_timestamp">%s tarihinden beri</string>
@@ -401,6 +403,7 @@
     <string name="logs_wal_tables_detail">WAL %1$s MB · %2$d tablo</string>
     <string name="logs_warnings_count">%d uyarı</string>
     <string name="logs_workers_errors">Arka plan işleri ve hatalar</string>
+    <string name="logs_x_ingest_status">X alımı: %s</string>
     <string name="media_type_image">Görsel</string>
     <string name="media_type_slideshow">Slayt gösterisi</string>
     <string name="media_type_video">Video</string>
@@ -729,6 +732,7 @@
     <string name="temp_download_title_cancelled">İndirme iptal edildi</string>
     <string name="temp_download_title_downloading">İndiriliyor...</string>
     <string name="temp_download_title_failed">İndirme tamamlanamadı</string>
+    <string name="thread_back_to_feed">&lt;- Akış</string>
     <string name="thread_unavailable">Gönderi dizisi açılamıyor</string>
     <string name="time_days_ago">%1$d gün önce</string>
     <string name="time_days_from_now">%1$d gün sonra</string>
