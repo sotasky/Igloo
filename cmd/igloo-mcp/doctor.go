@@ -230,6 +230,8 @@ func writeDoctorAssetParity(sb *strings.Builder, conn *sql.DB) {
 		parts = []string{"empty=0"}
 	}
 	fmt.Fprintf(sb, "  inventory states: %s\n", strings.Join(parts, ", "))
+	activeLeases, expiredLeases := doctorAssetLeaseCounts(conn, time.Now().UnixMilli())
+	fmt.Fprintf(sb, "  asset leases: active_downloading=%d expired_downloading=%d\n", activeLeases, expiredLeases)
 
 	dataDir := filepath.Dir(getDBPath())
 	postMediaLegacy := doctorCount(conn, `
@@ -311,6 +313,17 @@ func writeDoctorAssetParity(sb *strings.Builder, conn *sql.DB) {
 		}
 	}
 	sb.WriteString("\n")
+}
+
+func doctorAssetLeaseCounts(conn *sql.DB, nowMs int64) (active int, expired int) {
+	_ = conn.QueryRow(`
+		SELECT
+			COALESCE(SUM(CASE WHEN COALESCE(lease_until_ms, 0) > ? THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN COALESCE(lease_until_ms, 0) > 0 AND lease_until_ms <= ? THEN 1 ELSE 0 END), 0)
+		FROM assets
+		WHERE state = 'downloading'
+	`, nowMs, nowMs).Scan(&active, &expired)
+	return active, expired
 }
 
 func doctorNonAudioPathSQL(column string) string {

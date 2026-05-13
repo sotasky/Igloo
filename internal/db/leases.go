@@ -44,15 +44,23 @@ func normalizeLeaseOptions(opts LeaseOptions, defaultFrom, defaultTo string) Lea
 }
 
 func leaseEligibleSQL() string {
+	return leaseEligibleSQLFor("status", "next_attempt_at_ms", "lease_until_ms")
+}
+
+func leaseEligibleSQLFor(stateColumn, nextAttemptColumn, leaseUntilColumn string) string {
 	return `
-		next_attempt_at_ms <= ?
+		` + nextAttemptColumn + ` <= ?
 		AND (
-			(status = ? AND (COALESCE(lease_until_ms, 0) = 0 OR lease_until_ms <= ?))
-			OR (status = ? AND COALESCE(lease_until_ms, 0) <= ?)
+			(` + stateColumn + ` = ? AND (COALESCE(` + leaseUntilColumn + `, 0) = 0 OR ` + leaseUntilColumn + ` <= ?))
+			OR (` + stateColumn + ` = ? AND COALESCE(` + leaseUntilColumn + `, 0) <= ?)
 		)`
 }
 
 func claimLeasedIDs(tx *sql.Tx, table, keyColumn string, candidateQuery string, candidateArgs []any, opts LeaseOptions) ([]string, error) {
+	return claimLeasedIDsWithStateColumn(tx, table, keyColumn, "status", candidateQuery, candidateArgs, opts)
+}
+
+func claimLeasedIDsWithStateColumn(tx *sql.Tx, table, keyColumn, stateColumn string, candidateQuery string, candidateArgs []any, opts LeaseOptions) ([]string, error) {
 	rows, err := tx.Query(candidateQuery, candidateArgs...)
 	if err != nil {
 		return nil, err
@@ -76,12 +84,12 @@ func claimLeasedIDs(tx *sql.Tx, table, keyColumn string, candidateQuery string, 
 
 	update := fmt.Sprintf(`
 		UPDATE %s
-		   SET status = ?,
+		   SET %s = ?,
 		       lease_owner = ?,
 		       lease_until_ms = ?
 		 WHERE %s = ?
 		   AND %s
-	`, table, keyColumn, leaseEligibleSQL())
+	`, table, stateColumn, keyColumn, leaseEligibleSQLFor(stateColumn, "next_attempt_at_ms", "lease_until_ms"))
 	claimed := candidates[:0]
 	for _, key := range candidates {
 		res, err := tx.Exec(

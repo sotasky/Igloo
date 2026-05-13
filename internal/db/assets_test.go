@@ -1,9 +1,11 @@
 package db
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/screwys/igloo/internal/model"
 )
@@ -104,6 +106,133 @@ func TestRefreshAssetFileStateMarksReadyAndServerMissing(t *testing.T) {
 	}
 	if gotMissing.State != AssetStateServerMissing || gotMissing.SizeBytes != 0 {
 		t.Fatalf("missing asset state/size = %s/%d", gotMissing.State, gotMissing.SizeBytes)
+	}
+}
+
+func TestClaimAssetRepairBatchWithLeaseExcludesActiveLease(t *testing.T) {
+	d := openWritableTestDB(t)
+	now := time.Now().UnixMilli()
+	assetID := BuildManifestAssetID("twitter", "tweet", "sample_tweet_asset_lease", "post_media", 0)
+	if err := d.UpsertAsset(Asset{
+		AssetID:         assetID,
+		AssetKind:       "post_media",
+		OwnerKind:       "tweet",
+		OwnerID:         "sample_tweet_asset_lease",
+		MediaIndex:      0,
+		State:           AssetStateQueued,
+		NextAttemptAtMs: 0,
+	}, now-1000); err != nil {
+		t.Fatalf("seed asset: %v", err)
+	}
+
+	first, err := d.ClaimAssetRepairBatchWithLease(LeaseOptions{
+		Owner:   "worker-a",
+		NowMs:   now,
+		LeaseMs: int64(time.Minute / time.Millisecond),
+		Limit:   1,
+	})
+	if err != nil {
+		t.Fatalf("first claim: %v", err)
+	}
+	if len(first) != 1 || first[0].AssetID != assetID || first[0].State != AssetStateDownloading || first[0].LeaseOwner != "worker-a" {
+		t.Fatalf("first claim = %+v, want downloading asset leased by worker-a", first)
+	}
+
+	second, err := d.ClaimAssetRepairBatchWithLease(LeaseOptions{
+		Owner:   "worker-b",
+		NowMs:   now + 1,
+		LeaseMs: int64(time.Minute / time.Millisecond),
+		Limit:   1,
+	})
+	if err != nil {
+		t.Fatalf("second claim: %v", err)
+	}
+	if len(second) != 0 {
+		t.Fatalf("active asset lease was claimed by another worker: %+v", second)
+	}
+
+	expired, err := d.ClaimAssetRepairBatchWithLease(LeaseOptions{
+		Owner:   "worker-b",
+		NowMs:   now + int64(2*time.Minute/time.Millisecond),
+		LeaseMs: int64(time.Minute / time.Millisecond),
+		Limit:   1,
+	})
+	if err != nil {
+		t.Fatalf("expired claim: %v", err)
+	}
+	if len(expired) != 1 || expired[0].AssetID != assetID || expired[0].LeaseOwner != "worker-b" {
+		t.Fatalf("expired claim = %+v, want worker-b to take over", expired)
+	}
+}
+
+func TestAssetRepairLeaseTerminalUpdates(t *testing.T) {
+	d := openWritableTestDB(t)
+	now := time.Now().UnixMilli()
+	assetID := BuildManifestAssetID("twitter", "tweet", "sample_tweet_asset_terminal", "post_media", 0)
+	if err := d.UpsertAsset(Asset{
+		AssetID:    assetID,
+		AssetKind:  "post_media",
+		OwnerKind:  "tweet",
+		OwnerID:    "sample_tweet_asset_terminal",
+		MediaIndex: 0,
+		State:      AssetStateQueued,
+	}, now); err != nil {
+		t.Fatalf("seed asset: %v", err)
+	}
+	claimed, err := d.ClaimAssetRepairBatchWithLease(LeaseOptions{
+		Owner:   "worker-a",
+		NowMs:   now,
+		LeaseMs: int64(time.Minute / time.Millisecond),
+		Limit:   1,
+	})
+	if err != nil {
+		t.Fatalf("claim asset: %v", err)
+	}
+	if len(claimed) != 1 {
+		t.Fatalf("claimed %d assets, want 1", len(claimed))
+	}
+	if err := d.RetryAssetRepair(assetID, "post_media", "worker-b", "temporary", "stale owner", time.Minute, now+1); !errors.Is(err, ErrQueueLeaseNotHeld) {
+		t.Fatalf("stale retry error = %v, want ErrQueueLeaseNotHeld", err)
+	}
+	if err := d.RetryAssetRepair(assetID, "post_media", "worker-a", "temporary", "timeout", 5*time.Minute, now+2); err != nil {
+		t.Fatalf("retry asset: %v", err)
+	}
+	got, err := d.GetAsset(assetID, "post_media")
+	if err != nil {
+		t.Fatalf("get retried asset: %v", err)
+	}
+	if got.State != AssetStateQueued || got.Attempts != 1 || got.NextAttemptAtMs != now+2+int64(5*time.Minute/time.Millisecond) || got.LeaseOwner != "" || got.LeaseUntilMs != 0 {
+		t.Fatalf("retried asset = %+v", *got)
+	}
+
+	claimed, err = d.ClaimAssetRepairBatchWithLease(LeaseOptions{
+		Owner:   "worker-a",
+		NowMs:   got.NextAttemptAtMs,
+		LeaseMs: int64(time.Minute / time.Millisecond),
+		Limit:   1,
+	})
+	if err != nil {
+		t.Fatalf("claim retried asset: %v", err)
+	}
+	if len(claimed) != 1 {
+		t.Fatalf("claimed retried assets = %d, want 1", len(claimed))
+	}
+	if err := d.CompleteAssetRepair(Asset{
+		AssetID:     assetID,
+		AssetKind:   "post_media",
+		FilePath:    "media/twitter/sample/sample_tweet_asset_terminal.jpg",
+		ContentType: "image/jpeg",
+		SizeBytes:   123,
+		SHA256:      "sha",
+	}, "worker-a", got.NextAttemptAtMs+1); err != nil {
+		t.Fatalf("complete asset: %v", err)
+	}
+	got, err = d.GetAsset(assetID, "post_media")
+	if err != nil {
+		t.Fatalf("get completed asset: %v", err)
+	}
+	if got.State != AssetStateReady || got.Attempts != 0 || got.NextAttemptAtMs != 0 || got.LeaseOwner != "" || got.FilePath == "" {
+		t.Fatalf("completed asset = %+v", *got)
 	}
 }
 

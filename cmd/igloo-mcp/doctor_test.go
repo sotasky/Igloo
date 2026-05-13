@@ -95,6 +95,17 @@ func TestDoctorStatusReportsLocalHealthAndMasksSecrets(t *testing.T) {
 	`, now, now); err != nil {
 		t.Fatalf("insert asset: %v", err)
 	}
+	if err := d.ExecRaw(`
+		INSERT INTO assets (
+			asset_id, asset_kind, owner_kind, owner_id, media_index,
+			file_path, content_type, size_bytes, sha256, state,
+			lease_owner, lease_until_ms, created_at_ms, updated_at_ms
+		) VALUES ('sample_downloading_asset', 'post_thumbnail', 'tweet', 'sample_post', 0,
+			'thumbnails/generated/sample_post.jpg', 'image/jpeg', 0, '', 'downloading',
+			'worker-a', ?, ?, ?)
+	`, now-1, now, now); err != nil {
+		t.Fatalf("insert downloading asset: %v", err)
+	}
 	for _, path := range []string{
 		filepath.Join(tmp, "thumbnails", "avatars", "sample_profile.jpg"),
 		filepath.Join(tmp, "thumbnails", "banners", "sample_profile.jpg"),
@@ -156,10 +167,11 @@ func TestDoctorStatusReportsLocalHealthAndMasksSecrets(t *testing.T) {
 		"Queue counts:",
 		"Profile/media readiness:",
 		"Asset inventory parity:",
-		"inventory states: ready=1",
+		"inventory states: downloading=1, ready=1",
+		"asset leases: active_downloading=0 expired_downloading=1",
 		"post_media:          assets=1 legacy=1 gap=0",
 		"video_stream:        assets=0 legacy=1 gap=1",
-		"post_thumbnail:      assets=0 legacy=1 gap=1",
+		"post_thumbnail:      assets=1 legacy=1 gap=0",
 		"dearrow_thumbnail:   assets=0 legacy=1 gap=1",
 		"avatar:              assets=0 legacy=1 gap=1",
 		"banner:              assets=0 legacy=1 gap=1",

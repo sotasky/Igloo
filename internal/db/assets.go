@@ -39,6 +39,8 @@ type Asset struct {
 	LastError       string
 	Attempts        int
 	NextAttemptAtMs int64
+	LeaseOwner      string
+	LeaseUntilMs    int64
 	CreatedAtMs     int64
 	UpdatedAtMs     int64
 }
@@ -53,8 +55,8 @@ func (db *DB) UpsertAsset(asset Asset, nowMs int64) error {
 				asset_id, asset_kind, owner_kind, owner_id, media_index,
 				source_url, file_path, content_type, size_bytes, sha256, state,
 				required_reason, last_error_kind, last_error, attempts,
-				next_attempt_at_ms, created_at_ms, updated_at_ms
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				next_attempt_at_ms, lease_owner, lease_until_ms, created_at_ms, updated_at_ms
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(asset_kind, owner_kind, owner_id, media_index) DO UPDATE SET
 				asset_id = excluded.asset_id,
 				source_url = excluded.source_url,
@@ -68,11 +70,13 @@ func (db *DB) UpsertAsset(asset Asset, nowMs int64) error {
 				last_error = excluded.last_error,
 				attempts = excluded.attempts,
 				next_attempt_at_ms = excluded.next_attempt_at_ms,
+				lease_owner = excluded.lease_owner,
+				lease_until_ms = excluded.lease_until_ms,
 				updated_at_ms = excluded.updated_at_ms
 		`, asset.AssetID, asset.AssetKind, asset.OwnerKind, asset.OwnerID, asset.MediaIndex,
 			asset.SourceURL, asset.FilePath, asset.ContentType, asset.SizeBytes, asset.SHA256, asset.State,
 			asset.RequiredReason, asset.LastErrorKind, asset.LastError, asset.Attempts,
-			asset.NextAttemptAtMs, asset.CreatedAtMs, asset.UpdatedAtMs)
+			asset.NextAttemptAtMs, asset.LeaseOwner, asset.LeaseUntilMs, asset.CreatedAtMs, asset.UpdatedAtMs)
 		return err
 	})
 }
@@ -93,6 +97,7 @@ func normalizeAsset(asset Asset, nowMs int64) Asset {
 	asset.RequiredReason = strings.TrimSpace(asset.RequiredReason)
 	asset.LastErrorKind = strings.TrimSpace(asset.LastErrorKind)
 	asset.LastError = strings.TrimSpace(asset.LastError)
+	asset.LeaseOwner = strings.TrimSpace(asset.LeaseOwner)
 	if asset.State == "" {
 		asset.State = AssetStateQueued
 	}
@@ -111,7 +116,7 @@ func (db *DB) GetAsset(assetID, assetKind string) (*Asset, error) {
 		SELECT id, asset_id, asset_kind, owner_kind, owner_id, media_index,
 		       source_url, file_path, content_type, size_bytes, sha256, state,
 		       required_reason, last_error_kind, last_error, attempts,
-		       next_attempt_at_ms, created_at_ms, updated_at_ms
+		       next_attempt_at_ms, lease_owner, lease_until_ms, created_at_ms, updated_at_ms
 		FROM assets
 		WHERE asset_id = ? AND asset_kind = ?
 	`, strings.TrimSpace(assetID), strings.TrimSpace(assetKind))
@@ -123,6 +128,175 @@ func (db *DB) GetAsset(assetID, assetKind string) (*Asset, error) {
 		return nil, err
 	}
 	return &asset, nil
+}
+
+// ClaimAssetRepairBatch claims queued or expired downloading assets for repair.
+func (db *DB) ClaimAssetRepairBatch(limit int) ([]Asset, error) {
+	return db.ClaimAssetRepairBatchWithLease(LeaseOptions{
+		Owner: "assets:legacy",
+		Limit: limit,
+	})
+}
+
+// ClaimAssetRepairBatchWithLease claims assets with a durable lease.
+func (db *DB) ClaimAssetRepairBatchWithLease(opts LeaseOptions) ([]Asset, error) {
+	opts = normalizeLeaseOptions(opts, AssetStateQueued, AssetStateDownloading)
+	var claimed []Asset
+	err := db.WithWrite(func(tx *sql.Tx) error {
+		query := `
+			SELECT asset_id
+			FROM assets
+			WHERE ` + leaseEligibleSQLFor("state", "next_attempt_at_ms", "lease_until_ms") + `
+			ORDER BY attempts ASC, updated_at_ms ASC, id ASC
+			LIMIT ?`
+		ids, err := claimLeasedIDsWithStateColumn(tx, "assets", "asset_id", "state", query, []any{
+			opts.NowMs, opts.StatusFrom, opts.NowMs, opts.StatusTo, opts.NowMs, opts.Limit,
+		}, opts)
+		if err != nil {
+			return err
+		}
+		for _, id := range ids {
+			if _, err := tx.Exec(`UPDATE assets SET updated_at_ms = ? WHERE asset_id = ?`, opts.NowMs, id); err != nil {
+				return err
+			}
+			asset, err := readAssetTx(tx, id)
+			if err != nil {
+				return err
+			}
+			claimed = append(claimed, asset)
+		}
+		return nil
+	})
+	return claimed, err
+}
+
+func readAssetTx(tx *sql.Tx, assetID string) (Asset, error) {
+	return scanAsset(tx.QueryRow(`
+		SELECT id, asset_id, asset_kind, owner_kind, owner_id, media_index,
+		       source_url, file_path, content_type, size_bytes, sha256, state,
+		       required_reason, last_error_kind, last_error, attempts,
+		       next_attempt_at_ms, lease_owner, lease_until_ms, created_at_ms, updated_at_ms
+		FROM assets
+		WHERE asset_id = ?
+	`, assetID))
+}
+
+func (db *DB) CompleteAssetRepair(asset Asset, owner string, nowMs int64) error {
+	if nowMs == 0 {
+		nowMs = time.Now().UnixMilli()
+	}
+	asset.AssetID = strings.TrimSpace(asset.AssetID)
+	asset.AssetKind = strings.TrimSpace(asset.AssetKind)
+	return db.WithWrite(func(tx *sql.Tx) error {
+		res, err := tx.Exec(`
+			UPDATE assets
+			   SET state=?,
+			       file_path=?,
+			       content_type=?,
+			       size_bytes=?,
+			       sha256=?,
+			       last_error_kind='',
+			       last_error='',
+			       attempts=0,
+			       next_attempt_at_ms=0,
+			       lease_owner='',
+			       lease_until_ms=0,
+			       updated_at_ms=?
+			 WHERE asset_id=?
+			   AND asset_kind=?
+			   AND state=?
+			   AND lease_owner=?
+		`, AssetStateReady, strings.TrimSpace(asset.FilePath), strings.TrimSpace(asset.ContentType),
+			asset.SizeBytes, strings.TrimSpace(asset.SHA256), nowMs, asset.AssetID, asset.AssetKind,
+			AssetStateDownloading, owner)
+		if err != nil {
+			return err
+		}
+		return requireQueueLeaseUpdate(res, "assets", asset.AssetID+"/"+asset.AssetKind, owner)
+	})
+}
+
+func (db *DB) RetryAssetRepair(assetID, assetKind, owner, kind, message string, delay time.Duration, nowMs int64) error {
+	if nowMs == 0 {
+		nowMs = time.Now().UnixMilli()
+	}
+	nextMs := nowMs + delay.Milliseconds()
+	if delay < 0 {
+		nextMs = nowMs
+	}
+	return db.WithWrite(func(tx *sql.Tx) error {
+		res, err := tx.Exec(`
+			UPDATE assets
+			   SET state=?,
+			       attempts=attempts+1,
+			       next_attempt_at_ms=?,
+			       last_error_kind=?,
+			       last_error=?,
+			       lease_owner='',
+			       lease_until_ms=0,
+			       updated_at_ms=?
+			 WHERE asset_id=?
+			   AND asset_kind=?
+			   AND state=?
+			   AND lease_owner=?
+		`, AssetStateQueued, nextMs, trimJobError(kind), trimJobError(message), nowMs,
+			strings.TrimSpace(assetID), strings.TrimSpace(assetKind), AssetStateDownloading, owner)
+		if err != nil {
+			return err
+		}
+		return requireQueueLeaseUpdate(res, "assets", strings.TrimSpace(assetID)+"/"+strings.TrimSpace(assetKind), owner)
+	})
+}
+
+func (db *DB) FailAssetRepair(assetID, assetKind, owner, kind, message string, nowMs int64) error {
+	if nowMs == 0 {
+		nowMs = time.Now().UnixMilli()
+	}
+	return db.WithWrite(func(tx *sql.Tx) error {
+		res, err := tx.Exec(`
+			UPDATE assets
+			   SET state=?,
+			       attempts=attempts+1,
+			       next_attempt_at_ms=0,
+			       last_error_kind=?,
+			       last_error=?,
+			       lease_owner='',
+			       lease_until_ms=0,
+			       updated_at_ms=?
+			 WHERE asset_id=?
+			   AND asset_kind=?
+			   AND state=?
+			   AND lease_owner=?
+		`, AssetStateFailed, trimJobError(kind), trimJobError(message), nowMs,
+			strings.TrimSpace(assetID), strings.TrimSpace(assetKind), AssetStateDownloading, owner)
+		if err != nil {
+			return err
+		}
+		return requireQueueLeaseUpdate(res, "assets", strings.TrimSpace(assetID)+"/"+strings.TrimSpace(assetKind), owner)
+	})
+}
+
+func (db *DB) RenewAssetRepairLease(assetID, assetKind, owner string, nowMs int64, lease time.Duration) error {
+	if assetID == "" || assetKind == "" || owner == "" {
+		return nil
+	}
+	if nowMs == 0 {
+		nowMs = time.Now().UnixMilli()
+	}
+	if lease <= 0 {
+		lease = defaultQueueLease
+	}
+	return db.WithWrite(func(tx *sql.Tx) error {
+		_, err := tx.Exec(`
+			UPDATE assets
+			   SET lease_until_ms=?, updated_at_ms=?
+			 WHERE asset_id=?
+			   AND asset_kind=?
+			   AND state=?
+			   AND lease_owner=?
+		`, nowMs+lease.Milliseconds(), nowMs, strings.TrimSpace(assetID), strings.TrimSpace(assetKind), AssetStateDownloading, owner)
+		return err
+	})
 }
 
 // ListAndroidSyncAssetInventoryRows returns inventory rows that can contribute
@@ -184,7 +358,7 @@ func (db *DB) ListAndroidSyncAssetInventoryRows(sets AndroidSyncDesiredSets) ([]
 				SELECT id, asset_id, asset_kind, owner_kind, owner_id, media_index,
 				       source_url, file_path, content_type, size_bytes, sha256, state,
 				       required_reason, last_error_kind, last_error, attempts,
-				       next_attempt_at_ms, created_at_ms, updated_at_ms
+				       next_attempt_at_ms, lease_owner, lease_until_ms, created_at_ms, updated_at_ms
 				FROM assets
 				WHERE owner_kind = ?
 				  AND owner_id IN (`+placeholders(len(chunk))+`)
@@ -276,6 +450,8 @@ func scanAsset(row assetScanner) (Asset, error) {
 		&asset.LastError,
 		&asset.Attempts,
 		&asset.NextAttemptAtMs,
+		&asset.LeaseOwner,
+		&asset.LeaseUntilMs,
 		&asset.CreatedAtMs,
 		&asset.UpdatedAtMs,
 	)
@@ -855,6 +1031,8 @@ func (db *DB) upsertBackfilledAsset(asset Asset, nowMs int64) error {
 			asset.LastError = existing.LastError
 			asset.Attempts = existing.Attempts
 			asset.NextAttemptAtMs = existing.NextAttemptAtMs
+			asset.LeaseOwner = existing.LeaseOwner
+			asset.LeaseUntilMs = existing.LeaseUntilMs
 		}
 	}
 	return db.UpsertAsset(asset, nowMs)
@@ -865,7 +1043,7 @@ func (db *DB) getAssetByOwnerIdentity(assetKind, ownerKind, ownerID string, medi
 		SELECT id, asset_id, asset_kind, owner_kind, owner_id, media_index,
 		       source_url, file_path, content_type, size_bytes, sha256, state,
 		       required_reason, last_error_kind, last_error, attempts,
-		       next_attempt_at_ms, created_at_ms, updated_at_ms
+		       next_attempt_at_ms, lease_owner, lease_until_ms, created_at_ms, updated_at_ms
 		FROM assets
 		WHERE asset_kind = ? AND owner_kind = ? AND owner_id = ? AND media_index = ?
 	`, strings.TrimSpace(assetKind), strings.TrimSpace(ownerKind), strings.TrimSpace(ownerID), mediaIndex)
@@ -881,7 +1059,7 @@ func (db *DB) getAssetByOwnerIdentity(assetKind, ownerKind, ownerID string, medi
 
 func preservesAssetRetryState(asset Asset) bool {
 	switch asset.State {
-	case AssetStateFailed, AssetStatePermanentMissing:
+	case AssetStateDownloading, AssetStateFailed, AssetStatePermanentMissing:
 		return true
 	}
 	return asset.Attempts > 0 ||

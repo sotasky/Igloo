@@ -20,6 +20,8 @@ func schemaMaintainedStateStatements() []string {
 			last_error         TEXT NOT NULL DEFAULT '',
 			attempts           INTEGER NOT NULL DEFAULT 0,
 			next_attempt_at_ms INTEGER NOT NULL DEFAULT 0,
+			lease_owner        TEXT NOT NULL DEFAULT '',
+			lease_until_ms     INTEGER NOT NULL DEFAULT 0,
 			created_at_ms      INTEGER NOT NULL DEFAULT 0,
 			updated_at_ms      INTEGER NOT NULL DEFAULT 0,
 			UNIQUE(asset_kind, owner_kind, owner_id, media_index)
