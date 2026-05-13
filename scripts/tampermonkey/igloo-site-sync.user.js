@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Igloo Site Sync
 // @namespace    local.igloo.site.sync
-// @version      8.0.19
+// @version      8.0.20
 // @author       screwys
 // @description  Follow X, TikTok, Instagram, and YouTube channels in Igloo; includes the full X media workflow.
 // @homepageURL  https://github.com/screwys/Igloo
@@ -34,7 +34,7 @@
 
 (function () {
   "use strict";
-  const SCRIPT_VERSION = "8.0.19";
+  const SCRIPT_VERSION = "8.0.20";
 
   const SETTINGS = {
     apiBase: "xsync_api_base",
@@ -1914,6 +1914,27 @@
     });
   }
 
+  function downloadVideoViaServer(media, handle, label, categoryId) {
+    const tweetUrl = media?.tweetUrl || "";
+    if (!tweetUrl) {
+      return Promise.resolve({
+        ok: false,
+        json: { success: false, error: "tweet URL not found" },
+      });
+    }
+    return apiRequest(
+      "POST",
+      "/api/tweet-media-dl",
+      {
+        tweet_url: tweetUrl,
+        handle,
+        label,
+        category_id: categoryId,
+      },
+      true,
+    );
+  }
+
   function moveStagedMedia(handle, label, categoryId, stagedFiles) {
     return apiRequest(
       "POST",
@@ -1949,6 +1970,15 @@
     );
   }
 
+  function downloadFailureLabel(media, fallback) {
+    const detail =
+      (fallback && fallback.json && fallback.json.error) ||
+      fallback?.error ||
+      "download failed";
+    const owner = media?.tweetId ? "tweet " + media.tweetId : "media";
+    return owner + ": " + detail;
+  }
+
   function downloadMediaItems(
     tweetId,
     handle,
@@ -1977,17 +2007,27 @@
             media,
             staged.staging_name,
           );
-          if (!directResp.ok) {
-            failed.push(media.tweetId || staged.staging_name);
-            continue;
+          if (directResp.ok) {
+            const moveResp = await moveStagedMedia(handle, label, categoryId, [
+              staged,
+            ]);
+            if (moveResp.ok && moveResp.json && moveResp.json.success) {
+              moved.push(...(moveResp.json.moved || []));
+              continue;
+            }
+            console.warn("[XDL] direct video move failed:", moveResp);
           }
-          const moveResp = await moveStagedMedia(handle, label, categoryId, [
-            staged,
-          ]);
-          if (moveResp.ok && moveResp.json && moveResp.json.success) {
-            moved.push(...(moveResp.json.moved || []));
+
+          const serverResp = await downloadVideoViaServer(
+            media,
+            handle,
+            label,
+            categoryId,
+          );
+          if (serverResp.ok && serverResp.json && serverResp.json.success) {
+            moved.push(...(serverResp.json.moved || []));
           } else {
-            failed.push(media.tweetId || staged.staging_name);
+            failed.push(downloadFailureLabel(media, serverResp));
           }
           continue;
         }
@@ -2071,7 +2111,11 @@
                 return;
               }
               setDlButtonState(dlBtn, "error");
-              showToast("Download failed: move error");
+              const firstFailure = (resp.json?.failed || [])[0];
+              showToast(
+                "Download failed" +
+                  (firstFailure ? ": " + firstFailure : ""),
+              );
             },
           );
         } else {
