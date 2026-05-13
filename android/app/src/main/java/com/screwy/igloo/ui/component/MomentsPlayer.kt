@@ -209,6 +209,7 @@ internal data class StoryProgressWindow(
 internal data class StoryAdvanceTarget(
     val nextIndex: Int?,
     val shouldExit: Boolean,
+    val animate: Boolean,
 )
 
 internal fun storyAdvanceTarget(
@@ -217,16 +218,17 @@ internal fun storyAdvanceTarget(
     crossProfile: Boolean,
 ): StoryAdvanceTarget {
     if (items.isEmpty() || currentIndex !in items.indices) {
-        return StoryAdvanceTarget(nextIndex = null, shouldExit = true)
+        return StoryAdvanceTarget(nextIndex = null, shouldExit = true, animate = false)
     }
     val nextIndex = currentIndex + 1
     if (nextIndex !in items.indices) {
-        return StoryAdvanceTarget(nextIndex = null, shouldExit = true)
+        return StoryAdvanceTarget(nextIndex = null, shouldExit = true, animate = false)
     }
-    if (!crossProfile && items[nextIndex].channelId != items[currentIndex].channelId) {
-        return StoryAdvanceTarget(nextIndex = null, shouldExit = true)
+    val crossesProfile = items[nextIndex].channelId != items[currentIndex].channelId
+    if (!crossProfile && crossesProfile) {
+        return StoryAdvanceTarget(nextIndex = null, shouldExit = true, animate = false)
     }
-    return StoryAdvanceTarget(nextIndex = nextIndex, shouldExit = false)
+    return StoryAdvanceTarget(nextIndex = nextIndex, shouldExit = false, animate = crossesProfile)
 }
 
 private fun momentStreamUrl(baseUrl: String, videoId: String): String? {
@@ -453,6 +455,7 @@ fun MomentsPlayer(
     LaunchedEffect(advanceTick) {
         if (advanceTick == 0) return@LaunchedEffect
         val page = currentIndex
+        var animateAdvance = false
         val next = if (storyMode) {
             val target = storyAdvanceTarget(
                 items = items,
@@ -463,8 +466,10 @@ fun MomentsPlayer(
                 onEndReached()
                 return@LaunchedEffect
             }
+            animateAdvance = target.animate
             target.nextIndex
         } else {
+            animateAdvance = true
             nextMomentPageForAutoSwipe(
                 currentPage = page,
                 lastIndex = items.lastIndex,
@@ -472,13 +477,17 @@ fun MomentsPlayer(
             )
         }
         next ?: return@LaunchedEffect
-        pagerState.animateScrollToPage(
-            page = next,
-            animationSpec = tween(
-                durationMillis = AUTO_SWIPE_SCROLL_DURATION_MS,
-                easing = FastOutSlowInEasing,
-            ),
-        )
+        if (animateAdvance) {
+            pagerState.animateScrollToPage(
+                page = next,
+                animationSpec = tween(
+                    durationMillis = AUTO_SWIPE_SCROLL_DURATION_MS,
+                    easing = FastOutSlowInEasing,
+                ),
+            )
+        } else {
+            pagerState.scrollToPage(next)
+        }
     }
 
     var initialSeekConsumed by remember(safeStart, startPositionMs) { mutableStateOf(startPositionMs <= 0L) }

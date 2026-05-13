@@ -84,11 +84,11 @@ class MomentsPlayerTest {
         )
 
         assertEquals(
-            StoryAdvanceTarget(nextIndex = 1, shouldExit = false),
+            StoryAdvanceTarget(nextIndex = 1, shouldExit = false, animate = false),
             storyAdvanceTarget(items, currentIndex = 0, crossProfile = false),
         )
         assertEquals(
-            StoryAdvanceTarget(nextIndex = null, shouldExit = true),
+            StoryAdvanceTarget(nextIndex = null, shouldExit = true, animate = false),
             storyAdvanceTarget(items, currentIndex = 1, crossProfile = false),
         )
     }
@@ -102,11 +102,11 @@ class MomentsPlayerTest {
         )
 
         assertEquals(
-            StoryAdvanceTarget(nextIndex = 2, shouldExit = false),
+            StoryAdvanceTarget(nextIndex = 2, shouldExit = false, animate = true),
             storyAdvanceTarget(items, currentIndex = 1, crossProfile = true),
         )
         assertEquals(
-            StoryAdvanceTarget(nextIndex = null, shouldExit = true),
+            StoryAdvanceTarget(nextIndex = null, shouldExit = true, animate = false),
             storyAdvanceTarget(items, currentIndex = 2, crossProfile = true),
         )
     }
