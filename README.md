@@ -27,7 +27,7 @@ Once you import a few subscriptions, you can expand your subscriptions list thro
 
 - A web UI for following accounts, browsing one feed, watching saved media,
   searching your archive, and managing downloads.
-- Moments for vertical clips, stories, reposts, tagged posts, and image
+- Moments for vertical clips, stories, reposts, and image
   slideshows from TikTok and Instagram.
 - Video pages with subtitles, chapters, playback speed, SponsorBlock, DeArrow,
   comments, preview thumbnails, and synced watch position where supported.
@@ -72,7 +72,7 @@ Once you import a few subscriptions, you can expand your subscriptions list thro
 - **Stories**: TikTok and Instagram story-style stories, that can be accessed
   from tap on user avatar, or dedicated stories sidebar.
 - **Moments**: vertical video player for short videos, image slideshows, TikTok
-  reposts, and Instagram tagged posts.
+  reposts, and Instagram reposts.
 
 <img src="static/screenshots/moments.png" alt="Moments" width="100%">
 

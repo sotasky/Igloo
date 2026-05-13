@@ -535,7 +535,7 @@
     <string name="settings_moments_default_tab">Moments default tab</string>
     <string name="settings_moments_default_tab_all">All</string>
     <string name="settings_moments_default_tab_following">Following</string>
-    <string name="settings_moments_include_instagram_tagged">Include Instagram tagged posts in Moments</string>
+    <string name="settings_moments_include_instagram_tagged">Include Instagram reposts in Moments</string>
     <string name="settings_moments_include_reposts">Include Moments reposts</string>
     <string name="settings_moments_include_tiktok_reposts">Include TikTok reposts in Moments</string>
     <string name="settings_mute_by_default">Mute by default</string>

@@ -87,8 +87,6 @@ class PreferencesRepo(
 
         // Moments resume cursor (written by outbox ACK for moments_cursor kind)
         const val MOMENTS_DEFAULT_TAB         = "moments_default_tab"
-        const val MOMENTS_INCLUDE_REPOSTS_DEFAULT = "moments_include_reposts_default"
-        const val INSTAGRAM_INCLUDE_TAGGED_DEFAULT = "instagram_include_tagged_default"
         const val MOMENTS_RESUME_VIDEO_ID    = "moments_resume_video_id"
         const val MOMENTS_RESUME_POSITION_MS = "moments_resume_position_ms"
         const val MOMENTS_RESUME_SORT_AT_MS  = "moments_resume_sort_at_ms"
@@ -151,8 +149,6 @@ class PreferencesRepo(
         const val DEARROW_MODE               = "off"
         val VALID_DEARROW_MODES = setOf("off", "default", "casual")
         const val MOMENTS_DEFAULT_TAB         = "all"
-        const val MOMENTS_INCLUDE_REPOSTS_DEFAULT = false
-        const val INSTAGRAM_INCLUDE_TAGGED_DEFAULT = false
         val VALID_MOMENTS_TABS = setOf("all", "following", "stories")
 
         fun normalizeDearrowMode(v: String?): String =
@@ -236,12 +232,6 @@ class PreferencesRepo(
     fun momentsDefaultTab(): Flow<String> =
         flowString(Keys.MOMENTS_DEFAULT_TAB, default = Defaults.MOMENTS_DEFAULT_TAB)
             .map { Defaults.normalizeMomentsTab(it) }
-
-    fun momentsIncludeRepostsDefault(): Flow<Boolean> =
-        flowBool(Keys.MOMENTS_INCLUDE_REPOSTS_DEFAULT, default = Defaults.MOMENTS_INCLUDE_REPOSTS_DEFAULT)
-
-    fun instagramIncludeTaggedDefault(): Flow<Boolean> =
-        flowBool(Keys.INSTAGRAM_INCLUDE_TAGGED_DEFAULT, default = Defaults.INSTAGRAM_INCLUDE_TAGGED_DEFAULT)
 
     fun momentsResumeVideoId(scope: String): Flow<String?> {
         val normalized = Defaults.normalizeMomentsTab(scope)
@@ -347,10 +337,6 @@ class PreferencesRepo(
 
     suspend fun setMomentsDefaultTab(value: String) =
         putString(Keys.MOMENTS_DEFAULT_TAB, Defaults.normalizeMomentsTab(value))
-    suspend fun setMomentsIncludeRepostsDefault(value: Boolean) =
-        putBool(Keys.MOMENTS_INCLUDE_REPOSTS_DEFAULT, value)
-    suspend fun setInstagramIncludeTaggedDefault(value: Boolean) =
-        putBool(Keys.INSTAGRAM_INCLUDE_TAGGED_DEFAULT, value)
 
     suspend fun setMomentsResumeVideoId(videoId: String?, scope: String = "all") {
         val normalized = Defaults.normalizeMomentsTab(scope)

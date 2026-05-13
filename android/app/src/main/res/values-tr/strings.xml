@@ -534,7 +534,7 @@
     <string name="settings_moments_default_tab">Varsayılan Moments sekmesi</string>
     <string name="settings_moments_default_tab_all">Tümü</string>
     <string name="settings_moments_default_tab_following">Takip edilenler</string>
-    <string name="settings_moments_include_instagram_tagged">Instagram etiketli gönderileri Moments\'ta gösterilsin</string>
+    <string name="settings_moments_include_instagram_tagged">Instagram yeniden paylaşımları Moments\'ta gösterilsin</string>
     <string name="settings_moments_include_reposts">Yeniden paylaşımlar Moments\'ta gösterilsin</string>
     <string name="settings_moments_include_tiktok_reposts">TikTok yeniden paylaşımları Moments\'ta gösterilsin</string>
     <string name="settings_mute_by_default">Varsayılan olarak sessize al</string>

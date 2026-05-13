@@ -104,13 +104,6 @@ class MomentsViewModel(
         initialValue = PreferencesRepo.Defaults.MOMENTS_DEFAULT_TAB,
     )
 
-    private val includeReposts: StateFlow<Boolean> = prefs.momentsIncludeRepostsDefault()
-        .stateIn(
-            scope = viewModelScope,
-            started = SharingStarted.WhileSubscribed(5_000L),
-            initialValue = PreferencesRepo.Defaults.MOMENTS_INCLUDE_REPOSTS_DEFAULT,
-        )
-
     private val storyCutoffMillis: StateFlow<Long> = prefs.storiesWindowHours()
         .map { hours -> storyCutoffMillis(hours) }
         .stateIn(
@@ -148,15 +141,13 @@ class MomentsViewModel(
      * Raw Room projection — the single source-of-truth for both grid and player. `null`
      * until the first Room emission so `uiState` can paint Loading.
      */
-    private val rowsRaw: StateFlow<List<DbMomentItem>?> = combine(activeTab, includeReposts) { tab, include ->
-        tab to include
-    }.flatMapLatest { (tab, include) ->
+    private val rowsRaw: StateFlow<List<DbMomentItem>?> = activeTab.flatMapLatest { tab ->
         if (tab == "stories") {
             flowOf(emptyList())
         } else if (tab == "following") {
             db.momentReadDao().momentsFollowingFlow()
         } else {
-            db.momentReadDao().momentsAllFlow(includeReposts = include)
+            db.momentReadDao().momentsAllFlow()
         }
     }.map<List<DbMomentItem>, List<DbMomentItem>?> { it }
         .stateIn(
@@ -170,13 +161,11 @@ class MomentsViewModel(
      * view row on every swipe. It still observes `videos` and `channels`, so new
      * shorts, prunes, and channel/unfollow effects continue to update the player.
      */
-    private val playerRowsRaw: StateFlow<List<DbMomentItem>?> = combine(activeTab, includeReposts) { tab, include ->
-        tab to include
-    }.flatMapLatest { (tab, include) ->
+    private val playerRowsRaw: StateFlow<List<DbMomentItem>?> = activeTab.flatMapLatest { tab ->
         if (tab == "following") {
             db.momentReadDao().playerMomentsFollowingFlow()
         } else {
-            db.momentReadDao().playerMomentsAllFlow(includeReposts = include)
+            db.momentReadDao().playerMomentsAllFlow()
         }
     }.map<List<DbMomentItem>, List<DbMomentItem>?> { it }
         .stateIn(

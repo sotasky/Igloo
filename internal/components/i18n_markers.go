@@ -128,7 +128,7 @@ var _ = []string{
 	N("settings_export_unavailable", "Export not available yet"),
 	N("settings_feed_include_reposts", "Include reposts"),
 	N("settings_media_only_x", "Media only (X)"),
-	N("settings_moments_include_instagram_tagged", "Include Instagram tagged posts in Moments"),
+	N("settings_moments_include_instagram_tagged", "Include Instagram reposts in Moments"),
 	N("settings_mute_by_default", "Mute by default"),
 	N("settings_no_cached_media", "No cached media yet."),
 	N("settings_no_muted_accounts", "No muted accounts"),

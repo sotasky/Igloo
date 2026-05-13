@@ -63,11 +63,11 @@ interface MomentReadDao {
         LEFT JOIN repost_heads rh ON rh.video_id = v.video_id
         WHERE (v.channel_id LIKE 'tiktok_%' OR v.channel_id LIKE 'instagram_%')
           AND COALESCE(v.source_kind, '') != 'story'
-          AND (cf.channel_id IS NOT NULL OR (:includeReposts = 1 AND rh.video_id IS NOT NULL))
+          AND (cf.channel_id IS NOT NULL OR rh.video_id IS NOT NULL)
         ORDER BY effective_moment_at_ms ASC, v.video_id ASC
         """
     )
-    fun momentsAllFlow(includeReposts: Boolean): Flow<List<MomentItem>>
+    fun momentsAllFlow(): Flow<List<MomentItem>>
 
     @RewriteQueriesToDropUnusedColumns
     @Query(
@@ -144,11 +144,11 @@ interface MomentReadDao {
         LEFT JOIN repost_heads rh ON rh.video_id = v.video_id
         WHERE (v.channel_id LIKE 'tiktok_%' OR v.channel_id LIKE 'instagram_%')
           AND COALESCE(v.source_kind, '') != 'story'
-          AND (cf.channel_id IS NOT NULL OR (:includeReposts = 1 AND rh.video_id IS NOT NULL))
+          AND (cf.channel_id IS NOT NULL OR rh.video_id IS NOT NULL)
         ORDER BY effective_moment_at_ms ASC, v.video_id ASC
         """
     )
-    fun playerMomentsAllFlow(includeReposts: Boolean): Flow<List<MomentItem>>
+    fun playerMomentsAllFlow(): Flow<List<MomentItem>>
 
     @RewriteQueriesToDropUnusedColumns
     @Query(

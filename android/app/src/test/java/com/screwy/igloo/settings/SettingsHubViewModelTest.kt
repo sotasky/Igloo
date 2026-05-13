@@ -77,15 +77,4 @@ class SettingsHubViewModelTest {
         }
         assertEquals(true, ok)
     }
-
-    @Test fun setInstagramIncludeTagged_writesGenericBoolKey() = runBlocking {
-        val vm = newViewModel()
-        vm.setInstagramIncludeTagged(true)
-
-        val ok = withTimeoutOrNull(5_000L) {
-            while (db.preferenceDao().getValue(PreferencesRepo.Keys.INSTAGRAM_INCLUDE_TAGGED_DEFAULT) != "true") delay(10)
-            true
-        }
-        assertEquals(true, ok)
-    }
 }

@@ -38,8 +38,6 @@ fun SettingsHubRoute(
     val shareEmbedFriendlyLinks by vm.shareEmbedFriendlyLinks.collectAsStateWithLifecycle()
     val debugMode by vm.debugMode.collectAsStateWithLifecycle()
     val momentsDefaultTab by vm.momentsDefaultTab.collectAsStateWithLifecycle()
-    val momentsIncludeReposts by vm.momentsIncludeReposts.collectAsStateWithLifecycle()
-    val instagramIncludeTagged by vm.instagramIncludeTagged.collectAsStateWithLifecycle()
     val navigator = rememberIglooNavigator(navController)
 
     SettingsSubScreen(
@@ -73,18 +71,6 @@ fun SettingsHubRoute(
             }
             SettingsHubDivider()
             MomentsDefaultTabRow(value = momentsDefaultTab, onSelect = vm::setMomentsDefaultTab)
-            SettingsHubDivider()
-            SettingsSwitchRow(
-                label = stringResource(R.string.settings_moments_include_tiktok_reposts),
-                checked = momentsIncludeReposts,
-                onToggle = vm::setMomentsIncludeReposts,
-            )
-            SettingsHubDivider()
-            SettingsSwitchRow(
-                label = stringResource(R.string.settings_moments_include_instagram_tagged),
-                checked = instagramIncludeTagged,
-                onToggle = vm::setInstagramIncludeTagged,
-            )
             SettingsHubDivider()
             SettingsHubRow(stringResource(R.string.settings_sponsorblock_dearrow)) {
                 navigator.openDestination(IglooDestination.SponsorBlockSettings, IglooNavigationSource.Settings)

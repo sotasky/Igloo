@@ -287,10 +287,8 @@ class ShortsRouteViewModel(
         ShortsPlaylistType.Moments -> db.momentReadDao()
             .playerMomentsFollowingFlow()
             .map { rows -> rows.map(::toPlayerMomentItem) }
-        ShortsPlaylistType.AllMoments -> prefs.momentsIncludeRepostsDefault()
-            .flatMapLatest { includeReposts ->
-                db.momentReadDao().playerMomentsAllFlow(includeReposts = includeReposts)
-            }
+        ShortsPlaylistType.AllMoments -> db.momentReadDao()
+            .playerMomentsAllFlow()
             .map { rows -> rows.map(::toPlayerMomentItem) }
         ShortsPlaylistType.Channel -> db.momentReadDao()
             .channelMomentsFlow(playlistSpec.playlistId)

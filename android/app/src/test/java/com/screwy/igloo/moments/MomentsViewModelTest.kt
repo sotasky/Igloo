@@ -168,7 +168,6 @@ class MomentsViewModelTest {
     }
 
     @Test fun playerItemsUseSyncedRepostAuthorLabel() = runBlocking {
-        prefs.setMomentsIncludeRepostsDefault(true)
         db.channelDao().upsert(ChannelEntity(
             channelId = "tiktok_author", name = "Author", platform = "tiktok",
             sourceId = "author",

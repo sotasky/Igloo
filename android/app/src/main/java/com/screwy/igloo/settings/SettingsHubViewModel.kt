@@ -24,10 +24,6 @@ class SettingsHubViewModel(
 
     val momentsDefaultTab: StateFlow<String> =
         prefs.momentsDefaultTab().stateDefault(PreferencesRepo.Defaults.MOMENTS_DEFAULT_TAB)
-    val momentsIncludeReposts: StateFlow<Boolean> =
-        prefs.momentsIncludeRepostsDefault().stateDefault(PreferencesRepo.Defaults.MOMENTS_INCLUDE_REPOSTS_DEFAULT)
-    val instagramIncludeTagged: StateFlow<Boolean> =
-        prefs.instagramIncludeTaggedDefault().stateDefault(PreferencesRepo.Defaults.INSTAGRAM_INCLUDE_TAGGED_DEFAULT)
 
     // Display — which top-level destination opens when the app launches.
     val startingPage: StateFlow<String> =
@@ -46,10 +42,6 @@ class SettingsHubViewModel(
 
     fun setMomentsDefaultTab(value: String) =
         launchSet { prefs.setMomentsDefaultTab(value) }
-    fun setMomentsIncludeReposts(value: Boolean) =
-        launchSet { prefs.setMomentsIncludeRepostsDefault(value) }
-    fun setInstagramIncludeTagged(value: Boolean) =
-        launchSet { prefs.setInstagramIncludeTaggedDefault(value) }
     fun setStartingPage(value: String) = launchSet { prefs.setStartingPage(value) }
     fun setShareEmbedFriendlyLinks(value: Boolean) = launchSet { prefs.setShareEmbedFriendlyLinks(value) }
     fun setLanguageTag(value: String) = languageStore.setLanguageTag(value)

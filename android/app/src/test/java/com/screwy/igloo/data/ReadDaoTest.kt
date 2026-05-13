@@ -7,6 +7,7 @@ import com.screwy.igloo.data.entity.ChannelStarEntity
 import com.screwy.igloo.data.entity.FeedItemEntity
 import com.screwy.igloo.data.entity.MomentViewEntity
 import com.screwy.igloo.data.entity.VideoEntity
+import com.screwy.igloo.data.entity.VideoRepostSourceEntity
 import com.screwy.igloo.data.entity.WatchHistoryEntity
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -51,6 +52,34 @@ class ReadDaoTest {
         val rows = db.momentReadDao().momentsFollowingFlow().first()
         val ids  = rows.map { it.video.videoId }.toSet()
         assertEquals(setOf("v_tt", "v_ig"), ids)
+    }
+
+    @Test fun momentsAll_includesServerSyncedInstagramReposts() = runBlocking {
+        db.channelDao().upsert(listOf(
+            ChannelEntity("instagram_sample_profile", name = "Sample Profile", platform = "instagram", sourceId = "sample_profile"),
+            ChannelEntity("instagram_sample_reposter", name = "Sample Reposter", platform = "instagram", sourceId = "sample_reposter"),
+        ))
+        db.channelFollowDao().upsert(ChannelFollowEntity(channelId = "instagram_sample_reposter"))
+        db.videoDao().upsert(VideoEntity(
+            videoId = "sample_video",
+            channelId = "instagram_sample_profile",
+            title = "Reposted",
+            publishedAt = 10,
+        ))
+        db.videoRepostSourceDao().upsert(listOf(VideoRepostSourceEntity(
+            videoId = "sample_video",
+            reposterChannelId = "instagram_sample_reposter",
+            reposterHandle = "sample_reposter",
+            repostAuthorLabel = "Sample Reposter",
+            firstSeenAtMs = 20,
+        )))
+
+        val all = db.momentReadDao().momentsAllFlow().first()
+        val following = db.momentReadDao().momentsFollowingFlow().first()
+
+        assertEquals(listOf("sample_video"), all.map { it.video.videoId })
+        assertEquals(1, all.single().repostIntroduced)
+        assertEquals(emptyList<String>(), following.map { it.video.videoId })
     }
 
     @Test fun moments_flagsViewedWhenSideTablePresent() = runBlocking {
