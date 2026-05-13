@@ -24,7 +24,13 @@ cat >"$TMP/bin/go" <<'SH'
 echo "go $*" >>"$DRIFT_TEST_LOG"
 case "$*" in
   "run github.com/a-h/templ/cmd/templ@v0.3.1020 generate") exit 0 ;;
-  "run ./cmd/igloo-assets") exit 0 ;;
+  "run ./cmd/igloo-assets")
+    mkdir -p static/js/dist
+    for asset in feed.js feed.js.map shorts.js shorts.js.map player.js player.js.map; do
+      printf 'mock bundle\n' >"static/js/dist/$asset"
+    done
+    exit 0
+    ;;
 esac
 echo "unexpected go invocation: $*" >&2
 exit 43
