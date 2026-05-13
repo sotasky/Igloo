@@ -97,6 +97,8 @@ type sponsorblockFetcher interface {
 
 var instagramHandleRe = regexp.MustCompile(`^[a-z0-9_.]{1,64}$`)
 
+const androidSyncMaintenanceInterval = time.Hour
+
 // NewManager creates a Manager; call StartAll to launch goroutines.
 func NewManager(database *db.DB, cfg *config.Config) *Manager {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -196,6 +198,7 @@ func (m *Manager) StartAll() {
 	m.launch("preview", m.runPreviewWorker)
 	m.launch("downloader_operation_prune", m.runDownloaderOperationPruner)
 	m.launch("channel_metadata_prune", m.runChannelMetadataPruner)
+	m.launch("android_sync_maintenance", m.runAndroidSyncMaintenanceWorker)
 	m.startOnce("preview_backfill", m.backfillPreviews)
 	m.startOnce("thumbnail_backfill", m.backfillThumbnails)
 	m.launch("feed_scoring", m.runFeedScoringWorker)
@@ -250,6 +253,65 @@ func (m *Manager) runChannelMetadataPruner(ctx context.Context) {
 			}
 		}
 	}
+}
+
+func (m *Manager) runAndroidSyncMaintenanceWorker(ctx context.Context) {
+	if m == nil || m.db == nil {
+		return
+	}
+	m.runAndroidSyncMaintenanceCycle()
+
+	ticker := time.NewTicker(androidSyncMaintenanceInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			m.runAndroidSyncMaintenanceCycle()
+		}
+	}
+}
+
+func (m *Manager) runAndroidSyncMaintenanceCycle() {
+	result, err := m.runAndroidSyncMaintenanceOnce(time.Now().UnixMilli())
+	if err != nil {
+		log.Printf("[worker] RunAndroidSyncMaintenance: %v", err)
+		return
+	}
+	if result.Drain.GenerationsDeleted == 0 &&
+		result.Drain.ItemsDeleted == 0 &&
+		result.Drain.AssetsDeleted == 0 &&
+		result.Drain.HealthReportsDeleted == 0 &&
+		result.After.EligibleGenerations == 0 &&
+		result.After.EligibleItems == 0 &&
+		result.After.EligibleAssets == 0 &&
+		result.After.EligibleHealthReports == 0 {
+		return
+	}
+	log.Printf(
+		"[worker] android sync maintenance: deleted generations=%d items=%d assets=%d health_reports=%d remaining_generations=%d remaining_items=%d remaining_assets=%d remaining_health_reports=%d passes=%d",
+		result.Drain.GenerationsDeleted,
+		result.Drain.ItemsDeleted,
+		result.Drain.AssetsDeleted,
+		result.Drain.HealthReportsDeleted,
+		result.After.EligibleGenerations,
+		result.After.EligibleItems,
+		result.After.EligibleAssets,
+		result.After.EligibleHealthReports,
+		result.Drain.Passes,
+	)
+}
+
+func (m *Manager) runAndroidSyncMaintenanceOnce(nowMs int64) (db.AndroidSyncMaintenanceResult, error) {
+	if m == nil || m.db == nil {
+		return db.AndroidSyncMaintenanceResult{}, nil
+	}
+	return m.db.RunAndroidSyncMaintenance(db.AndroidSyncMaintenanceOptions{
+		NowMs:     nowMs,
+		Policy:    db.DefaultAndroidSyncPrunePolicy(),
+		MaxPasses: db.DefaultAndroidSyncPruneDrainPasses,
+	})
 }
 
 // ShutdownTimeout cancels workers and waits up to timeout for them to exit.
