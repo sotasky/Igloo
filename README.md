@@ -12,7 +12,7 @@
 
 ![Igloo web app](static/screenshots/igloo.png)
 
-Igloo is an opinionated self-hosted personal social inbox for X, YouTube, TikTok and Instagram written in [Go](https://go.dev/). It pulls content from imported creators, and syncs it to an offline-first Android app. It is not meant to be a complete front-end replacement for these services, it intentionally stays out of any interaction with these platforms, such as posting or commenting. [Jump to installation](#install)
+Igloo is an opinionated self-hosted personal social inbox for X, YouTube, TikTok and Instagram written in [Go](https://go.dev/). It pulls content from imported creators, and syncs it to an offline-first Android app. It is not meant to be a complete front-end replacement for these services, it intentionally stays out of any interaction with these platforms, such as posting or commenting. The published image is built with Nix to keep it small, 200~ MB compressed and 700~ MB local image size. You can also build the image yourself. [Jump to installation](#install)
 
 
 Any interaction you do on the client, stays in your machine which includes likes, follows or bookmarks. You don't need to log in to your accounts on these platforms, but that can also affect what media the server can fetch, since it uses [yt-dlp](https://github.com/yt-dlp/yt-dlp) and [gallery-dl](https://github.com/mikf/gallery-dl) to download media, you can only go as far as these packages let you go without cookies. On the web UI, you can upload a cookie file or set the browser with cookies to automatically enable cookies.
