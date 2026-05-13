@@ -8,6 +8,7 @@ func schemaCreateStatements() []string {
 		schemaDiagnosticStatements(),
 		schemaMaintainedStateStatements(),
 		schemaDerivedCacheStatements(),
+		schemaSearchStatements(),
 		schemaQueueStatements(),
 		schemaSecurityStateStatements(),
 	}

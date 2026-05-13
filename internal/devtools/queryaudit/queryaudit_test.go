@@ -31,6 +31,7 @@ func TestRunReportsHotPathPlans(t *testing.T) {
 		"asset_repair_claim_candidates:",
 		"profile_refresh_candidate:",
 		"channel_search:",
+		"video_search:",
 		"mutation_delta_candidates:",
 		"elapsed_ms:",
 		"rows:",
@@ -213,6 +214,22 @@ func createQueryAuditFixture(t *testing.T) string {
 		`CREATE INDEX idx_channel_profiles_refresh ON channel_profiles(tombstone, fetched_at) WHERE tombstone = 0`,
 		`CREATE TABLE video_repost_sources (video_id TEXT NOT NULL, reposter_channel_id TEXT NOT NULL, reposted_at_ms INTEGER NOT NULL DEFAULT 0, first_seen_at_ms INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (video_id, reposter_channel_id))`,
 		`CREATE TABLE channel_stars (user_id TEXT NOT NULL DEFAULT '', channel_id TEXT NOT NULL, starred_at INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (user_id, channel_id))`,
+		`CREATE VIRTUAL TABLE search_channels_fts USING fts5(
+			channel_id_pk UNINDEXED,
+			name,
+			source_id,
+			display_name,
+			handle,
+			tokenize = 'unicode61'
+		)`,
+		`CREATE VIRTUAL TABLE search_videos_fts USING fts5(
+			video_id_pk UNINDEXED,
+			title,
+			dearrow_title,
+			dearrow_title_casual,
+			channel_name,
+			tokenize = 'unicode61'
+		)`,
 		`CREATE TABLE sync_changes (
 			version INTEGER PRIMARY KEY AUTOINCREMENT,
 			type TEXT NOT NULL,
@@ -235,6 +252,10 @@ func createQueryAuditFixture(t *testing.T) string {
 		 VALUES ('sample_asset_1', 'post_media', 'video', 'sample_video_1', 'queued', 1000)`,
 		`INSERT INTO channel_profiles (channel_id, platform, handle, display_name, fetched_at)
 		 VALUES ('tiktok_sample_channel', 'tiktok', 'sample_channel', 'Sample Channel', 0)`,
+		`INSERT INTO search_channels_fts(rowid, channel_id_pk, name, source_id, display_name, handle)
+		 VALUES (1, 'tiktok_sample_channel', 'Sample Channel', 'sample_channel', 'Sample Channel', 'sample_channel')`,
+		`INSERT INTO search_videos_fts(rowid, video_id_pk, title, dearrow_title, dearrow_title_casual, channel_name)
+		 VALUES (1, 'sample_video_1', 'Sample Video', '', '', 'Sample Channel')`,
 		`INSERT INTO sync_changes (type, item_id, value, created_at)
 		 VALUES ('follow', 'tiktok_sample_channel', '{}', 1000)`,
 	}

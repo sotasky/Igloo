@@ -1,6 +1,11 @@
 package db
 
-import "testing"
+import (
+	"context"
+	"testing"
+
+	"github.com/screwys/igloo/internal/model"
+)
 
 // TestSearchVideosFallback_MatchesOriginalTitle is the baseline: verifies the
 // existing behavior didn't break.
@@ -126,6 +131,86 @@ func TestSearchVideosFallback_ScansDearrowFields(t *testing.T) {
 	}
 	if v.DearrowThumbPath == nil || *v.DearrowThumbPath != thumb {
 		t.Errorf("DearrowThumbPath = %v", v.DearrowThumbPath)
+	}
+}
+
+func TestRebuildSearchIndexEnablesChannelAndVideoFTS(t *testing.T) {
+	d := openFreshTestDB(t)
+	seedSearchChannel(t, d, "tiktok_sample_channel", "tiktok")
+	if err := d.UpsertChannelProfile(model.ChannelProfile{
+		ChannelID:   "tiktok_sample_channel",
+		Platform:    "tiktok",
+		Handle:      "sample_handle",
+		DisplayName: "Sample Display",
+	}); err != nil {
+		t.Fatalf("UpsertChannelProfile: %v", err)
+	}
+	seedSearchVideo(t, d, "sample_video_1", "tiktok_sample_channel", "Original Clickbait")
+	realTitle := "Sample Real Title"
+	if err := d.SetDearrowData("sample_video_1", &realTitle, nil, nil, 1_700_000_000_000); err != nil {
+		t.Fatalf("SetDearrowData: %v", err)
+	}
+
+	count, err := d.RebuildSearchIndex(context.Background())
+	if err != nil {
+		t.Fatalf("RebuildSearchIndex: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("indexed rows = %d, want channel + video", count)
+	}
+
+	channels, err := d.SearchChannelsFast("display", 10)
+	if err != nil {
+		t.Fatalf("SearchChannelsFast: %v", err)
+	}
+	if len(channels) != 1 || channels[0].ChannelID != "tiktok_sample_channel" {
+		t.Fatalf("channels = %+v, want tiktok_sample_channel", channels)
+	}
+
+	videos, err := d.SearchVideosFast("real", 10)
+	if err != nil {
+		t.Fatalf("SearchVideosFast: %v", err)
+	}
+	if len(videos) != 1 || videos[0].VideoID != "sample_video_1" {
+		t.Fatalf("videos = %+v, want sample_video_1", videos)
+	}
+}
+
+func TestSearchFTSTriggersKeepReadyIndexCurrent(t *testing.T) {
+	d := openFreshTestDB(t)
+	if _, err := d.RebuildSearchIndex(context.Background()); err != nil {
+		t.Fatalf("RebuildSearchIndex: %v", err)
+	}
+
+	seedSearchChannel(t, d, "tiktok_sample_channel", "tiktok")
+	if err := d.UpsertChannelProfile(model.ChannelProfile{
+		ChannelID:   "tiktok_sample_channel",
+		Platform:    "tiktok",
+		Handle:      "sample_handle",
+		DisplayName: "Sample Fresh Display",
+	}); err != nil {
+		t.Fatalf("UpsertChannelProfile: %v", err)
+	}
+	seedSearchVideo(t, d, "sample_video_1", "tiktok_sample_channel", "Original Title")
+	casual := "Sample Fresh Casual"
+	if err := d.SetDearrowData("sample_video_1", nil, &casual, nil, 1_700_000_000_000); err != nil {
+		t.Fatalf("SetDearrowData: %v", err)
+	}
+
+	channels, err := d.SearchChannelsFast("fresh", 10)
+	if err != nil {
+		t.Fatalf("SearchChannelsFast: %v", err)
+	}
+	if len(channels) != 1 || channels[0].ChannelID != "tiktok_sample_channel" {
+		t.Fatalf("channels = %+v, want tiktok_sample_channel", channels)
+	}
+
+	videos, err := d.SearchVideosFast("casual", 10)
+	if err != nil {
+		t.Fatalf("SearchVideosFast: %v", err)
+	}
+	if len(videos) != 1 || videos[0].VideoID != "sample_video_1" {
+		t.Fatalf("videos = %+v, want sample_video_1", videos)
 	}
 }
 

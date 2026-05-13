@@ -421,33 +421,35 @@ func probeSpecs() []probeSpec {
 		},
 		{
 			name:        "channel_search",
-			description: "channel search fallback read",
+			description: "channel FTS search read",
 			lifecycle:   "archive/user_state",
 			build: func(opts Options) (string, []any) {
-				prefix := opts.Search + "%"
-				wordStart := "% " + opts.Search + "%"
 				return `
-					SELECT c.channel_id
-					FROM channels c
-					LEFT JOIN channel_stars cs ON cs.channel_id = c.channel_id
-					LEFT JOIN channel_profiles cp ON cp.channel_id = c.channel_id AND cp.tombstone = 0
-					WHERE c.name LIKE ?
-					   OR c.name LIKE ?
-					   OR (c.platform IN ('tiktok','twitter') AND c.source_id LIKE ?)
-					   OR cp.display_name LIKE ?
-					   OR cp.display_name LIKE ?
-					ORDER BY
-						CASE
-							WHEN c.name LIKE ? THEN 0
-							WHEN cp.display_name LIKE ? THEN 0
-							WHEN c.name LIKE ? THEN 1
-							WHEN cp.display_name LIKE ? THEN 1
-							ELSE 2
-						END,
-						CASE WHEN cs.channel_id IS NOT NULL THEN 1 ELSE 0 END DESC,
-						COALESCE(NULLIF(cp.display_name, ''), c.name) COLLATE NOCASE
+					SELECT f.channel_id_pk
+					FROM search_channels_fts f
+					LEFT JOIN channels c ON c.channel_id = f.channel_id_pk
+					LEFT JOIN channel_stars cs ON cs.channel_id = f.channel_id_pk
+					LEFT JOIN channel_profiles cp ON cp.channel_id = f.channel_id_pk AND cp.tombstone = 0
+					WHERE search_channels_fts MATCH ?
+					ORDER BY rank
 					LIMIT ?
-				`, []any{prefix, wordStart, prefix, prefix, wordStart, prefix, prefix, wordStart, wordStart, opts.Limit}
+				`, []any{compileSearchFTSQuery(opts.Search), opts.Limit}
+			},
+		},
+		{
+			name:        "video_search",
+			description: "video FTS search read",
+			lifecycle:   "archive",
+			build: func(opts Options) (string, []any) {
+				return `
+					SELECT f.video_id_pk
+					FROM search_videos_fts f
+					LEFT JOIN videos v ON v.video_id = f.video_id_pk
+					LEFT JOIN channels c ON c.channel_id = v.channel_id
+					WHERE search_videos_fts MATCH ?
+					ORDER BY rank
+					LIMIT ?
+				`, []any{compileSearchFTSQuery(opts.Search), opts.Limit}
 			},
 		},
 		{
@@ -472,4 +474,17 @@ func probeSpecs() []probeSpec {
 			},
 		},
 	}
+}
+
+func compileSearchFTSQuery(q string) string {
+	terms := strings.Fields(strings.TrimSpace(q))
+	if len(terms) == 0 {
+		return `""`
+	}
+	var parts []string
+	for _, term := range terms {
+		term = strings.ReplaceAll(term, `"`, `""`)
+		parts = append(parts, `"`+term+`"*`)
+	}
+	return strings.Join(parts, " AND ")
 }

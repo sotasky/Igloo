@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"strings"
 
 	"github.com/screwys/igloo/internal/model"
@@ -32,19 +33,23 @@ func (db *DB) SearchChannelsFast(q string, limit int) ([]model.Channel, error) {
 	if limit <= 0 {
 		limit = 50
 	}
+	if !db.searchIndexReady() {
+		return db.searchChannelsFallback(q, limit)
+	}
 
 	rows, err := db.conn.Query(`
 		SELECT f.channel_id_pk,
 		       COALESCE(NULLIF(cp.display_name, ''), NULLIF(c.name, ''), f.name) AS display_name,
-		       COALESCE(NULLIF(f.channel_id, ''), f.channel_id_pk) AS channel_id,
+		       COALESCE(NULLIF(c.channel_id, ''), f.channel_id_pk) AS channel_id,
 		       COALESCE(c.source_id, '') AS source_id,
-		       COALESCE(NULLIF(f.platform, ''), c.platform, 'youtube') AS platform,
-		       f.is_starred,
+		       COALESCE(c.platform, 'youtube') AS platform,
+		       CASE WHEN cs.channel_id IS NOT NULL THEN 1 ELSE 0 END AS is_starred,
 		       COALESCE(cp.handle, '') AS handle,
 		       COALESCE(cp.display_name, '') AS profile_display_name
 		FROM search_channels_fts f
-		LEFT JOIN channels c ON c.channel_id = COALESCE(NULLIF(f.channel_id, ''), f.channel_id_pk)
-		LEFT JOIN channel_profiles cp ON cp.channel_id = COALESCE(NULLIF(f.channel_id, ''), f.channel_id_pk) AND cp.tombstone = 0
+		LEFT JOIN channels c ON c.channel_id = f.channel_id_pk
+		LEFT JOIN channel_stars cs ON cs.channel_id = f.channel_id_pk
+		LEFT JOIN channel_profiles cp ON cp.channel_id = f.channel_id_pk AND cp.tombstone = 0
 		WHERE search_channels_fts MATCH ?
 		ORDER BY rank
 		LIMIT ?
@@ -58,14 +63,13 @@ func (db *DB) SearchChannelsFast(q string, limit int) ([]model.Channel, error) {
 	var channels []model.Channel
 	for rows.Next() {
 		var ch model.Channel
-		var channelIDPK, isStarred string
-		if err := rows.Scan(&channelIDPK, &ch.Name, &ch.ChannelID, &ch.SourceID, &ch.Platform, &isStarred, &ch.Handle, &ch.DisplayName); err != nil {
+		var channelIDPK string
+		if err := rows.Scan(&channelIDPK, &ch.Name, &ch.ChannelID, &ch.SourceID, &ch.Platform, &ch.IsStarred, &ch.Handle, &ch.DisplayName); err != nil {
 			return nil, err
 		}
 		if ch.ChannelID == "" {
 			ch.ChannelID = channelIDPK
 		}
-		ch.IsStarred = isStarred == "1"
 		ch.AvatarURL = "/api/media/avatar/" + ch.ChannelID
 		channels = append(channels, ch)
 	}
@@ -149,13 +153,22 @@ func (db *DB) SearchVideosFast(q string, limit int) ([]model.Video, error) {
 	if limit <= 0 {
 		limit = 200
 	}
+	if !db.searchIndexReady() {
+		return db.searchVideosFallback(q, limit)
+	}
 
 	rows, err := db.conn.Query(`
-		SELECT f.video_id_pk, f.title, f.channel_name, f.channel_id,
-		       f.platform, f.published_at, f.is_temp,
+		SELECT f.video_id_pk,
+		       COALESCE(v.title, f.title),
+		       COALESCE(c.name, f.channel_name, ''),
+		       COALESCE(v.channel_id, ''),
+		       COALESCE(c.platform, 'youtube'),
+		       v.published_at,
+		       COALESCE(v.is_temp, 0),
 		       v.dearrow_title, v.dearrow_title_casual, v.dearrow_thumb_path
 		FROM search_videos_fts f
 		LEFT JOIN videos v ON v.video_id = f.video_id_pk
+		LEFT JOIN channels c ON c.channel_id = v.channel_id
 		WHERE search_videos_fts MATCH ?
 		ORDER BY rank
 		LIMIT ?
@@ -170,13 +183,13 @@ func (db *DB) SearchVideosFast(q string, limit int) ([]model.Video, error) {
 	for rows.Next() {
 		var v model.Video
 		var pubAt sql.NullInt64
-		var isTemp string
+		var isTemp bool
 		if err := rows.Scan(&v.VideoID, &v.Title, &v.ChannelName, &v.ChannelID, &v.Platform, &pubAt, &isTemp,
 			&v.DearrowTitle, &v.DearrowTitleCasual, &v.DearrowThumbPath); err != nil {
 			return nil, err
 		}
 		v.PublishedAt = millisToTimePtr(pubAt)
-		v.IsTemp = isTemp == "1"
+		v.IsTemp = isTemp
 		v.ThumbnailURL = "/api/media/thumbnail/" + v.VideoID
 		if v.ChannelID != "" {
 			v.AvatarURL = "/api/media/avatar/" + v.ChannelID
@@ -236,9 +249,67 @@ func (db *DB) searchVideosFallback(q string, limit int) ([]model.Video, error) {
 }
 
 // RebuildSearchIndex repopulates all FTS5 tables. Returns count of indexed rows.
-// This is a stub — FTS5 virtual tables are updated on insert via triggers.
 func (db *DB) RebuildSearchIndex(ctx context.Context) (int, error) {
-	return 0, nil
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	tx, err := db.conn.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("begin search index rebuild: %w", err)
+	}
+	defer tx.Rollback()
+
+	var channelCount, videoCount int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM channels`).Scan(&channelCount); err != nil {
+		return 0, fmt.Errorf("count channel search rows: %w", err)
+	}
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM videos`).Scan(&videoCount); err != nil {
+		return 0, fmt.Errorf("count video search rows: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM search_channels_fts`); err != nil {
+		return 0, fmt.Errorf("clear channel search index: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO search_channels_fts(rowid, channel_id_pk, name, source_id, display_name, handle)
+		SELECT c.id, c.channel_id, COALESCE(c.name, ''), COALESCE(c.source_id, ''),
+		       COALESCE(cp.display_name, ''), COALESCE(cp.handle, '')
+		FROM channels c
+		LEFT JOIN channel_profiles cp ON cp.channel_id = c.channel_id AND COALESCE(cp.tombstone, 0) = 0
+	`); err != nil {
+		return 0, fmt.Errorf("populate channel search index: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM search_videos_fts`); err != nil {
+		return 0, fmt.Errorf("clear video search index: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO search_videos_fts(rowid, video_id_pk, title, dearrow_title, dearrow_title_casual, channel_name)
+		SELECT v.id, v.video_id, COALESCE(v.title, ''), COALESCE(v.dearrow_title, ''),
+		       COALESCE(v.dearrow_title_casual, ''), COALESCE(c.name, '')
+		FROM videos v
+		LEFT JOIN channels c ON c.channel_id = v.channel_id
+	`); err != nil {
+		return 0, fmt.Errorf("populate video search index: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO settings (user_id, key, value)
+		VALUES ('', 'search_index_ready', '1')
+		ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value
+	`); err != nil {
+		return 0, fmt.Errorf("mark search index ready: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit search index rebuild: %w", err)
+	}
+	return channelCount + videoCount, nil
+}
+
+func (db *DB) searchIndexReady() bool {
+	var ready string
+	err := db.conn.QueryRow(`SELECT value FROM settings WHERE user_id = '' AND key = 'search_index_ready'`).Scan(&ready)
+	return err == nil && ready == "1"
 }
 
 // SearchFeedItems searches X posts by body text, author handle, or display name.
