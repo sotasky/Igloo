@@ -38,8 +38,73 @@ var feedList = document.getElementById('feed-list')
 var feedPagination = document.getElementById('feed-pagination')
 var pendingForms = new WeakSet()
 var feedInitialRankDone = false
+var feedThreadReturnKey = 'igloo.feed.threadReturn'
 
 // ── State helpers ──
+
+function feedReturnURL() {
+  return window.location.pathname + window.location.search + window.location.hash
+}
+
+function writeFeedThreadReturn(tweetId) {
+  if (!tweetId || !window.sessionStorage) return
+  try {
+    window.sessionStorage.setItem(feedThreadReturnKey, JSON.stringify({
+      url: feedReturnURL(),
+      scrollY: window.scrollY || 0,
+      tweetId: tweetId,
+      pending: false,
+      at: Date.now()
+    }))
+  } catch (_) {}
+}
+
+function readFeedThreadReturn() {
+  if (!window.sessionStorage) return null
+  try {
+    var raw = window.sessionStorage.getItem(feedThreadReturnKey)
+    return raw ? JSON.parse(raw) : null
+  } catch (_) {
+    return null
+  }
+}
+
+function writeFeedThreadReturnState(state) {
+  if (!state || !window.sessionStorage) return
+  try { window.sessionStorage.setItem(feedThreadReturnKey, JSON.stringify(state)) } catch (_) {}
+}
+
+function markFeedThreadReturnPending() {
+  var state = readFeedThreadReturn()
+  if (!state) return
+  state.pending = true
+  writeFeedThreadReturnState(state)
+}
+
+function restoreFeedThreadReturn() {
+  if (!feedList) return
+  var state = readFeedThreadReturn()
+  if (!state || !state.pending) return
+  state.pending = false
+  writeFeedThreadReturnState(state)
+  var tweetId = String(state.tweetId || '').trim()
+  var target = tweetId ? feedList.querySelector('[data-feed-item][data-tweet-id="' + cssEscape(tweetId) + '"]') : null
+  if (target && typeof target.scrollIntoView === 'function') {
+    try { target.scrollIntoView({ behavior: 'auto', block: 'center' }) } catch (_) { target.scrollIntoView() }
+    return
+  }
+  if (typeof state.scrollY === 'number') {
+    window.scrollTo(0, state.scrollY)
+  }
+}
+
+function initThreadBackLink() {
+  var link = document.querySelector('[data-thread-back-link]')
+  if (!link) return
+  var state = readFeedThreadReturn()
+  if (state && state.url) link.setAttribute('href', state.url)
+  link.addEventListener('click', function () { markFeedThreadReturnPending() })
+}
 
 function isCurrentChannelPath(channelId) {
   var cid = String(channelId || '').trim()
@@ -640,21 +705,6 @@ function initFeedCards(scope) {
   }
 }
 
-function revealFullThread(button) {
-  var thread = button && button.closest ? button.closest('[data-feed-thread]') : null
-  if (!thread) return
-  thread.querySelectorAll('[data-feed-thread-collapsed="1"]').forEach(function (row) {
-    row.classList.remove('hidden', 'feed-thread-collapsed')
-    row.removeAttribute('data-feed-thread-collapsed')
-  })
-  var wrap = button.closest('[data-feed-thread-more-wrap]')
-  if (wrap) wrap.remove()
-  initTextClamps(thread)
-  initDates(thread)
-  initInlineMedia(thread)
-  observeTranslateCards(thread, getTranslateObserver())
-}
-
 // ── Event delegation: form submit ──
 
 document.addEventListener('submit', function (event) {
@@ -668,10 +718,10 @@ document.addEventListener('submit', function (event) {
 // ── Event delegation: clicks ──
 
 document.addEventListener('click', function (event) {
-  var threadMoreBtn = event.target && event.target.closest ? event.target.closest('[data-feed-thread-more]') : null
-  if (threadMoreBtn) {
-    event.preventDefault(); event.stopPropagation()
-    revealFullThread(threadMoreBtn)
+  var threadOpen = event.target && event.target.closest ? event.target.closest('[data-feed-thread-open]') : null
+  if (threadOpen) {
+    var tweetId = String(threadOpen.getAttribute('data-thread-tweet-id') || '').trim()
+    if (tweetId) writeFeedThreadReturn(tweetId)
     return
   }
 
@@ -1149,6 +1199,8 @@ initFeedCards(feedList)
 removeEmptyStateIfNeeded()
 observeSentinelEarly()
 initRetweetersDialog()
+restoreFeedThreadReturn()
+initThreadBackLink()
 
 // Boot-time sync: push any channels that are muted in localStorage but not
 // yet persisted on the server (channels toggled before the API call existed).
