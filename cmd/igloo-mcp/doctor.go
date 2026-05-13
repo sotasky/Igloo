@@ -25,6 +25,7 @@ func doctorStatus() (string, error) {
 	writeDoctorDBFiles(&sb)
 	writeDoctorSQLiteStorage(&sb, conn)
 	writeDoctorDBStat(&sb, conn)
+	writeDoctorPersistenceLifecycle(&sb, conn)
 	writeDoctorAndroidSync(&sb, conn)
 	writeDoctorQueues(&sb, conn)
 	writeDoctorProfileReadiness(&sb, conn)
@@ -105,6 +106,176 @@ func writeDoctorDBStat(sb *strings.Builder, conn *sql.DB) {
 		sb.WriteString("  none\n")
 	}
 	sb.WriteString("\n")
+}
+
+type doctorPersistenceTable struct {
+	name  string
+	rows  int64
+	bytes int64
+}
+
+type doctorPersistenceLifecycle struct {
+	name   string
+	tables []doctorPersistenceTable
+	rows   int64
+	bytes  int64
+}
+
+func writeDoctorPersistenceLifecycle(sb *strings.Builder, conn *sql.DB) {
+	sb.WriteString("Persistence lifecycle:\n")
+	groups, err := doctorPersistenceLifecycles(conn)
+	if err != nil {
+		fmt.Fprintf(sb, "  unavailable: %v\n\n", err)
+		return
+	}
+	for _, group := range groups {
+		if len(group.tables) == 0 {
+			continue
+		}
+		fmt.Fprintf(sb, "  %-18s tables=%d rows=%d size=%s\n", group.name+":", len(group.tables), group.rows, formatSize(group.bytes))
+		sort.Slice(group.tables, func(i, j int) bool {
+			if group.tables[i].bytes != group.tables[j].bytes {
+				return group.tables[i].bytes > group.tables[j].bytes
+			}
+			if group.tables[i].rows != group.tables[j].rows {
+				return group.tables[i].rows > group.tables[j].rows
+			}
+			return group.tables[i].name < group.tables[j].name
+		})
+		limit := len(group.tables)
+		if limit > 3 {
+			limit = 3
+		}
+		for _, table := range group.tables[:limit] {
+			fmt.Fprintf(sb, "    %-30s rows=%d size=%s\n", table.name, table.rows, formatSize(table.bytes))
+		}
+	}
+	sb.WriteString("\n")
+}
+
+func doctorPersistenceLifecycles(conn *sql.DB) ([]doctorPersistenceLifecycle, error) {
+	tables, err := doctorUserTables(conn)
+	if err != nil {
+		return nil, err
+	}
+	bytesByTable, err := doctorTableStorageBytes(conn)
+	if err != nil {
+		return nil, err
+	}
+
+	order := []string{
+		"archive",
+		"maintained_state",
+		"user_state",
+		"queue",
+		"derived_cache",
+		"diagnostic",
+		"security_state",
+		"legacy_migration",
+		"unclassified",
+	}
+	byLifecycle := make(map[string]*doctorPersistenceLifecycle, len(order))
+	for _, name := range order {
+		byLifecycle[name] = &doctorPersistenceLifecycle{name: name}
+	}
+	for _, table := range tables {
+		lifecycle, ok := igloodb.SchemaTableLifecycle(table)
+		if !ok {
+			lifecycle = "unclassified"
+		}
+		group := byLifecycle[lifecycle]
+		if group == nil {
+			group = &doctorPersistenceLifecycle{name: lifecycle}
+			byLifecycle[lifecycle] = group
+			order = append(order, lifecycle)
+		}
+		rowCount := doctorTableRowCount(conn, table)
+		bytes := bytesByTable[table]
+		group.tables = append(group.tables, doctorPersistenceTable{
+			name:  table,
+			rows:  rowCount,
+			bytes: bytes,
+		})
+		group.rows += rowCount
+		group.bytes += bytes
+	}
+
+	groups := make([]doctorPersistenceLifecycle, 0, len(order))
+	for _, name := range order {
+		if group := byLifecycle[name]; group != nil {
+			groups = append(groups, *group)
+		}
+	}
+	return groups, nil
+}
+
+func doctorUserTables(conn *sql.DB) ([]string, error) {
+	rows, err := conn.Query(`
+		SELECT name
+		FROM sqlite_master
+		WHERE type = 'table'
+		  AND name NOT LIKE 'sqlite_%'
+		ORDER BY name
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("query user tables: %w", err)
+	}
+	defer rows.Close()
+
+	var tables []string
+	for rows.Next() {
+		var table string
+		if err := rows.Scan(&table); err != nil {
+			return nil, fmt.Errorf("scan user table: %w", err)
+		}
+		tables = append(tables, table)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate user tables: %w", err)
+	}
+	return tables, nil
+}
+
+func doctorTableStorageBytes(conn *sql.DB) (map[string]int64, error) {
+	rows, err := conn.Query(`
+		SELECT m.tbl_name, COALESCE(SUM(s.pgsize), 0) AS bytes
+		FROM sqlite_master m
+		LEFT JOIN dbstat s ON s.name = m.name
+		WHERE m.type IN ('table', 'index')
+		  AND m.tbl_name NOT LIKE 'sqlite_%'
+		GROUP BY m.tbl_name
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("query table storage bytes: %w", err)
+	}
+	defer rows.Close()
+
+	out := make(map[string]int64)
+	for rows.Next() {
+		var table string
+		var bytes int64
+		if err := rows.Scan(&table, &bytes); err != nil {
+			return nil, fmt.Errorf("scan table storage bytes: %w", err)
+		}
+		out[table] = bytes
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate table storage bytes: %w", err)
+	}
+	return out, nil
+}
+
+func doctorTableRowCount(conn *sql.DB, table string) int64 {
+	var count int64
+	query := fmt.Sprintf(`SELECT COUNT(*) FROM %s`, quoteSQLiteIdent(table))
+	if err := conn.QueryRow(query).Scan(&count); err != nil {
+		return 0
+	}
+	return count
+}
+
+func quoteSQLiteIdent(name string) string {
+	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
 }
 
 func writeDoctorAndroidSync(sb *strings.Builder, conn *sql.DB) {

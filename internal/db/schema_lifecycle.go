@@ -59,3 +59,14 @@ var schemaTableLifecycles = map[string]schemaTableLifecycle{
 	"videos":                      schemaLifecycleArchive,
 	"watch_history":               schemaLifecycleUserState,
 }
+
+// SchemaTableLifecycle returns the lifecycle classification for a schema table.
+// It is used by runtime audit tooling; tests below keep this map in sync with
+// the fresh schema.
+func SchemaTableLifecycle(table string) (string, bool) {
+	lifecycle, ok := schemaTableLifecycles[table]
+	if !ok {
+		return "", false
+	}
+	return string(lifecycle), true
+}
