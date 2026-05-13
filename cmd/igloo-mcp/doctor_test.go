@@ -75,6 +75,40 @@ func TestDoctorStatusReportsLocalHealthAndMasksSecrets(t *testing.T) {
 		t.Fatalf("insert profile: %v", err)
 	}
 	if err := d.ExecRaw(`
+		INSERT INTO media_files (owner_type, owner_id, media_index, file_path, media_type)
+		VALUES ('feed_media', 'sample_post', 0, 'media/sample_post_0.jpg', 'photo')
+	`); err != nil {
+		t.Fatalf("insert media file: %v", err)
+	}
+	if err := d.ExecRaw(`
+		INSERT INTO videos (video_id, channel_id, title, thumbnail_path, file_path, dearrow_thumb_path, published_at)
+		VALUES ('sample_video', 'youtube_sample_channel', 'Doctor Video', 'videos/sample_video.jpg', 'videos/sample_video.mp4', 'thumbnails/dearrow/sample_video.jpg', ?)
+	`, now); err != nil {
+		t.Fatalf("insert video: %v", err)
+	}
+	if err := d.ExecRaw(`
+		INSERT INTO assets (
+			asset_id, asset_kind, owner_kind, owner_id, media_index,
+			file_path, content_type, size_bytes, sha256, state, created_at_ms, updated_at_ms
+		) VALUES ('sample_post_asset', 'post_media', 'tweet', 'sample_post', 0,
+			'media/sample_post_0.jpg', 'image/jpeg', 10, 'sha', 'ready', ?, ?)
+	`, now, now); err != nil {
+		t.Fatalf("insert asset: %v", err)
+	}
+	for _, path := range []string{
+		filepath.Join(tmp, "thumbnails", "avatars", "sample_profile.jpg"),
+		filepath.Join(tmp, "thumbnails", "banners", "sample_profile.jpg"),
+		filepath.Join(tmp, "thumbnails", "previews", "sample_video", "track.json"),
+		filepath.Join(tmp, "thumbnails", "previews", "sample_video", "sprite.jpg"),
+	} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("mkdir asset fixture dir: %v", err)
+		}
+		if err := os.WriteFile(path, []byte("fixture"), 0o644); err != nil {
+			t.Fatalf("write asset fixture %s: %v", path, err)
+		}
+	}
+	if err := d.ExecRaw(`
 		INSERT INTO download_queue (video_id, channel_id, title, status, error, added_at)
 		VALUES ('sample_video', 'youtube_sample_channel', 'Doctor Video', 'failed', 'sample failure', ?)
 	`, now); err != nil {
@@ -121,6 +155,16 @@ func TestDoctorStatusReportsLocalHealthAndMasksSecrets(t *testing.T) {
 		"Android sync:",
 		"Queue counts:",
 		"Profile/media readiness:",
+		"Asset inventory parity:",
+		"inventory states: ready=1",
+		"post_media:          assets=1 legacy=1 gap=0",
+		"video_stream:        assets=0 legacy=1 gap=1",
+		"post_thumbnail:      assets=0 legacy=1 gap=1",
+		"dearrow_thumbnail:   assets=0 legacy=1 gap=1",
+		"avatar:              assets=0 legacy=1 gap=1",
+		"banner:              assets=0 legacy=1 gap=1",
+		"preview_track_json:  assets=0 legacy=1 gap=1",
+		"preview_sprite:      assets=0 legacy=1 gap=1",
 		"Downloader failures:",
 		"Recent high-signal log errors:",
 		"Android sync client failures:",

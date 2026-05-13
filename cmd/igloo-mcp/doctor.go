@@ -27,6 +27,7 @@ func doctorStatus() (string, error) {
 	writeDoctorAndroidSync(&sb, conn)
 	writeDoctorQueues(&sb, conn)
 	writeDoctorProfileReadiness(&sb, conn)
+	writeDoctorAssetParity(&sb, conn)
 	writeDoctorDownloaderFailures(&sb, conn)
 	writeDoctorAndroidSyncClientFailures(&sb)
 	writeDoctorRecentErrors(&sb)
@@ -220,6 +221,39 @@ func writeDoctorProfileReadiness(sb *strings.Builder, conn *sql.DB) {
 	dataDir := filepath.Dir(getDBPath())
 	fmt.Fprintf(sb, "  cached avatars: %d\n", countFiles(filepath.Join(dataDir, "thumbnails", "avatars")))
 	fmt.Fprintf(sb, "  cached banners: %d\n\n", countFiles(filepath.Join(dataDir, "thumbnails", "banners")))
+}
+
+func writeDoctorAssetParity(sb *strings.Builder, conn *sql.DB) {
+	sb.WriteString("Asset inventory parity:\n")
+	parts := doctorStatusCounts(conn, "assets", "state", "")
+	if len(parts) == 0 {
+		parts = []string{"empty=0"}
+	}
+	fmt.Fprintf(sb, "  inventory states: %s\n", strings.Join(parts, ", "))
+
+	dataDir := filepath.Dir(getDBPath())
+	rows := []struct {
+		kind   string
+		legacy int
+	}{
+		{"post_media", doctorCount(conn, `SELECT COUNT(*) FROM media_files WHERE COALESCE(file_path, '') != '' AND owner_type IN ('feed_media', 'quote_media')`)},
+		{"video_stream", doctorCount(conn, `SELECT COUNT(*) FROM videos WHERE COALESCE(file_path, '') != ''`)},
+		{"post_thumbnail", doctorCount(conn, `SELECT COUNT(*) FROM videos WHERE COALESCE(thumbnail_path, '') != ''`) + countFiles(filepath.Join(dataDir, "thumbnails", "generated"))},
+		{"dearrow_thumbnail", doctorCount(conn, `SELECT COUNT(*) FROM videos WHERE COALESCE(dearrow_thumb_path, '') != ''`) + countFiles(filepath.Join(dataDir, "thumbnails", "dearrow"))},
+		{"avatar", countFiles(filepath.Join(dataDir, "thumbnails", "avatars"))},
+		{"banner", countFiles(filepath.Join(dataDir, "thumbnails", "banners"))},
+		{"preview_track_json", countFilesNamed(filepath.Join(dataDir, "thumbnails", "previews"), "track.json")},
+		{"preview_sprite", countFilesNamed(filepath.Join(dataDir, "thumbnails", "previews"), "sprite.jpg")},
+	}
+	for _, row := range rows {
+		assets := doctorAssetKindCount(conn, row.kind)
+		gap := row.legacy - assets
+		if gap < 0 {
+			gap = 0
+		}
+		fmt.Fprintf(sb, "  %-20s assets=%d legacy=%d gap=%d\n", row.kind+":", assets, row.legacy, gap)
+	}
+	sb.WriteString("\n")
 }
 
 func writeDoctorDownloaderFailures(sb *strings.Builder, conn *sql.DB) {
@@ -429,6 +463,18 @@ func doctorStatusCounts(conn *sql.DB, table, groupColumn, where string) []string
 	return parts
 }
 
+func doctorCount(conn *sql.DB, query string, args ...any) int {
+	var count int
+	if err := conn.QueryRow(query, args...).Scan(&count); err != nil {
+		return 0
+	}
+	return count
+}
+
+func doctorAssetKindCount(conn *sql.DB, kind string) int {
+	return doctorCount(conn, `SELECT COUNT(*) FROM assets WHERE asset_kind = ?`, kind)
+}
+
 func countFiles(dir string) int {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -440,6 +486,20 @@ func countFiles(dir string) int {
 			count++
 		}
 	}
+	return count
+}
+
+func countFilesNamed(dir, name string) int {
+	count := 0
+	_ = filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d == nil || d.IsDir() {
+			return nil
+		}
+		if d.Name() == name {
+			count++
+		}
+		return nil
+	})
 	return count
 }
 
