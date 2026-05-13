@@ -20,7 +20,6 @@ import (
 	"github.com/screwys/igloo/internal/feed"
 	"github.com/screwys/igloo/internal/model"
 	"github.com/screwys/igloo/internal/subtitlemeta"
-	"github.com/screwys/igloo/internal/worker"
 )
 
 const (
@@ -1008,7 +1007,7 @@ func (s *Server) buildAndroidSyncAssets(username string, sets db.AndroidSyncDesi
 	if err != nil {
 		return nil, counts, err
 	}
-	s.addAndroidSyncInventoryAssets(byKey, inventoryRows)
+	s.addAndroidSyncInventoryAssets(byKey, inventoryRows, sets)
 	slog.Info(
 		"android_sync_asset_phase",
 		"phase", "asset_inventory_rows",
@@ -1152,9 +1151,44 @@ func (s *Server) buildAndroidSyncAssets(username string, sets db.AndroidSyncDesi
 	return out, counts, nil
 }
 
-func (s *Server) addAndroidSyncInventoryAssets(byKey map[string]model.AndroidSyncAsset, rows []db.Asset) {
+func (s *Server) addAndroidSyncInventoryAssets(byKey map[string]model.AndroidSyncAsset, rows []db.Asset, sets db.AndroidSyncDesiredSets) {
 	for _, row := range rows {
+		if !androidSyncInventoryAssetDesired(row, sets) {
+			continue
+		}
 		addAndroidSyncAsset(byKey, s.androidSyncAssetFromInventory(row))
+	}
+}
+
+func androidSyncInventoryAssetDesired(row db.Asset, sets db.AndroidSyncDesiredSets) bool {
+	switch row.AssetKind {
+	case "avatar", "banner":
+		_, ok := sets.Channels[row.OwnerID]
+		return ok
+	case "video_stream":
+		_, ok := sets.MediaVideos[row.OwnerID]
+		return ok
+	case "post_media", "post_audio":
+		if _, ok := sets.MediaVideos[row.OwnerID]; ok {
+			return true
+		}
+		_, ok := sets.Tweets[row.OwnerID]
+		return ok
+	case "subtitle", "preview_track_json", "preview_sprite", "post_thumbnail", "dearrow_thumbnail":
+		if _, ok := sets.Videos[row.OwnerID]; ok {
+			return true
+		}
+		if _, ok := sets.MediaVideos[row.OwnerID]; ok {
+			return true
+		}
+		_, ok := sets.Tweets[row.OwnerID]
+		return ok
+	default:
+		if _, ok := sets.Tweets[row.OwnerID]; ok {
+			return true
+		}
+		_, ok := sets.Videos[row.OwnerID]
+		return ok
 	}
 }
 
@@ -1406,34 +1440,6 @@ func (s *Server) androidSyncVideoMetadataAssets(video model.Video) []model.Andro
 				EffectiveRecencyMs: recency,
 			})
 		}
-		if s.ensureAndroidSyncPreviewTrackJSON(video) && s.androidSyncPreviewPath(video.VideoID, "track.json") != "" {
-			out = append(out, model.AndroidSyncAsset{
-				AssetID:            db.BuildManifestAssetID(platform, ownerKind, video.VideoID, "preview_track_json", 0),
-				AssetKind:          "preview_track_json",
-				OwnerID:            video.VideoID,
-				OwnerKind:          ownerKind,
-				Bucket:             bucket,
-				ServerURL:          "/api/media/preview-track-json/" + video.VideoID,
-				ContentType:        "application/json",
-				State:              "ready",
-				RequiredReason:     "metadata",
-				EffectiveRecencyMs: recency,
-			})
-		}
-		if s.androidSyncPreviewPath(video.VideoID, "sprite.jpg") != "" {
-			out = append(out, model.AndroidSyncAsset{
-				AssetID:            db.BuildManifestAssetID(platform, ownerKind, video.VideoID, "preview_sprite", 0),
-				AssetKind:          "preview_sprite",
-				OwnerID:            video.VideoID,
-				OwnerKind:          ownerKind,
-				Bucket:             bucket,
-				ServerURL:          "/api/media/preview-sprite/" + video.VideoID,
-				ContentType:        "image/jpeg",
-				State:              "ready",
-				RequiredReason:     "metadata",
-				EffectiveRecencyMs: recency,
-			})
-		}
 	}
 	return out
 }
@@ -1520,34 +1526,6 @@ func (s *Server) androidSyncVideoPlaybackAssets(video model.Video) []model.Andro
 			RequiredReason:     "retention",
 			IsAuto:             &isAuto,
 			AudioLanguage:      audioLang,
-			EffectiveRecencyMs: recency,
-		})
-	}
-	if s.ensureAndroidSyncPreviewTrackJSON(video) && s.androidSyncPreviewPath(video.VideoID, "track.json") != "" {
-		out = append(out, model.AndroidSyncAsset{
-			AssetID:            db.BuildManifestAssetID(platform, ownerKind, video.VideoID, "preview_track_json", 0),
-			AssetKind:          "preview_track_json",
-			OwnerID:            video.VideoID,
-			OwnerKind:          ownerKind,
-			Bucket:             bucket,
-			ServerURL:          "/api/media/preview-track-json/" + video.VideoID,
-			ContentType:        "application/json",
-			State:              "ready",
-			RequiredReason:     "retention",
-			EffectiveRecencyMs: recency,
-		})
-	}
-	if s.androidSyncPreviewPath(video.VideoID, "sprite.jpg") != "" {
-		out = append(out, model.AndroidSyncAsset{
-			AssetID:            db.BuildManifestAssetID(platform, ownerKind, video.VideoID, "preview_sprite", 0),
-			AssetKind:          "preview_sprite",
-			OwnerID:            video.VideoID,
-			OwnerKind:          ownerKind,
-			Bucket:             bucket,
-			ServerURL:          "/api/media/preview-sprite/" + video.VideoID,
-			ContentType:        "image/jpeg",
-			State:              "ready",
-			RequiredReason:     "retention",
 			EffectiveRecencyMs: recency,
 		})
 	}
@@ -1678,6 +1656,9 @@ func (s *Server) androidSyncAssetPath(asset model.AndroidSyncAsset) string {
 	if path, ok := s.androidSyncInventoryAssetPath(asset); ok {
 		return path
 	}
+	if androidSyncAssetKindRequiresInventory(asset.AssetKind) {
+		return ""
+	}
 	switch asset.AssetKind {
 	case "avatar":
 		return s.resolveAvatarPath(asset.OwnerID)
@@ -1714,6 +1695,15 @@ func (s *Server) androidSyncAssetPath(asset model.AndroidSyncAsset) string {
 	}
 }
 
+func androidSyncAssetKindRequiresInventory(kind string) bool {
+	switch kind {
+	case "preview_track_json", "preview_sprite":
+		return true
+	default:
+		return false
+	}
+}
+
 func (s *Server) androidSyncInventoryAssetPath(asset model.AndroidSyncAsset) (string, bool) {
 	row, err := s.db.GetAsset(asset.AssetID, asset.AssetKind)
 	if err != nil || row == nil {
@@ -1730,24 +1720,6 @@ func (s *Server) androidSyncInventoryAssetPath(asset model.AndroidSyncAsset) (st
 		return "", false
 	}
 	return path, true
-}
-
-func (s *Server) ensureAndroidSyncPreviewTrackJSON(video model.Video) bool {
-	if s.androidSyncPreviewPath(video.VideoID, "track.json") != "" {
-		return true
-	}
-	outDir := resolveDataPath(s.cfg.DataDir, filepath.Join("thumbnails", "previews", video.VideoID))
-	if outDir == "" || s.androidSyncPreviewPath(video.VideoID, "sprite.jpg") == "" {
-		return false
-	}
-	if err := worker.EnsurePreviewTrackJSON(outDir, worker.PreviewRequest{
-		VideoID:  video.VideoID,
-		Duration: float64(video.Duration),
-	}); err != nil {
-		slog.Warn("android_sync_preview_track_json_omitted", "video_id", video.VideoID, "err", err)
-		return false
-	}
-	return s.androidSyncPreviewPath(video.VideoID, "track.json") != ""
 }
 
 func (s *Server) androidSyncPreviewPath(videoID, name string) string {

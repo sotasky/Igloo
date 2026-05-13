@@ -1770,6 +1770,7 @@ func TestAndroidSyncMetadataVideosPublishNonStreamAssetsWithoutStream(t *testing
 	mustWriteFile(t, filepath.Join(dataDir, "videos", "youtube", "old.mp4"), []byte("old-video"))
 	mustWriteFile(t, filepath.Join(dataDir, "videos", "youtube", "old.en.vtt"), []byte("WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nhello\n"))
 	mustWriteFile(t, filepath.Join(dataDir, "videos", "youtube", "old.info.json"), []byte(`{"language":"en","automatic_captions":{"en":[{"url":"https://example.test/auto.vtt"}]}}`))
+	mustWriteFile(t, filepath.Join(dataDir, "thumbnails", "previews", "old_youtube", "track.json"), []byte(`{"version":1}`))
 	mustWriteFile(t, filepath.Join(dataDir, "thumbnails", "previews", "old_youtube", "sprite.jpg"), []byte{0xff, 0xd8, 0xff, 0xdb, 0x00, 0x43})
 	if err := srv.db.ExecRaw(`
 		INSERT INTO videos (
@@ -1782,6 +1783,40 @@ func TestAndroidSyncMetadataVideosPublishNonStreamAssetsWithoutStream(t *testing
 		)
 	`, now-90*24*60*60*1000); err != nil {
 		t.Fatalf("insert old video: %v", err)
+	}
+	videoID := "old_" + "youtube"
+	for _, asset := range []db.Asset{
+		{
+			AssetID:     db.BuildManifestAssetID("youtube", "youtube_video", videoID, "video_stream", 0),
+			AssetKind:   "video_stream",
+			OwnerKind:   "youtube_video",
+			OwnerID:     videoID,
+			FilePath:    "videos/youtube/old.mp4",
+			State:       db.AssetStateReady,
+			ContentType: "video/mp4",
+		},
+		{
+			AssetID:     db.BuildManifestAssetID("youtube", "youtube_video", videoID, "preview_track_json", 0),
+			AssetKind:   "preview_track_json",
+			OwnerKind:   "youtube_video",
+			OwnerID:     videoID,
+			FilePath:    "thumbnails/previews/old_youtube/track.json",
+			State:       db.AssetStateReady,
+			ContentType: "application/json",
+		},
+		{
+			AssetID:     db.BuildManifestAssetID("youtube", "youtube_video", videoID, "preview_sprite", 0),
+			AssetKind:   "preview_sprite",
+			OwnerKind:   "youtube_video",
+			OwnerID:     videoID,
+			FilePath:    "thumbnails/previews/old_youtube/sprite.jpg",
+			State:       db.AssetStateReady,
+			ContentType: "image/jpeg",
+		},
+	} {
+		if err := srv.db.UpsertAsset(asset, now); err != nil {
+			t.Fatalf("upsert inventory asset %s: %v", asset.AssetKind, err)
+		}
 	}
 
 	assets, _, err := srv.buildAndroidSyncAssets("", db.AndroidSyncDesiredSets{
@@ -1817,7 +1852,7 @@ func TestAndroidSyncMetadataVideosPublishNonStreamAssetsWithoutStream(t *testing
 	}
 	if track, ok := found["preview_track_json"]; !ok {
 		t.Fatalf("metadata preview JSON track missing: %+v", found)
-	} else if track.State != "ready" || track.RequiredReason != "metadata" {
+	} else if track.State != "ready" || track.RequiredReason != "retention" {
 		t.Fatalf("metadata preview JSON track mismatch: %+v", track)
 	} else if track.ContentType != "application/json" || track.ServerURL != "/api/media/preview-track-json/old_youtube" {
 		t.Fatalf("metadata preview JSON contract mismatch: %+v", track)
@@ -1827,8 +1862,50 @@ func TestAndroidSyncMetadataVideosPublishNonStreamAssetsWithoutStream(t *testing
 	}
 	if sprite, ok := found["preview_sprite"]; !ok {
 		t.Fatalf("metadata preview sprite missing: %+v", found)
-	} else if sprite.State != "ready" || sprite.RequiredReason != "metadata" {
+	} else if sprite.State != "ready" || sprite.RequiredReason != "retention" {
 		t.Fatalf("metadata preview sprite mismatch: %+v", sprite)
+	}
+}
+
+func TestAndroidSyncPreviewAssetsRequireInventoryRows(t *testing.T) {
+	srv := newAndroidSyncTestServer(t)
+	dataDir := srv.cfg.DataDir
+	now := time.Now().UnixMilli()
+
+	mustWriteFile(t, filepath.Join(dataDir, "videos", "youtube", "sample-video-preview.mp4"), []byte("old-video"))
+	mustWriteFile(t, filepath.Join(dataDir, "thumbnails", "previews", "sample_video_preview", "track.json"), []byte(`{"version":1}`))
+	mustWriteFile(t, filepath.Join(dataDir, "thumbnails", "previews", "sample_video_preview", "sprite.jpg"), []byte("sprite"))
+	if err := srv.db.ExecRaw(`
+		INSERT INTO videos (
+			video_id, channel_id, title, duration, file_path,
+			file_size, media_kind, published_at, sync_seq
+		) VALUES (
+			'sample_video_preview', 'youtube_sample_channel', 'Old', 12,
+			'videos/youtube/sample-video-preview.mp4',
+			9, 'video', ?, 1
+		)
+	`, now); err != nil {
+		t.Fatalf("insert old video: %v", err)
+	}
+
+	assets, _, err := srv.buildAndroidSyncAssets("", db.AndroidSyncDesiredSets{
+		Tweets: map[string]struct{}{},
+		Videos: map[string]struct{}{
+			"sample_video_preview": {},
+		},
+		MediaVideos: map[string]struct{}{},
+		Channels:    map[string]struct{}{},
+	})
+	if err != nil {
+		t.Fatalf("build assets: %v", err)
+	}
+	for _, asset := range assets {
+		if asset.OwnerID != "sample_video_preview" {
+			continue
+		}
+		if asset.AssetKind == "preview_track_json" || asset.AssetKind == "preview_sprite" {
+			t.Fatalf("preview asset must come from inventory, got legacy fallback: %+v", asset)
+		}
 	}
 }
 
