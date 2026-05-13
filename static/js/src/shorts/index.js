@@ -430,7 +430,7 @@ if (layout) {
         '</button>' +
         '<div class="shorts-story-tray-header">' +
         '<h2>' + escapeHtml(t('shorts_tab_stories', 'Stories')) + '</h2>' +
-        '<button class="shorts-story-tray-close" type="button" title="' + escapeHtml(closeLabel) + '" aria-label="' + escapeHtml(closeLabel) + '">' + iconSvg('close') + '</button>' +
+        '<button class="shorts-story-tray-close" type="button" title="' + escapeHtml(closeLabel) + '" aria-label="' + escapeHtml(closeLabel) + '">' + iconSvg('tray-right') + '</button>' +
         '</div>' +
         '<div class="shorts-story-tray-body"></div>'
       tray.addEventListener('click', function (event) {
