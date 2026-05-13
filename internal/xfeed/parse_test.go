@@ -198,44 +198,43 @@ func TestClientFetchTimelineEnrichesMissingQuoteParentAndRetweetQuote(t *testing
 	}
 }
 
-func TestClientFetchTimelineUsesFXTwitterAfterGalleryDLMissesRetweetQuote(t *testing.T) {
+func TestClientFetchTimelineUsesFXTwitterBeforeGalleryDLForMissingQuoteParent(t *testing.T) {
 	runner := func(_ context.Context, args []string) ([]byte, error) {
 		joined := strings.Join(args, " ")
 		switch {
-		case strings.Contains(joined, "/source_user/with_replies"):
+		case strings.Contains(joined, "/sample_source/with_replies"):
 			return []byte(`[
-				[2, {"tweet_id":"1000000000000000400","retweet_id":"1000000000000000300","content":"RT @original_author: original parent text","author":{"name":"original_author","nick":"Original Author"},"user":{"name":"source_user","nick":"Source User"},"quote_id":0,"reply_id":0}]
+				[2, {"tweet_id":"9000000000000000200","content":"quoted text","date":"2026-05-09 09:00:00","quote_by":"sample_source","quote_id":"9000000000000000100","author":{"name":"sample_quote","nick":"Sample Quote"},"user":{"name":"sample_source","nick":"Sample Source"},"retweet_id":0}]
 			]`), nil
-		case strings.Contains(joined, "/original_author/status/1000000000000000300"):
-			return []byte(`[
-				[2, {"tweet_id":"1000000000000000300","content":"original parent text","author":{"name":"original_author","nick":"Original Author"},"user":{"name":"original_author"},"quote_id":0,"reply_id":0,"retweet_id":0}]
-			]`), nil
+		case strings.Contains(joined, "/status/"):
+			t.Fatalf("status gallery-dl should not be called when fxtwitter supplies the parent: %v", args)
+			return nil, nil
 		default:
 			t.Fatalf("unexpected gallery-dl args: %v", args)
 			return nil, nil
 		}
 	}
 	fallback := fakeTweetFallback{fetch: func(_ context.Context, handle, tweetID string) (*fxtwitter.Tweet, error) {
-		if handle != "original_author" || tweetID != "1000000000000000300" {
+		if handle != "sample_source" || tweetID != "9000000000000000100" {
 			t.Fatalf("fallback fetch = %s/%s", handle, tweetID)
 		}
 		return &fxtwitter.Tweet{
-			ID:                "1000000000000000300",
-			AuthorHandle:      "original_author",
-			AuthorDisplayName: "Original Author",
-			Text:              "original parent text",
+			ID:                "9000000000000000100",
+			AuthorHandle:      "sample_source",
+			AuthorDisplayName: "Sample Source",
+			Text:              "parent quote text",
 			Quote: &fxtwitter.Tweet{
-				ID:                "1000000000000000500",
-				AuthorHandle:      "quote_author",
-				AuthorDisplayName: "Quote Author",
-				Text:              "quote fallback text",
-				MediaJSON:         `[{"url":"https://pbs.twimg.com/media/fallback.jpg?name=orig","type":"photo"}]`,
+				ID:                "9000000000000000200",
+				AuthorHandle:      "sample_quote",
+				AuthorDisplayName: "Sample Quote",
+				Text:              "quoted text",
+				MediaJSON:         `[{"url":"https://pbs.twimg.com/media/fallback-parent.jpg?name=orig","type":"photo"}]`,
 			},
 		}, nil
 	}}
 
 	client := &Client{Runner: runner, TweetFallback: fallback}
-	items, err := client.FetchTimeline(context.Background(), "source_user", 1)
+	items, err := client.FetchTimeline(context.Background(), "sample_source", 1)
 	if err != nil {
 		t.Fatalf("FetchTimeline: %v", err)
 	}
@@ -243,7 +242,60 @@ func TestClientFetchTimelineUsesFXTwitterAfterGalleryDLMissesRetweetQuote(t *tes
 		t.Fatalf("items = %#v", items)
 	}
 	item := items[0]
-	if item.QuoteTweetID != "1000000000000000500" || item.QuoteBodyText != "quote fallback text" {
+	if item.TweetID != "9000000000000000100" || item.QuoteTweetID != "9000000000000000200" {
+		b, _ := json.MarshalIndent(item, "", "  ")
+		t.Fatalf("missing parent not enriched from fxtwitter: %s", b)
+	}
+	if len(item.QuoteMedia) != 1 || item.QuoteMedia[0].URL == "" {
+		t.Fatalf("quote media = %#v", item.QuoteMedia)
+	}
+}
+
+func TestClientFetchTimelineUsesFXTwitterBeforeGalleryDLForRetweetQuote(t *testing.T) {
+	runner := func(_ context.Context, args []string) ([]byte, error) {
+		joined := strings.Join(args, " ")
+		switch {
+		case strings.Contains(joined, "/sample_source/with_replies"):
+			return []byte(`[
+				[2, {"tweet_id":"9000000000000000400","retweet_id":"9000000000000000300","content":"RT @sample_author: original parent text","author":{"name":"sample_author","nick":"Sample Author"},"user":{"name":"sample_source","nick":"Sample Source"},"quote_id":0,"reply_id":0}]
+			]`), nil
+		case strings.Contains(joined, "/status/"):
+			t.Fatalf("status gallery-dl should not be called when fxtwitter supplies the retweet quote: %v", args)
+			return nil, nil
+		default:
+			t.Fatalf("unexpected gallery-dl args: %v", args)
+			return nil, nil
+		}
+	}
+	fallback := fakeTweetFallback{fetch: func(_ context.Context, handle, tweetID string) (*fxtwitter.Tweet, error) {
+		if handle != "sample_author" || tweetID != "9000000000000000300" {
+			t.Fatalf("fallback fetch = %s/%s", handle, tweetID)
+		}
+		return &fxtwitter.Tweet{
+			ID:                "9000000000000000300",
+			AuthorHandle:      "sample_author",
+			AuthorDisplayName: "Sample Author",
+			Text:              "original parent text",
+			Quote: &fxtwitter.Tweet{
+				ID:                "9000000000000000500",
+				AuthorHandle:      "sample_quote",
+				AuthorDisplayName: "Sample Quote",
+				Text:              "quote fallback text",
+				MediaJSON:         `[{"url":"https://pbs.twimg.com/media/fallback.jpg?name=orig","type":"photo"}]`,
+			},
+		}, nil
+	}}
+
+	client := &Client{Runner: runner, TweetFallback: fallback}
+	items, err := client.FetchTimeline(context.Background(), "sample_source", 1)
+	if err != nil {
+		t.Fatalf("FetchTimeline: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("items = %#v", items)
+	}
+	item := items[0]
+	if item.QuoteTweetID != "9000000000000000500" || item.QuoteBodyText != "quote fallback text" {
 		b, _ := json.MarshalIndent(item, "", "  ")
 		t.Fatalf("quote fallback missing: %s", b)
 	}

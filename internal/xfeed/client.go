@@ -108,6 +108,7 @@ func (c *Client) enrichStatuses(ctx context.Context, parsed *ParseResult) error 
 	if c == nil {
 		return nil
 	}
+	hasTweetFallback := c.TweetFallback != nil
 
 	seen := make(map[string]bool)
 	for _, ref := range parsed.MissingQuoteParents {
@@ -119,15 +120,21 @@ func (c *Client) enrichStatuses(ctx context.Context, parsed *ParseResult) error 
 			continue
 		}
 		seen[key] = true
+		if fallback, ok := c.fallbackFeedItem(ctx, ref.Handle, ref.TweetID); ok {
+			parsed.Merge(ParseResult{Items: []FeedItem{fallback}})
+			if parent := parsed.Find(ref.TweetID); parent != nil && parent.QuoteTweetID != "" {
+				continue
+			}
+		}
+		if hasTweetFallback {
+			continue
+		}
 		status, err := c.FetchStatus(ctx, ref.Handle, ref.TweetID)
 		if err == nil {
 			parsed.Merge(status)
 			if parent := parsed.Find(ref.TweetID); parent != nil && parent.QuoteTweetID != "" {
 				continue
 			}
-		}
-		if fallback, ok := c.fallbackFeedItem(ctx, ref.Handle, ref.TweetID); ok {
-			parsed.Merge(ParseResult{Items: []FeedItem{fallback}})
 		}
 	}
 
@@ -149,15 +156,19 @@ func (c *Client) enrichStatuses(ctx context.Context, parsed *ParseResult) error 
 			continue
 		}
 		seen[key] = true
+		if fallback, ok := c.fallbackFeedItem(ctx, item.AuthorHandle, item.CanonicalTweetID); ok && fallback.QuoteTweetID != "" {
+			copyQuoteFields(item, fallback)
+			continue
+		}
+		if hasTweetFallback {
+			continue
+		}
 		status, err := c.FetchStatus(ctx, item.AuthorHandle, item.CanonicalTweetID)
 		if err == nil {
 			if rich := status.Find(item.CanonicalTweetID); rich != nil && rich.QuoteTweetID != "" {
 				copyQuoteFields(item, *rich)
 				continue
 			}
-		}
-		if fallback, ok := c.fallbackFeedItem(ctx, item.AuthorHandle, item.CanonicalTweetID); ok && fallback.QuoteTweetID != "" {
-			copyQuoteFields(item, fallback)
 		}
 	}
 	return nil
