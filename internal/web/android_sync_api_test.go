@@ -24,30 +24,30 @@ func TestAndroidSyncGenerationPublishesServeableAssets(t *testing.T) {
 
 	mustWriteFile(t, filepath.Join(dataDir, "videos", "youtube", "clip.mp4"), []byte("fake-mp4-bytes"))
 	mustWriteFile(t, filepath.Join(dataDir, "videos", "youtube", "clip.jpg"), []byte{0xff, 0xd8, 0xff, 0xdb, 0x00, 0x43})
-	mustWriteFile(t, filepath.Join(dataDir, "thumbnails", "avatars", "youtube_chan.jpg"), []byte{0xff, 0xd8, 0xff, 0xdb, 0x00, 0x43})
+	mustWriteFile(t, filepath.Join(dataDir, "thumbnails", "avatars", "youtube_sample_channel.jpg"), []byte{0xff, 0xd8, 0xff, 0xdb, 0x00, 0x43})
 
 	now := time.Now().UnixMilli()
 	if err := srv.db.ExecRaw(`
 		INSERT INTO channels (channel_id, source_id, name, platform, created_at, sync_seq)
-		VALUES ('youtube_chan', 'chan', 'Channel', 'youtube', ?, 1)
+		VALUES ('youtube_sample_channel', 'sample_channel', 'Sample Channel', 'youtube', ?, 1)
 	`, now); err != nil {
 		t.Fatalf("insert channel: %v", err)
 	}
 	if err := srv.db.ExecRaw(`
 		INSERT INTO channel_follows (user_id, channel_id, followed_at)
-		VALUES ('', 'youtube_chan', ?)
+		VALUES ('', 'youtube_sample_channel', ?)
 	`, now); err != nil {
 		t.Fatalf("insert follow: %v", err)
 	}
 	if err := srv.db.ExecRaw(`
 		INSERT INTO channel_profiles (channel_id, platform, handle, display_name, avatar_url, fetched_at)
-		VALUES ('youtube_chan', 'youtube', 'chan', 'Channel', 'https://example.invalid/a.jpg', ?)
+		VALUES ('youtube_sample_channel', 'youtube', 'sample_channel', 'Sample Channel', 'https://example.invalid/a.jpg', ?)
 	`, now); err != nil {
 		t.Fatalf("insert profile: %v", err)
 	}
 	if err := srv.db.ExecRaw(`
 		INSERT INTO videos (video_id, channel_id, title, duration, thumbnail_path, file_path, file_size, published_at, downloaded_at, sync_seq)
-		VALUES ('clip', 'youtube_chan', 'Clip', 12, 'videos/youtube/clip.jpg', 'videos/youtube/clip.mp4', 14, ?, ?, 2)
+		VALUES ('clip', 'youtube_sample_channel', 'Clip', 12, 'videos/youtube/clip.jpg', 'videos/youtube/clip.mp4', 14, ?, ?, 2)
 	`, now, now); err != nil {
 		t.Fatalf("insert video: %v", err)
 	}
@@ -1223,7 +1223,7 @@ func TestAndroidSyncCanonicalVideoURL(t *testing.T) {
 	}
 }
 
-func TestAndroidSyncLatestCreatesGenerationDuringFreshSourceDrift(t *testing.T) {
+func TestAndroidSyncLatestServesFreshGenerationWhileRefreshBuilds(t *testing.T) {
 	srv := newAndroidSyncTestServer(t)
 	dataDir := srv.cfg.DataDir
 	now := time.Now().UnixMilli()
@@ -1246,7 +1246,118 @@ func TestAndroidSyncLatestCreatesGenerationDuringFreshSourceDrift(t *testing.T) 
 	}
 	if err := srv.db.ExecRaw(`
 		INSERT INTO videos (video_id, channel_id, title, duration, thumbnail_path, file_path, file_size, published_at, downloaded_at, sync_seq)
-		VALUES ('clip-a', 'youtube_chan', 'Clip A', 12, 'videos/youtube/clip-a.jpg', 'videos/youtube/clip-a.mp4', 6, ?, ?, 2)
+		VALUES ('clip-a', 'youtube_sample_channel', 'Clip A', 12, 'videos/youtube/clip-a.jpg', 'videos/youtube/clip-a.mp4', 6, ?, ?, 2)
+	`, now, now); err != nil {
+		t.Fatalf("insert first video: %v", err)
+	}
+
+	retention := db.AndroidRetentionSettings{FeedDays: 3, YoutubeDays: 2, MomentsDays: 90, StoryHours: 48}
+	first, err := srv.ensureAndroidSyncGeneration("alice", retention)
+	if err != nil {
+		t.Fatalf("first generation: %v", err)
+	}
+
+	mustWriteFile(t, filepath.Join(dataDir, "videos", "youtube", "clip-b.mp4"), []byte("clip-b"))
+	mustWriteFile(t, filepath.Join(dataDir, "videos", "youtube", "clip-b.jpg"), []byte{0xff, 0xd8, 0xff, 0xdb, 0x00, 0x43})
+	if err := srv.db.ExecRaw(`
+		INSERT INTO videos (video_id, channel_id, title, duration, thumbnail_path, file_path, file_size, published_at, downloaded_at, sync_seq)
+		VALUES ('clip-b', 'youtube_sample_channel', 'Clip B', 12, 'videos/youtube/clip-b.jpg', 'videos/youtube/clip-b.mp4', 6, ?, ?, 3)
+	`, now+1, now+1); err != nil {
+		t.Fatalf("insert second video: %v", err)
+	}
+	nextSource, err := srv.db.AndroidSyncSourceVersion("alice", retention)
+	if err != nil {
+		t.Fatalf("next source version: %v", err)
+	}
+
+	srv.androidSyncGenerationMu.Lock()
+	locked := true
+	defer func() {
+		if locked {
+			srv.androidSyncGenerationMu.Unlock()
+		}
+	}()
+
+	req := httptest.NewRequest("GET", "/api/android/sync/generation/latest?feed_days=3&youtube_days=2&moments_days=90&story_hours=48", nil)
+	req = attachTestAuth(req, "alice")
+	rec := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		srv.mux.ServeHTTP(rec, req)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(500 * time.Millisecond):
+		srv.androidSyncGenerationMu.Unlock()
+		locked = false
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+		}
+		t.Fatalf("latest generation request blocked behind refresh materialization")
+	}
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var latest struct {
+		Generation model.AndroidSyncGeneration `json:"generation"`
+		Refreshing bool                        `json:"refreshing"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&latest); err != nil {
+		t.Fatalf("decode latest: %v", err)
+	}
+	if latest.Generation.GenerationID != first.GenerationID {
+		t.Fatalf("served generation = %s, want existing fresh %s", latest.Generation.GenerationID, first.GenerationID)
+	}
+	if !latest.Refreshing {
+		t.Fatalf("refreshing = false, want true while source refresh is queued")
+	}
+
+	srv.androidSyncGenerationMu.Unlock()
+	locked = false
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		existing, err := srv.db.GetAndroidSyncGenerationBySource(nextSource)
+		if err != nil {
+			t.Fatalf("lookup refreshed source: %v", err)
+		}
+		if existing != nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("background refresh did not store source %s", nextSource)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestAndroidSyncLatestCreatesGenerationDuringFreshSourceDrift(t *testing.T) {
+	srv := newAndroidSyncTestServer(t)
+	dataDir := srv.cfg.DataDir
+	now := time.Now().UnixMilli()
+
+	mustWriteFile(t, filepath.Join(dataDir, "videos", "youtube", "clip-a.mp4"), []byte("clip-a"))
+	mustWriteFile(t, filepath.Join(dataDir, "videos", "youtube", "clip-a.jpg"), []byte{0xff, 0xd8, 0xff, 0xdb, 0x00, 0x43})
+	mustWriteFile(t, filepath.Join(dataDir, "thumbnails", "avatars", "youtube_sample_channel.jpg"), []byte{0xff, 0xd8, 0xff, 0xdb, 0x00, 0x43})
+
+	if err := srv.db.ExecRaw(`
+		INSERT INTO channels (channel_id, source_id, name, platform, created_at, sync_seq)
+		VALUES ('youtube_sample_channel', 'sample_channel', 'Sample Channel', 'youtube', ?, 1)
+	`, now); err != nil {
+		t.Fatalf("insert channel: %v", err)
+	}
+	if err := srv.db.ExecRaw(`
+		INSERT INTO channel_follows (user_id, channel_id, followed_at)
+		VALUES ('', 'youtube_sample_channel', ?)
+	`, now); err != nil {
+		t.Fatalf("insert follow: %v", err)
+	}
+	if err := srv.db.ExecRaw(`
+		INSERT INTO videos (video_id, channel_id, title, duration, thumbnail_path, file_path, file_size, published_at, downloaded_at, sync_seq)
+		VALUES ('clip-a', 'youtube_sample_channel', 'Clip A', 12, 'videos/youtube/clip-a.jpg', 'videos/youtube/clip-a.mp4', 6, ?, ?, 2)
 	`, now, now); err != nil {
 		t.Fatalf("insert first video: %v", err)
 	}
@@ -1270,7 +1381,7 @@ func TestAndroidSyncLatestCreatesGenerationDuringFreshSourceDrift(t *testing.T) 
 	mustWriteFile(t, filepath.Join(dataDir, "videos", "youtube", "clip-b.jpg"), []byte{0xff, 0xd8, 0xff, 0xdb, 0x00, 0x43})
 	if err := srv.db.ExecRaw(`
 		INSERT INTO videos (video_id, channel_id, title, duration, thumbnail_path, file_path, file_size, published_at, downloaded_at, sync_seq)
-		VALUES ('clip-b', 'youtube_chan', 'Clip B', 12, 'videos/youtube/clip-b.jpg', 'videos/youtube/clip-b.mp4', 6, ?, ?, 3)
+		VALUES ('clip-b', 'youtube_sample_channel', 'Clip B', 12, 'videos/youtube/clip-b.jpg', 'videos/youtube/clip-b.mp4', 6, ?, ?, 3)
 	`, now+1, now+1); err != nil {
 		t.Fatalf("insert second video: %v", err)
 	}

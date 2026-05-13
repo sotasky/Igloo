@@ -10,6 +10,7 @@ import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
 import io.ktor.http.contentType
+import io.ktor.http.isSuccess
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
@@ -25,19 +26,19 @@ class AndroidSyncApi(
             parameter("youtube_days", retention.youtubeDays)
             parameter("moments_days", retention.momentsDays)
             parameter("story_hours", retention.storyHours)
-        }.bodyAsText().decodeSync("latest_generation")
+        }.decodeSyncResponse("latest_generation")
 
     suspend fun items(generationId: String, after: String? = null): AndroidSyncItemsResponse =
         client.get(baseUrlProvider() + "/api/android/sync/generation/$generationId/items") {
             syncMetadataTimeout()
             if (!after.isNullOrEmpty()) parameter("after", after)
-        }.bodyAsText().decodeSync("items:$generationId")
+        }.decodeSyncResponse("items:$generationId")
 
     suspend fun assets(generationId: String, after: String? = null): AndroidSyncAssetsResponse =
         client.get(baseUrlProvider() + "/api/android/sync/generation/$generationId/assets") {
             syncMetadataTimeout()
             if (!after.isNullOrEmpty()) parameter("after", after)
-        }.bodyAsText().decodeSync("assets:$generationId")
+        }.decodeSyncResponse("assets:$generationId")
 
     suspend fun health(req: AndroidSyncHealthRequest): HttpResponse =
         client.post(baseUrlProvider() + "/api/android/sync/health") {
@@ -61,13 +62,51 @@ class AndroidSyncApi(
     }
 }
 
+class AndroidSyncHttpException(
+    val label: String,
+    val statusCode: Int,
+    body: String,
+) : IllegalStateException(syncHttpErrorMessage(label, statusCode, body)) {
+    val isTransient: Boolean
+        get() = statusCode == 408 || statusCode == 429 || statusCode in 500..599
+
+    val downgradesReachability: Boolean
+        get() = statusCode == 408 || statusCode == 502 || statusCode == 503 || statusCode == 504
+}
+
+class AndroidSyncDecodeException(
+    val label: String,
+    body: String,
+    cause: Throwable,
+) : IllegalStateException("Sync decode failed for $label: ${body.syncErrorPreview()}", cause)
+
+private suspend inline fun <reified T> HttpResponse.decodeSyncResponse(label: String): T {
+    val raw = bodyAsText()
+    if (!status.isSuccess()) {
+        throw AndroidSyncHttpException(label, status.value, raw)
+    }
+    return raw.decodeSync(label)
+}
+
 private inline fun <reified T> String.decodeSync(label: String): T =
     try {
         iglooJson.decodeFromString(this)
     } catch (e: Exception) {
-        val preview = take(600).replace('\n', ' ')
-        throw IllegalStateException("Sync decode failed for $label: $preview", e)
+        throw AndroidSyncDecodeException(label, this, e)
     }
+
+private fun syncHttpErrorMessage(label: String, statusCode: Int, body: String): String {
+    val preview = body.syncErrorPreview()
+    if (preview.isBlank() || preview.startsWith("<")) {
+        return "Sync HTTP $statusCode for $label"
+    }
+    return "Sync HTTP $statusCode for $label: $preview"
+}
+
+private val syncWhitespace = Regex("\\s+")
+
+private fun String.syncErrorPreview(): String =
+    trim().replace(syncWhitespace, " ").take(200)
 
 @Serializable
 data class AndroidSyncLatestResponse(

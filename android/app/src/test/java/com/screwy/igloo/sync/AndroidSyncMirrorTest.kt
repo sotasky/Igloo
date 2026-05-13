@@ -1,5 +1,6 @@
 package com.screwy.igloo.sync
 
+import com.screwy.igloo.data.PreferencesRepo
 import com.screwy.igloo.data.IglooDatabase
 import com.screwy.igloo.data.RoomTestSupport
 import com.screwy.igloo.data.entity.AndroidSyncAssetEntity
@@ -17,6 +18,8 @@ import com.screwy.igloo.data.entity.FeedItemEntity
 import com.screwy.igloo.data.entity.FeedLikeEntity
 import com.screwy.igloo.data.entity.OutboxEntity
 import com.screwy.igloo.data.entity.VideoEntity
+import com.screwy.igloo.log.InMemoryLogSink
+import com.screwy.igloo.log.LogEntry
 import com.screwy.igloo.log.Logger
 import com.screwy.igloo.media.ForegroundPromoter
 import com.screwy.igloo.net.AndroidSyncApi
@@ -46,8 +49,10 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -57,6 +62,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -79,13 +85,20 @@ class AndroidSyncMirrorTest {
     private lateinit var db: IglooDatabase
     private lateinit var scope: CoroutineScope
     private lateinit var client: HttpClient
+    private lateinit var logSink: InMemoryLogSink
     private lateinit var logger: Logger
     private var nowMs: Long = 10_000L
 
     @Before fun setUp() {
         db = RoomTestSupport.freshDb()
         scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-        logger = mockk(relaxed = true)
+        logSink = InMemoryLogSink()
+        logger = Logger(
+            prefs = PreferencesRepo(db.preferenceDao(), scope, nowMsProvider = { nowMs }),
+            sink = logSink,
+            scope = scope,
+            nowMsProvider = { nowMs },
+        )
     }
 
     @After fun tearDown() {
@@ -93,6 +106,15 @@ class AndroidSyncMirrorTest {
         scope.cancel()
         db.close()
     }
+
+    private suspend fun waitForLog(event: String): LogEntry =
+        withTimeout(3_000L) {
+            while (true) {
+                logSink.snapshot().firstOrNull { it.event == event }?.let { return@withTimeout it }
+                delay(10)
+            }
+            error("unreachable")
+        }
 
     @Test fun triggerMarksMirrorPendingBeforeRunnerCreatesGeneration() {
         val mirror = buildMirror(MockEngine { respondOk("{}") })
@@ -178,6 +200,84 @@ class AndroidSyncMirrorTest {
         assertNotNull(localPath)
         assertTrue(localPath!!.contains("${java.io.File.separator}sync${java.io.File.separator}feed${java.io.File.separator}"))
         assertTrue("health should be attempted after each batch and final report", healthAttempts.get() >= 2)
+    }
+
+    @Test fun transientGatewayMetadataFailureRetriesAsHttpStatusNotDecodeFailure() = runBlocking {
+        val latestAttempts = AtomicInteger(0)
+        val engine = MockEngine { request ->
+            when (request.url.encodedPath) {
+                "/api/android/sync/generation/latest" -> {
+                    if (latestAttempts.incrementAndGet() == 1) {
+                        respond(
+                            "<html><body><h1>502 Bad Gateway</h1><p>proxy response</p></body></html>",
+                            HttpStatusCode.BadGateway,
+                            headersOf("Content-Type", ContentType.Text.Html.toString()),
+                        )
+                    } else {
+                        respondJson(
+                            AndroidSyncLatestResponse(
+                                generation = AndroidSyncGenerationDto(
+                                    generation_id = GENERATION_ID,
+                                    created_at_ms = nowMs,
+                                    status = "published",
+                                    source_version = "test",
+                                ),
+                            ),
+                        )
+                    }
+                }
+                "/api/android/sync/generation/$GENERATION_ID/items" -> respondJson(
+                    AndroidSyncItemsResponse(
+                        generation_id = GENERATION_ID,
+                        items = emptyList(),
+                        end_of_stream = true,
+                    ),
+                )
+                "/api/android/sync/generation/$GENERATION_ID/assets" -> respondJson(
+                    AndroidSyncAssetsResponse(
+                        generation_id = GENERATION_ID,
+                        assets = emptyList(),
+                        end_of_stream = true,
+                    ),
+                )
+                "/api/android/sync/health" -> respond("""{"ok":true}""", HttpStatusCode.OK, jsonHeaders())
+                else -> error("Unexpected request ${request.url}")
+            }
+        }
+        val mirror = buildMirror(engine)
+
+        mirror.syncOnce()
+
+        assertEquals(2, latestAttempts.get())
+        val retry = waitForLog("android_sync_metadata_retry")
+        assertEquals("latest_generation", retry.fields["label"])
+        assertEquals(1, retry.fields["attempt"])
+        assertEquals("Sync HTTP 502 for latest_generation", retry.fields["error"])
+    }
+
+    @Test fun malformedSuccessfulMetadataFailsWithoutInfiniteRetry() = runBlocking {
+        val latestAttempts = AtomicInteger(0)
+        val engine = MockEngine { request ->
+            when (request.url.encodedPath) {
+                "/api/android/sync/generation/latest" -> {
+                    latestAttempts.incrementAndGet()
+                    respondOk("""{"generation": "not an object"}""")
+                }
+                else -> error("Unexpected request ${request.url}")
+            }
+        }
+        val mirror = buildMirror(engine)
+
+        try {
+            withTimeout(500) {
+                mirror.syncOnce()
+            }
+            fail("malformed metadata should fail")
+        } catch (e: IllegalStateException) {
+            assertTrue(e.message.orEmpty().contains("latest_generation"))
+            assertTrue(e.message.orEmpty().contains("Sync decode failed"))
+        }
+        assertEquals(1, latestAttempts.get())
     }
 
     @Test fun assetWithoutSizeOrHashFailsWithoutDownload() = runBlocking {

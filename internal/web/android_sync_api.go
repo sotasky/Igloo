@@ -53,7 +53,7 @@ func (s *Server) handleAndroidSyncLatestGeneration(w http.ResponseWriter, r *htt
 		writeJSONError(w, http.StatusBadRequest, "bad_retention", err.Error())
 		return
 	}
-	gen, err := s.ensureAndroidSyncGeneration(user.Username, retention)
+	gen, refreshing, err := s.androidSyncGenerationForRequest(user.Username, retention)
 	if err != nil {
 		slog.Error("android_sync_generation_failed", "err", err, "duration_ms", time.Since(start).Milliseconds())
 		writeJSONError(w, http.StatusInternalServerError, "generation_failed", err.Error())
@@ -68,9 +68,10 @@ func (s *Server) handleAndroidSyncLatestGeneration(w http.ResponseWriter, r *htt
 		"ready_assets", gen.ReadyAssetCount,
 		"server_missing_assets", gen.ServerMissingAssetCount,
 		"moments_days", retention.MomentsDays,
+		"refreshing", refreshing,
 		"duration_ms", time.Since(start).Milliseconds(),
 	)
-	writeJSON(w, http.StatusOK, map[string]any{"generation": gen})
+	writeJSON(w, http.StatusOK, map[string]any{"generation": gen, "refreshing": refreshing})
 }
 
 func (s *Server) handleAndroidSyncGenerationItems(w http.ResponseWriter, r *http.Request) {
@@ -458,6 +459,80 @@ func (s *Server) ensureAndroidSyncGeneration(username string, retention db.Andro
 		return nil, err
 	}
 	return &gen, nil
+}
+
+func (s *Server) androidSyncGenerationForRequest(username string, retention db.AndroidRetentionSettings) (*model.AndroidSyncGeneration, bool, error) {
+	nowMs := time.Now().UnixMilli()
+	sourceVersion, err := s.db.AndroidSyncSourceVersion(username, retention)
+	if err != nil {
+		return nil, false, err
+	}
+	if latest, err := s.db.GetLatestAndroidSyncGeneration(); err != nil {
+		return nil, false, err
+	} else if latest != nil && latest.SourceVersion == sourceVersion && androidSyncGenerationFreshForRetention(latest, retention, nowMs) {
+		return latest, false, nil
+	}
+	if existing, err := s.db.GetAndroidSyncGenerationBySource(sourceVersion); err != nil {
+		return nil, false, err
+	} else if existing != nil && androidSyncGenerationRetentionMatches(existing.Retention, retention) {
+		return existing, false, nil
+	}
+	if latest, err := s.db.GetLatestAndroidSyncGeneration(); err != nil {
+		return nil, false, err
+	} else if latest != nil && androidSyncCanServeStaleGeneration() && androidSyncGenerationFreshForRetention(latest, retention, nowMs) {
+		s.queueAndroidSyncGenerationRefresh(username, retention, sourceVersion)
+		return latest, true, nil
+	}
+	gen, err := s.ensureAndroidSyncGeneration(username, retention)
+	return gen, false, err
+}
+
+func (s *Server) queueAndroidSyncGenerationRefresh(username string, retention db.AndroidRetentionSettings, sourceVersion string) {
+	s.androidSyncGenerationRefreshMu.Lock()
+	if s.androidSyncGenerationRefreshing {
+		s.androidSyncGenerationRefreshMu.Unlock()
+		return
+	}
+	s.androidSyncGenerationRefreshing = true
+	s.androidSyncGenerationRefreshMu.Unlock()
+
+	go func() {
+		start := time.Now()
+		defer func() {
+			s.androidSyncGenerationRefreshMu.Lock()
+			s.androidSyncGenerationRefreshing = false
+			s.androidSyncGenerationRefreshMu.Unlock()
+		}()
+		gen, err := s.ensureAndroidSyncGeneration(username, retention)
+		if err != nil {
+			slog.Error(
+				"android_sync_generation_refresh_failed",
+				"source_version", shortAndroidSyncSourceVersion(sourceVersion),
+				"err", err,
+				"duration_ms", time.Since(start).Milliseconds(),
+			)
+			return
+		}
+		slog.Info(
+			"android_sync_generation_refresh_done",
+			"generation_id", gen.GenerationID,
+			"source_version", shortAndroidSyncSourceVersion(sourceVersion),
+			"items", gen.ItemCount,
+			"assets", gen.AssetCount,
+			"duration_ms", time.Since(start).Milliseconds(),
+		)
+	}()
+}
+
+func shortAndroidSyncSourceVersion(sourceVersion string) string {
+	if len(sourceVersion) <= 16 {
+		return sourceVersion
+	}
+	return sourceVersion[:16]
+}
+
+func androidSyncCanServeStaleGeneration() bool {
+	return len(productHealthUsernames()) <= 1
 }
 
 func androidSyncGenerationRetentionPayload(retention db.AndroidRetentionSettings) map[string]int {

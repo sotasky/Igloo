@@ -53,9 +53,11 @@ type Server struct {
 	downloaderReportMu     sync.Mutex
 	downloaderReportLatest *downloaderReport
 
-	androidSyncGenerationMu        sync.Mutex
-	androidSyncAssetServeSemOnce   sync.Once
-	androidSyncAssetServeSemaphore chan struct{}
+	androidSyncGenerationMu         sync.Mutex
+	androidSyncGenerationRefreshMu  sync.Mutex
+	androidSyncGenerationRefreshing bool
+	androidSyncAssetServeSemOnce    sync.Once
+	androidSyncAssetServeSemaphore  chan struct{}
 }
 
 func NewServer(database *db.DB, cfg *config.Config, workers *worker.Manager, staticV func(string) string) http.Handler {

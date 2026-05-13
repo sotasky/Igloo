@@ -10,7 +10,9 @@ import com.screwy.igloo.data.entity.AndroidSyncItemEntity
 import com.screwy.igloo.log.Logger
 import com.screwy.igloo.net.AndroidSyncApi
 import com.screwy.igloo.net.AndroidSyncAssetDto
+import com.screwy.igloo.net.AndroidSyncDecodeException
 import com.screwy.igloo.net.AndroidSyncGenerationDto
+import com.screwy.igloo.net.AndroidSyncHttpException
 import com.screwy.igloo.net.AndroidSyncItemDto
 import com.screwy.igloo.net.AndroidSyncRetentionRequest
 import com.screwy.igloo.net.Reachability
@@ -379,6 +381,7 @@ class AndroidSyncMirror(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
+                if (e.isTerminalMetadataFailure()) throw e
                 if (e.isLikelyTransportFailure()) reachability.downgrade()
                 val retryDelay = METADATA_RETRY_DELAYS_MS.getOrElse(attempt) { METADATA_RETRY_DELAYS_MS.last() }
                 logger.info(
@@ -405,6 +408,7 @@ class AndroidSyncMirror(
 
 internal fun Throwable.isLikelyTransportFailure(): Boolean {
     generateSequence(this) { it.cause }.forEach { cause ->
+        if (cause is AndroidSyncHttpException && cause.downgradesReachability) return true
         if (cause is IOException) return true
         val simpleName = cause::class.simpleName.orEmpty()
         if (simpleName == "ConnectTimeoutException" ||
@@ -423,6 +427,14 @@ internal fun Throwable.isLikelyTransportFailure(): Boolean {
         {
             return true
         }
+    }
+    return false
+}
+
+private fun Throwable.isTerminalMetadataFailure(): Boolean {
+    generateSequence(this) { it.cause }.forEach { cause ->
+        if (cause is AndroidSyncDecodeException) return true
+        if (cause is AndroidSyncHttpException && !cause.isTransient) return true
     }
     return false
 }
