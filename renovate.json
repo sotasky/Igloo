@@ -1,8 +1,8 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "description": "Renovate owns Docker/runtime dependency updates; Dependabot owns Go, Gradle, and GitHub Actions.",
+  "description": "Renovate owns dependency updates for Go, Gradle, GitHub Actions, Docker images, and runtime tools.",
   "extends": ["config:recommended"],
-  "enabledManagers": ["dockerfile", "custom.regex"],
+  "enabledManagers": ["gomod", "gradle", "github-actions", "dockerfile", "custom.regex"],
   "dependencyDashboard": true,
   "prConcurrentLimit": 3,
   "prHourlyLimit": 1,
@@ -17,6 +17,20 @@
     }
   ],
   "packageRules": [
+    {
+      "description": "Group Go minor and patch updates.",
+      "matchManagers": ["gomod"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "groupName": "go minor and patch dependencies",
+      "groupSlug": "go-minor-patch"
+    },
+    {
+      "description": "Group Android minor and patch updates.",
+      "matchManagers": ["gradle"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "groupName": "android minor and patch dependencies",
+      "groupSlug": "android-minor-patch"
+    },
     {
       "description": "Keep Docker and runtime tool updates together.",
       "matchManagers": ["dockerfile", "custom.regex"],
