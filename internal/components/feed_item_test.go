@@ -94,7 +94,7 @@ func TestFeedItemThreadRowsRenderBottomActions(t *testing.T) {
 	}
 }
 
-func TestFeedItemThreadCollapsesOlderAncestors(t *testing.T) {
+func TestFeedItemThreadRendersConversationCapsuleForOlderAncestors(t *testing.T) {
 	item := model.FeedItem{
 		TweetID:      "leaf_1",
 		AuthorHandle: "sample_author",
@@ -111,16 +111,27 @@ func TestFeedItemThreadCollapsesOlderAncestors(t *testing.T) {
 		t.Fatalf("render feed item: %v", err)
 	}
 	html := buf.String()
-	if got := strings.Count(html, `data-feed-thread-collapsed="1"`); got != 2 {
-		t.Fatalf("collapsed thread rows = %d, want 2; html=%s", got, html)
+	if strings.Contains(html, `data-feed-thread-more`) || strings.Contains(html, `Load more replies`) {
+		t.Fatalf("load-more control should not render: %s", html)
 	}
-	if !strings.Contains(html, `data-feed-thread-more`) || !strings.Contains(html, `Load more replies`) {
-		t.Fatalf("load-more replies control missing: %s", html)
+	if strings.Contains(html, `data-feed-thread-collapsed`) {
+		t.Fatalf("collapsed hidden thread rows should not render: %s", html)
 	}
-	buttonAt := strings.Index(html, `data-feed-thread-more`)
-	visibleParentAt := strings.Index(html, `data-tweet-id="parent_1"`)
-	if buttonAt < 0 || visibleParentAt < 0 || buttonAt > visibleParentAt {
-		t.Fatalf("load-more control should render before visible latest replies; button=%d parent=%d html=%s", buttonAt, visibleParentAt, html)
+	for _, hiddenID := range []string{`data-tweet-id="root_1"`, `data-tweet-id="mid_1"`} {
+		if strings.Contains(html, hiddenID) {
+			t.Fatalf("older ancestor %s should not render in feed card: %s", hiddenID, html)
+		}
+	}
+	for _, want := range []string{
+		`data-feed-thread-capsule`,
+		`href="/thread/leaf_1"`,
+		`4 posts across 4 people`,
+		`data-tweet-id="parent_1"`,
+		`data-tweet-id="leaf_1"`,
+	} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("missing %q in html: %s", want, html)
+		}
 	}
 }
 

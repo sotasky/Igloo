@@ -487,15 +487,33 @@ func feedAlgoScore(score float64) string {
 }
 
 func threadVisibleAncestorStart(chain []model.FeedItem) int {
-	total := len(chain) + 1 // ancestors plus the leaf card
-	if total <= 2 {
+	if len(chain) <= 1 {
 		return 0
 	}
-	hidden := total - 2
-	if hidden > len(chain) {
-		return len(chain)
+	return len(chain) - 1
+}
+
+func threadCapsuleVisible(chain []model.FeedItem) bool {
+	return len(chain) > 1
+}
+
+func threadCapsulePostCount(item model.FeedItem) int {
+	return len(item.ThreadChain) + 1
+}
+
+func threadCapsulePeopleCount(item model.FeedItem) int {
+	seen := make(map[string]bool)
+	add := func(handle string) {
+		handle = strings.TrimPrefix(strings.ToLower(strings.TrimSpace(handle)), "@")
+		if handle != "" {
+			seen[handle] = true
+		}
 	}
-	return hidden
+	for _, ancestor := range item.ThreadChain {
+		add(ancestor.AuthorHandle)
+	}
+	add(item.AuthorHandle)
+	return len(seen)
 }
 
 // feedPublishedAtStr returns the published_at time as a string or empty.

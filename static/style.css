@@ -9062,28 +9062,45 @@ body.shorts-mode .sidebar {
     margin-bottom: 0;
 }
 
-.feed-thread-more-wrap {
-    padding: 0.5rem 0.7rem 0.45rem calc(0.7rem + var(--thread-gutter));
-}
-
-.feed-thread-more {
-    appearance: none;
-    border: 1px solid rgba(255, 255, 255, 0.16);
-    border-radius: 999px;
-    background: rgba(255, 255, 255, 0.06);
+.feed-thread-capsule {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    padding: 0.55rem 0.7rem 0.45rem calc(0.7rem + var(--thread-gutter));
     color: var(--text-secondary);
-    cursor: pointer;
-    font: inherit;
+    text-decoration: none;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.07);
     font-size: 0.82rem;
-    font-weight: 600;
-    line-height: 1.2;
-    padding: 0.42rem 0.78rem;
+    line-height: 1.25;
 }
 
-.feed-thread-more:hover,
-.feed-thread-more:focus-visible {
-    background: rgba(255, 255, 255, 0.1);
+.feed-thread-capsule:hover,
+.feed-thread-capsule:focus-visible {
     color: var(--text-primary);
+    background: rgba(255, 255, 255, 0.045);
+}
+
+.feed-thread-capsule-avatars {
+    display: inline-flex;
+    align-items: center;
+    padding-left: 0.25rem;
+}
+
+.feed-thread-capsule-dot {
+    width: 13px;
+    height: 13px;
+    border-radius: 50%;
+    background: var(--text-muted);
+    border: 1px solid rgba(var(--surface-soft-rgb), 0.95);
+    margin-left: -0.25rem;
+}
+
+.feed-thread-capsule-dot:first-child {
+    margin-left: 0;
+}
+
+.feed-thread-capsule-open {
+    color: var(--text-muted);
 }
 
 /* Strip individual card chrome inside a thread — the wrapper provides
