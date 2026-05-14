@@ -25,6 +25,10 @@ If profile media only becomes ready after hover/page render, treat that as a pip
 
 ## Coding Rules
 
+- Commit subjects may use Conventional Commits:
+  `<type>[optional scope]: <description>`.
+  Examples: `fix(feed): trigger hover on cards`, `docs: trim setup notes`.
+  Lowercase unless a name requires caps.
 - Keep changes scoped. Do not mix unrelated cleanup, formatting, generated churn, or private workflow notes into product work.
 - Use generic names in tests, docs, examples, comments, and commits.
   Do not commit real handles, usernames, channel IDs, post IDs, or local data
@@ -44,6 +48,8 @@ For Go code, protect the success path. Do not allocate rollback journals, diagno
 
 ## Test Gates
 
+- Use focused tests while developing or proving a narrow change, but use
+  `scripts/dev/test-full.sh` for full-suite completion claims.
 - For full-suite verification, do not treat raw `go test ./...` or Android
   `BUILD SUCCESSFUL` output as enough. Check for skipped tests and ignored
   errors explicitly.
@@ -84,6 +90,9 @@ For Go code, protect the success path. Do not allocate rollback journals, diagno
 - Retention widening triggers replay/backfill; narrowing prunes; bookmarks and likes survive prune.
 - Use project scripts: `android/build.sh`, `android/test.sh`, `scripts/dev/build.sh android`, `scripts/dev/build.sh all`.
 - Before committing Android changes, run the focused `android/test.sh <ClassFilter>` proof for the touched area.
+- Do not run a separate full `android/test.sh` after `scripts/dev/test-full.sh`
+  just to duplicate full-suite proof; run it separately when debugging Android
+  failures or when Android-only output is needed.
 - For Android build, install, launcher, signing, SDK, Gradle, or device-script changes, `android/build.sh` is the required proof because it builds, installs, and relaunches on the device. `android/build.sh apk` and `android/build.sh compile` are useful diagnostics only; do not present them as completion unless the user explicitly narrowed the request to APK or compile output.
 - Before pushing Android changes, run full `android/test.sh` and `android/build.sh` so the APK is built, installed, and relaunched on the device. If device install is not available or fails, report that blocker plainly instead of falling back to APK-only proof unless the user explicitly narrowed verification or says they are building it.
 - Do not run `adb uninstall`, `pm uninstall`, or package-removal retries for Igloo on a device unless the user explicitly approves that exact action. `pm uninstall -k` still removes the installed app and is not a safe install-recovery step.

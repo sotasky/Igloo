@@ -185,6 +185,10 @@ See [PRIVACY.md](PRIVACY.md).
   [yt-dlp](https://github.com/yt-dlp/yt-dlp) and
   [gallery-dl](https://github.com/mikf/gallery-dl).
 
+## AI Usage
+
+This project is developed heavily with AI. I don't use AI for human-facing parts such as documentation and locales and will never automate that part.
+
 ## License
 
 [LICENSE](LICENSE)
