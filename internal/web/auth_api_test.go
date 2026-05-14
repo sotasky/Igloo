@@ -2,13 +2,17 @@ package web
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/screwys/igloo/internal/auth"
+	"golang.org/x/crypto/pbkdf2"
 )
 
 func contextWithUser(r *http.Request, username, role string) context.Context {
@@ -54,6 +58,49 @@ func TestRefreshRotationIssuesNewPair(t *testing.T) {
 	}
 }
 
+func TestAuthLoginUpgradesLegacyPBKDF2PasswordHash(t *testing.T) {
+	srv := newTestServer(t)
+	authPath := filepath.Join(t.TempDir(), "auth_users.json")
+	srv.cfg.AuthUsersPath = authPath
+	if err := auth.SaveUsers(authPath, map[string]auth.UserRecord{
+		"alice": {
+			Password:  testPBKDF2PasswordRecord("correct-password"),
+			Role:      "admin",
+			Platforms: []string{"youtube"},
+		},
+	}); err != nil {
+		t.Fatalf("SaveUsers: %v", err)
+	}
+	auth.InitCache(authPath)
+
+	req := httptest.NewRequest("POST", "/api/auth/login", strings.NewReader(
+		`{"username":"alice","password":"correct-password"}`,
+	))
+	rec := httptest.NewRecorder()
+	srv.handleAuthLogin(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("login status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	users, err := auth.LoadUsers(authPath)
+	if err != nil {
+		t.Fatalf("LoadUsers: %v", err)
+	}
+	upgraded := users["alice"].Password
+	if upgraded.Algorithm != "argon2id" {
+		t.Fatalf("algorithm = %q, want argon2id", upgraded.Algorithm)
+	}
+	if upgraded.Iterations != 0 {
+		t.Fatalf("iterations = %d, want 0 for Argon2id record", upgraded.Iterations)
+	}
+	if auth.PasswordNeedsRehash(upgraded) {
+		t.Fatal("upgraded password record should not need rehash")
+	}
+	if !auth.VerifyPassword("correct-password", upgraded) {
+		t.Fatal("upgraded password record did not verify")
+	}
+}
+
 func TestRefreshReplayRevokesSession(t *testing.T) {
 	srv := newTestServer(t)
 
@@ -88,6 +135,16 @@ func TestRefreshReplayRevokesSession(t *testing.T) {
 	}
 	if !sess.Revoked || sess.RevokeReason != "refresh_replay" {
 		t.Errorf("session should be revoked with refresh_replay reason, got revoked=%v reason=%q", sess.Revoked, sess.RevokeReason)
+	}
+}
+
+func testPBKDF2PasswordRecord(password string) auth.PasswordRecord {
+	salt := []byte("1234567890abcdef")
+	hash := pbkdf2.Key([]byte(password), salt, 200_000, 32, sha256.New)
+	return auth.PasswordRecord{
+		Salt:       base64.StdEncoding.EncodeToString(salt),
+		Hash:       base64.StdEncoding.EncodeToString(hash),
+		Iterations: 200_000,
 	}
 }
 
@@ -148,4 +205,3 @@ func TestTokenErrorCodeMapping(t *testing.T) {
 		})
 	}
 }
-

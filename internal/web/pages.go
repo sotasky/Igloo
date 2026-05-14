@@ -252,7 +252,7 @@ func (s *Server) handleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 	username := strings.TrimSpace(r.FormValue("username"))
 	password := r.FormValue("password")
 
-	// Use the same auth source as Android (auth_users.json with PBKDF2).
+	// Use the same auth source as Android (auth_users.json).
 	users := auth.GetCachedUsers()
 	if len(users) == 0 {
 		http.Redirect(w, r, "/setup", http.StatusSeeOther)
@@ -260,6 +260,9 @@ func (s *Server) handleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if rec, ok := users[username]; ok && auth.VerifyPassword(password, rec.Password) {
+		if err := s.upgradePasswordHashAfterLogin(username, password, rec.Password); err != nil {
+			slog.Warn("auth: password hash upgrade failed", "username", username, "err", err)
+		}
 		s.loginSuccess(w, r, username, rec.Role, rec.Platforms)
 		return
 	}

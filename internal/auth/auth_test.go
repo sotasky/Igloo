@@ -20,17 +20,20 @@ func TestHashAndVerify(t *testing.T) {
 
 func TestHashCompatibility(t *testing.T) {
 	rec := HashPassword("test-password")
+	if rec.Algorithm != passwordAlgorithmArgon2id {
+		t.Errorf("algorithm: got %q, want %q", rec.Algorithm, passwordAlgorithmArgon2id)
+	}
 
 	// Salt should be base64 of 16 bytes = 24 chars
 	salt, err := base64.StdEncoding.DecodeString(rec.Salt)
 	if err != nil {
 		t.Fatalf("salt is not valid base64: %v", err)
 	}
-	if len(salt) != 16 {
-		t.Errorf("salt length: got %d, want 16", len(salt))
+	if len(salt) != defaultSaltLen {
+		t.Errorf("salt length: got %d, want %d", len(salt), defaultSaltLen)
 	}
 
-	// Hash should be base64 of 32 bytes (SHA-256) = 44 chars
+	// Hash should be base64 of 32 bytes = 44 chars.
 	hash, err := base64.StdEncoding.DecodeString(rec.Hash)
 	if err != nil {
 		t.Fatalf("hash is not valid base64: %v", err)
@@ -39,8 +42,38 @@ func TestHashCompatibility(t *testing.T) {
 		t.Errorf("hash length: got %d, want 32", len(hash))
 	}
 
-	if rec.Iterations != defaultIterations {
-		t.Errorf("iterations: got %d, want %d", rec.Iterations, defaultIterations)
+	if rec.MemoryKiB != defaultArgon2idMemoryKiB {
+		t.Errorf("memory_kib: got %d, want %d", rec.MemoryKiB, defaultArgon2idMemoryKiB)
+	}
+	if rec.Time != defaultArgon2idTime {
+		t.Errorf("time: got %d, want %d", rec.Time, defaultArgon2idTime)
+	}
+	if rec.Parallelism != defaultArgon2idParallelism {
+		t.Errorf("parallelism: got %d, want %d", rec.Parallelism, defaultArgon2idParallelism)
+	}
+	if PasswordNeedsRehash(rec) {
+		t.Error("fresh Argon2id record should not need rehash")
+	}
+}
+
+func TestPBKDF2Compatibility(t *testing.T) {
+	rec := hashPasswordPBKDF2("test-password", defaultIterations)
+	if !VerifyPassword("test-password", rec) {
+		t.Fatal("explicit PBKDF2 record did not verify")
+	}
+	if VerifyPassword("wrong-password", rec) {
+		t.Fatal("wrong password verified against PBKDF2 record")
+	}
+	if !PasswordNeedsRehash(rec) {
+		t.Fatal("PBKDF2 record should need rehash")
+	}
+
+	rec.Algorithm = ""
+	if !VerifyPassword("test-password", rec) {
+		t.Fatal("legacy implicit PBKDF2 record did not verify")
+	}
+	if !PasswordNeedsRehash(rec) {
+		t.Fatal("legacy implicit PBKDF2 record should need rehash")
 	}
 }
 

@@ -49,6 +49,9 @@ func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, 401, "invalid_credentials", "invalid credentials")
 		return
 	}
+	if err := s.upgradePasswordHashAfterLogin(body.Username, body.Password, rec.Password); err != nil {
+		slog.Warn("auth: password hash upgrade failed", "username", body.Username, "err", err)
+	}
 
 	sessionID, err := s.db.CreateAuthSession(body.Username)
 	if err != nil {
