@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Igloo Site Sync
 // @namespace    local.igloo.site.sync
-// @version      8.0.22
+// @version      8.0.23
 // @author       screwys
 // @description  Follow X, TikTok, Instagram, and YouTube channels in Igloo; includes the full X media workflow.
 // @homepageURL  https://github.com/screwys/Igloo
@@ -20,7 +20,6 @@
 // @grant        GM_registerMenuCommand
 // @grant        GM_notification
 // @grant        GM_setClipboard
-// @grant        GM_download
 // @grant        unsafeWindow
 // @connect      localhost
 // @connect      127.0.0.1
@@ -35,7 +34,7 @@
 
 (function () {
   "use strict";
-  const SCRIPT_VERSION = "8.0.22";
+  const SCRIPT_VERSION = "8.0.23";
 
   const SETTINGS = {
     apiBase: "xsync_api_base",
@@ -149,7 +148,6 @@
   const pageWindow =
     typeof unsafeWindow !== "undefined" ? unsafeWindow : window;
   const X_MEDIA_CACHE_LIMIT = 500;
-  const X_MEDIA_GRAPHQL_PATH_RE = /^(?:\/i\/api)?\/graphql\/[^/]+\/[^/?#]+$/;
   const cachedXImageMediaByTweetId = new Map();
   const cachedXVideoUrlsByTweetId = new Map();
   const cachedXVideoUrlsByMediaId = new Map();
@@ -501,15 +499,6 @@
     return cached;
   }
 
-  function shouldCaptureXApiMediaUrl(url) {
-    try {
-      const parsed = new URL(url, location.origin);
-      return X_MEDIA_GRAPHQL_PATH_RE.test(parsed.pathname);
-    } catch (_) {
-      return false;
-    }
-  }
-
   function videoMediaIdFromElement(node) {
     const candidates = [];
     function add(value) {
@@ -542,114 +531,6 @@
       if (mediaId) return mediaId;
     }
     return "";
-  }
-
-  function performanceVideoUrlsForMediaId(mediaId) {
-    const id = String(mediaId || "");
-    if (
-      !id ||
-      typeof performance === "undefined" ||
-      typeof performance.getEntriesByType !== "function"
-    )
-      return [];
-    const urls = performance
-      .getEntriesByType("resource")
-      .map((entry) => String(entry.name || ""))
-      .filter(
-        (url) => isVideoTwimgMp4Url(url) && videoMediaIdFromUrl(url) === id,
-      );
-    if (urls.length) rememberCachedVideoUrlsForMediaId(id, urls);
-    return normalizeVideoUrls(urls);
-  }
-
-  function fetchInputUrl(input) {
-    if (typeof input === "string") return input;
-    if (input instanceof URL) return input.href;
-    if (input && typeof input.href === "string") return input.href;
-    if (input && typeof input.url === "string") return input.url;
-    return "";
-  }
-
-  function captureXhrMediaResponse(xhr) {
-    try {
-      if (xhr.status !== 200) return;
-      const body =
-        typeof xhr.responseText === "string"
-          ? xhr.responseText
-          : xhr.response;
-      cacheTweetMediaFromApiResponse(body);
-    } catch (_) {}
-  }
-
-  function captureFetchMediaResponse(resp) {
-    try {
-      const ok =
-        typeof resp.ok === "boolean"
-          ? resp.ok
-          : resp.status >= 200 && resp.status < 300;
-      if (!ok || typeof resp.clone !== "function") return;
-      resp
-        .clone()
-        .text()
-        .then(cacheTweetMediaFromApiResponse)
-        .catch(() => {});
-    } catch (_) {}
-  }
-
-  function installXApiMediaCapture() {
-    if (
-      !isXSite() ||
-      isXAuthRoute() ||
-      !pageWindow ||
-      pageWindow.__iglooXMediaCaptureInstalled
-    )
-      return;
-    try {
-      pageWindow.__iglooXMediaCaptureInstalled = true;
-    } catch (_) {}
-
-    try {
-      const XHR = pageWindow.XMLHttpRequest;
-      if (XHR?.prototype?.open && !XHR.prototype.open.__iglooPatched) {
-        const nativeOpen = XHR.prototype.open;
-        const patchedOpen = function (...args) {
-          const url = args[1];
-          try {
-            if (
-              shouldCaptureXApiMediaUrl(url) &&
-              typeof this.addEventListener === "function"
-            ) {
-              this.addEventListener("load", () => captureXhrMediaResponse(this));
-            }
-          } catch (_) {}
-          return nativeOpen.apply(this, args);
-        };
-        patchedOpen.__iglooPatched = true;
-        XHR.prototype.open = patchedOpen;
-      }
-    } catch (err) {
-      console.warn("[XDL] could not install XHR media capture:", err);
-    }
-
-    try {
-      const nativeFetch = pageWindow.fetch;
-      if (typeof nativeFetch === "function" && !nativeFetch.__iglooPatched) {
-        const patchedFetch = function (...args) {
-          const shouldCapture = shouldCaptureXApiMediaUrl(fetchInputUrl(args[0]));
-          const promise = nativeFetch.apply(this, args);
-          if (!shouldCapture || !promise || typeof promise.then !== "function")
-            return promise;
-          return promise.then((resp) => {
-            captureFetchMediaResponse(resp);
-            return resp;
-          });
-        };
-        patchedFetch.__iglooPatched = true;
-        pageWindow.fetch = patchedFetch;
-      }
-    } catch (err) {
-      console.warn("[XDL] could not install fetch media capture:", err);
-    }
   }
 
   function extractHandleFromArticle(article) {
@@ -1027,10 +908,6 @@
     return [...images, ...videos];
   }
 
-  function bestVideoUrlForMedia(media) {
-    return directVideoDownloadCandidates(media)[0] || "";
-  }
-
   function collectTweetMediaItems(article) {
     const parentInfo = extractTweetUrl(article);
     if (!parentInfo) return [];
@@ -1084,8 +961,6 @@
           ext: ".mp4",
           domOrder: items.length,
         };
-        const cachedUrl = bestVideoUrlForMedia(item);
-        if (cachedUrl) item.url = cachedUrl;
         items.push(item);
       });
 
@@ -1938,134 +1813,32 @@
     }
   }
 
-  // ── Download: direct browser staging ───────────────────────────────────────
-  // X media downloads must stay standalone. Do not add a server downloader
-  // fallback such as /api/tweet-media-dl here; the local API is only used to
-  // move files that GM_download already saved into the browser staging folder.
-  function downloadImageToStaging(media, stagingName) {
-    return new Promise((resolve) => {
-      GM_download({
-        url: media.url,
-        name: stagingName,
-        headers: { Referer: "https://x.com/" },
-        onload() {
-          resolve({ ok: true });
-        },
-        onerror(err) {
-          console.warn("[XDL] GM_download failed:", stagingName, err);
-          resolve({ ok: false, error: err });
-        },
-        ontimeout() {
-          resolve({ ok: false, error: "timeout" });
-        },
-      });
-    });
-  }
-
-  function directVideoDownloadCandidates(media) {
-    if (!media || typeof media !== "object") return [];
-    return normalizeVideoUrls([
-      ...(isVideoTwimgMp4Url(media.url) ? [media.url] : []),
-      ...cachedVideoUrlsForTweet(media.tweetId),
-      ...cachedVideoUrlsForMediaId(media.mediaId),
-      ...performanceVideoUrlsForMediaId(media.mediaId),
-    ]);
-  }
-
-  function parseResponseHeaders(rawHeaders) {
-    const headers = {};
-    String(rawHeaders || "")
-      .split(/\r?\n/)
-      .forEach((line) => {
-        const idx = line.indexOf(":");
-        if (idx <= 0) return;
-        headers[line.slice(0, idx).trim().toLowerCase()] = line
-          .slice(idx + 1)
-          .trim();
-      });
-    return headers;
-  }
-
-  function probeDirectMediaUrl(url) {
-    return new Promise((resolve) => {
-      GM_xmlhttpRequest({
-        method: "HEAD",
-        url,
-        headers: { Referer: "https://x.com/" },
-        timeout: 15000,
-        onload(resp) {
-          const headers = parseResponseHeaders(resp.responseHeaders || "");
-          const contentType = String(headers["content-type"] || "")
-            .toLowerCase();
-          const finalUrl = String(resp.finalUrl || url);
-          const mediaURL = /(^|\/\/)video\.twimg\.com\//i.test(finalUrl);
-          const mp4URL = /\.mp4(?:$|[?#])/i.test(finalUrl);
-          const ok =
-            resp.status >= 200 &&
-            resp.status < 400 &&
-            !contentType.includes("text/html") &&
-            (contentType.startsWith("video/") ||
-              mediaURL ||
-              ((contentType === "application/octet-stream" || !contentType) &&
-                mp4URL));
-          resolve({ ok, status: resp.status, contentType, finalUrl });
-        },
-        onerror() {
-          resolve({ ok: false, error: "network_error" });
-        },
-        ontimeout() {
-          resolve({ ok: false, error: "timeout" });
-        },
-      });
-    });
-  }
-
-  function downloadVideoToStaging(media, stagingName) {
-    const candidates = directVideoDownloadCandidates(media);
-    return new Promise((resolve) => {
-      let index = 0;
-      async function tryNext() {
-        const url = candidates[index++];
-        if (!url) {
-          resolve({ ok: false, error: "no_cached_video_url" });
-          return;
-        }
-        const probe = await probeDirectMediaUrl(url);
-        if (!probe.ok) {
-          console.warn("[XDL] direct video probe rejected:", url, probe);
-          tryNext();
-          return;
-        }
-        GM_download({
-          url,
-          name: stagingName,
-          headers: { Referer: "https://x.com/" },
-          onload() {
-            resolve({ ok: true, url });
-          },
-          onerror(err) {
-            console.warn("[XDL] direct video download failed:", url, err);
-            tryNext();
-          },
-          ontimeout() {
-            console.warn("[XDL] direct video download timed out:", url);
-            tryNext();
-          },
-        });
-      }
-      tryNext();
-    });
-  }
-
-  function moveStagedMedia(handle, label, categoryId, stagedFiles) {
+  // ── Download: server-backed archive writes ────────────────────────────────
+  // Keep X media downloads out of page globals and browser staging. The local
+  // Igloo server owns archive writes via yt-dlp/image download endpoints.
+  function saveImageViaServer(media, handle, label, categoryId) {
     return apiRequest(
       "POST",
-      "/api/tweet-media-move",
+      "/api/tweet-media-save",
       {
+        urls: [media.url],
         handle,
         label,
         category_id: categoryId,
-        staged_files: stagedFiles,
+      },
+      true,
+    );
+  }
+
+  function downloadTweetMediaViaServer(media, handle, label, categoryId) {
+    return apiRequest(
+      "POST",
+      "/api/tweet-media-dl",
+      {
+        tweet_url: media.tweetUrl,
+        handle,
+        label,
+        category_id: categoryId,
       },
       true,
     );
@@ -2098,19 +1871,7 @@
 
   function mediaFailureLabel(media, err) {
     const owner = media?.tweetId ? "tweet " + media.tweetId : "media";
-    const detail = downloadErrorText(err);
-    if (detail === "no_cached_video_url") {
-      return owner + ": direct video URL not found";
-    }
-    return owner + ": " + detail;
-  }
-
-  function makeDownloadRunId() {
-    return (
-      Date.now().toString(36) +
-      "_" +
-      Math.random().toString(36).slice(2, 8)
-    );
+    return owner + ": " + downloadErrorText(err);
   }
 
   function downloadMediaItems(
@@ -2129,47 +1890,21 @@
     (async () => {
       const moved = [];
       const failed = [];
-      const runId = makeDownloadRunId();
       for (let i = 0; i < mediaItems.length; i++) {
         const media = mediaItems[i];
-        const staged = {
-          staging_name: "tmp_" + tweetId + "_" + runId + "_" + i + media.ext,
-          ext: media.ext,
-        };
-        if (media.kind === "video") {
-          const directResp = await downloadVideoToStaging(
-            media,
-            staged.staging_name,
-          );
-          if (!directResp.ok) {
-            failed.push(mediaFailureLabel(media, directResp.error));
-            continue;
-          }
-          const moveResp = await moveStagedMedia(handle, label, categoryId, [
-            staged,
-          ]);
-          if (moveResp.ok && moveResp.json && moveResp.json.success) {
-            moved.push(...(moveResp.json.moved || []));
-          } else {
-            failed.push(mediaFailureLabel(media, moveResp.json || moveResp));
-          }
-          continue;
-        }
-
-        const dlResp = await downloadImageToStaging(media, staged.staging_name);
-        if (!dlResp.ok) {
-          failed.push(
-            staged.staging_name + ": " + downloadErrorText(dlResp.error),
-          );
-          continue;
-        }
-        const moveResp = await moveStagedMedia(handle, label, categoryId, [
-          staged,
-        ]);
-        if (moveResp.ok && moveResp.json && moveResp.json.success) {
-          moved.push(...(moveResp.json.moved || []));
+        const resp =
+          media.kind === "video"
+            ? await downloadTweetMediaViaServer(
+                media,
+                handle,
+                label,
+                categoryId,
+              )
+            : await saveImageViaServer(media, handle, label, categoryId);
+        if (resp.ok && resp.json && resp.json.success) {
+          moved.push(...(resp.json.moved || []));
         } else {
-          failed.push(staged.staging_name + ": move failed");
+          failed.push(mediaFailureLabel(media, resp.json || resp));
         }
       }
       onComplete(mediaDownloadResult(moved, failed));
@@ -2185,6 +1920,17 @@
 
     const handle = extractHandleFromArticle(article) || info.handle;
     const mediaItems = collectTweetMediaItems(article);
+    const downloadableItems = mediaItems.length
+      ? mediaItems
+      : [
+          {
+            kind: "video",
+            tweetId: info.tweetId,
+            tweetUrl: info.url,
+            ext: ".mp4",
+            index: 0,
+          },
+        ];
 
     if (dlCategories === null) {
       notify("Categories loading, try again");
@@ -2195,7 +1941,7 @@
       dlBtn,
       handle,
       info.tweetId,
-      mediaItems.length || 1,
+      downloadableItems.length,
       async (catId, lbl, effectiveHandle, selectedIndices) => {
         setDlButtonState(dlBtn, "loading");
 
@@ -2206,8 +1952,8 @@
         }
 
         const selectedMedia = selectedIndices
-          ? mediaItems.filter((_, i) => selectedIndices.includes(i))
-          : mediaItems;
+          ? downloadableItems.filter((_, i) => selectedIndices.includes(i))
+          : downloadableItems;
         if (selectedMedia.length) {
           downloadMediaItems(
             info.tweetId,
@@ -3651,7 +3397,6 @@
     console.log(`[IglooSync] loaded v${SCRIPT_VERSION}`);
   }
 
-  installXApiMediaCapture();
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", startIglooSync, {
       once: true,
