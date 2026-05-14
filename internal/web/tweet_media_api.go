@@ -27,6 +27,9 @@ func (s *Server) registerTweetMediaAPIRoutes(mux *http.ServeMux) {
 // handleTweetMediaNextIndex returns the next sequential file number for a
 // handle+label+category combo. Used by the Tampermonkey download preview.
 func (s *Server) handleTweetMediaNextIndex(w http.ResponseWriter, r *http.Request) {
+	if !requireAdmin(w, r) {
+		return
+	}
 	handle := r.URL.Query().Get("handle")
 	label := r.URL.Query().Get("label")
 	categoryID := r.URL.Query().Get("category_id")
@@ -45,6 +48,9 @@ func (s *Server) handleTweetMediaNextIndex(w http.ResponseWriter, r *http.Reques
 // handleTweetMediaSave downloads images from provided URLs and archives them
 // to the bookmark category's archive_path.
 func (s *Server) handleTweetMediaSave(w http.ResponseWriter, r *http.Request) {
+	if !requireAdmin(w, r) {
+		return
+	}
 	var body struct {
 		URLs       []string `json:"urls"`
 		Handle     string   `json:"handle"`
@@ -96,6 +102,9 @@ func (s *Server) handleTweetMediaSave(w http.ResponseWriter, r *http.Request) {
 // The tampermonkey script uses GM_download to save files to ~/Downloads, then
 // calls this endpoint to move them into the correct category archive folder.
 func (s *Server) handleTweetMediaMove(w http.ResponseWriter, r *http.Request) {
+	if !requireAdmin(w, r) {
+		return
+	}
 	var body struct {
 		Handle      string `json:"handle"`
 		Label       string `json:"label"`
@@ -184,6 +193,9 @@ func (s *Server) handleTweetMediaMove(w http.ResponseWriter, r *http.Request) {
 
 // handleTweetMediaDl downloads a tweet's video via yt-dlp to the archive path.
 func (s *Server) handleTweetMediaDl(w http.ResponseWriter, r *http.Request) {
+	if !requireAdmin(w, r) {
+		return
+	}
 	var body struct {
 		TweetURL   string `json:"tweet_url"`
 		MediaURL   string `json:"media_url"`
@@ -294,10 +306,10 @@ func (s *Server) archivePathForCategory(r *http.Request, categoryIDStr string) s
 
 func (s *Server) archivePathForCategoryID(r *http.Request, catID int64) string {
 	user := userFromContext(r.Context())
-	uid := ""
-	if user != nil {
-		uid = user.Username
+	if !bookmarkArchivePathsAllowed(user) {
+		return ""
 	}
+	uid := user.Username
 	cats, _ := s.db.GetBookmarkCategories(uid)
 	for _, c := range cats {
 		if c.ID == catID {

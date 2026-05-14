@@ -440,7 +440,7 @@ func TestMutationBookmarkArchivesCategoryMedia(t *testing.T) {
 		t.Fatalf("insert media_files: %v", err)
 	}
 
-	resp := postMutation(t, srv, "POST", "/api/mutations/bookmark", "alice", fmt.Sprintf(`{
+	resp := postMutationRole(t, srv, "POST", "/api/mutations/bookmark", "alice", "admin", fmt.Sprintf(`{
 	  "video_id": "tw_archive",
 	  "action": "set",
 	  "category_id": %d,
@@ -468,6 +468,32 @@ func TestMutationBookmarkArchivesCategoryMedia(t *testing.T) {
 			t.Fatalf("archived media %q not found; entries=%v", filepath.Base(want), names)
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+func TestMutationBookmarkRejectsCategoryOwnedByAnotherUser(t *testing.T) {
+	srv := newTestServer(t)
+
+	bobCategoryID, err := srv.db.CreateBookmarkCategory("bob", "Private", "")
+	if err != nil {
+		t.Fatalf("CreateBookmarkCategory: %v", err)
+	}
+	resp := postMutation(t, srv, "POST", "/api/mutations/bookmark", "alice", fmt.Sprintf(`{
+	  "video_id": "v_cross_category",
+	  "action": "set",
+	  "category_id": %d,
+	  "updated_at_ms": 123
+	}`, bobCategoryID))
+	if resp["error_code"] != "not_found" {
+		t.Fatalf("response = %v, want not_found", resp)
+	}
+
+	var count int
+	if err := srv.db.QueryRow(`SELECT COUNT(*) FROM bookmarks WHERE user_id='alice' AND video_id='v_cross_category'`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("bookmark count = %d, want 0", count)
 	}
 }
 
@@ -629,11 +655,15 @@ func getJSON(t *testing.T, srv *testServer, path, user string) map[string]any {
 }
 
 func postMutation(t *testing.T, srv *testServer, method, path, user, body string) map[string]any {
+	return postMutationRole(t, srv, method, path, user, "user", body)
+}
+
+func postMutationRole(t *testing.T, srv *testServer, method, path, user, role, body string) map[string]any {
 	t.Helper()
 	req := httptest.NewRequest(method, path, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	if user != "" {
-		req = attachTestAuth(req, user)
+		req = attachTestAuthRole(req, user, role)
 	}
 	rec := httptest.NewRecorder()
 	srv.mux.ServeHTTP(rec, req)

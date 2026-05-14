@@ -1,6 +1,7 @@
 package web
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -68,7 +69,7 @@ func TestHandleBookmarkAdd_DoesNotRearchiveUnchangedBookmark(t *testing.T) {
 	for i := 0; i < 2; i++ {
 		req := httptest.NewRequest("POST", "/api/bookmark/tw_archive_once", strings.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
-		req = attachTestAuth(req, "alice")
+		req = attachTestAuthRole(req, "alice", "admin")
 		rr := httptest.NewRecorder()
 		srv.mux.ServeHTTP(rr, req)
 		if rr.Code != http.StatusOK {
@@ -88,7 +89,7 @@ func TestHandleBookmarkCategoryCreateRejectsRelativeArchivePath(t *testing.T) {
 	body := strings.NewReader(`{"name":"Archive","archive_path":"../../tmp/archive"}`)
 	req := httptest.NewRequest("POST", "/api/bookmark-categories", body)
 	req.Header.Set("Content-Type", "application/json")
-	req = attachTestAuth(req, "alice")
+	req = attachTestAuthRole(req, "alice", "admin")
 	rr := httptest.NewRecorder()
 	srv.mux.ServeHTTP(rr, req)
 
@@ -104,7 +105,7 @@ func TestHandleBookmarkCategoryCreateCreatesArchivePath(t *testing.T) {
 	body := fmt.Sprintf(`{"name":"Cinema","archive_path":%q}`, archiveDir)
 	req := httptest.NewRequest("POST", "/api/bookmark-categories", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req = attachTestAuth(req, "alice")
+	req = attachTestAuthRole(req, "alice", "admin")
 	rr := httptest.NewRecorder()
 	srv.mux.ServeHTTP(rr, req)
 
@@ -117,6 +118,144 @@ func TestHandleBookmarkCategoryCreateCreatesArchivePath(t *testing.T) {
 	}
 	if !info.IsDir() {
 		t.Fatalf("archive path is not a directory")
+	}
+}
+
+func TestHandleBookmarkCategoryCreateIgnoresArchivePathForNonAdmin(t *testing.T) {
+	srv := newTestServer(t)
+
+	archiveDir := filepath.Join(t.TempDir(), "bookmarks", "cinema")
+	body := fmt.Sprintf(`{"name":"Cinema","archive_path":%q}`, archiveDir)
+	req := httptest.NewRequest("POST", "/api/bookmark-categories", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req = attachTestAuth(req, "alice")
+	rr := httptest.NewRecorder()
+	srv.mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status: got %d - %s", rr.Code, rr.Body.String())
+	}
+	if _, err := os.Stat(archiveDir); !os.IsNotExist(err) {
+		t.Fatalf("non-admin archive path should not be created, stat err=%v", err)
+	}
+	var archivePath string
+	if err := srv.db.QueryRow(
+		`SELECT COALESCE(archive_path, '') FROM bookmark_categories WHERE user_id = ? AND name = ?`,
+		"alice", "Cinema",
+	).Scan(&archivePath); err != nil {
+		t.Fatalf("select archive path: %v", err)
+	}
+	if archivePath != "" {
+		t.Fatalf("archive_path = %q, want empty", archivePath)
+	}
+}
+
+func TestHandleBookmarkAddRejectsCategoryOwnedByAnotherUser(t *testing.T) {
+	srv := newTestServer(t)
+
+	bobCategoryID, err := srv.db.CreateBookmarkCategory("bob", "Private", "")
+	if err != nil {
+		t.Fatalf("CreateBookmarkCategory: %v", err)
+	}
+
+	body := fmt.Sprintf(`{"category_id":%d}`, bobCategoryID)
+	req := httptest.NewRequest("POST", "/api/bookmark/vid_cross_category", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req = attachTestAuthRole(req, "admin", "admin")
+	rr := httptest.NewRecorder()
+	srv.mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("status: got %d - %s", rr.Code, rr.Body.String())
+	}
+	var count int
+	if err := srv.db.QueryRow(
+		`SELECT COUNT(*) FROM bookmarks WHERE user_id = ? AND video_id = ?`,
+		"admin", "vid_cross_category",
+	).Scan(&count); err != nil {
+		t.Fatalf("count bookmarks: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("cross-user category created bookmark count = %d, want 0", count)
+	}
+}
+
+func TestHandleBookmarkAddDoesNotArchiveForNonAdmin(t *testing.T) {
+	srv := newTestServer(t)
+
+	archiveDir := t.TempDir()
+	categoryID, err := srv.db.CreateBookmarkCategory("alice", "Legacy Archive", archiveDir)
+	if err != nil {
+		t.Fatalf("CreateBookmarkCategory: %v", err)
+	}
+	relPath := filepath.Join("feed_media", "tw_nonadmin_archive_0.jpg")
+	fullPath := filepath.Join(srv.cfg.DataDir, relPath)
+	if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
+		t.Fatalf("mkdir media dir: %v", err)
+	}
+	if err := os.WriteFile(fullPath, []byte("image-bytes"), 0o644); err != nil {
+		t.Fatalf("write media fixture: %v", err)
+	}
+	if err := srv.db.ExecRaw(
+		`INSERT INTO media_files (owner_type, owner_id, media_index, file_path, media_type, file_size)
+		 VALUES ('feed_media', 'tw_nonadmin_archive', 0, ?, 'photo', ?)`,
+		relPath, len("image-bytes"),
+	); err != nil {
+		t.Fatalf("insert media_files: %v", err)
+	}
+
+	body := fmt.Sprintf(`{"category_id":%d,"custom_title":"Saved Label","account_handles":["author_handle"],"media_indices":[0]}`, categoryID)
+	req := httptest.NewRequest("POST", "/api/bookmark/tw_nonadmin_archive", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req = attachTestAuth(req, "alice")
+	rr := httptest.NewRecorder()
+	srv.mux.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status: got %d - %s", rr.Code, rr.Body.String())
+	}
+
+	assertFileDoesNotAppear(t, filepath.Join(archiveDir, "author_handle Saved Label 001.jpg"), 300*time.Millisecond)
+}
+
+func TestHandleBookmarkCategoriesListHidesArchivePathForNonAdmin(t *testing.T) {
+	srv := newTestServer(t)
+
+	if _, err := srv.db.CreateBookmarkCategory("alice", "Archive", "/archive/alice"); err != nil {
+		t.Fatalf("CreateBookmarkCategory: %v", err)
+	}
+
+	req := httptest.NewRequest("GET", "/api/bookmark-categories", nil)
+	req = attachTestAuth(req, "alice")
+	rr := httptest.NewRecorder()
+	srv.mux.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("non-admin status: got %d - %s", rr.Code, rr.Body.String())
+	}
+	var nonAdmin struct {
+		Categories []map[string]any `json:"categories"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &nonAdmin); err != nil {
+		t.Fatalf("decode non-admin response: %v", err)
+	}
+	if got := nonAdmin.Categories[0]["archive_path"]; got != "" {
+		t.Fatalf("non-admin archive_path = %#v, want empty", got)
+	}
+
+	req = httptest.NewRequest("GET", "/api/bookmark-categories", nil)
+	req = attachTestAuthRole(req, "alice", "admin")
+	rr = httptest.NewRecorder()
+	srv.mux.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("admin status: got %d - %s", rr.Code, rr.Body.String())
+	}
+	var admin struct {
+		Categories []map[string]any `json:"categories"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &admin); err != nil {
+		t.Fatalf("decode admin response: %v", err)
+	}
+	if got := admin.Categories[0]["archive_path"]; got != "/archive/alice" {
+		t.Fatalf("admin archive_path = %#v, want /archive/alice", got)
 	}
 }
 

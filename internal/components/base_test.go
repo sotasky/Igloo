@@ -258,6 +258,45 @@ func TestBookmarkCategoryPathsPanelUsesTallerScrollArea(t *testing.T) {
 	}
 }
 
+func TestBookmarkArchiveControlsAreAdminOnly(t *testing.T) {
+	p := newTestPageProps()
+	p.UserRole = "user"
+	prefs := PrefsData{Settings: map[string]any{"archive_bookmarks": true}}
+	var buf bytes.Buffer
+	if err := PrefsBody(p, prefs).Render(context.Background(), &buf); err != nil {
+		t.Fatal(err)
+	}
+	html := buf.String()
+	if strings.Contains(html, `name="archive_bookmarks"`) || strings.Contains(html, `Save bookmarks to folder`) {
+		t.Fatalf("non-admin preferences should not show bookmark archive controls:\n%s", html)
+	}
+	if !strings.Contains(html, `hx-get="/api/bookmark-categories"`) {
+		t.Fatalf("non-admin preferences should still show category management loader:\n%s", html)
+	}
+}
+
+func TestBookmarkCategoryPathsPanelHidesArchivePathsForNonAdmin(t *testing.T) {
+	p := newTestPageProps()
+	p.UserRole = "user"
+	cats := []BookmarkCategoryDisplay{{
+		ID:          1,
+		Name:        "Saved",
+		ArchivePath: "/archive/private",
+		Slug:        "saved",
+	}}
+	var buf bytes.Buffer
+	if err := BookmarkCategoryPathsPanel(p, cats).Render(context.Background(), &buf); err != nil {
+		t.Fatal(err)
+	}
+	html := buf.String()
+	if strings.Contains(html, `name="archive_path"`) || strings.Contains(html, `/archive/private`) {
+		t.Fatalf("non-admin category panel leaked archive path:\n%s", html)
+	}
+	if !strings.Contains(html, `name="name"`) {
+		t.Fatalf("non-admin category panel should keep category names editable:\n%s", html)
+	}
+}
+
 func TestCookieRowsPanelRendersDisableActionWithoutRemoveAndCompactBrowserSelect(t *testing.T) {
 	p := newTestPageProps()
 	rows := []CookieRowData{{

@@ -61,12 +61,17 @@ func (s *Server) handleBookmarkAdd(w http.ResponseWriter, r *http.Request) {
 		mediaIndicesJSON = string(b)
 	}
 
-	// Load categories once: used both to default category_id (FK requires
-	// a valid one) and to resolve category_name + archive_path locally.
-	cats, _ := s.db.GetBookmarkCategories(userID)
-	if body.CategoryID <= 0 && len(cats) > 0 {
-		body.CategoryID = cats[0].ID
+	category, ok, err := s.resolveOwnedBookmarkCategory(userID, body.CategoryID)
+	if err != nil {
+		slog.Error("GetBookmarkCategories", "err", err)
+		writeJSON(w, 500, map[string]any{"success": false, "error": "db error"})
+		return
 	}
+	if !ok {
+		writeJSON(w, 404, map[string]any{"success": false, "error": "bookmark category not found"})
+		return
+	}
+	body.CategoryID = category.ID
 
 	alreadyCurrent, err := s.bookmarkPayloadIsCurrent(userID, videoID, body.CategoryID, body.CustomTitle, accountHandlesJSON, mediaIndicesJSON)
 	if err != nil {
@@ -80,13 +85,10 @@ func (s *Server) handleBookmarkAdd(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var categoryName, archivePath string
-	for _, c := range cats {
-		if c.ID == body.CategoryID {
-			categoryName = c.Name
-			archivePath = c.ArchivePath
-			break
-		}
+	categoryName := category.Name
+	archivePath := ""
+	if bookmarkArchivePathsAllowed(user) {
+		archivePath = category.ArchivePath
 	}
 
 	// AddBookmark already emits a sync_change inside its transaction.
@@ -119,19 +121,6 @@ func (s *Server) handleBookmarkAdd(w http.ResponseWriter, r *http.Request) {
 			s.startBookmarkArchive(videoID, archivePath, body.CustomTitle, accountHandlesJSON, body.MediaIndices)
 		}
 	}()
-}
-
-func (s *Server) bookmarkCategoryArchiveTarget(userID string, categoryID int64) (categoryName, archivePath string) {
-	if categoryID <= 0 {
-		return "", ""
-	}
-	cats, _ := s.db.GetBookmarkCategories(userID)
-	for _, c := range cats {
-		if c.ID == categoryID {
-			return c.Name, c.ArchivePath
-		}
-	}
-	return "", ""
 }
 
 func (s *Server) bookmarkPayloadIsCurrent(userID, videoID string, categoryID int64, customTitle, accountHandles, mediaIndices string) (bool, error) {
@@ -244,6 +233,38 @@ func (s *Server) handleBookmarkGet(w http.ResponseWriter, r *http.Request) {
 
 var slugRe = regexp.MustCompile(`[^a-z0-9]+`)
 
+type bookmarkCategorySelection struct {
+	ID          int64
+	Name        string
+	ArchivePath string
+}
+
+func bookmarkArchivePathsAllowed(user *userInfo) bool {
+	// Archive paths point at the server filesystem, so treat them as admin-only
+	// configuration while bookmark/category ownership remains per signed-in user.
+	return user != nil && user.Role == "admin"
+}
+
+func (s *Server) resolveOwnedBookmarkCategory(userID string, requestedID int64) (bookmarkCategorySelection, bool, error) {
+	cats, err := s.db.GetBookmarkCategories(userID)
+	if err != nil {
+		return bookmarkCategorySelection{}, false, err
+	}
+	if requestedID > 0 {
+		for _, c := range cats {
+			if c.ID == requestedID {
+				return bookmarkCategorySelection{ID: c.ID, Name: c.Name, ArchivePath: c.ArchivePath}, true, nil
+			}
+		}
+		return bookmarkCategorySelection{}, false, nil
+	}
+	if len(cats) > 0 {
+		c := cats[0]
+		return bookmarkCategorySelection{ID: c.ID, Name: c.Name, ArchivePath: c.ArchivePath}, true, nil
+	}
+	return bookmarkCategorySelection{}, true, nil
+}
+
 func (s *Server) handleBookmarkCategoriesList(w http.ResponseWriter, r *http.Request) {
 	user := userFromContext(r.Context())
 	userID := ""
@@ -264,11 +285,16 @@ func (s *Server) handleBookmarkCategoriesList(w http.ResponseWriter, r *http.Req
 	}
 
 	result := make([]map[string]any, 0, len(cats))
+	includeArchivePath := bookmarkArchivePathsAllowed(user)
 	for _, c := range cats {
+		archivePath := ""
+		if includeArchivePath {
+			archivePath = c.ArchivePath
+		}
 		result = append(result, map[string]any{
 			"id":             c.ID,
 			"name":           c.Name,
-			"archive_path":   c.ArchivePath,
+			"archive_path":   archivePath,
 			"created_at":     c.CreatedAtMs,
 			"bookmark_count": c.BookmarkCount,
 		})
@@ -288,6 +314,7 @@ func (s *Server) handleBookmarkCategoryBatch(w http.ResponseWriter, r *http.Requ
 	ids := r.Form["id"]
 	names := r.Form["name"]
 	paths := r.Form["archive_path"]
+	canEditArchivePath := bookmarkArchivePathsAllowed(user)
 
 	for i := range ids {
 		if i >= len(names) {
@@ -296,7 +323,9 @@ func (s *Server) handleBookmarkCategoryBatch(w http.ResponseWriter, r *http.Requ
 		id, _ := strconv.ParseInt(ids[i], 10, 64)
 		name := strings.TrimSpace(names[i])
 		archivePath := ""
-		if i < len(paths) {
+		// Archive paths are server filesystem destinations, so only admins can
+		// configure them. Category ownership still follows the signed-in user.
+		if canEditArchivePath && i < len(paths) {
 			var pathErr error
 			archivePath, pathErr = normalizeArchivePath(paths[i])
 			if pathErr != nil {
@@ -346,14 +375,18 @@ func (s *Server) handleBookmarkCategoryCreate(w http.ResponseWriter, r *http.Req
 		writeJSON(w, 400, map[string]any{"success": false, "error": "name required"})
 		return
 	}
-	archivePath, err := normalizeArchivePath(body.ArchivePath)
-	if err != nil {
-		writeJSON(w, 422, map[string]any{"success": false, "error": err.Error()})
-		return
-	}
-	if err := ensureArchivePath(archivePath); err != nil {
-		writeJSON(w, 422, map[string]any{"success": false, "error": err.Error()})
-		return
+	archivePath := ""
+	if bookmarkArchivePathsAllowed(user) {
+		var err error
+		archivePath, err = normalizeArchivePath(body.ArchivePath)
+		if err != nil {
+			writeJSON(w, 422, map[string]any{"success": false, "error": err.Error()})
+			return
+		}
+		if err := ensureArchivePath(archivePath); err != nil {
+			writeJSON(w, 422, map[string]any{"success": false, "error": err.Error()})
+			return
+		}
 	}
 
 	catID, err := s.db.CreateBookmarkCategory(userID, body.Name, archivePath)
@@ -366,6 +399,7 @@ func (s *Server) handleBookmarkCategoryCreate(w http.ResponseWriter, r *http.Req
 	writeJSON(w, 200, map[string]any{
 		"success": true,
 		"category": map[string]any{
+			"id":           catID,
 			"category_id":  catID,
 			"name":         body.Name,
 			"archive_path": archivePath,
@@ -394,14 +428,18 @@ func (s *Server) handleBookmarkCategoryUpdate(w http.ResponseWriter, r *http.Req
 		writeJSON(w, 400, map[string]any{"success": false, "error": "name required"})
 		return
 	}
-	archivePath, err := normalizeArchivePath(body.ArchivePath)
-	if err != nil {
-		writeJSON(w, 422, map[string]any{"success": false, "error": err.Error()})
-		return
-	}
-	if err := ensureArchivePath(archivePath); err != nil {
-		writeJSON(w, 422, map[string]any{"success": false, "error": err.Error()})
-		return
+	archivePath := ""
+	if bookmarkArchivePathsAllowed(user) {
+		var err error
+		archivePath, err = normalizeArchivePath(body.ArchivePath)
+		if err != nil {
+			writeJSON(w, 422, map[string]any{"success": false, "error": err.Error()})
+			return
+		}
+		if err := ensureArchivePath(archivePath); err != nil {
+			writeJSON(w, 422, map[string]any{"success": false, "error": err.Error()})
+			return
+		}
 	}
 
 	if err := s.db.UpdateBookmarkCategory(userID, categoryID, body.Name, archivePath); err != nil {

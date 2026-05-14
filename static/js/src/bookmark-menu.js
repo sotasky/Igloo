@@ -276,7 +276,10 @@ export async function openBookmarkMenu(anchorEl, root, opts) {
   function renderSheet() {
     var categories = Array.isArray(bookmarkCategories) ? bookmarkCategories : []
     if (!categories.some(function (c) { return String(c.id) === String(currentCategoryId) })) {
-      currentCategoryId = String(getLastBookmarkCategoryId() || (categories[0] && categories[0].id) || '')
+      var lastCategoryId = String(getLastBookmarkCategoryId() || '')
+      currentCategoryId = categories.some(function (c) { return String(c.id) === lastCategoryId })
+        ? lastCategoryId
+        : String((categories[0] && categories[0].id) || '')
     }
 
     body.textContent = ''

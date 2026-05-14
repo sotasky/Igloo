@@ -187,11 +187,26 @@ func (s *Server) handleMutationBookmark(w http.ResponseWriter, r *http.Request) 
 		writeJSONError(w, 400, "invalid_body", err.Error())
 		return
 	}
-	if body.Action == "set" && (body.CategoryID == nil || *body.CategoryID <= 0) {
-		cats, _ := s.db.GetBookmarkCategories(user.Username)
-		if len(cats) > 0 {
-			categoryID := cats[0].ID
-			body.CategoryID = &categoryID
+	var archivePath string
+	if body.Action == "set" {
+		requestedCategoryID := int64(0)
+		if body.CategoryID != nil {
+			requestedCategoryID = *body.CategoryID
+		}
+		category, ok, err := s.resolveOwnedBookmarkCategory(user.Username, requestedCategoryID)
+		if err != nil {
+			slog.Error("GetBookmarkCategories", "err", err)
+			writeJSONError(w, 500, "db_error", "database error")
+			return
+		}
+		if !ok {
+			writeJSONError(w, 404, "not_found", "bookmark category not found")
+			return
+		}
+		categoryID := category.ID
+		body.CategoryID = &categoryID
+		if bookmarkArchivePathsAllowed(user) {
+			archivePath = category.ArchivePath
 		}
 	}
 	alreadyCurrent := false
@@ -224,7 +239,6 @@ func (s *Server) handleMutationBookmark(w http.ResponseWriter, r *http.Request) 
 	}
 	s.kickFeedOrderForTweetIDs(body.VideoID)
 	if body.Action == "set" && body.CategoryID != nil && !alreadyCurrent {
-		_, archivePath := s.bookmarkCategoryArchiveTarget(user.Username, *body.CategoryID)
 		s.startBookmarkArchive(
 			body.VideoID,
 			archivePath,

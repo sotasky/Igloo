@@ -45,7 +45,7 @@ func TestHandleTweetMediaMoveRejectsHTMLDisguisedAsMP4(t *testing.T) {
 	}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/tweet-media-move", body)
 	req.Header.Set("Content-Type", "application/json")
-	req = attachTestAuth(req, "alice")
+	req = attachTestAuthRole(req, "alice", "admin")
 	rec := httptest.NewRecorder()
 
 	srv.handleTweetMediaMove(rec, req)
@@ -122,7 +122,7 @@ func TestHandleTweetMediaDlArchivesDirectMediaURL(t *testing.T) {
 	}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/tweet-media-dl", body)
 	req.Header.Set("Content-Type", "application/json")
-	req = attachTestAuth(req, "sample_user")
+	req = attachTestAuthRole(req, "sample_user", "admin")
 	rec := httptest.NewRecorder()
 
 	srv.handleTweetMediaDl(rec, req)

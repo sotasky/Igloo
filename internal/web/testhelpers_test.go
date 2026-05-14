@@ -85,12 +85,19 @@ func newTestServer(t *testing.T) *testServer {
 // given username under the real userContextKey — matching what enforceAuth
 // would have set. Use "" to leave the request unauthenticated.
 func attachTestAuth(r *http.Request, username string) *http.Request {
+	return attachTestAuthRole(r, username, "user")
+}
+
+func attachTestAuthRole(r *http.Request, username, role string) *http.Request {
 	if username == "" {
 		return r
 	}
+	if role == "" {
+		role = "user"
+	}
 	ctx := context.WithValue(r.Context(), userContextKey, &userInfo{
 		Username: username,
-		Role:     "user",
+		Role:     role,
 	})
 	return r.WithContext(ctx)
 }
