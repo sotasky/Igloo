@@ -6,6 +6,8 @@
 #   scripts/install.sh              — full install
 #   scripts/install.sh --check      — dependency check only
 #   scripts/install.sh --no-build   — skip Go build (just dirs + services)
+#   scripts/install.sh --allow-test-failures
+#                                  — continue install even if go test ./... fails
 set -eu
 
 # ── Colors ──────────────────────────────────────────────────────────
@@ -29,6 +31,14 @@ REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 # Verify we're in the right repo
 if [ ! -f "$REPO_DIR/go.mod" ] || ! grep -q 'screwys/igloo' "$REPO_DIR/go.mod"; then
     printf "${RED}error:${RESET} cannot find Igloo repo root (expected go.mod at %s)\n" "$REPO_DIR"
+    exit 1
+fi
+
+TEMPL_MODULE="github.com/a-h/templ"
+TEMPL_CMD="$TEMPL_MODULE/cmd/templ"
+TEMPL_VERSION="$(awk -v module="$TEMPL_MODULE" '$1 == module { print $2; exit }' "$REPO_DIR/go.mod")"
+if [ -z "$TEMPL_VERSION" ]; then
+    printf "${RED}error:${RESET} cannot find %s version in %s\n" "$TEMPL_MODULE" "$REPO_DIR/go.mod"
     exit 1
 fi
 
@@ -94,10 +104,12 @@ service_path_append /bin
 
 CHECK_ONLY=false
 SKIP_BUILD=false
+ALLOW_TEST_FAILURES=false
 for arg in "$@"; do
     case "$arg" in
-        --check)    CHECK_ONLY=true ;;
-        --no-build) SKIP_BUILD=true ;;
+        --check)               CHECK_ONLY=true ;;
+        --no-build)            SKIP_BUILD=true ;;
+        --allow-test-failures) ALLOW_TEST_FAILURES=true ;;
     esac
 done
 
@@ -139,10 +151,10 @@ check_optional() {
 # Required
 check_required go        "Go compiler — install from https://go.dev/dl/"
 if [ "$CHECK_ONLY" = false ] && command -v go >/dev/null 2>&1 && ! command -v templ >/dev/null 2>&1; then
-    info "installing templ with go install..."
-    go install github.com/a-h/templ/cmd/templ@latest
+    info "installing templ $TEMPL_VERSION with go install..."
+    go install "$TEMPL_CMD@$TEMPL_VERSION"
 fi
-check_required templ     "templ code generator — go install github.com/a-h/templ/cmd/templ@latest"
+check_required templ     "templ code generator — go install $TEMPL_CMD@$TEMPL_VERSION"
 check_required yt-dlp    "video downloader — brew install yt-dlp, pip install yt-dlp, or install your distro package"
 check_required gallery-dl "image downloader — brew install gallery-dl, pip install gallery-dl, or install your distro package"
 check_required ffmpeg    "media processing — brew install ffmpeg or install your distro package"
@@ -290,10 +302,13 @@ if [ "$SKIP_BUILD" = false ]; then
     ok "bin/igloo-import"
 
     info "running tests..."
-    if go test ./... >/dev/null 2>&1; then
+    if go test ./...; then
         ok "go test ./..."
+    elif [ "$ALLOW_TEST_FAILURES" = true ]; then
+        warn "some tests failed; continuing because --allow-test-failures was passed"
     else
-        warn "some tests failed — run 'go test ./... -v' to investigate"
+        printf "${RED}error:${RESET} go test ./... failed; re-run with --allow-test-failures to continue anyway\n"
+        exit 1
     fi
 else
     info "skipping build (--no-build)"
