@@ -26,10 +26,21 @@
           go = pkgs.go_1_26 or pkgs.go;
           buildGoModule = pkgs.buildGoModule.override { inherit go; };
           pythonPackages = pkgs.python3Packages;
+          runtimeRequirementLines = lib.splitString "\n" (builtins.readFile ./requirements-runtime.txt);
+          runtimeToolVersion =
+            package:
+            let
+              prefix = "${package}==";
+              matches = builtins.filter (line: lib.hasPrefix prefix line) runtimeRequirementLines;
+            in
+            if builtins.length matches != 1 then
+              throw "expected exactly one ${package} pin in requirements-runtime.txt"
+            else
+              lib.removePrefix prefix (builtins.head matches);
 
           ytDlp = pythonPackages.buildPythonApplication rec {
             pname = "yt-dlp";
-            version = "2026.3.17";
+            version = runtimeToolVersion "yt-dlp";
             pyproject = true;
 
             src = pkgs.fetchPypi {
@@ -60,7 +71,7 @@
 
           galleryDl = pythonPackages.buildPythonApplication rec {
             pname = "gallery_dl";
-            version = "1.32.1";
+            version = runtimeToolVersion "gallery-dl";
             pyproject = true;
 
             src = pkgs.fetchPypi {

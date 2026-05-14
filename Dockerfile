@@ -31,19 +31,16 @@ FROM docker.io/library/debian:bookworm-slim AS runtime
 ARG DEBIAN_FRONTEND=noninteractive
 # renovate: datasource=pypi packageName=pip versioning=pep440
 ARG PIP_VERSION=26.1.1
-# renovate: datasource=pypi packageName=yt-dlp versioning=pep440
-ARG YT_DLP_VERSION=2026.3.17
-# renovate: datasource=pypi packageName=gallery-dl versioning=pep440
-ARG GALLERY_DL_VERSION=1.32.1
+
+COPY requirements-runtime.txt /tmp/requirements-runtime.txt
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates ffmpeg python3 python3-venv \
     && rm -rf /var/lib/apt/lists/* \
     && python3 -m venv /opt/igloo-py \
     && /opt/igloo-py/bin/pip install --no-cache-dir --upgrade "pip==${PIP_VERSION}" \
-    && /opt/igloo-py/bin/pip install --no-cache-dir \
-        "yt-dlp==${YT_DLP_VERSION}" \
-        "gallery-dl==${GALLERY_DL_VERSION}"
+    && /opt/igloo-py/bin/pip install --no-cache-dir -r /tmp/requirements-runtime.txt \
+    && rm /tmp/requirements-runtime.txt
 
 ENV PATH="/opt/igloo-py/bin:${PATH}" \
     HOME=/tmp \

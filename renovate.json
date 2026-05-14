@@ -2,7 +2,7 @@
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "description": "Renovate owns dependency updates for Go, Gradle, GitHub Actions, Docker images, and runtime tools.",
   "extends": ["config:recommended"],
-  "enabledManagers": ["gomod", "gradle", "github-actions", "dockerfile", "nix", "custom.regex"],
+  "enabledManagers": ["gomod", "gradle", "github-actions", "dockerfile", "nix", "pip_requirements", "custom.regex"],
   "dependencyDashboard": true,
   "minimumReleaseAge": "7 days",
   "prCreation": "not-pending",
@@ -14,7 +14,7 @@
   "customManagers": [
     {
       "customType": "regex",
-      "description": "Update Python runtime tools pinned in Dockerfile.",
+      "description": "Update pip pinned in Dockerfile.",
       "managerFilePatterns": ["/(^|/)Dockerfile$/"],
       "matchStrings": [
         "# renovate: datasource=(?<datasource>[a-z-]+) packageName=(?<packageName>[^\\s]+) versioning=(?<versioning>[a-z0-9-]+)\\s+ARG [A-Z0-9_]+_VERSION=(?<currentValue>[^\\s]+)"
@@ -43,7 +43,7 @@
     },
     {
       "description": "Keep Docker and runtime tool updates together.",
-      "matchManagers": ["dockerfile", "nix", "custom.regex"],
+      "matchManagers": ["dockerfile", "nix", "pip_requirements", "custom.regex"],
       "groupName": "container runtime dependencies",
       "groupSlug": "container-runtime"
     }
