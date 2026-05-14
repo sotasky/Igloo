@@ -1,5 +1,7 @@
 # Contributing
 
+Thank you for your interest! I'm looking forward to any kind of feedbacks.
+
 ## Native Development
 
 For native development, clone the repo and run:
