@@ -38,6 +38,28 @@ func TestDownloaderReportEndpointsRequireAdmin(t *testing.T) {
 	}
 }
 
+func TestDownloaderReportPageDoesNotUseInnerHTMLForReportRows(t *testing.T) {
+	srv := newTestServer(t)
+	req := httptest.NewRequest(http.MethodGet, "/temp/downloader-report", nil)
+	req = req.WithContext(contextWithUser(req, "admin", "admin"))
+	rec := httptest.NewRecorder()
+
+	srv.handlePageDownloaderReport(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if strings.Contains(body, "innerHTML") {
+		t.Fatalf("report page still uses innerHTML: %s", body)
+	}
+	for _, want := range []string{"textContent", "replaceChildren"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("report page missing %q in:\n%s", want, body)
+		}
+	}
+}
+
 func TestDownloaderReportDirUsesIglooDataTmpAndPrunesOldRuns(t *testing.T) {
 	srv := newTestServer(t)
 	base := filepath.Join(srv.cfg.DataDir, "tmp", "downloader-reports")

@@ -85,18 +85,33 @@ th,td{border-bottom:1px solid #2a333b;padding:8px;text-align:left;vertical-align
 <span id="state"></span>
 <table><thead><tr><th>Status</th><th>Platform</th><th>Check</th><th>Artifacts</th><th>Error</th></tr></thead><tbody id="rows"></tbody></table>
 <pre id="raw"></pre>
-<script>
-const token=document.querySelector('meta[name="csrf-token"]').content;
-const rows=document.getElementById('rows'), raw=document.getElementById('raw'), state=document.getElementById('state');
-function render(report){
- rows.innerHTML='';
- (report.rows||[]).forEach(r=>{
-  const tr=document.createElement('tr');
-  tr.innerHTML='<td class="'+r.status+'">'+r.status+'</td><td>'+r.platform+'</td><td>'+r.name+'</td><td><pre>'+JSON.stringify(r.artifacts||{},null,2)+'</pre></td><td>'+(r.error_kind||'')+' '+(r.error||'')+'</td>';
-  rows.appendChild(tr);
- });
- raw.textContent=JSON.stringify(report,null,2);
-}
+	<script>
+	const token=document.querySelector('meta[name="csrf-token"]').content;
+	const rows=document.getElementById('rows'), raw=document.getElementById('raw'), state=document.getElementById('state');
+	function appendCell(tr,text,className){
+	 const td=document.createElement('td');
+	 if(className) td.className=className;
+	 td.textContent=text||'';
+	 tr.appendChild(td);
+	 return td;
+	}
+	function render(report){
+	 rows.replaceChildren();
+	 (report.rows||[]).forEach(r=>{
+	  const tr=document.createElement('tr');
+	  appendCell(tr,r.status||'',r.status||'');
+	  appendCell(tr,r.platform||'');
+	  appendCell(tr,r.name||'');
+	  const artifactsCell=document.createElement('td');
+	  const artifactsPre=document.createElement('pre');
+	  artifactsPre.textContent=JSON.stringify(r.artifacts||{},null,2);
+	  artifactsCell.appendChild(artifactsPre);
+	  tr.appendChild(artifactsCell);
+	  appendCell(tr,[(r.error_kind||''),(r.error||'')].filter(Boolean).join(' '));
+	  rows.appendChild(tr);
+	 });
+	 raw.textContent=JSON.stringify(report,null,2);
+	}
 async function latest(){const res=await fetch('/api/downloader/report/latest'); if(res.ok) render(await res.json());}
 document.getElementById('run').onclick=async()=>{state.textContent=' running'; const res=await fetch('/api/downloader/report/run',{method:'POST',headers:{'X-CSRF-Token':token}}); const data=await res.json(); state.textContent=' '+(data.status||'done'); render(data);};
 latest();

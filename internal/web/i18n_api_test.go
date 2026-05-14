@@ -79,6 +79,7 @@ func TestSettingsFormPreviewLanguageUsesCatalogWithoutChangingPersistedSelection
 	}
 
 	req := httptest.NewRequest("GET", "/api/settings/form?lang=tr", nil)
+	req = req.WithContext(contextWithUser(req, "admin", "admin"))
 	rec := httptest.NewRecorder()
 	srv.handleSettingsForm(rec, req)
 

@@ -204,6 +204,64 @@ func TestHandleUpdateSettingsRejectsNonAdmin(t *testing.T) {
 	}
 }
 
+func TestHandleGetSettingsRequiresAdmin(t *testing.T) {
+	srv := newTestServer(t)
+	if err := srv.db.SetSetting("", "translate_api_key", "sample-secret-key"); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest("GET", "/api/settings", nil)
+	req = req.WithContext(contextWithUser(req, "user", "user"))
+	rec := httptest.NewRecorder()
+
+	srv.handleGetSettings(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "sample-secret-key") {
+		t.Fatal("non-admin settings response leaked translate_api_key")
+	}
+
+	adminReq := httptest.NewRequest("GET", "/api/settings", nil)
+	adminReq = adminReq.WithContext(contextWithUser(adminReq, "admin", "admin"))
+	adminRec := httptest.NewRecorder()
+
+	srv.handleGetSettings(adminRec, adminReq)
+
+	if adminRec.Code != http.StatusOK {
+		t.Fatalf("admin status = %d, body = %s", adminRec.Code, adminRec.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(adminRec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode admin settings: %v", err)
+	}
+	if got := body["translate_api_key"]; got != "sample-secret-key" {
+		t.Fatalf("admin translate_api_key = %#v", got)
+	}
+}
+
+func TestHandleSettingsFormRequiresAdmin(t *testing.T) {
+	srv := newTestServer(t)
+	if err := srv.db.SetSetting("", "translate_api_key", "sample-secret-key"); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest("GET", "/api/settings/form", nil)
+	req.Header.Set("HX-Request", "true")
+	req = req.WithContext(contextWithUser(req, "user", "user"))
+	rec := httptest.NewRecorder()
+
+	srv.handleSettingsForm(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "sample-secret-key") {
+		t.Fatal("non-admin settings form leaked translate_api_key")
+	}
+}
+
 func TestHandleThemeCSSServesPersistedThemeAsNoStoreCSS(t *testing.T) {
 	srv := newTestServer(t)
 	if err := srv.db.SetSetting("", "web_theme_id", "dracula"); err != nil {

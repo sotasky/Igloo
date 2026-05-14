@@ -41,6 +41,72 @@ func TestQuickDownloadAllowsAdminValidationPath(t *testing.T) {
 	}
 }
 
+func TestStopResumeRejectNonAdminWithoutMutatingWorkers(t *testing.T) {
+	srv := newTestServer(t)
+	req := httptest.NewRequest(http.MethodPost, "/api/stop", nil)
+	req = req.WithContext(contextWithUser(req, "bob", "user"))
+	rec := httptest.NewRecorder()
+
+	srv.handleStop(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("stop status = %d, want 403, body = %s", rec.Code, rec.Body.String())
+	}
+	if srv.workers.IsStopRequested() {
+		t.Fatal("non-admin stop request changed stop state")
+	}
+	if srv.workers.IsIngestPaused() {
+		t.Fatal("non-admin stop request paused ingest")
+	}
+
+	srv.workers.SetStopRequested(true)
+	srv.workers.SetIngestPaused(true)
+	req = httptest.NewRequest(http.MethodPost, "/api/resume", nil)
+	req = req.WithContext(contextWithUser(req, "bob", "user"))
+	rec = httptest.NewRecorder()
+
+	srv.handleResume(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("resume status = %d, want 403, body = %s", rec.Code, rec.Body.String())
+	}
+	if !srv.workers.IsStopRequested() {
+		t.Fatal("non-admin resume request cleared stop state")
+	}
+	if !srv.workers.IsIngestPaused() {
+		t.Fatal("non-admin resume request resumed ingest")
+	}
+}
+
+func TestAdminCanStopAndResumeWorkers(t *testing.T) {
+	srv := newTestServer(t)
+	req := httptest.NewRequest(http.MethodPost, "/api/stop", nil)
+	req = req.WithContext(contextWithUser(req, "admin", "admin"))
+	rec := httptest.NewRecorder()
+
+	srv.handleStop(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("stop status = %d, want 200, body = %s", rec.Code, rec.Body.String())
+	}
+	if !srv.workers.IsStopRequested() || !srv.workers.IsIngestPaused() {
+		t.Fatal("admin stop request did not pause worker state")
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/api/resume", nil)
+	req = req.WithContext(contextWithUser(req, "admin", "admin"))
+	rec = httptest.NewRecorder()
+
+	srv.handleResume(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("resume status = %d, want 200, body = %s", rec.Code, rec.Body.String())
+	}
+	if srv.workers.IsStopRequested() || srv.workers.IsIngestPaused() {
+		t.Fatal("admin resume request did not resume worker state")
+	}
+}
+
 func TestEnforceAuthRequiresSubtitleAuthentication(t *testing.T) {
 	s := &Server{
 		cfg:   &config.Config{SecretKey: "test-key"},

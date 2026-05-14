@@ -151,6 +151,9 @@ func (s *Server) handleCancelDownload(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleStop(w http.ResponseWriter, r *http.Request) {
+	if !requireAdmin(w, r) {
+		return
+	}
 	s.workers.SetStopRequested(true)
 	s.workers.SetIngestPaused(true)
 	if r.Header.Get("HX-Request") != "" {
@@ -161,6 +164,9 @@ func (s *Server) handleStop(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleResume(w http.ResponseWriter, r *http.Request) {
+	if !requireAdmin(w, r) {
+		return
+	}
 	s.workers.SetStopRequested(false)
 	s.workers.SetIngestPaused(false)
 	s.workers.KickDownloadPool()

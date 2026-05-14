@@ -52,6 +52,9 @@ func (s *Server) registerAdminAPIRoutes(mux *http.ServeMux) {
 // ── Settings ─────────────────────────────────────────────────────────────────
 
 func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
+	if !requireAdmin(w, r) {
+		return
+	}
 	settings, err := s.db.GetAllSettings()
 	if err != nil {
 		slog.Error("GetAllSettings", "err", err)
@@ -63,6 +66,9 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 
 // handleSettingsForm renders the preferences form body (HTMX fragment).
 func (s *Server) handleSettingsForm(w http.ResponseWriter, r *http.Request) {
+	if !requireAdmin(w, r) {
+		return
+	}
 	dbSettings, err := s.db.GetAllSettings()
 	if err != nil {
 		slog.Error("GetAllSettings", "err", err)
