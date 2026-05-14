@@ -1260,20 +1260,34 @@ func (s *Server) findFeedMediaByQuoteTweetID(quoteTweetID string, index int) str
 
 // probeMediaFile checks common extensions for a feed media file on disk.
 func (s *Server) probeMediaFile(handle, tweetID string, index int) string {
-	// Try both directories: media/ (Go-era) and videos/ (Python-era)
-	dirs := []string{
-		filepath.Join(s.cfg.DataDir, "media", "twitter", handle),
-		filepath.Join(s.cfg.DataDir, "videos", "twitter", handle),
+	handle, ok := safeLegacyTwitterMediaSegment(handle)
+	if !ok {
+		return ""
 	}
+	tweetID, ok = safeLegacyTwitterMediaSegment(tweetID)
+	if !ok {
+		return ""
+	}
+
+	// Try both directories: media/ (Go-era) and videos/ (Python-era)
+	roots := []string{"media", "videos"}
 	// Try both 0-based (Go) and 1-based (legacy Python) file naming
 	fileIndices := []int{index, index + 1}
 
-	for _, baseDir := range dirs {
+	for _, root := range roots {
+		baseDir, ok := resolveDataPathUnder(s.cfg.DataDir, filepath.Join(root, "twitter", handle))
+		if !ok {
+			continue
+		}
 		for _, fi := range fileIndices {
 			for _, ext := range []string{".jpg", ".png", ".webp", ".mp4"} {
 				path := filepath.Join(baseDir, fmt.Sprintf("%s_%d%s", tweetID, fi, ext))
-				if _, err := os.Stat(path); err == nil {
-					return path
+				fullPath, ok := resolveDataPathUnder(s.cfg.DataDir, path)
+				if !ok {
+					continue
+				}
+				if _, err := os.Stat(fullPath); err == nil {
+					return fullPath
 				}
 			}
 		}
@@ -1283,35 +1297,65 @@ func (s *Server) probeMediaFile(handle, tweetID string, index int) string {
 }
 
 func (s *Server) probeMediaVideoFile(handle, tweetID string) string {
-	if handle == "" || tweetID == "" {
+	handle, ok := safeLegacyTwitterMediaSegment(handle)
+	if !ok {
+		return ""
+	}
+	tweetID, ok = safeLegacyTwitterMediaSegment(tweetID)
+	if !ok {
 		return ""
 	}
 
-	dirs := []string{
-		filepath.Join(s.cfg.DataDir, "media", "twitter", handle),
-		filepath.Join(s.cfg.DataDir, "videos", "twitter", handle),
-	}
+	roots := []string{"media", "videos"}
 	fileIndices := []int{0, 1}
 	videoExts := []string{".mp4", ".webm", ".mkv", ".mov", ".m4v", ".gif"}
 
-	for _, baseDir := range dirs {
+	for _, root := range roots {
+		baseDir, ok := resolveDataPathUnder(s.cfg.DataDir, filepath.Join(root, "twitter", handle))
+		if !ok {
+			continue
+		}
 		for _, ext := range videoExts {
 			path := filepath.Join(baseDir, tweetID+ext)
-			if _, err := os.Stat(path); err == nil {
-				return path
+			fullPath, ok := resolveDataPathUnder(s.cfg.DataDir, path)
+			if !ok {
+				continue
+			}
+			if _, err := os.Stat(fullPath); err == nil {
+				return fullPath
 			}
 		}
 		for _, fi := range fileIndices {
 			for _, ext := range videoExts {
 				path := filepath.Join(baseDir, fmt.Sprintf("%s_%d%s", tweetID, fi, ext))
-				if _, err := os.Stat(path); err == nil {
-					return path
+				fullPath, ok := resolveDataPathUnder(s.cfg.DataDir, path)
+				if !ok {
+					continue
+				}
+				if _, err := os.Stat(fullPath); err == nil {
+					return fullPath
 				}
 			}
 		}
 	}
 
 	return ""
+}
+
+// Legacy media probing treats stored handles and tweet IDs as path segments
+// under Igloo's data directory, never as caller-supplied filesystem paths.
+func safeLegacyTwitterMediaSegment(raw string) (string, bool) {
+	raw = strings.TrimSpace(strings.TrimPrefix(raw, "@"))
+	if raw == "" || raw == "." || raw == ".." || filepath.Base(raw) != raw || filepath.Clean(raw) != raw {
+		return "", false
+	}
+	for _, r := range raw {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '-' {
+			continue
+		}
+		return "", false
+	}
+	return raw, true
 }
 
 // findCDNSlideURL looks up the CDN URL for a feed item's media from media_json or quote_media_json.

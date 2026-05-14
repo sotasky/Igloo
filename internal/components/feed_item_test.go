@@ -226,6 +226,18 @@ func TestFeedExternalURLFallsBackToUniversalStatusPath(t *testing.T) {
 	}
 }
 
+func TestFeedExternalURLRejectsNonHTTPStoredURL(t *testing.T) {
+	got := feedExternalURL(model.FeedItem{
+		TweetID:      "status_1",
+		AuthorHandle: "sample_author",
+		CanonicalURL: "javascript:alert(1)",
+	})
+	want := "https://x.com/sample_author/status/status_1"
+	if got != want {
+		t.Fatalf("feedExternalURL() = %q, want %q", got, want)
+	}
+}
+
 func TestFeedItemShowsHandleWhenDisplayNameMissing(t *testing.T) {
 	item := model.FeedItem{
 		TweetID:      "tweet_1",

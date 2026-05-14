@@ -3,6 +3,7 @@ package components
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -391,7 +392,7 @@ func normalizeHandle(h string) string {
 }
 
 func feedExternalURL(item model.FeedItem) string {
-	if url := strings.TrimSpace(item.CanonicalURL); url != "" {
+	if url := safeExternalHTTPURL(item.CanonicalURL); url != "" {
 		return url
 	}
 	tweetID := strings.TrimSpace(item.TweetID)
@@ -406,6 +407,23 @@ func feedExternalURL(item model.FeedItem) string {
 		handle = "i"
 	}
 	return "https://x.com/" + handle + "/status/" + tweetID
+}
+
+// Feed cards may render stored canonical URLs as browser-openable links, so
+// preserve only absolute HTTP(S) URLs and rebuild X status links otherwise.
+func safeExternalHTTPURL(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	u, err := url.Parse(raw)
+	if err != nil || !u.IsAbs() || u.Host == "" || u.User != nil {
+		return ""
+	}
+	if !strings.EqualFold(u.Scheme, "http") && !strings.EqualFold(u.Scheme, "https") {
+		return ""
+	}
+	return raw
 }
 
 // repostEntries returns the ordered list of reposter entries to render, or

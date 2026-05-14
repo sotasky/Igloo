@@ -591,7 +591,8 @@ templ feedMediaTile(p PageProps, tweetID string, index int, m model.MediaRef, me
 templ feedQuoteCard(p PageProps, item model.FeedItem) {
 	{{ qLabel := feedQuoteLabel(item) }}
 	{{ qMediaCount := len(item.QuoteMedia) }}
-	{{ isUnavailable := item.QuoteCanonicalURL == "" && qMediaCount == 0 && item.QuoteBodyText == "" }}
+	{{ quoteExternalURL := safeExternalHTTPURL(item.QuoteCanonicalURL) }}
+	{{ isUnavailable := quoteExternalURL == "" && qMediaCount == 0 && item.QuoteBodyText == "" }}
 	<div
 		class={ "feed-quote-card", templ.KV("unavailable", isUnavailable) }
 		data-quote-tweet-id={ item.QuoteTweetID }
@@ -601,8 +602,8 @@ templ feedQuoteCard(p PageProps, item model.FeedItem) {
 		if item.QuoteAuthorHandle != "" {
 			data-quote-author-handle={ item.QuoteAuthorHandle }
 		}
-		if item.QuoteCanonicalURL != "" {
-			data-quote-link={ item.QuoteCanonicalURL }
+		if quoteExternalURL != "" {
+			data-quote-link={ quoteExternalURL }
 		}
 		data-quote-liked={ boolDataAttr(item.QuoteIsLiked) }
 		data-quote-bookmarked={ boolDataAttr(item.QuoteIsBookmarked) }

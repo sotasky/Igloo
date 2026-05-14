@@ -19,6 +19,17 @@ function textContentTrim(node) {
   return String((node && node.textContent) || '').trim()
 }
 
+function safeExternalHttpURL(raw) {
+  const value = String(raw || '').trim()
+  if (!/^https?:\/\//i.test(value)) return ''
+  try {
+    const parsed = new URL(value)
+    return (parsed.protocol === 'http:' || parsed.protocol === 'https:') ? parsed.href : ''
+  } catch (_) {
+    return ''
+  }
+}
+
 function getRetweetMutedChannels() {
   let raw = ''
   try {
@@ -222,7 +233,7 @@ export function openMediaOverlay(root, triggerEl) {
   closeMediaOverlay()
   const article = itemRootFromNode(root) || root
   const tweetId = String(article.getAttribute('data-tweet-id') || '').trim()
-  const link = String(article.getAttribute('data-feed-link') || '').trim()
+  const link = safeExternalHttpURL(article.getAttribute('data-feed-link'))
   const channelId = String(article.getAttribute('data-channel-id') || '').trim()
   const channelName = String(article.getAttribute('data-channel-name') || '').trim()
   const channelPlatform = String(article.getAttribute('data-channel-platform') || 'twitter').trim() || 'twitter'
@@ -231,7 +242,7 @@ export function openMediaOverlay(root, triggerEl) {
   const quoteCardEl = triggerQuoteCard || article.querySelector('.feed-quote-card')
   const isQuoteMedia = !!triggerQuoteCard
   const quoteTweetId = quoteCardEl ? String(quoteCardEl.getAttribute('data-quote-tweet-id') || '').trim() : ''
-  const quoteLink = quoteCardEl ? String(quoteCardEl.getAttribute('data-quote-link') || '').trim() : ''
+  const quoteLink = quoteCardEl ? safeExternalHttpURL(quoteCardEl.getAttribute('data-quote-link')) : ''
 
   let currentIndex = Math.max(0, Number(media.startIndex || 0))
   const overlay = document.createElement('div')

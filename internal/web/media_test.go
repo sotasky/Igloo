@@ -395,6 +395,32 @@ func TestHandleStreamResolvesQuoteVideoByDirectQuoteTweetID(t *testing.T) {
 	}
 }
 
+func TestProbeMediaFileRejectsUnsafeLegacySegments(t *testing.T) {
+	srv := newTestServer(t)
+
+	escapedByHandle := filepath.Join(srv.cfg.DataDir, "media", "outside_0.jpg")
+	if err := os.MkdirAll(filepath.Dir(escapedByHandle), 0o755); err != nil {
+		t.Fatalf("mkdir handle target: %v", err)
+	}
+	if err := os.WriteFile(escapedByHandle, make([]byte, 256), 0o644); err != nil {
+		t.Fatalf("write handle target: %v", err)
+	}
+	if got := srv.probeMediaFile("..", "outside", 0); got != "" {
+		t.Fatalf("probeMediaFile with unsafe handle = %q, want empty", got)
+	}
+
+	escapedByTweetID := filepath.Join(srv.cfg.DataDir, "media", "twitter", "outside_0.mp4")
+	if err := os.MkdirAll(filepath.Dir(escapedByTweetID), 0o755); err != nil {
+		t.Fatalf("mkdir tweet target: %v", err)
+	}
+	if err := os.WriteFile(escapedByTweetID, []byte("fake-mp4"), 0o644); err != nil {
+		t.Fatalf("write tweet target: %v", err)
+	}
+	if got := srv.probeMediaVideoFile("sample_author", "../outside"); got != "" {
+		t.Fatalf("probeMediaVideoFile with unsafe tweet ID = %q, want empty", got)
+	}
+}
+
 func TestHandleSlideRejectsPrivateCDNURLWhenLocalMissing(t *testing.T) {
 	srv := newTestServer(t)
 	const (
