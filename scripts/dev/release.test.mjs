@@ -173,6 +173,7 @@ test("Go workflow tools are pinned and Renovate-managed", () => {
 
   assert.doesNotMatch(workflow, /@latest/);
   assert.doesNotMatch(fullGate, /@latest/);
+  assert.match(fullGate, /go run \.\/scripts\/dev\/staticcheck/);
   assert.match(workflow, /\. scripts\/dev\/go-tool-versions\.sh/);
   assert.match(fullGate, /\. scripts\/dev\/go-tool-versions\.sh/);
   assert.match(versions, /packageName=github\.com\/kisielk\/errcheck/);
