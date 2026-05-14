@@ -160,8 +160,9 @@ func (db *DB) GetThreadChain(tweetID string) ([]model.FeedItem, error) {
 }
 
 // GetThreadTree returns the earliest known ancestor for tweetID followed by
-// every stored descendant reply. Items are ordered as a pre-order reply tree:
-// root, first direct reply and its descendants, then the next direct reply.
+// the selected top-level reply branch and that branch's descendants. Items are
+// ordered as a pre-order reply tree: root, selected direct reply branch, then
+// descendants within that branch.
 func (db *DB) GetThreadTree(tweetID string) ([]model.FeedItem, error) {
 	chain, err := db.GetThreadChain(tweetID)
 	if err != nil {
@@ -171,10 +172,16 @@ func (db *DB) GetThreadTree(tweetID string) ([]model.FeedItem, error) {
 		return nil, nil
 	}
 	rootID := chain[0].TweetID
+	branchRootID := rootID
+	branchStartDepth := 0
+	if len(chain) > 1 {
+		branchRootID = chain[1].TweetID
+		branchStartDepth = 1
+	}
 
 	const q = `
 		WITH RECURSIVE subtree(tweet_id, parent_id, depth, published_at) AS (
-			SELECT tweet_id, '', 0, COALESCE(published_at, 0)
+			SELECT tweet_id, COALESCE(reply_to_status, ''), ?, COALESCE(published_at, 0)
 			FROM feed_items
 			WHERE tweet_id = ?
 			UNION ALL
@@ -187,7 +194,7 @@ func (db *DB) GetThreadTree(tweetID string) ([]model.FeedItem, error) {
 		FROM subtree
 		WHERE tweet_id IS NOT NULL AND tweet_id != ''`
 
-	rows, err := db.conn.Query(q, rootID)
+	rows, err := db.conn.Query(q, branchStartDepth, branchRootID)
 	if err != nil {
 		return nil, fmt.Errorf("GetThreadTree query: %w", err)
 	}
@@ -204,6 +211,18 @@ func (db *DB) GetThreadTree(tweetID string) ([]model.FeedItem, error) {
 	nodes := make(map[string]node)
 	children := make(map[string][]node)
 	var ids []string
+	if branchRootID != rootID {
+		rootPublishedAt := int64(0)
+		if chain[0].PublishedAt != nil {
+			rootPublishedAt = chain[0].PublishedAt.UnixMilli()
+		}
+		nodes[rootID] = node{
+			tweetID:     rootID,
+			depth:       0,
+			publishedAt: rootPublishedAt,
+		}
+		ids = append(ids, rootID)
+	}
 	for rows.Next() {
 		var n node
 		if err := rows.Scan(&n.tweetID, &n.parentID, &n.depth, &n.publishedAt); err != nil {

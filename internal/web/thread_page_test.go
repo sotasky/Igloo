@@ -10,7 +10,7 @@ import (
 	"github.com/screwys/igloo/internal/model"
 )
 
-func TestHandlePageThreadRendersFullThread(t *testing.T) {
+func TestHandlePageThreadRendersSelectedReplyBranch(t *testing.T) {
 	ts := newTestServer(t)
 	rootAt := time.Unix(100, 0).UTC()
 	leafAt := time.Unix(110, 0).UTC()
@@ -32,10 +32,13 @@ func TestHandlePageThreadRendersFullThread(t *testing.T) {
 		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
 	}
 	body := rec.Body.String()
-	for _, want := range []string{`root body`, `leaf body`, `sibling body`, `data-thread-back-link`, `href="/feed"`, `data-thread-reply`, `data-thread-depth="1"`} {
+	for _, want := range []string{`root body`, `leaf body`, `data-thread-back-link`, `href="/feed"`, `data-thread-reply`, `data-thread-depth="1"`} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("missing %q in body: %s", want, body)
 		}
+	}
+	if strings.Contains(body, `sibling body`) {
+		t.Fatalf("thread route should exclude separate reply branches: %s", body)
 	}
 }
 

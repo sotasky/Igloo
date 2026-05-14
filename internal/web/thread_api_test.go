@@ -47,11 +47,11 @@ func TestGetThreadHandler(t *testing.T) {
 	if !resp.Success {
 		t.Fatal("response not successful")
 	}
-	if len(resp.Thread) != 4 {
-		t.Fatalf("thread length: got %d, want 4, body=%s", len(resp.Thread), rr.Body.String())
+	if len(resp.Thread) != 3 {
+		t.Fatalf("thread length: got %d, want 3, body=%s", len(resp.Thread), rr.Body.String())
 	}
-	want := []string{"t_1", "t_2", "t_3", "t_4"}
-	wantDepths := []float64{0, 1, 2, 1}
+	want := []string{"t_1", "t_2", "t_3"}
+	wantDepths := []float64{0, 1, 2}
 	for i, item := range resp.Thread {
 		if got, _ := item["tweet_id"].(string); got != want[i] {
 			t.Errorf("thread[%d].tweet_id: got %q, want %q", i, got, want[i])

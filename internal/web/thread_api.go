@@ -10,17 +10,18 @@ func (s *Server) registerThreadAPIRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/thread/{tweet_id}", s.handleGetThread)
 }
 
-// handleGetThread returns the root tweet and all stored replies for a tweet.
+// handleGetThread returns the root tweet and the selected reply branch for a tweet.
 //
 // GET /api/thread/{tweet_id}
 //
 // Includes is_ghost rows so the UI can render parent context for tweets the
-// user doesn't follow. Bounded at 50 levels by GetThreadTree's CTE depth cap.
+// user doesn't follow. Sibling reply branches under the same root stay
+// separate. Bounded at 50 levels by GetThreadTree's CTE depth cap.
 //
 // Response shape:
 //
 //	{ "success": true,
-//	  "thread": [ <feed item>, ... ],   // root-first pre-order
+//	  "thread": [ <feed item>, ... ],   // root-first branch pre-order
 //	  "root_id": "<root_tweet_id>",
 //	  "leaf_id": "<requested_tweet_id>" }
 func (s *Server) handleGetThread(w http.ResponseWriter, r *http.Request) {
