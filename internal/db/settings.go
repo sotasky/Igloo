@@ -155,13 +155,13 @@ func (db *DB) GetSetting(key, fallback string) (string, error) {
 // GetStats returns aggregate database statistics for the sidebar.
 func (db *DB) GetStats() (model.DBStats, error) {
 	var s model.DBStats
-	db.conn.QueryRow("SELECT COUNT(*) FROM channel_follows WHERE user_id = ''").Scan(&s.TotalChannels)
-	db.conn.QueryRow("SELECT COUNT(*) FROM videos").Scan(&s.TotalVideos)
-	db.conn.QueryRow("SELECT COUNT(*) FROM feed_items").Scan(&s.TotalFeedItems)
+	_ = db.conn.QueryRow("SELECT COUNT(*) FROM channel_follows WHERE user_id = ''").Scan(&s.TotalChannels)
+	_ = db.conn.QueryRow("SELECT COUNT(*) FROM videos").Scan(&s.TotalVideos)
+	_ = db.conn.QueryRow("SELECT COUNT(*) FROM feed_items").Scan(&s.TotalFeedItems)
 
 	var pageCount, pageSize int64
-	db.conn.QueryRow("PRAGMA page_count").Scan(&pageCount)
-	db.conn.QueryRow("PRAGMA page_size").Scan(&pageSize)
+	_ = db.conn.QueryRow("PRAGMA page_count").Scan(&pageCount)
+	_ = db.conn.QueryRow("PRAGMA page_size").Scan(&pageSize)
 	s.DatabaseSizeMB = float64(pageCount*pageSize) / (1024 * 1024)
 
 	return s, nil
@@ -230,7 +230,9 @@ func (db *DB) GetSyncChanges(sinceVersion int64, limit int) ([]SyncChange, bool,
 	if err != nil {
 		return nil, false, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	var changes []SyncChange
 	for rows.Next() {
@@ -320,7 +322,9 @@ func (db *DB) getMutationSyncChangeCandidates(sinceVersion int64, limit int) ([]
 	if err != nil {
 		return nil, false, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 	var changes []SyncChange
 	for rows.Next() {
 		var c SyncChange

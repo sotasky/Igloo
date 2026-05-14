@@ -103,15 +103,15 @@ func (s *Server) handleChannelStar(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("HX-Trigger", fmt.Sprintf(`{"starChanged":{"channelId":%q,"starred":%t}}`, channelID, isStarred))
 		switch r.URL.Query().Get("ctx") {
 		case "feed":
-			components.FeedStarButton(p, channelID, isStarred).Render(r.Context(), w)
+			_ = components.FeedStarButton(p, channelID, isStarred).Render(r.Context(), w)
 		case "profile":
-			components.ProfileCardStarButton(p, channelID, isStarred).Render(r.Context(), w)
+			_ = components.ProfileCardStarButton(p, channelID, isStarred).Render(r.Context(), w)
 		case "sidebar":
-			components.SidebarStarButton(p, channelID, isStarred).Render(r.Context(), w)
+			_ = components.SidebarStarButton(p, channelID, isStarred).Render(r.Context(), w)
 		case "player":
-			components.PlayerStarButton(p, channelID, isStarred).Render(r.Context(), w)
+			_ = components.PlayerStarButton(p, channelID, isStarred).Render(r.Context(), w)
 		default:
-			components.ChannelStarButton(p, channelID, isStarred).Render(r.Context(), w)
+			_ = components.ChannelStarButton(p, channelID, isStarred).Render(r.Context(), w)
 		}
 		return
 	}
@@ -193,7 +193,7 @@ func (s *Server) handleChannelSettingsGet(w http.ResponseWriter, r *http.Request
 			MediaDownloadLimit: settings.MediaDownloadLimit,
 		}
 		w.Header().Set("Content-Type", "text/html")
-		components.ChannelSettingsForm(s.pageProps(w, r), channelID, platform, cs).Render(r.Context(), w)
+		_ = components.ChannelSettingsForm(s.pageProps(w, r), channelID, platform, cs).Render(r.Context(), w)
 		return
 	}
 
@@ -217,8 +217,9 @@ func (s *Server) handleChannelSettingsPost(w http.ResponseWriter, r *http.Reques
 	var body map[string]any
 
 	if strings.HasPrefix(ct, "application/x-www-form-urlencoded") || strings.HasPrefix(ct, "multipart/form-data") {
-		// HTMX form submission.
-		r.ParseForm()
+		_ =
+			// HTMX form submission.
+			r.ParseForm()
 		body = make(map[string]any)
 		if v := r.FormValue("quality"); v != "" {
 			body["quality"] = v
@@ -343,7 +344,7 @@ func (s *Server) handleChannelSettingsPost(w http.ResponseWriter, r *http.Reques
 			}
 		}
 		w.Header().Set("Content-Type", "text/html")
-		components.ChannelSettingsForm(s.pageProps(w, r), channelID, platform, cs).Render(r.Context(), w)
+		_ = components.ChannelSettingsForm(s.pageProps(w, r), channelID, platform, cs).Render(r.Context(), w)
 	} else {
 		writeJSON(w, 200, map[string]any{
 			"success": true,

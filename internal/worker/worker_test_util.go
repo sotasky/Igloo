@@ -21,8 +21,8 @@ func newTestWorkerDB(t *testing.T) *db.DB {
 		t.Fatalf("create temp db file: %v", err)
 	}
 	dbPath := f.Name()
-	f.Close()
-	t.Cleanup(func() { os.Remove(dbPath) })
+	_ = f.Close()
+	t.Cleanup(func() { _ = os.Remove(dbPath) })
 
 	d, err := db.Open(dbPath, t.TempDir())
 	if err != nil {

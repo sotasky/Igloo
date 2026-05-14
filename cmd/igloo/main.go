@@ -38,7 +38,9 @@ func main() {
 		os.Exit(1)
 	}
 	if logFile := setupServerLogging(cfg); logFile != nil {
-		defer logFile.Close()
+		defer func() {
+			_ = logFile.Close()
+		}()
 	}
 
 	auth.InitCache(cfg.AuthUsersPath)
@@ -61,7 +63,9 @@ func main() {
 		slog.Error("failed to open database", "path", cfg.DatabasePath, "err", err)
 		os.Exit(1)
 	}
-	defer database.Close()
+	defer func() {
+		_ = database.Close()
+	}()
 	slog.Info("database opened", "path", cfg.DatabasePath)
 	logStartupPhase("db_open", time.Since(phaseStart))
 
@@ -152,7 +156,7 @@ func logStartupPhase(name string, elapsed time.Duration) {
 
 func buildStaticVersionCache(staticDir string) map[string]string {
 	versions := make(map[string]string)
-	filepath.Walk(staticDir, func(path string, info os.FileInfo, err error) error {
+	_ = filepath.Walk(staticDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil || info.IsDir() {
 			return nil
 		}

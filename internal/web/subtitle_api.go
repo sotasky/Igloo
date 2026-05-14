@@ -97,7 +97,7 @@ func serveVTT(w http.ResponseWriter, path string) {
 	}
 	w.Header().Set("Content-Type", "text/vtt")
 	w.Header().Set("Cache-Control", "no-cache")
-	w.Write(sanitizeVTT(data))
+	_, _ = w.Write(sanitizeVTT(data))
 }
 
 func sanitizeVTT(data []byte) []byte {

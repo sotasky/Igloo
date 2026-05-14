@@ -87,7 +87,9 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer database.Close()
+	defer func() {
+		_ = database.Close()
+	}()
 
 	switch mode {
 	case "dry-run":
@@ -189,12 +191,16 @@ func runExport(ctx context.Context, database *db.DB, target string, skip []strin
 	if err != nil {
 		return err
 	}
-	defer outFile.Close()
+	defer func() {
+		_ = outFile.Close()
+	}()
 	mapFile, err := os.Create(mapPath)
 	if err != nil {
 		return err
 	}
-	defer mapFile.Close()
+	defer func() {
+		_ = mapFile.Close()
+	}()
 	outEnc := json.NewEncoder(outFile)
 	mapEnc := json.NewEncoder(mapFile)
 	exported := 0
@@ -250,7 +256,9 @@ func runImport(database *db.DB, inPath, mapPath string) error {
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	defer func() {
+		_ = file.Close()
+	}()
 	scanner := bufio.NewScanner(file)
 	imported := 0
 	for scanner.Scan() {
@@ -311,7 +319,9 @@ func loadCatchupCandidates(ctx context.Context, database *db.DB, target string, 
 		if err != nil {
 			return err
 		}
-		defer sqlRows.Close()
+		defer func() {
+			_ = sqlRows.Close()
+		}()
 		for sqlRows.Next() {
 			var row candidateRow
 			if err := sqlRows.Scan(&row.TweetID, &row.Field, &row.SourceText, &row.SourceLang, &row.BodyText, &row.QuoteBodyText); err != nil {
@@ -396,7 +406,9 @@ func readMapRows(path string) (map[string]mapRow, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
+	defer func() {
+		_ = file.Close()
+	}()
 	out := map[string]mapRow{}
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {

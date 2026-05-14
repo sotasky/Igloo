@@ -19,7 +19,9 @@ func TestDoctorStatusReportsLocalHealthAndMasksSecrets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	defer d.Close()
+	defer func() {
+		_ = d.Close()
+	}()
 
 	now := time.Now().UnixMilli()
 	if err := d.ExecRaw(`

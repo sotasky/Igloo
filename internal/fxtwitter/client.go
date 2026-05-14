@@ -87,7 +87,9 @@ func (c *Client) FetchUser(ctx context.Context, handle string) (*User, error) {
 	if err != nil {
 		return nil, fmt.Errorf("fxtwitter request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 	if resp.StatusCode == http.StatusNotFound {
 		return nil, ErrNotFound
 	}
@@ -178,7 +180,9 @@ func (c *Client) FetchTweet(ctx context.Context, handle, tweetID string) (*Tweet
 	if err != nil {
 		return nil, fmt.Errorf("fxtwitter request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 	if resp.StatusCode == http.StatusNotFound {
 		return nil, ErrNotFound
 	}

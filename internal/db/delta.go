@@ -164,7 +164,9 @@ func (db *DB) ListFeedItemsForDelta(username string, since int64, limit int, cut
 	if err != nil {
 		return nil, 0, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 	items, err := scanFeedItemsWithSeq(rows)
 	if err != nil {
 		return nil, 0, err
@@ -226,7 +228,9 @@ func (db *DB) ListVideosForDelta(platforms []string, since int64, limit int) ([]
 	if err != nil {
 		return nil, 0, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	var videos []model.Video
 	var maxSeq int64
@@ -292,7 +296,9 @@ func (db *DB) ListChannelsForDelta(since int64, limit int) ([]model.Channel, int
 	if err != nil {
 		return nil, 0, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	var out []model.Channel
 	var maxSeq int64

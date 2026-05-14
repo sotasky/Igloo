@@ -255,7 +255,7 @@ func (db *DB) ReplaceVideoRepostSourcesForReposter(reposterChannelID string, row
 		for existingRows.Next() {
 			var videoID string
 			if err := existingRows.Scan(&videoID); err != nil {
-				existingRows.Close()
+				_ = existingRows.Close()
 				return err
 			}
 			existing = append(existing, videoID)
@@ -393,7 +393,9 @@ func (db *DB) GetVideoRepostSources(videoID string) ([]model.VideoRepostSource, 
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 	return scanVideoRepostSources(rows)
 }
 
@@ -419,7 +421,7 @@ func (db *DB) GetVideoRepostSourcesForVideoIDs(videoIDs []string) (map[string][]
 			return nil, err
 		}
 		reposts, scanErr := scanVideoRepostSources(rows)
-		rows.Close()
+		_ = rows.Close()
 		if scanErr != nil {
 			return nil, scanErr
 		}

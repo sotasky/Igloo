@@ -367,7 +367,9 @@ func (db *DB) ApplySeenMutation(username string, tweetIDs []string, updatedAtMs 
 			if err != nil {
 				return err
 			}
-			defer stmt.Close()
+			defer func() {
+				_ = stmt.Close()
+			}()
 			for _, id := range tweetIDs {
 				if _, err := stmt.Exec(username, id, updatedAtMs); err != nil {
 					return err

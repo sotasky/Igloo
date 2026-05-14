@@ -138,7 +138,9 @@ func detectImageContentType(path string) string {
 	if err != nil {
 		return fallback
 	}
-	defer f.Close()
+	defer func() {
+		_ = f.Close()
+	}()
 
 	buf := make([]byte, 512)
 	n, err := io.ReadFull(f, buf)

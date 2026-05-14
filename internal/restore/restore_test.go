@@ -44,7 +44,7 @@ func TestStageTarballRoundTrip(t *testing.T) {
 	confDir := t.TempDir()
 
 	tarBytes := buildTarball(t, map[string]string{
-		"igloo.db":              "fake-db-bytes",
+		"igloo.db":               "fake-db-bytes",
 		"config/auth_users.json": `{"alpha":"hash"}`,
 		"config/cookies/x.txt":   "cookie-contents",
 	})
@@ -143,8 +143,8 @@ func TestStageTarballRejectsUnsafePaths(t *testing.T) {
 	if _, err := tw.Write([]byte("evil")); err != nil {
 		t.Fatal(err)
 	}
-	tw.Close()
-	gz.Close()
+	_ = tw.Close()
+	_ = gz.Close()
 	if err := StageTarball(&buf, dataDir); err == nil {
 		t.Fatal("expected error for tar entry escaping staging dir")
 	}

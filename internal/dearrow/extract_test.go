@@ -35,7 +35,9 @@ func TestExtractFrame_WritesJPEG(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open output: %v", err)
 	}
-	defer f.Close()
+	defer func() {
+		_ = f.Close()
+	}()
 	magic := make([]byte, 3)
 	if _, err := f.Read(magic); err != nil {
 		t.Fatalf("read magic: %v", err)

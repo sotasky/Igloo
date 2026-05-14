@@ -47,7 +47,9 @@ func (db *DB) ListMomentViews(username string, since time.Time, limit int) ([]Mo
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	var out []MomentView
 	for rows.Next() {

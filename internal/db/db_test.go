@@ -28,7 +28,7 @@ func openTestDB(t *testing.T) *DB {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	t.Cleanup(func() { d.Close() })
+	t.Cleanup(func() { _ = d.Close() })
 	return d
 }
 
@@ -41,16 +41,16 @@ func openWritableTestDB(t *testing.T) *DB {
 		t.Fatalf("create temp db: %v", err)
 	}
 	tmpPath := tmpFile.Name()
-	tmpFile.Close()
+	_ = tmpFile.Close()
 
 	d, err := Open(tmpPath, t.TempDir())
 	if err != nil {
-		os.Remove(tmpPath)
+		_ = os.Remove(tmpPath)
 		t.Fatalf("open writable: %v", err)
 	}
 	t.Cleanup(func() {
-		d.Close()
-		os.Remove(tmpPath)
+		_ = d.Close()
+		_ = os.Remove(tmpPath)
 	})
 	return d
 }
@@ -98,7 +98,7 @@ func TestOpenDropsLegacyChannelCheckInterval(t *testing.T) {
 		`INSERT INTO settings (user_id, key, value) VALUES ('feed', 'shorts_check_interval', '3')`,
 	} {
 		if _, err := seed.Exec(stmt); err != nil {
-			seed.Close()
+			_ = seed.Close()
 			t.Fatalf("seed %q: %v", stmt, err)
 		}
 	}
@@ -110,13 +110,17 @@ func TestOpenDropsLegacyChannelCheckInterval(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	defer d.Close()
+	defer func() {
+		_ = d.Close()
+	}()
 
 	rows, err := d.conn.Query(`PRAGMA table_info(channels)`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 	for rows.Next() {
 		var (
 			cid     int
@@ -155,7 +159,9 @@ func TestOpenReadOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenReadOnly: %v", err)
 	}
-	defer d.Close()
+	defer func() {
+		_ = d.Close()
+	}()
 
 	var count int
 	err = d.conn.QueryRow("SELECT count(*) FROM channels").Scan(&count)
@@ -194,7 +200,7 @@ func TestOpenCleansRetiredReadingFeatureState(t *testing.T) {
 		`CREATE INDEX idx_reading_cache_cat_pub ON reading_articles_cache(category_key, published_at DESC)`,
 	} {
 		if _, err := seed.Exec(stmt); err != nil {
-			seed.Close()
+			_ = seed.Close()
 			t.Fatalf("seed %q: %v", stmt, err)
 		}
 	}
@@ -206,7 +212,9 @@ func TestOpenCleansRetiredReadingFeatureState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	defer d.Close()
+	defer func() {
+		_ = d.Close()
+	}()
 
 	for _, table := range []string{"reading_preferences", "saved_articles", "reading_articles_cache"} {
 		var count int

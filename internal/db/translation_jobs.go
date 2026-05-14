@@ -66,7 +66,9 @@ func (db *DB) EnqueueTranslationCandidates(targetLang string, skipLangs []string
 		if err != nil {
 			return err
 		}
-		defer stmt.Close()
+		defer func() {
+			_ = stmt.Close()
+		}()
 		for _, c := range candidates {
 			if strings.TrimSpace(c.TweetID) == "" || strings.TrimSpace(c.Field) == "" || strings.TrimSpace(c.SourceText) == "" {
 				continue

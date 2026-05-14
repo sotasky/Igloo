@@ -168,7 +168,9 @@ func (db *DB) repairTwitterPlaceholderAuthorsOnce() error {
 		if err != nil {
 			return err
 		}
-		defer rows.Close()
+		defer func() {
+			_ = rows.Close()
+		}()
 
 		type repairRow struct {
 			tweetID          string
@@ -381,7 +383,9 @@ func columnExistsTx(tx *sql.Tx, tableName, columnName string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 	for rows.Next() {
 		var (
 			cid     int
@@ -406,7 +410,9 @@ func warnIfColumnExists(conn *sql.DB, migrationName, tableName, columnName strin
 	if err != nil {
 		return
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 	for rows.Next() {
 		var (
 			cid     int

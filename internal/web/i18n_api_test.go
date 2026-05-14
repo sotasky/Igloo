@@ -14,7 +14,7 @@ import (
 func TestI18NCatalogEndpoint(t *testing.T) {
 	srv := newTestServer(t)
 	srv.i18n = i18n.NewCatalog()
-	srv.i18n.LoadTOMLFile(testTOMLFile(t, "tr", map[string]string{"search_global_placeholder": "Ara"}))
+	_ = srv.i18n.LoadTOMLFile(testTOMLFile(t, "tr", map[string]string{"search_global_placeholder": "Ara"}))
 
 	req := httptest.NewRequest("GET", "/api/i18n/catalog?lang=tr", nil)
 	rec := httptest.NewRecorder()
@@ -41,7 +41,7 @@ func TestI18NCatalogEndpoint(t *testing.T) {
 func TestRequestLanguageAutoUsesAcceptLanguage(t *testing.T) {
 	srv := newTestServer(t)
 	srv.i18n = i18n.NewCatalog()
-	srv.i18n.LoadTOMLFile(testTOMLFile(t, "tr", map[string]string{"search_global_placeholder": "Ara"}))
+	_ = srv.i18n.LoadTOMLFile(testTOMLFile(t, "tr", map[string]string{"search_global_placeholder": "Ara"}))
 	if err := srv.db.SetSetting("", "ui_language", "auto"); err != nil {
 		t.Fatalf("SetSetting: %v", err)
 	}
@@ -57,7 +57,7 @@ func TestRequestLanguageAutoUsesAcceptLanguage(t *testing.T) {
 func TestRequestLanguageQueryAutoUsesAcceptLanguage(t *testing.T) {
 	srv := newTestServer(t)
 	srv.i18n = i18n.NewCatalog()
-	srv.i18n.LoadTOMLFile(testTOMLFile(t, "tr", map[string]string{"search_global_placeholder": "Ara"}))
+	_ = srv.i18n.LoadTOMLFile(testTOMLFile(t, "tr", map[string]string{"search_global_placeholder": "Ara"}))
 
 	req := httptest.NewRequest("GET", "/feed?lang=auto", nil)
 	req.Header.Set("Accept-Language", "tr-TR,tr;q=0.9,en;q=0.7")
@@ -70,7 +70,7 @@ func TestRequestLanguageQueryAutoUsesAcceptLanguage(t *testing.T) {
 func TestSettingsFormPreviewLanguageUsesCatalogWithoutChangingPersistedSelection(t *testing.T) {
 	srv := newTestServer(t)
 	srv.i18n = i18n.NewCatalog()
-	srv.i18n.LoadTOMLFile(testTOMLFile(t, "tr", map[string]string{
+	_ = srv.i18n.LoadTOMLFile(testTOMLFile(t, "tr", map[string]string{
 		"action_save_preferences": "Tercihleri kaydet",
 		"settings_tab_general":    "Genel",
 	}))

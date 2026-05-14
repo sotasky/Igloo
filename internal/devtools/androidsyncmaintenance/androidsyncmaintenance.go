@@ -73,13 +73,13 @@ func parseOptions(args []string) (options, error) {
 func Run(args []string, stdout, stderr io.Writer) int {
 	opts, err := parseOptions(args)
 	if err != nil {
-		fmt.Fprintf(stderr, "android sync maintenance: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "android sync maintenance: %v\n", err)
 		return 2
 	}
 
 	cfg := config.Load()
 	if cfg.ConfigError != nil {
-		fmt.Fprintf(stderr, "android sync maintenance: invalid configuration: %v\n", cfg.ConfigError)
+		_, _ = fmt.Fprintf(stderr, "android sync maintenance: invalid configuration: %v\n", cfg.ConfigError)
 		return 1
 	}
 
@@ -87,13 +87,15 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	if opts.DryRun {
 		store, err := db.OpenReadOnly(cfg.DatabasePath, cfg.DataDir)
 		if err != nil {
-			fmt.Fprintf(stderr, "android sync maintenance: open readonly db: %v\n", err)
+			_, _ = fmt.Fprintf(stderr, "android sync maintenance: open readonly db: %v\n", err)
 			return 1
 		}
-		defer store.Close()
+		defer func() {
+			_ = store.Close()
+		}()
 		debt, err := store.AndroidSyncPruneDebt(time.Now().UnixMilli(), opts.Policy)
 		if err != nil {
-			fmt.Fprintf(stderr, "android sync maintenance: read prune debt: %v\n", err)
+			_, _ = fmt.Fprintf(stderr, "android sync maintenance: read prune debt: %v\n", err)
 			return 1
 		}
 		out = report{
@@ -106,16 +108,18 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		// same schema and startup repairs as the server before pruning.
 		store, err := db.Open(cfg.DatabasePath, cfg.DataDir)
 		if err != nil {
-			fmt.Fprintf(stderr, "android sync maintenance: open writable db: %v\n", err)
+			_, _ = fmt.Fprintf(stderr, "android sync maintenance: open writable db: %v\n", err)
 			return 1
 		}
-		defer store.Close()
+		defer func() {
+			_ = store.Close()
+		}()
 		result, err := store.RunAndroidSyncMaintenance(db.AndroidSyncMaintenanceOptions{
 			Policy:    opts.Policy,
 			MaxPasses: opts.Passes,
 		})
 		if err != nil {
-			fmt.Fprintf(stderr, "android sync maintenance: run: %v\n", err)
+			_, _ = fmt.Fprintf(stderr, "android sync maintenance: run: %v\n", err)
 			return 1
 		}
 		out = report{
@@ -136,12 +140,12 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		enc := json.NewEncoder(stdout)
 		enc.SetIndent("", "  ")
 		if err := enc.Encode(out); err != nil {
-			fmt.Fprintf(stderr, "android sync maintenance: encode JSON: %v\n", err)
+			_, _ = fmt.Fprintf(stderr, "android sync maintenance: encode JSON: %v\n", err)
 			return 1
 		}
 		return 0
 	}
-	fmt.Fprint(stdout, formatText(out))
+	_, _ = fmt.Fprint(stdout, formatText(out))
 	return 0
 }
 

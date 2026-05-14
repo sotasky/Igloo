@@ -84,7 +84,9 @@ func sniffImageContentType(path string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("open %s: %w", path, err)
 	}
-	defer f.Close()
+	defer func() {
+		_ = f.Close()
+	}()
 
 	buf := make([]byte, 512)
 	n, err := f.Read(buf)

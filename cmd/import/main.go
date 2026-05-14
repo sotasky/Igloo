@@ -28,66 +28,67 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	if fs.NArg() != 1 {
-		fmt.Fprintln(stderr, "usage: igloo-import [--replace] [--user USERNAME] igloo-full-*.zip")
+		_, _ = fmt.Fprintln(stderr, "usage: igloo-import [--replace] [--user USERNAME] igloo-full-*.zip")
 		return 2
 	}
 
 	cfg := config.Load()
 	if cfg.ConfigError != nil {
-		fmt.Fprintf(stderr, "invalid config: %v\n", cfg.ConfigError)
+		_, _ = fmt.Fprintf(stderr, "invalid config: %v\n", cfg.ConfigError)
 		return 1
 	}
 	if err := os.MkdirAll(cfg.DataDir, 0o755); err != nil {
-		fmt.Fprintf(stderr, "create data dir: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "create data dir: %v\n", err)
 		return 1
 	}
 	if err := os.MkdirAll(cfg.ConfDir, 0o700); err != nil {
-		fmt.Fprintf(stderr, "create config dir: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "create config dir: %v\n", err)
 		return 1
 	}
 
 	zipPath := fs.Arg(0)
 	data, err := os.ReadFile(zipPath)
 	if err != nil {
-		fmt.Fprintf(stderr, "read export zip: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "read export zip: %v\n", err)
 		return 1
 	}
 	if !fullimport.IsZipPayload(data) {
-		fmt.Fprintln(stderr, "not an Igloo full export zip: missing zip signature")
+		_, _ = fmt.Fprintln(stderr, "not an Igloo full export zip: missing zip signature")
 		return 1
 	}
 	exportCfg, err := fullimport.ReadExportConfig(data)
 	if err != nil {
-		fmt.Fprintf(stderr, "read full export manifest: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "read full export manifest: %v\n", err)
 		return 1
 	}
 
 	owner, ownerLabel, err := resolveImportOwner(cfg.AuthUsersPath, *user, exportCfg.UserID)
 	if err != nil {
-		fmt.Fprintf(stderr, "resolve owner: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "resolve owner: %v\n", err)
 		return 1
 	}
 
 	store, err := db.Open(cfg.DatabasePath, cfg.DataDir)
 	if err != nil {
-		fmt.Fprintf(stderr, "open database: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "open database: %v\n", err)
 		return 1
 	}
-	defer store.Close()
+	defer func() {
+		_ = store.Close()
+	}()
 
 	result, restoredMedia, restoredConfig, err := fullimport.ImportFullExportZip(store, cfg.DataDir, cfg.ConfDir, cfg.RepoDir, data, owner, *replace)
 	if err != nil {
-		fmt.Fprintf(stderr, "import full export: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "import full export: %v\n", err)
 		return 1
 	}
-
-	fmt.Fprintln(stdout, "format=full_export_zip")
-	fmt.Fprintf(stdout, "owner=%s\n", ownerLabel)
-	fmt.Fprintf(stdout, "data_dir=%s\n", cfg.DataDir)
-	fmt.Fprintf(stdout, "config_dir=%s\n", cfg.ConfDir)
-	fmt.Fprintf(stdout, "database=%s\n", cfg.DatabasePath)
-	fmt.Fprintf(stdout, "replace=%t\n", *replace)
-	fmt.Fprintf(stdout, "added_channels=%d added_bookmarks=%d added_categories=%d updated_settings=%d restored_media=%d restored_config_files=%d skipped=%d\n",
+	_, _ = fmt.Fprintln(stdout, "format=full_export_zip")
+	_, _ = fmt.Fprintf(stdout, "owner=%s\n", ownerLabel)
+	_, _ = fmt.Fprintf(stdout, "data_dir=%s\n", cfg.DataDir)
+	_, _ = fmt.Fprintf(stdout, "config_dir=%s\n", cfg.ConfDir)
+	_, _ = fmt.Fprintf(stdout, "database=%s\n", cfg.DatabasePath)
+	_, _ = fmt.Fprintf(stdout, "replace=%t\n", *replace)
+	_, _ = fmt.Fprintf(stdout, "added_channels=%d added_bookmarks=%d added_categories=%d updated_settings=%d restored_media=%d restored_config_files=%d skipped=%d\n",
 		result.AddedChannels, result.AddedBookmarks, result.AddedCategories, result.UpdatedSettings, restoredMedia, restoredConfig, result.Skipped)
 	return 0
 }

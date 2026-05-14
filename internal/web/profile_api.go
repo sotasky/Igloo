@@ -350,13 +350,15 @@ func copyFile(src, dst string) error {
 	if err != nil {
 		return fmt.Errorf("open %s: %w", src, err)
 	}
-	defer in.Close()
+	defer func() {
+		_ = in.Close()
+	}()
 	out, err := os.Create(dst)
 	if err != nil {
 		return fmt.Errorf("create %s: %w", dst, err)
 	}
 	if _, err := io.Copy(out, in); err != nil {
-		out.Close()
+		_ = out.Close()
 		_ = os.Remove(dst)
 		return fmt.Errorf("copy %s -> %s: %w", src, dst, err)
 	}

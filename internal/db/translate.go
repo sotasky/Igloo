@@ -54,7 +54,9 @@ func (db *DB) GetTranslationsForTweetIDs(tweetIDs []string, targetLang string) (
 	if err != nil {
 		return result, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 	for rows.Next() {
 		var tid, field, text, srcLang string
 		if err := rows.Scan(&tid, &field, &text, &srcLang); err != nil {
@@ -163,7 +165,9 @@ func (db *DB) ListTranslationCandidates(targetLang string, skipLangs []string, l
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	var candidates []TranslationCandidate
 	for rows.Next() {

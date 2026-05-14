@@ -24,7 +24,9 @@ func (db *DB) GetAllSettings() (map[string]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	out := make(map[string]string)
 	for rows.Next() {
@@ -54,7 +56,9 @@ func (db *DB) UpdateSettings(settings map[string]string) error {
 		if err != nil {
 			return err
 		}
-		defer stmt.Close()
+		defer func() {
+			_ = stmt.Close()
+		}()
 		for k, v := range settings {
 			if retiredGlobalSettingKeys[k] {
 				if _, err := tx.Exec(`DELETE FROM settings WHERE key = ?`, k); err != nil {
@@ -121,7 +125,9 @@ func (db *DB) exportChannelSettingsMap() (map[string]exportedChannelSettings, er
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 	out := make(map[string]exportedChannelSettings)
 	for rows.Next() {
 		var channelID string
@@ -227,7 +233,7 @@ type ConfigExport struct {
 func (db *DB) resolveBookmarkUserID(preferredUserID string) string {
 	for _, uid := range []string{preferredUserID, ""} {
 		var count int
-		db.conn.QueryRow("SELECT COUNT(*) FROM bookmarks WHERE user_id = ?", uid).Scan(&count)
+		_ = db.conn.QueryRow("SELECT COUNT(*) FROM bookmarks WHERE user_id = ?", uid).Scan(&count)
 		if count > 0 {
 			return uid
 		}
@@ -238,7 +244,7 @@ func (db *DB) resolveBookmarkUserID(preferredUserID string) string {
 func (db *DB) resolveCategoryUserID(preferredUserID string) string {
 	for _, uid := range []string{preferredUserID, ""} {
 		var count int
-		db.conn.QueryRow("SELECT COUNT(*) FROM bookmark_categories WHERE user_id = ?", uid).Scan(&count)
+		_ = db.conn.QueryRow("SELECT COUNT(*) FROM bookmark_categories WHERE user_id = ?", uid).Scan(&count)
 		if count > 0 {
 			return uid
 		}
@@ -249,7 +255,7 @@ func (db *DB) resolveCategoryUserID(preferredUserID string) string {
 func (db *DB) resolveLikeUsername(preferredUserID string) string {
 	for _, uid := range []string{preferredUserID, ""} {
 		var count int
-		db.conn.QueryRow("SELECT COUNT(*) FROM feed_likes WHERE username = ?", uid).Scan(&count)
+		_ = db.conn.QueryRow("SELECT COUNT(*) FROM feed_likes WHERE username = ?", uid).Scan(&count)
 		if count > 0 {
 			return uid
 		}
@@ -307,7 +313,9 @@ func (db *DB) ExportConfig(userID string) (ConfigExport, error) {
 	if err != nil {
 		return cfg, fmt.Errorf("export bookmark categories: %w", err)
 	}
-	defer catRows.Close()
+	defer func() {
+		_ = catRows.Close()
+	}()
 	for catRows.Next() {
 		var cat BookmarkCatExport
 		if err := catRows.Scan(&cat.Name, &cat.ArchivePath); err != nil {
@@ -333,7 +341,9 @@ func (db *DB) ExportConfig(userID string) (ConfigExport, error) {
 	if err != nil {
 		return cfg, fmt.Errorf("export bookmarks: %w", err)
 	}
-	defer bRows.Close()
+	defer func() {
+		_ = bRows.Close()
+	}()
 	for bRows.Next() {
 		var bm BookmarkExport
 		if err := bRows.Scan(&bm.VideoID, &bm.CategoryName, &bm.CustomTitle,
@@ -371,7 +381,9 @@ func (db *DB) ExportFullData(userID string) (ConfigExport, error) {
 	if err != nil {
 		return cfg, fmt.Errorf("export liked posts: %w", err)
 	}
-	defer likeRows.Close()
+	defer func() {
+		_ = likeRows.Close()
+	}()
 	for likeRows.Next() {
 		var lp LikedPostExport
 		if err := likeRows.Scan(&lp.TweetID, &lp.SourceHandle, &lp.AuthorHandle,
@@ -396,7 +408,9 @@ func (db *DB) ExportFullData(userID string) (ConfigExport, error) {
 	if err != nil {
 		return cfg, fmt.Errorf("export feed seen: %w", err)
 	}
-	defer seenRows.Close()
+	defer func() {
+		_ = seenRows.Close()
+	}()
 	for seenRows.Next() {
 		var seen FeedSeenExport
 		if err := seenRows.Scan(&seen.TweetID, &seen.SeenAt); err != nil {
@@ -426,7 +440,9 @@ func (db *DB) ExportFullData(userID string) (ConfigExport, error) {
 	if err != nil {
 		return cfg, fmt.Errorf("export bookmarked videos: %w", err)
 	}
-	defer vidRows.Close()
+	defer func() {
+		_ = vidRows.Close()
+	}()
 	for vidRows.Next() {
 		var bv BookmarkedVideoExport
 		if err := vidRows.Scan(&bv.VideoID, &bv.ChannelID, &bv.Title,
@@ -506,9 +522,9 @@ func (db *DB) ImportConfig(cfg ConfigExport, userID string, replace bool) (Impor
 	return res, db.WithWrite(func(tx *sql.Tx) error {
 		// Replace mode: clear existing data
 		if replace {
-			tx.Exec("DELETE FROM settings WHERE user_id = ''")
-			tx.Exec("DELETE FROM bookmarks WHERE user_id = ?", userID)
-			tx.Exec("DELETE FROM bookmark_categories WHERE user_id = ?", userID)
+			_, _ = tx.Exec("DELETE FROM settings WHERE user_id = ''")
+			_, _ = tx.Exec("DELETE FROM bookmarks WHERE user_id = ?", userID)
+			_, _ = tx.Exec("DELETE FROM bookmark_categories WHERE user_id = ?", userID)
 		}
 
 		// Upsert settings
@@ -520,7 +536,9 @@ func (db *DB) ImportConfig(cfg ConfigExport, userID string, replace bool) (Impor
 			if err != nil {
 				return err
 			}
-			defer stmt.Close()
+			defer func() {
+				_ = stmt.Close()
+			}()
 			for k, v := range cfg.Settings {
 				if retiredGlobalSettingKeys[k] {
 					continue
@@ -557,7 +575,9 @@ func (db *DB) ImportConfig(cfg ConfigExport, userID string, replace bool) (Impor
 		if err != nil {
 			return err
 		}
-		defer catRows.Close()
+		defer func() {
+			_ = catRows.Close()
+		}()
 		for catRows.Next() {
 			var id int64
 			var name string
@@ -711,7 +731,9 @@ func (db *DB) ImportConfig(cfg ConfigExport, userID string, replace bool) (Impor
 			if err != nil {
 				return err
 			}
-			defer stmt.Close()
+			defer func() {
+				_ = stmt.Close()
+			}()
 			for _, lp := range cfg.LikedPosts {
 				publishedAt := exportTimestampMillis(lp.PublishedAtMs, lp.PublishedAt)
 				if publishedAt == 0 && isTwitterExportPlatform(lp.Platform, "") {

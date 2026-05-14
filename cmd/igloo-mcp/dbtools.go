@@ -32,7 +32,7 @@ func getServerDB() (*sql.DB, error) {
 		if err := serverDB.Ping(); err == nil {
 			return serverDB, nil
 		}
-		serverDB.Close()
+		_ = serverDB.Close()
 		serverDB = nil
 	}
 	dbPath := getDBPath()
@@ -42,7 +42,7 @@ func getServerDB() (*sql.DB, error) {
 		return nil, fmt.Errorf("open %s: %w", dbPath, err)
 	}
 	if err := conn.Ping(); err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return nil, fmt.Errorf("ping %s: %w", dbPath, err)
 	}
 	serverDB = conn
@@ -74,7 +74,9 @@ func serverQuery(query string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("query: %w", err)
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	cols, err := rows.Columns()
 	if err != nil {
@@ -172,12 +174,14 @@ func listDBTables() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	var tables []string
 	for rows.Next() {
 		var name string
-		rows.Scan(&name)
+		_ = rows.Scan(&name)
 		tables = append(tables, name)
 	}
 
@@ -186,7 +190,7 @@ func listDBTables() (string, error) {
 	sb.WriteString(strings.Repeat("-", 42) + "\n")
 	for _, t := range tables {
 		var count int
-		conn.QueryRow("SELECT COUNT(*) FROM `" + t + "`").Scan(&count)
+		_ = conn.QueryRow("SELECT COUNT(*) FROM `" + t + "`").Scan(&count)
 		fmt.Fprintf(&sb, "%-30s %d\n", t, count)
 	}
 	fmt.Fprintf(&sb, "\nTotal: %d tables", len(tables))
@@ -209,12 +213,14 @@ func dbSchema(tableName string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	var sb strings.Builder
 	for rows.Next() {
 		var name, ddl string
-		rows.Scan(&name, &ddl)
+		_ = rows.Scan(&name, &ddl)
 		fmt.Fprintf(&sb, "%s\n\n", ddl)
 	}
 	return strings.TrimRight(sb.String(), "\n"), nil
@@ -234,7 +240,9 @@ func singleTableSchema(conn *sql.DB, table string) (string, error) {
 	// Column info
 	rows, err := conn.Query(fmt.Sprintf("PRAGMA table_info(`%s`)", table))
 	if err == nil {
-		defer rows.Close()
+		defer func() {
+			_ = rows.Close()
+		}()
 		fmt.Fprintf(&sb, "%-4s %-25s %-15s %-8s %-15s %s\n", "#", "Name", "Type", "NotNull", "Default", "PK")
 		sb.WriteString(strings.Repeat("-", 75) + "\n")
 		for rows.Next() {
@@ -242,7 +250,7 @@ func singleTableSchema(conn *sql.DB, table string) (string, error) {
 			var name, typ string
 			var notNull, pk int
 			var dflt sql.NullString
-			rows.Scan(&cid, &name, &typ, &notNull, &dflt, &pk)
+			_ = rows.Scan(&cid, &name, &typ, &notNull, &dflt, &pk)
 			def := ""
 			if dflt.Valid {
 				def = dflt.String
@@ -262,13 +270,15 @@ func singleTableSchema(conn *sql.DB, table string) (string, error) {
 	// Indexes
 	idxRows, err := conn.Query(fmt.Sprintf("PRAGMA index_list(`%s`)", table))
 	if err == nil {
-		defer idxRows.Close()
+		defer func() {
+			_ = idxRows.Close()
+		}()
 		var indexes []string
 		for idxRows.Next() {
 			var seq int
 			var name, origin string
 			var unique, partial int
-			idxRows.Scan(&seq, &name, &unique, &origin, &partial)
+			_ = idxRows.Scan(&seq, &name, &unique, &origin, &partial)
 			u := ""
 			if unique == 1 {
 				u = " UNIQUE"
@@ -285,14 +295,16 @@ func singleTableSchema(conn *sql.DB, table string) (string, error) {
 
 	// Row count
 	var count int
-	conn.QueryRow("SELECT COUNT(*) FROM `" + table + "`").Scan(&count)
+	_ = conn.QueryRow("SELECT COUNT(*) FROM `" + table + "`").Scan(&count)
 	fmt.Fprintf(&sb, "\nRow count: %d", count)
 
 	// Sample (5 rows)
 	if count > 0 {
 		sample, err := conn.Query(fmt.Sprintf("SELECT * FROM `%s` LIMIT 5", table))
 		if err == nil {
-			defer sample.Close()
+			defer func() {
+				_ = sample.Close()
+			}()
 			cols, _ := sample.Columns()
 			sb.WriteString("\n\nSample (5 rows):\n")
 			for i, c := range cols {
@@ -308,7 +320,7 @@ func singleTableSchema(conn *sql.DB, table string) (string, error) {
 				scanPtrs[i] = &scanDest[i]
 			}
 			for sample.Next() {
-				sample.Scan(scanPtrs...)
+				_ = sample.Scan(scanPtrs...)
 				for i, v := range scanDest {
 					if i > 0 {
 						sb.WriteString(" | ")
@@ -345,7 +357,9 @@ func dbSummary() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	type tableInfo struct {
 		name  string
@@ -354,9 +368,9 @@ func dbSummary() (string, error) {
 	var tables []tableInfo
 	for rows.Next() {
 		var name string
-		rows.Scan(&name)
+		_ = rows.Scan(&name)
 		var count int
-		conn.QueryRow("SELECT COUNT(*) FROM `" + name + "`").Scan(&count)
+		_ = conn.QueryRow("SELECT COUNT(*) FROM `" + name + "`").Scan(&count)
 		tables = append(tables, tableInfo{name, count})
 	}
 
@@ -382,10 +396,10 @@ func dbSummary() (string, error) {
 		for qrows.Next() {
 			var status string
 			var count int
-			qrows.Scan(&status, &count)
+			_ = qrows.Scan(&status, &count)
 			parts = append(parts, fmt.Sprintf("%s=%d", status, count))
 		}
-		qrows.Close()
+		_ = qrows.Close()
 		if len(parts) > 0 {
 			fmt.Fprintf(&sb, "  %-20s %s\n", table+":", strings.Join(parts, ", "))
 		}
@@ -403,7 +417,7 @@ func dbSummary() (string, error) {
 	}
 	for _, ts := range timestamps {
 		var val sql.NullString
-		conn.QueryRow(ts.query).Scan(&val)
+		_ = conn.QueryRow(ts.query).Scan(&val)
 		v := "none"
 		if val.Valid && val.String != "" {
 			v = val.String

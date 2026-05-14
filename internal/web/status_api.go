@@ -111,7 +111,7 @@ func (s *Server) handleSidebarStatus(w http.ResponseWriter, r *http.Request) {
 		QueueTotal:    queueTotal,
 		StopRequested: s.workers.IsStopRequested(),
 	}
-	components.SidebarStatusFragment(s.pageProps(w, r), data).Render(r.Context(), w)
+	_ = components.SidebarStatusFragment(s.pageProps(w, r), data).Render(r.Context(), w)
 }
 
 func (s *Server) handleSidebarChannels(w http.ResponseWriter, r *http.Request) {
@@ -126,7 +126,7 @@ func (s *Server) handleSidebarChannels(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		components.SidebarChannelItems(s.pageProps(w, r), group.Channels).Render(r.Context(), w)
+		_ = components.SidebarChannelItems(s.pageProps(w, r), group.Channels).Render(r.Context(), w)
 		return
 	}
 	http.NotFound(w, r)
@@ -223,7 +223,7 @@ func (s *Server) handleFeedHead(w http.ResponseWriter, r *http.Request) {
 
 		p := s.pageProps(w, r)
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		components.FeedNewPostsBar(p, hasNew, knownHead, avatars).Render(r.Context(), w)
+		_ = components.FeedNewPostsBar(p, hasNew, knownHead, avatars).Render(r.Context(), w)
 		return
 	}
 
@@ -370,7 +370,7 @@ func (s *Server) handleFeedStatus(w http.ResponseWriter, r *http.Request) {
 		d.Sources, d.XIngestStatus = s.buildFeedSources()
 
 		w.Header().Set("Content-Type", "text/html")
-		components.FeedDashboard(s.pageProps(w, r), d).Render(r.Context(), w)
+		_ = components.FeedDashboard(s.pageProps(w, r), d).Render(r.Context(), w)
 		return
 	}
 
@@ -483,7 +483,7 @@ func (s *Server) handleDownloadsStatus(w http.ResponseWriter, r *http.Request) {
 			d.Recent[i], d.Recent[j] = d.Recent[j], d.Recent[i]
 		}
 		w.Header().Set("Content-Type", "text/html")
-		components.DownloadsDashboard(s.pageProps(w, r), d).Render(r.Context(), w)
+		_ = components.DownloadsDashboard(s.pageProps(w, r), d).Render(r.Context(), w)
 		return
 	}
 
@@ -645,7 +645,7 @@ func (s *Server) handleServerStatus(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 		w.Header().Set("Content-Type", "text/html")
-		components.ServerDashboard(s.pageProps(w, r), d).Render(r.Context(), w)
+		_ = components.ServerDashboard(s.pageProps(w, r), d).Render(r.Context(), w)
 		return
 	}
 

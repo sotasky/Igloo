@@ -272,7 +272,7 @@ func TestGetLatestVideosPerChannelIncludesUndownloadedShortsOnly(t *testing.T) {
 func TestGetComments(t *testing.T) {
 	d := openTestDB(t)
 	var videoID string
-	d.conn.QueryRow("SELECT video_id FROM video_comments LIMIT 1").Scan(&videoID)
+	_ = d.conn.QueryRow("SELECT video_id FROM video_comments LIMIT 1").Scan(&videoID)
 	if videoID == "" {
 		t.Skip("no comments in test DB")
 	}
@@ -300,7 +300,7 @@ func TestGetPlaybackPosition(t *testing.T) {
 func TestMarkWatched(t *testing.T) {
 	d := openWritableTestDB(t)
 	var videoID string
-	d.conn.QueryRow("SELECT video_id FROM videos LIMIT 1").Scan(&videoID)
+	_ = d.conn.QueryRow("SELECT video_id FROM videos LIMIT 1").Scan(&videoID)
 	if videoID == "" {
 		t.Skip("no videos")
 	}
@@ -313,7 +313,7 @@ func TestMarkWatched(t *testing.T) {
 func TestSetPinned(t *testing.T) {
 	d := openWritableTestDB(t)
 	var videoID string
-	d.conn.QueryRow("SELECT video_id FROM videos LIMIT 1").Scan(&videoID)
+	_ = d.conn.QueryRow("SELECT video_id FROM videos LIMIT 1").Scan(&videoID)
 	if videoID == "" {
 		t.Skip("no videos")
 	}
@@ -326,7 +326,7 @@ func TestSetPinned(t *testing.T) {
 func TestSaveProgress(t *testing.T) {
 	d := openWritableTestDB(t)
 	var videoID string
-	d.conn.QueryRow("SELECT video_id FROM videos LIMIT 1").Scan(&videoID)
+	_ = d.conn.QueryRow("SELECT video_id FROM videos LIMIT 1").Scan(&videoID)
 	if videoID == "" {
 		t.Skip("no videos")
 	}

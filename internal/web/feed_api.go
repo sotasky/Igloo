@@ -45,7 +45,7 @@ func (s *Server) handleFeedLike(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Item map[string]string `json:"item"`
 	}
-	json.NewDecoder(r.Body).Decode(&body)
+	_ = json.NewDecoder(r.Body).Decode(&body)
 
 	fields := body.Item
 	if fields == nil {
@@ -64,7 +64,7 @@ func (s *Server) handleFeedLike(w http.ResponseWriter, r *http.Request) {
 
 	if r.Header.Get("HX-Request") != "" {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		components.LikeButton(s.pageProps(w, r), tweetID, true).Render(r.Context(), w)
+		_ = components.LikeButton(s.pageProps(w, r), tweetID, true).Render(r.Context(), w)
 		return
 	}
 
@@ -96,7 +96,7 @@ func (s *Server) handleFeedUnlike(w http.ResponseWriter, r *http.Request) {
 
 	if r.Header.Get("HX-Request") != "" {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		components.LikeButton(s.pageProps(w, r), tweetID, false).Render(r.Context(), w)
+		_ = components.LikeButton(s.pageProps(w, r), tweetID, false).Render(r.Context(), w)
 		return
 	}
 
@@ -247,7 +247,7 @@ func (s *Server) renderMutedAccountsHTML(w http.ResponseWriter, r *http.Request)
 	if muted == nil {
 		muted = []string{}
 	}
-	components.MutedAccountsList(s.pageProps(w, r), muted).Render(r.Context(), w)
+	_ = components.MutedAccountsList(s.pageProps(w, r), muted).Render(r.Context(), w)
 }
 
 func (s *Server) handleFeedIngestPause(w http.ResponseWriter, r *http.Request) {

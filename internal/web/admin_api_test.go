@@ -1002,7 +1002,7 @@ func readZipEntries(t *testing.T, data []byte) map[string][]byte {
 			t.Fatalf("open zip entry %s: %v", f.Name, err)
 		}
 		data, err := io.ReadAll(rc)
-		rc.Close()
+		_ = rc.Close()
 		if err != nil {
 			t.Fatalf("read zip entry %s: %v", f.Name, err)
 		}

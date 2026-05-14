@@ -84,7 +84,9 @@ func createAuditFixture(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("open fixture db: %v", err)
 	}
-	defer conn.Close()
+	defer func() {
+		_ = conn.Close()
+	}()
 	for _, stmt := range []string{
 		`CREATE TABLE feed_items (tweet_id TEXT PRIMARY KEY, body TEXT)`,
 		`CREATE TABLE assets (asset_id TEXT PRIMARY KEY, state TEXT)`,

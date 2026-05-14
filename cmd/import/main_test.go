@@ -39,7 +39,9 @@ func TestRunImportsCurrentFullExportZipFreshInstall(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open imported db: %v", err)
 	}
-	defer store.Close()
+	defer func() {
+		_ = store.Close()
+	}()
 
 	var categoryUser, bookmarkUser, likeUser string
 	if err := store.QueryRow(`SELECT user_id FROM bookmark_categories WHERE name='Watch Later'`).Scan(&categoryUser); err != nil {
@@ -173,7 +175,9 @@ func writeFullExportZipFixture(t *testing.T, path string) {
 	if err != nil {
 		t.Fatalf("create zip: %v", err)
 	}
-	defer out.Close()
+	defer func() {
+		_ = out.Close()
+	}()
 
 	zw := zip.NewWriter(out)
 	exportFile, err := zw.Create("export.json")

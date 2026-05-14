@@ -58,7 +58,9 @@ func (db *DB) SearchChannelsFast(q string, limit int) ([]model.Channel, error) {
 		// FTS5 not available — fallback to LIKE
 		return db.searchChannelsFallback(q, limit)
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	var channels []model.Channel
 	for rows.Next() {
@@ -130,7 +132,9 @@ func (db *DB) searchChannelsFallback(q string, limit int) ([]model.Channel, erro
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	var channels []model.Channel
 	for rows.Next() {
@@ -177,7 +181,9 @@ func (db *DB) SearchVideosFast(q string, limit int) ([]model.Video, error) {
 		// FTS5 not available — fallback to LIKE
 		return db.searchVideosFallback(q, limit)
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	var videos []model.Video
 	for rows.Next() {
@@ -228,7 +234,9 @@ func (db *DB) searchVideosFallback(q string, limit int) ([]model.Video, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	var videos []model.Video
 	for rows.Next() {
@@ -260,7 +268,9 @@ func (db *DB) RebuildSearchIndex(ctx context.Context) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("begin search index rebuild: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() {
+		_ = tx.Rollback()
+	}()
 
 	var channelCount, videoCount int
 	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM channels`).Scan(&channelCount); err != nil {
@@ -344,6 +354,8 @@ func (db *DB) SearchFeedItems(q string, limit int) ([]model.FeedItem, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 	return scanFeedItems(rows)
 }

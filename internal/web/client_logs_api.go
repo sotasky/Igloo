@@ -103,7 +103,9 @@ func (s *Server) appendClientLog(w http.ResponseWriter, r *http.Request, logRelP
 		writeJSONError(w, 500, "log_write_failed", fmt.Sprintf("open: %v", err))
 		return
 	}
-	defer f.Close()
+	defer func() {
+		_ = f.Close()
+	}()
 
 	written := 0
 	receivedAtMs := time.Now().UnixMilli()

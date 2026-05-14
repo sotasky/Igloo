@@ -291,16 +291,16 @@ func openWritableFeedTestDB(t *testing.T) *db.DB {
 		t.Fatalf("CreateTemp: %v", err)
 	}
 	tmpPath := tmpFile.Name()
-	tmpFile.Close()
+	_ = tmpFile.Close()
 
 	d, err := db.Open(tmpPath, filepath.Join(t.TempDir(), "data"))
 	if err != nil {
-		os.Remove(tmpPath)
+		_ = os.Remove(tmpPath)
 		t.Fatalf("db.Open: %v", err)
 	}
 	t.Cleanup(func() {
-		d.Close()
-		os.Remove(tmpPath)
+		_ = d.Close()
+		_ = os.Remove(tmpPath)
 	})
 	return d
 }

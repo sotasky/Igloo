@@ -28,7 +28,7 @@ func ExtractFrame(ctx context.Context, videoPath string, timestamp float64, outP
 	)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		os.Remove(outPath)
+		_ = os.Remove(outPath)
 		return fmt.Errorf("ffmpeg: %w (%s)", err, out)
 	}
 	return nil

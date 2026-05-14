@@ -50,7 +50,9 @@ func (db *DB) GetBookmarkCategories(userID string) ([]BookmarkCategoryRow, error
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	var categories []BookmarkCategoryRow
 	for rows.Next() {
@@ -170,7 +172,9 @@ func (db *DB) GetBookmarks(opts GetBookmarksOpts) ([]model.Video, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	var videos []model.Video
 	for rows.Next() {
@@ -406,7 +410,9 @@ func (db *DB) GetBookmarkedHandles(userID string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 	seen := map[string]bool{}
 	for rows.Next() {
 		var raw string
@@ -449,7 +455,9 @@ func (db *DB) GetBookmarkLabels(userID, categoryID string) ([]string, error) {
 	if err != nil {
 		return []string{}, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 	var labels []string
 	for rows.Next() {
 		var label string
@@ -477,16 +485,16 @@ func (db *DB) ClearBookmarkLabel(userID, label string) error {
 		for rows.Next() {
 			var videoID string
 			if err := rows.Scan(&videoID); err != nil {
-				rows.Close()
+				_ = rows.Close()
 				return err
 			}
 			videoIDs = append(videoIDs, videoID)
 		}
 		if err := rows.Err(); err != nil {
-			rows.Close()
+			_ = rows.Close()
 			return err
 		}
-		rows.Close()
+		_ = rows.Close()
 
 		if _, err := tx.Exec(
 			"UPDATE bookmarks SET custom_title = '' WHERE user_id = ? AND custom_title = ?",

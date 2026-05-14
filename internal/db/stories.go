@@ -94,7 +94,9 @@ func (db *DB) ListStoryChannels(username string, nowMs int64, limit int) ([]mode
 	if err != nil {
 		return nil, false, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	out := []model.StoryChannel{}
 	hasUnseen := false
@@ -175,7 +177,9 @@ func (db *DB) GetStoryStatusForChannelIDs(username string, channelIDs []string, 
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 	for rows.Next() {
 		var row model.StoryStatus
 		if err := rows.Scan(
@@ -301,7 +305,9 @@ func (db *DB) DeleteExpiredStoryVideos(nowMs int64, dataDir string) (int, error)
 	if err != nil {
 		return 0, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	var ids []string
 	for rows.Next() {
@@ -347,7 +353,9 @@ func (db *DB) momentViewedSet(username string, videos []model.Video) (map[string
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 	for rows.Next() {
 		var id string
 		if err := rows.Scan(&id); err != nil {

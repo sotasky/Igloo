@@ -61,7 +61,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("open db: %v", err)
 	}
-	defer store.Close()
+	defer func() {
+		_ = store.Close()
+	}()
 
 	merges, err := findMergeCandidates(store)
 	if err != nil {
@@ -148,7 +150,9 @@ func findMergeCandidates(store *db.DB) ([]mergeCandidate, error) {
 		if err != nil {
 			return err
 		}
-		defer result.Close()
+		defer func() {
+			_ = result.Close()
+		}()
 		for result.Next() {
 			var row channelRow
 			if err := result.Scan(
@@ -198,7 +202,9 @@ func findSuspiciousRefreshIDs(store *db.DB) ([]string, error) {
 		if err != nil {
 			return err
 		}
-		defer rows.Close()
+		defer func() {
+			_ = rows.Close()
+		}()
 		for rows.Next() {
 			var channelID, avatarURL, bannerURL string
 			if err := rows.Scan(&channelID, &avatarURL, &bannerURL); err != nil {
@@ -475,7 +481,9 @@ func sniffImageContentType(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer f.Close()
+	defer func() {
+		_ = f.Close()
+	}()
 
 	buf := make([]byte, 512)
 	n, err := f.Read(buf)
@@ -507,7 +515,9 @@ func imageConfig(path string) (int, int, bool) {
 	if err != nil {
 		return 0, 0, false
 	}
-	defer f.Close()
+	defer func() {
+		_ = f.Close()
+	}()
 	cfg, _, err := image.DecodeConfig(f)
 	if err != nil {
 		return 0, 0, false

@@ -119,7 +119,7 @@ func TestDownloadTwimgQualityFallback(t *testing.T) {
 			return
 		}
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("image data"))
+		_, _ = w.Write([]byte("image data"))
 	}))
 	defer srv.Close()
 

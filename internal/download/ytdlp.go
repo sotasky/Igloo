@@ -281,7 +281,7 @@ func (y *YtDlpWrapper) FetchInfo(ctx context.Context, url string, opts ...Opts) 
 		return nil, err
 	}
 	var m map[string]any
-	json.Unmarshal(data, &m)
+	_ = json.Unmarshal(data, &m)
 	y.recordYtDlpOperationWithCounts(ctx, "youtube.info", url, start, nil, opt, 1, 0, 0)
 	return m, nil
 }
@@ -318,7 +318,7 @@ func (y *YtDlpWrapper) FetchPlaylistInfo(ctx context.Context, url string, opts .
 		return nil, err
 	}
 	var m map[string]any
-	json.Unmarshal(data, &m)
+	_ = json.Unmarshal(data, &m)
 	y.recordYtDlpOperationWithCounts(ctx, "youtube.playlist_info", url, start, nil, opt, 1, 0, 0)
 	return m, nil
 }

@@ -34,12 +34,12 @@ func TestMutationLikeSetAndClear(t *testing.T) {
 
 	// Verify side-table write landed.
 	var count int
-	srv.db.QueryRow(`SELECT COUNT(*) FROM feed_likes WHERE username='alice' AND tweet_id='tw_like'`).Scan(&count)
+	_ = srv.db.QueryRow(`SELECT COUNT(*) FROM feed_likes WHERE username='alice' AND tweet_id='tw_like'`).Scan(&count)
 	if count != 1 {
 		t.Errorf("feed_likes row missing after set, got %d", count)
 	}
 	var likeValue string
-	srv.db.QueryRow(`SELECT value FROM sync_changes WHERE type='like' AND item_id='tw_like' ORDER BY version DESC LIMIT 1`).Scan(&likeValue)
+	_ = srv.db.QueryRow(`SELECT value FROM sync_changes WHERE type='like' AND item_id='tw_like' ORDER BY version DESC LIMIT 1`).Scan(&likeValue)
 	if !strings.Contains(likeValue, `"action":"set"`) || !strings.Contains(likeValue, `"liked":true`) {
 		t.Fatalf("like sync value = %s, want action set and liked true", likeValue)
 	}
@@ -54,11 +54,11 @@ func TestMutationLikeSetAndClear(t *testing.T) {
 	if v2 <= v1 {
 		t.Errorf("sync_version should advance on clear: %v → %v", v1, v2)
 	}
-	srv.db.QueryRow(`SELECT COUNT(*) FROM feed_likes WHERE username='alice' AND tweet_id='tw_like'`).Scan(&count)
+	_ = srv.db.QueryRow(`SELECT COUNT(*) FROM feed_likes WHERE username='alice' AND tweet_id='tw_like'`).Scan(&count)
 	if count != 0 {
 		t.Errorf("feed_likes row should be gone after clear, got %d", count)
 	}
-	srv.db.QueryRow(`SELECT value FROM sync_changes WHERE type='like' AND item_id='tw_like' ORDER BY version DESC LIMIT 1`).Scan(&likeValue)
+	_ = srv.db.QueryRow(`SELECT value FROM sync_changes WHERE type='like' AND item_id='tw_like' ORDER BY version DESC LIMIT 1`).Scan(&likeValue)
 	if !strings.Contains(likeValue, `"action":"clear"`) || !strings.Contains(likeValue, `"liked":false`) {
 		t.Fatalf("like clear sync value = %s, want action clear and liked false", likeValue)
 	}
@@ -124,11 +124,11 @@ func TestMutationSeenBatched(t *testing.T) {
 		t.Errorf("marked = %v, want 3", marked)
 	}
 	var count int
-	srv.db.QueryRow(`SELECT COUNT(*) FROM feed_seen WHERE username='alice'`).Scan(&count)
+	_ = srv.db.QueryRow(`SELECT COUNT(*) FROM feed_seen WHERE username='alice'`).Scan(&count)
 	if count != 3 {
 		t.Errorf("feed_seen rows = %d, want 3", count)
 	}
-	srv.db.QueryRow(`SELECT COUNT(*) FROM feed_items WHERE tweet_id IN ('tw_a','tw_b','tw_c') AND algo_scored_at = 0`).Scan(&count)
+	_ = srv.db.QueryRow(`SELECT COUNT(*) FROM feed_items WHERE tweet_id IN ('tw_a','tw_b','tw_c') AND algo_scored_at = 0`).Scan(&count)
 	if count != 0 {
 		t.Errorf("seen mutation invalidated %d feed item scores, want 0", count)
 	}
@@ -143,11 +143,11 @@ func TestMutationFollowRejectsPathTraversalChannelID(t *testing.T) {
 		t.Fatalf("error_code = %v, want invalid_body", resp["error_code"])
 	}
 	var count int
-	srv.db.QueryRow(`SELECT COUNT(*) FROM channel_follows WHERE channel_id='youtube_../../../escape'`).Scan(&count)
+	_ = srv.db.QueryRow(`SELECT COUNT(*) FROM channel_follows WHERE channel_id='youtube_../../../escape'`).Scan(&count)
 	if count != 0 {
 		t.Fatalf("follow row created for invalid channel_id, count=%d", count)
 	}
-	srv.db.QueryRow(`SELECT COUNT(*) FROM channels WHERE channel_id='youtube_../../../escape'`).Scan(&count)
+	_ = srv.db.QueryRow(`SELECT COUNT(*) FROM channels WHERE channel_id='youtube_../../../escape'`).Scan(&count)
 	if count != 0 {
 		t.Fatalf("channel row created for invalid channel_id, count=%d", count)
 	}
@@ -162,11 +162,11 @@ func TestMutationFollowRejectsBareYouTubeChannelID(t *testing.T) {
 		t.Fatalf("error_code = %v, want invalid_body", resp["error_code"])
 	}
 	var count int
-	srv.db.QueryRow(`SELECT COUNT(*) FROM channel_follows WHERE channel_id='UCbarechannel'`).Scan(&count)
+	_ = srv.db.QueryRow(`SELECT COUNT(*) FROM channel_follows WHERE channel_id='UCbarechannel'`).Scan(&count)
 	if count != 0 {
 		t.Fatalf("follow row created for bare YouTube channel_id, count=%d", count)
 	}
-	srv.db.QueryRow(`SELECT COUNT(*) FROM channels WHERE channel_id='UCbarechannel'`).Scan(&count)
+	_ = srv.db.QueryRow(`SELECT COUNT(*) FROM channels WHERE channel_id='UCbarechannel'`).Scan(&count)
 	if count != 0 {
 		t.Fatalf("channel row created for bare YouTube channel_id, count=%d", count)
 	}
@@ -181,9 +181,9 @@ func TestMutationFollowAndStar(t *testing.T) {
 	  "channel_id": "youtube_alice", "action": "set", "updated_at_ms": 1
 	}`)
 	var fcount, scount, channelCount int
-	srv.db.QueryRow(`SELECT COUNT(*) FROM channel_follows WHERE channel_id='youtube_alice'`).Scan(&fcount)
-	srv.db.QueryRow(`SELECT COUNT(*) FROM channel_stars WHERE channel_id='youtube_alice'`).Scan(&scount)
-	srv.db.QueryRow(`SELECT COUNT(*) FROM channels WHERE channel_id='youtube_alice'`).Scan(&channelCount)
+	_ = srv.db.QueryRow(`SELECT COUNT(*) FROM channel_follows WHERE channel_id='youtube_alice'`).Scan(&fcount)
+	_ = srv.db.QueryRow(`SELECT COUNT(*) FROM channel_stars WHERE channel_id='youtube_alice'`).Scan(&scount)
+	_ = srv.db.QueryRow(`SELECT COUNT(*) FROM channels WHERE channel_id='youtube_alice'`).Scan(&channelCount)
 	if fcount != 1 || scount != 1 {
 		t.Errorf("follow=%d star=%d, want both 1", fcount, scount)
 	}
@@ -191,7 +191,7 @@ func TestMutationFollowAndStar(t *testing.T) {
 		t.Errorf("follow mutation should create channel stub, got %d rows", channelCount)
 	}
 	var followValue string
-	srv.db.QueryRow(`SELECT value FROM sync_changes WHERE type='follow' AND item_id='youtube_alice' ORDER BY version DESC LIMIT 1`).Scan(&followValue)
+	_ = srv.db.QueryRow(`SELECT value FROM sync_changes WHERE type='follow' AND item_id='youtube_alice' ORDER BY version DESC LIMIT 1`).Scan(&followValue)
 	if !strings.Contains(followValue, `"action":"set"`) || !strings.Contains(followValue, `"followed":true`) {
 		t.Fatalf("follow sync value = %s, want action set and followed true", followValue)
 	}
@@ -267,11 +267,11 @@ func TestMutationFollowClearPurgesUnbookmarkedVideoChannelContent(t *testing.T) 
 	}
 
 	var count int
-	srv.db.QueryRow(`SELECT COUNT(*) FROM channel_follows WHERE channel_id='tiktok_purge'`).Scan(&count)
+	_ = srv.db.QueryRow(`SELECT COUNT(*) FROM channel_follows WHERE channel_id='tiktok_purge'`).Scan(&count)
 	if count != 0 {
 		t.Fatalf("channel_follows count = %d, want 0", count)
 	}
-	srv.db.QueryRow(`SELECT COUNT(*) FROM videos WHERE video_id='purged_short'`).Scan(&count)
+	_ = srv.db.QueryRow(`SELECT COUNT(*) FROM videos WHERE video_id='purged_short'`).Scan(&count)
 	if count != 0 {
 		t.Fatalf("purged_short should be deleted, count=%d", count)
 	}
@@ -281,7 +281,7 @@ func TestMutationFollowClearPurgesUnbookmarkedVideoChannelContent(t *testing.T) 
 	if _, err := os.Stat(filepath.Join(srv.cfg.DataDir, "slides/purged_0.jpg")); !os.IsNotExist(err) {
 		t.Fatalf("purged slide file should be removed, stat err=%v", err)
 	}
-	srv.db.QueryRow(`SELECT COUNT(*) FROM videos WHERE video_id='saved_short'`).Scan(&count)
+	_ = srv.db.QueryRow(`SELECT COUNT(*) FROM videos WHERE video_id='saved_short'`).Scan(&count)
 	if count != 1 {
 		t.Fatalf("bookmarked saved_short should survive, count=%d", count)
 	}
@@ -291,11 +291,11 @@ func TestMutationFollowClearPurgesUnbookmarkedVideoChannelContent(t *testing.T) 
 	if _, err := os.Stat(filepath.Join(srv.cfg.DataDir, "slides/saved_0.jpg")); err != nil {
 		t.Fatalf("bookmarked slide file should survive: %v", err)
 	}
-	srv.db.QueryRow(`SELECT COUNT(*) FROM channels WHERE channel_id='tiktok_purge'`).Scan(&count)
+	_ = srv.db.QueryRow(`SELECT COUNT(*) FROM channels WHERE channel_id='tiktok_purge'`).Scan(&count)
 	if count != 1 {
 		t.Fatalf("channel row should survive for bookmarked video profile info, count=%d", count)
 	}
-	srv.db.QueryRow(`SELECT COUNT(*) FROM channel_profiles WHERE channel_id='tiktok_purge'`).Scan(&count)
+	_ = srv.db.QueryRow(`SELECT COUNT(*) FROM channel_profiles WHERE channel_id='tiktok_purge'`).Scan(&count)
 	if count != 1 {
 		t.Fatalf("channel profile should survive for bookmarked video profile info, count=%d", count)
 	}
@@ -364,11 +364,11 @@ func TestMutationFollowClearPurgesUnfollowedTwitterMediaFiles(t *testing.T) {
 	}
 
 	var count int
-	srv.db.QueryRow(`SELECT COUNT(*) FROM feed_items WHERE tweet_id='tw_drop'`).Scan(&count)
+	_ = srv.db.QueryRow(`SELECT COUNT(*) FROM feed_items WHERE tweet_id='tw_drop'`).Scan(&count)
 	if count != 0 {
 		t.Fatalf("tw_drop should be deleted, count=%d", count)
 	}
-	srv.db.QueryRow(`SELECT COUNT(*) FROM media_files WHERE owner_id='tw_drop'`).Scan(&count)
+	_ = srv.db.QueryRow(`SELECT COUNT(*) FROM media_files WHERE owner_id='tw_drop'`).Scan(&count)
 	if count != 0 {
 		t.Fatalf("tw_drop media_files should be deleted, count=%d", count)
 	}
@@ -377,7 +377,7 @@ func TestMutationFollowClearPurgesUnfollowedTwitterMediaFiles(t *testing.T) {
 			t.Fatalf("purged twitter media file %s should be removed, stat err=%v", rel, err)
 		}
 	}
-	srv.db.QueryRow(`SELECT COUNT(*) FROM feed_items WHERE tweet_id='tw_saved'`).Scan(&count)
+	_ = srv.db.QueryRow(`SELECT COUNT(*) FROM feed_items WHERE tweet_id='tw_saved'`).Scan(&count)
 	if count != 1 {
 		t.Fatalf("bookmarked tw_saved should survive, count=%d", count)
 	}
@@ -392,7 +392,7 @@ func TestMutationMute(t *testing.T) {
 	  "handle": "spammer", "action": "set", "updated_at_ms": 1
 	}`)
 	var count int
-	srv.db.QueryRow(`SELECT COUNT(*) FROM muted_accounts WHERE handle='spammer'`).Scan(&count)
+	_ = srv.db.QueryRow(`SELECT COUNT(*) FROM muted_accounts WHERE handle='spammer'`).Scan(&count)
 	if count != 1 {
 		t.Errorf("muted_accounts count = %d, want 1", count)
 	}
@@ -406,7 +406,7 @@ func TestMutationBookmark(t *testing.T) {
 	}`)
 	var count int
 	var handles string
-	srv.db.QueryRow(`SELECT COUNT(*), COALESCE(account_handles, '') FROM bookmarks WHERE user_id='alice' AND video_id='v_bm'`).Scan(&count, &handles)
+	_ = srv.db.QueryRow(`SELECT COUNT(*), COALESCE(account_handles, '') FROM bookmarks WHERE user_id='alice' AND video_id='v_bm'`).Scan(&count, &handles)
 	if count != 1 {
 		t.Errorf("bookmark count = %d, want 1", count)
 	}
@@ -504,7 +504,7 @@ func TestMutationProgress(t *testing.T) {
 	  "updated_at_ms": 1745100000000
 	}`)
 	var pos float64
-	srv.db.QueryRow(`SELECT playback_position FROM watch_history WHERE user_id='alice' AND video_id='v_prog'`).Scan(&pos)
+	_ = srv.db.QueryRow(`SELECT playback_position FROM watch_history WHERE user_id='alice' AND video_id='v_prog'`).Scan(&pos)
 	if pos != 42.5 {
 		t.Errorf("progress position = %v, want 42.5", pos)
 	}
@@ -539,8 +539,9 @@ func TestMutationLikeSetMarksSeenAndEmitsSeenDelta(t *testing.T) {
 
 func TestMutationChannelSettingWhitelistsField(t *testing.T) {
 	srv := newTestServer(t)
-	// channel_settings has a FK to channels — seed the parent row.
-	srv.db.ExecRaw(`INSERT INTO channels (channel_id, name, platform) VALUES ('youtube_x', 'x', 'youtube')`)
+	_ =
+		// channel_settings has a FK to channels — seed the parent row.
+		srv.db.ExecRaw(`INSERT INTO channels (channel_id, name, platform) VALUES ('youtube_x', 'x', 'youtube')`)
 
 	// Bogus field should 400.
 	resp := postMutation(t, srv, "PUT", "/api/mutations/channel_setting", "alice", `{

@@ -81,7 +81,9 @@ func createRepackFixture(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("open fixture db: %v", err)
 	}
-	defer conn.Close()
+	defer func() {
+		_ = conn.Close()
+	}()
 	if _, err := conn.Exec(`CREATE TABLE items (id INTEGER PRIMARY KEY, payload TEXT)`); err != nil {
 		t.Fatalf("create fixture table: %v", err)
 	}
@@ -95,7 +97,7 @@ func createRepackFixture(t *testing.T) string {
 	}
 	for i := 0; i < 512; i++ {
 		if _, err := stmt.Exec(strings.Repeat("x", 512)); err != nil {
-			stmt.Close()
+			_ = stmt.Close()
 			_ = tx.Rollback()
 			t.Fatalf("insert fixture row: %v", err)
 		}

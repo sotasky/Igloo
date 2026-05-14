@@ -23,7 +23,7 @@ func openFreshTestDB(t *testing.T) *DB {
 	if err != nil {
 		t.Fatalf("Open fresh DB: %v", err)
 	}
-	t.Cleanup(func() { d.Close() })
+	t.Cleanup(func() { _ = d.Close() })
 	return d
 }
 
@@ -150,23 +150,23 @@ func TestGetMediaFilePathNotFound(t *testing.T) {
 
 func TestGetMediaManifestV2_BookmarkedScopeCoversAllAssetKinds(t *testing.T) {
 	d := openFreshTestDB(t)
-
-	d.ExecRaw(`INSERT INTO feed_items (tweet_id, source_handle, author_handle, media_json, quote_tweet_id) VALUES
+	_ = d.ExecRaw(`INSERT INTO feed_items (tweet_id, source_handle, author_handle, media_json, quote_tweet_id) VALUES
 		('tweet_001', 'handle_a', 'author_a', '[{"type":"photo"}]', ''),
 		('tweet_002', 'handle_b', 'author_b', '[{"type":"video"}]', 'quote_001')
 	`)
-	d.ExecRaw(`INSERT INTO feed_media_jobs (tweet_id, status, media_kind) VALUES
+	_ = d.ExecRaw(`INSERT INTO feed_media_jobs (tweet_id, status, media_kind) VALUES
 		('tweet_001', 'completed', 'image'),
 		('tweet_002', 'completed', 'video')
 	`)
-	d.ExecRaw(`INSERT INTO media_files (owner_type, owner_id, media_index, file_path, media_type, file_size) VALUES
+	_ = d.ExecRaw(`INSERT INTO media_files (owner_type, owner_id, media_index, file_path, media_type, file_size) VALUES
 		('feed_media', 'tweet_001', 0, 'feed_media/tweet_001_0.jpg', 'photo', 5000),
 		('feed_media', 'tweet_002', 0, 'feed_media/tweet_002_0.mp4', 'video', 90000),
 		('quote_media', 'quote_001', 0, 'quote_media/quote_001_0.jpg', 'photo', 3000)
 	`)
 	seedAvatarCache(t, d, "twitter_author_a", "https://pbs.twimg.com/profile_images/a_normal.jpg", "twitter_author_a.jpg", []byte("jpg"))
-	// Bookmarked scope pulls from bookmarks.video_id — exercise the scope filter.
-	d.ExecRaw(`INSERT INTO bookmarks (user_id, video_id) VALUES ('', 'tweet_001'), ('', 'tweet_002')`)
+	_ =
+		// Bookmarked scope pulls from bookmarks.video_id — exercise the scope filter.
+		d.ExecRaw(`INSERT INTO bookmarks (user_id, video_id) VALUES ('', 'tweet_001'), ('', 'tweet_002')`)
 
 	entries, nextMarker, _, err := d.GetMediaManifestV2("bookmarked", "", "", 40)
 	if err != nil {
@@ -231,14 +231,13 @@ func TestGetMediaManifestV2_BookmarkedScopeCoversAllAssetKinds(t *testing.T) {
 
 func TestGetMediaManifestV2_IncludesRetweeterAvatarsForVisibleTweets(t *testing.T) {
 	d := openFreshTestDB(t)
-
-	d.ExecRaw(`INSERT INTO feed_items (tweet_id, source_handle, author_handle, content_hash, media_json) VALUES
+	_ = d.ExecRaw(`INSERT INTO feed_items (tweet_id, source_handle, author_handle, content_hash, media_json) VALUES
 		('tweet_rt', 'poster_a', 'author_a', 'hash_rt', '[{"type":"photo"}]')`)
-	d.ExecRaw(`INSERT INTO feed_media_jobs (tweet_id, status, media_kind) VALUES ('tweet_rt', 'completed', 'image')`)
-	d.ExecRaw(`INSERT INTO media_files (owner_type, owner_id, media_index, file_path, media_type, file_size) VALUES
+	_ = d.ExecRaw(`INSERT INTO feed_media_jobs (tweet_id, status, media_kind) VALUES ('tweet_rt', 'completed', 'image')`)
+	_ = d.ExecRaw(`INSERT INTO media_files (owner_type, owner_id, media_index, file_path, media_type, file_size) VALUES
 		('feed_media', 'tweet_rt', 0, 'feed_media/tweet_rt_0.jpg', 'photo', 5000)`)
-	d.ExecRaw(`INSERT INTO bookmarks (user_id, video_id) VALUES ('', 'tweet_rt')`)
-	d.ExecRaw(`INSERT INTO retweet_sources (content_hash, retweeter_handle, retweeter_display_name, tweet_id, published_at) VALUES
+	_ = d.ExecRaw(`INSERT INTO bookmarks (user_id, video_id) VALUES ('', 'tweet_rt')`)
+	_ = d.ExecRaw(`INSERT INTO retweet_sources (content_hash, retweeter_handle, retweeter_display_name, tweet_id, published_at) VALUES
 		('hash_rt', 'retweeter_b', 'Retweeter B', 'tweet_rt', 1)`)
 	seedAvatarCache(
 		t,
@@ -273,13 +272,12 @@ func TestGetMediaManifestV2_IncludesRetweeterAvatarsForVisibleTweets(t *testing.
 
 func TestGetMediaManifestV2_EmitsProfileAvatarBeforeServerFileExists(t *testing.T) {
 	d := openFreshTestDB(t)
-
-	d.ExecRaw(`INSERT INTO feed_items (tweet_id, source_handle, author_handle, media_json) VALUES
+	_ = d.ExecRaw(`INSERT INTO feed_items (tweet_id, source_handle, author_handle, media_json) VALUES
 		('tweet_avatar_only', 'poster_a', 'author_a', '[{"type":"photo"}]')`)
-	d.ExecRaw(`INSERT INTO feed_media_jobs (tweet_id, status, media_kind) VALUES ('tweet_avatar_only', 'completed', 'image')`)
-	d.ExecRaw(`INSERT INTO media_files (owner_type, owner_id, media_index, file_path, media_type, file_size) VALUES
+	_ = d.ExecRaw(`INSERT INTO feed_media_jobs (tweet_id, status, media_kind) VALUES ('tweet_avatar_only', 'completed', 'image')`)
+	_ = d.ExecRaw(`INSERT INTO media_files (owner_type, owner_id, media_index, file_path, media_type, file_size) VALUES
 		('feed_media', 'tweet_avatar_only', 0, 'feed_media/tweet_avatar_only_0.jpg', 'photo', 5000)`)
-	d.ExecRaw(`INSERT INTO bookmarks (user_id, video_id) VALUES ('', 'tweet_avatar_only')`)
+	_ = d.ExecRaw(`INSERT INTO bookmarks (user_id, video_id) VALUES ('', 'tweet_avatar_only')`)
 	if err := d.UpsertChannelProfile(model.ChannelProfile{
 		ChannelID: "twitter_author_a",
 		Platform:  "twitter",
@@ -315,13 +313,12 @@ func TestGetMediaManifestV2_EmitsProfileAvatarBeforeServerFileExists(t *testing.
 
 func TestGetMediaManifestV2_EmitsInlineFeedAvatarAfterProfileSeed(t *testing.T) {
 	d := openFreshTestDB(t)
-
-	d.ExecRaw(`INSERT INTO feed_items (tweet_id, source_handle, author_handle, author_avatar_url, media_json) VALUES
+	_ = d.ExecRaw(`INSERT INTO feed_items (tweet_id, source_handle, author_handle, author_avatar_url, media_json) VALUES
 		('tweet_inline_avatar', 'poster_a', 'author_inline', 'https://pbs.twimg.com/profile_images/555/author-inline_normal.jpg', '[{"type":"photo"}]')`)
-	d.ExecRaw(`INSERT INTO feed_media_jobs (tweet_id, status, media_kind) VALUES ('tweet_inline_avatar', 'completed', 'image')`)
-	d.ExecRaw(`INSERT INTO media_files (owner_type, owner_id, media_index, file_path, media_type, file_size) VALUES
+	_ = d.ExecRaw(`INSERT INTO feed_media_jobs (tweet_id, status, media_kind) VALUES ('tweet_inline_avatar', 'completed', 'image')`)
+	_ = d.ExecRaw(`INSERT INTO media_files (owner_type, owner_id, media_index, file_path, media_type, file_size) VALUES
 		('feed_media', 'tweet_inline_avatar', 0, 'feed_media/tweet_inline_avatar_0.jpg', 'photo', 5000)`)
-	d.ExecRaw(`INSERT INTO bookmarks (user_id, video_id) VALUES ('', 'tweet_inline_avatar')`)
+	_ = d.ExecRaw(`INSERT INTO bookmarks (user_id, video_id) VALUES ('', 'tweet_inline_avatar')`)
 	if _, err := d.SeedChannelProfileRows(); err != nil {
 		t.Fatalf("SeedChannelProfileRows: %v", err)
 	}
@@ -377,8 +374,7 @@ func TestGetMediaManifestV2_SubscriptionsAvatarsPageFromProfiles(t *testing.T) {
 
 func TestGetMediaManifestV2_SubscriptionsIncludesCachedChannelBanners(t *testing.T) {
 	d := openFreshTestDB(t)
-
-	d.ExecRaw(`INSERT INTO channel_follows (user_id, channel_id) VALUES ('', 'tiktok_banner_a')`)
+	_ = d.ExecRaw(`INSERT INTO channel_follows (user_id, channel_id) VALUES ('', 'tiktok_banner_a')`)
 	seedBannerCache(
 		t,
 		d,
@@ -420,13 +416,12 @@ func TestGetMediaManifestV2_SubscriptionsIncludesCachedChannelBanners(t *testing
 
 func TestGetMediaManifestV2_IncludesQuoteAuthorAvatarMatchedByURL(t *testing.T) {
 	d := openFreshTestDB(t)
-
-	d.ExecRaw(`INSERT INTO feed_items (tweet_id, source_handle, author_handle, quote_author_avatar_url, media_json) VALUES
+	_ = d.ExecRaw(`INSERT INTO feed_items (tweet_id, source_handle, author_handle, quote_author_avatar_url, media_json) VALUES
 		('tweet_quote', 'poster_a', 'author_a', 'https://pbs.twimg.com/profile_images/quote_user_normal.jpg', '[{"type":"photo"}]')`)
-	d.ExecRaw(`INSERT INTO feed_media_jobs (tweet_id, status, media_kind) VALUES ('tweet_quote', 'completed', 'image')`)
-	d.ExecRaw(`INSERT INTO media_files (owner_type, owner_id, media_index, file_path, media_type, file_size) VALUES
+	_ = d.ExecRaw(`INSERT INTO feed_media_jobs (tweet_id, status, media_kind) VALUES ('tweet_quote', 'completed', 'image')`)
+	_ = d.ExecRaw(`INSERT INTO media_files (owner_type, owner_id, media_index, file_path, media_type, file_size) VALUES
 		('feed_media', 'tweet_quote', 0, 'feed_media/tweet_quote_0.jpg', 'photo', 5000)`)
-	d.ExecRaw(`INSERT INTO bookmarks (user_id, video_id) VALUES ('', 'tweet_quote')`)
+	_ = d.ExecRaw(`INSERT INTO bookmarks (user_id, video_id) VALUES ('', 'tweet_quote')`)
 	seedAvatarCache(
 		t,
 		d,
@@ -457,14 +452,14 @@ func TestGetMediaManifestV2_IncludesQuoteAuthorAvatarMatchedByURL(t *testing.T) 
 
 func TestGetMediaManifestV2_CursorAdvance(t *testing.T) {
 	d := openFreshTestDB(t)
-	d.ExecRaw(`INSERT INTO feed_items (tweet_id, source_handle, author_handle, media_json) VALUES
+	_ = d.ExecRaw(`INSERT INTO feed_items (tweet_id, source_handle, author_handle, media_json) VALUES
 		('t1', 'h', 'a', '[{"type":"photo"}]'),
 		('t2', 'h', 'b', '[{"type":"photo"}]')`)
-	d.ExecRaw(`INSERT INTO feed_media_jobs (tweet_id, status) VALUES ('t1','completed'),('t2','completed')`)
-	d.ExecRaw(`INSERT INTO media_files (owner_type, owner_id, media_index, file_path, media_type, file_size) VALUES
+	_ = d.ExecRaw(`INSERT INTO feed_media_jobs (tweet_id, status) VALUES ('t1','completed'),('t2','completed')`)
+	_ = d.ExecRaw(`INSERT INTO media_files (owner_type, owner_id, media_index, file_path, media_type, file_size) VALUES
 		('feed_media','t1',0,'f/t1_0.jpg','photo',1),
 		('feed_media','t2',0,'f/t2_0.jpg','photo',1)`)
-	d.ExecRaw(`INSERT INTO bookmarks (user_id, video_id) VALUES ('','t1'),('','t2')`)
+	_ = d.ExecRaw(`INSERT INTO bookmarks (user_id, video_id) VALUES ('','t1'),('','t2')`)
 
 	first, maxSeq1, _, err := d.GetMediaManifestV2("bookmarked", "", "", 1)
 	if err != nil {
@@ -491,16 +486,15 @@ func TestGetMediaManifestV2_CursorAdvance(t *testing.T) {
 
 func TestGetMediaManifestV2_PerBranchCursorSurfacesNewLowerRangeAssets(t *testing.T) {
 	d := openFreshTestDB(t)
-
-	d.ExecRaw(`INSERT INTO channels (channel_id, name, platform) VALUES ('youtube_chan', 'Channel', 'youtube')`)
-	d.ExecRaw(`INSERT INTO channel_follows (user_id, channel_id) VALUES ('', 'youtube_chan')`)
-	d.ExecRaw(`INSERT INTO channel_follows (user_id, channel_id) VALUES ('', 'twitter_h')`)
-	d.ExecRaw(`INSERT INTO feed_items (tweet_id, source_handle, author_handle, media_json) VALUES
+	_ = d.ExecRaw(`INSERT INTO channels (channel_id, name, platform) VALUES ('youtube_chan', 'Channel', 'youtube')`)
+	_ = d.ExecRaw(`INSERT INTO channel_follows (user_id, channel_id) VALUES ('', 'youtube_chan')`)
+	_ = d.ExecRaw(`INSERT INTO channel_follows (user_id, channel_id) VALUES ('', 'twitter_h')`)
+	_ = d.ExecRaw(`INSERT INTO feed_items (tweet_id, source_handle, author_handle, media_json) VALUES
 		('t_old', 'h', 'h', '[{"type":"photo"}]')`)
-	d.ExecRaw(`INSERT INTO feed_media_jobs (tweet_id, status) VALUES ('t_old', 'completed')`)
-	d.ExecRaw(`INSERT INTO media_files (owner_type, owner_id, media_index, file_path, media_type, file_size) VALUES
+	_ = d.ExecRaw(`INSERT INTO feed_media_jobs (tweet_id, status) VALUES ('t_old', 'completed')`)
+	_ = d.ExecRaw(`INSERT INTO media_files (owner_type, owner_id, media_index, file_path, media_type, file_size) VALUES
 		('feed_media', 't_old', 0, 'f/t_old_0.jpg', 'photo', 1)`)
-	d.ExecRaw(`INSERT INTO videos (video_id, channel_id, title, thumbnail_path, file_path, file_size, published_at) VALUES
+	_ = d.ExecRaw(`INSERT INTO videos (video_id, channel_id, title, thumbnail_path, file_path, file_size, published_at) VALUES
 		('youtube_old', 'youtube_chan', 'Old', 'thumbs/youtube_old.jpg', 'videos/youtube_old.mp4', 10, 1)`)
 
 	_, marker, _, err := d.GetMediaManifestV2("subscriptions", "", "", 40)
@@ -510,13 +504,12 @@ func TestGetMediaManifestV2_PerBranchCursorSurfacesNewLowerRangeAssets(t *testin
 	if marker == "" {
 		t.Fatal("expected marker after initial manifest")
 	}
-
-	d.ExecRaw(`INSERT INTO feed_items (tweet_id, source_handle, author_handle, media_json) VALUES
+	_ = d.ExecRaw(`INSERT INTO feed_items (tweet_id, source_handle, author_handle, media_json) VALUES
 		('t_new', 'h', 'h', '[{"type":"photo"}]')`)
-	d.ExecRaw(`INSERT INTO feed_media_jobs (tweet_id, status) VALUES ('t_new', 'completed')`)
-	d.ExecRaw(`INSERT INTO media_files (owner_type, owner_id, media_index, file_path, media_type, file_size) VALUES
+	_ = d.ExecRaw(`INSERT INTO feed_media_jobs (tweet_id, status) VALUES ('t_new', 'completed')`)
+	_ = d.ExecRaw(`INSERT INTO media_files (owner_type, owner_id, media_index, file_path, media_type, file_size) VALUES
 		('feed_media', 't_new', 0, 'f/t_new_0.jpg', 'photo', 1)`)
-	d.ExecRaw(`INSERT INTO videos (video_id, channel_id, title, thumbnail_path, file_path, file_size, published_at) VALUES
+	_ = d.ExecRaw(`INSERT INTO videos (video_id, channel_id, title, thumbnail_path, file_path, file_size, published_at) VALUES
 		('youtube_new', 'youtube_chan', 'New', 'thumbs/youtube_new.jpg', 'videos/youtube_new.mp4', 10, 2)`)
 
 	entries, _, _, err := d.GetMediaManifestV2("subscriptions", "", marker, 40)
@@ -544,21 +537,20 @@ func TestGetMediaManifestV2_VideoAssetsSurfaceBeforeLargeFeedBacklog(t *testing.
 	if err := os.WriteFile(filepath.Join(d.dataDir, "thumbs", "youtube_newest.jpg"), []byte("jpg"), 0o644); err != nil {
 		t.Fatalf("write youtube thumb: %v", err)
 	}
-
-	d.ExecRaw(`INSERT INTO channels (channel_id, name, platform) VALUES
+	_ = d.ExecRaw(`INSERT INTO channels (channel_id, name, platform) VALUES
 		('youtube_chan', 'Video Channel', 'youtube'),
 		('twitter_h', 'Feed Channel', 'twitter')`)
-	d.ExecRaw(`INSERT INTO channel_follows (user_id, channel_id) VALUES
+	_ = d.ExecRaw(`INSERT INTO channel_follows (user_id, channel_id) VALUES
 		('', 'youtube_chan'),
 		('', 'twitter_h')`)
-	d.ExecRaw(`INSERT INTO videos (video_id, channel_id, title, thumbnail_path, file_path, file_size, published_at) VALUES
+	_ = d.ExecRaw(`INSERT INTO videos (video_id, channel_id, title, thumbnail_path, file_path, file_size, published_at) VALUES
 		('youtube_newest', 'youtube_chan', 'Newest', 'thumbs/youtube_newest.jpg', 'videos/youtube_newest.mp4', 10, 2)`)
 
 	for i := range 300 {
 		tweetID := fmt.Sprintf("tweet_%03d", i)
-		d.ExecRaw(`INSERT INTO feed_items (tweet_id, source_handle, author_handle, media_json) VALUES (?, 'h', 'h', '[{"type":"photo"}]')`, tweetID)
-		d.ExecRaw(`INSERT INTO feed_media_jobs (tweet_id, status) VALUES (?, 'completed')`, tweetID)
-		d.ExecRaw(`INSERT INTO media_files (owner_type, owner_id, media_index, file_path, media_type, file_size) VALUES ('feed_media', ?, 0, ?, 'photo', 1)`, tweetID, "f/"+tweetID+"_0.jpg")
+		_ = d.ExecRaw(`INSERT INTO feed_items (tweet_id, source_handle, author_handle, media_json) VALUES (?, 'h', 'h', '[{"type":"photo"}]')`, tweetID)
+		_ = d.ExecRaw(`INSERT INTO feed_media_jobs (tweet_id, status) VALUES (?, 'completed')`, tweetID)
+		_ = d.ExecRaw(`INSERT INTO media_files (owner_type, owner_id, media_index, file_path, media_type, file_size) VALUES ('feed_media', ?, 0, ?, 'photo', 1)`, tweetID, "f/"+tweetID+"_0.jpg")
 	}
 
 	entries, _, _, err := d.GetMediaManifestV2("subscriptions", "", "", 40)
@@ -580,9 +572,8 @@ func TestGetMediaManifestV2_VideoAssetsSurfaceBeforeLargeFeedBacklog(t *testing.
 
 func TestGetMediaManifestV2_AvatarsSurfaceBeforeLargeFeedBacklog(t *testing.T) {
 	d := openFreshTestDB(t)
-
-	d.ExecRaw(`INSERT INTO channels (channel_id, name, platform) VALUES ('twitter_h', 'Feed Channel', 'twitter')`)
-	d.ExecRaw(`INSERT INTO channel_follows (user_id, channel_id) VALUES ('', 'twitter_h')`)
+	_ = d.ExecRaw(`INSERT INTO channels (channel_id, name, platform) VALUES ('twitter_h', 'Feed Channel', 'twitter')`)
+	_ = d.ExecRaw(`INSERT INTO channel_follows (user_id, channel_id) VALUES ('', 'twitter_h')`)
 	if err := d.UpsertChannelProfile(model.ChannelProfile{
 		ChannelID: "twitter_visible_author",
 		Platform:  "twitter",
@@ -594,9 +585,9 @@ func TestGetMediaManifestV2_AvatarsSurfaceBeforeLargeFeedBacklog(t *testing.T) {
 
 	for i := range 300 {
 		tweetID := fmt.Sprintf("tweet_%03d", i)
-		d.ExecRaw(`INSERT INTO feed_items (tweet_id, source_handle, author_handle, media_json) VALUES (?, 'h', 'h', '[{"type":"photo"}]')`, tweetID)
-		d.ExecRaw(`INSERT INTO feed_media_jobs (tweet_id, status) VALUES (?, 'completed')`, tweetID)
-		d.ExecRaw(`INSERT INTO media_files (owner_type, owner_id, media_index, file_path, media_type, file_size) VALUES ('feed_media', ?, 0, ?, 'photo', 1)`, tweetID, "f/"+tweetID+"_0.jpg")
+		_ = d.ExecRaw(`INSERT INTO feed_items (tweet_id, source_handle, author_handle, media_json) VALUES (?, 'h', 'h', '[{"type":"photo"}]')`, tweetID)
+		_ = d.ExecRaw(`INSERT INTO feed_media_jobs (tweet_id, status) VALUES (?, 'completed')`, tweetID)
+		_ = d.ExecRaw(`INSERT INTO media_files (owner_type, owner_id, media_index, file_path, media_type, file_size) VALUES ('feed_media', ?, 0, ?, 'photo', 1)`, tweetID, "f/"+tweetID+"_0.jpg")
 	}
 
 	entries, _, _, err := d.GetMediaManifestV2("subscriptions", "", "", 40)
@@ -614,12 +605,11 @@ func TestGetMediaManifestV2_AvatarsSurfaceBeforeLargeFeedBacklog(t *testing.T) {
 
 func TestGetMediaManifestV2_LegacyNumericCursorForcesReplay(t *testing.T) {
 	d := openFreshTestDB(t)
-
-	d.ExecRaw(`INSERT INTO feed_items (tweet_id, source_handle, author_handle, media_json) VALUES
+	_ = d.ExecRaw(`INSERT INTO feed_items (tweet_id, source_handle, author_handle, media_json) VALUES
 		('t_replay', 'h', 'h', '[{"type":"photo"}]')`)
-	d.ExecRaw(`INSERT INTO channel_follows (user_id, channel_id) VALUES ('', 'twitter_h')`)
-	d.ExecRaw(`INSERT INTO feed_media_jobs (tweet_id, status) VALUES ('t_replay', 'completed')`)
-	d.ExecRaw(`INSERT INTO media_files (owner_type, owner_id, media_index, file_path, media_type, file_size) VALUES
+	_ = d.ExecRaw(`INSERT INTO channel_follows (user_id, channel_id) VALUES ('', 'twitter_h')`)
+	_ = d.ExecRaw(`INSERT INTO feed_media_jobs (tweet_id, status) VALUES ('t_replay', 'completed')`)
+	_ = d.ExecRaw(`INSERT INTO media_files (owner_type, owner_id, media_index, file_path, media_type, file_size) VALUES
 		('feed_media', 't_replay', 0, 'f/t_replay_0.jpg', 'photo', 1)`)
 
 	entries, _, _, err := d.GetMediaManifestV2("subscriptions", "", "4500000000000", 40)
@@ -636,13 +626,12 @@ func TestGetMediaManifestV2_LegacyNumericCursorForcesReplay(t *testing.T) {
 
 func TestGetMediaManifestV2_LowLegacyCursorPreservesMediaProgress(t *testing.T) {
 	d := openFreshTestDB(t)
-
-	d.ExecRaw(`INSERT INTO feed_items (tweet_id, source_handle, author_handle, media_json) VALUES
+	_ = d.ExecRaw(`INSERT INTO feed_items (tweet_id, source_handle, author_handle, media_json) VALUES
 		('t_old', 'h', 'h', '[{"type":"photo"}]'),
 		('t_new', 'h', 'h', '[{"type":"photo"}]')`)
-	d.ExecRaw(`INSERT INTO channel_follows (user_id, channel_id) VALUES ('', 'twitter_h')`)
-	d.ExecRaw(`INSERT INTO feed_media_jobs (tweet_id, status) VALUES ('t_old', 'completed'), ('t_new', 'completed')`)
-	d.ExecRaw(`INSERT INTO media_files (id, owner_type, owner_id, media_index, file_path, media_type, file_size) VALUES
+	_ = d.ExecRaw(`INSERT INTO channel_follows (user_id, channel_id) VALUES ('', 'twitter_h')`)
+	_ = d.ExecRaw(`INSERT INTO feed_media_jobs (tweet_id, status) VALUES ('t_old', 'completed'), ('t_new', 'completed')`)
+	_ = d.ExecRaw(`INSERT INTO media_files (id, owner_type, owner_id, media_index, file_path, media_type, file_size) VALUES
 		(10, 'feed_media', 't_old', 0, 'f/t_old_0.jpg', 'photo', 1),
 		(20, 'feed_media', 't_new', 0, 'f/t_new_0.jpg', 'photo', 1)`)
 
@@ -670,14 +659,13 @@ func TestGetMediaManifestV2_BookmarkedTwitterVideoStubUsesTwitterIdentity(t *tes
 	if err := os.WriteFile(filepath.Join(d.dataDir, "thumbs", "9000000000000000001.jpg"), []byte("jpg"), 0o644); err != nil {
 		t.Fatalf("write thumb: %v", err)
 	}
-
-	d.ExecRaw(`INSERT INTO videos (
+	_ = d.ExecRaw(`INSERT INTO videos (
 		video_id, channel_id, title, duration, thumbnail_path, file_path, file_size, published_at
 	) VALUES (
 		'9000000000000000001', 'twitter_author_alpha', 'X post 9000000000000000001', 12,
 		'thumbs/9000000000000000001.jpg', 'videos/9000000000000000001.mp4', 1234, 1776880000000
 	)`)
-	d.ExecRaw(`INSERT INTO bookmarks (user_id, video_id) VALUES ('', '9000000000000000001')`)
+	_ = d.ExecRaw(`INSERT INTO bookmarks (user_id, video_id) VALUES ('', '9000000000000000001')`)
 
 	entries, _, _, err := d.GetMediaManifestV2("bookmarked", "", "", 20)
 	if err != nil {
@@ -728,14 +716,13 @@ func TestGetMediaManifestV2_VideoThumbnailUsesSiblingThumb(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(videoDir, "tiktok_vid.jpg"), thumbBytes, 0o644); err != nil {
 		t.Fatalf("write sibling thumb: %v", err)
 	}
-
-	d.ExecRaw(`INSERT INTO videos (
+	_ = d.ExecRaw(`INSERT INTO videos (
 		video_id, channel_id, title, duration, thumbnail_path, file_path, file_size, published_at
 	) VALUES (
 		'tiktok_vid', 'tiktok_creator', 'Short', 12,
 		'media/tiktok/creator/tiktok_vid.jpg', 'media/tiktok/creator/tiktok_vid.mp4', 1234, 1776880000000
 	)`)
-	d.ExecRaw(`INSERT INTO bookmarks (user_id, video_id) VALUES ('', 'tiktok_vid')`)
+	_ = d.ExecRaw(`INSERT INTO bookmarks (user_id, video_id) VALUES ('', 'tiktok_vid')`)
 
 	entries, _, _, err := d.GetMediaManifestV2("bookmarked", "", "", 20)
 	if err != nil {
@@ -786,19 +773,17 @@ func TestGetMediaManifestV2_UsesActualFileContentTypes(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(d.dataDir, "thumbs", "youtube_vid_1.webp"), []byte("RIFFxxxxWEBP"), 0o644); err != nil {
 		t.Fatalf("write video thumb: %v", err)
 	}
-
-	d.ExecRaw(`INSERT INTO feed_items (tweet_id, source_handle, author_handle, media_json) VALUES
-		('tweet_png', 'h', 'author_png', '[{"type":"photo"}]')`)
-	d.ExecRaw(`INSERT INTO feed_media_jobs (tweet_id, status) VALUES ('tweet_png', 'completed')`)
-	d.ExecRaw(`INSERT INTO media_files (owner_type, owner_id, media_index, file_path, media_type, file_size) VALUES
-		('feed_media', 'tweet_png', 0, 'feed_media/tweet_png_0.png', 'photo', 5)`)
-	d.ExecRaw(`INSERT INTO channels (channel_id, name, platform) VALUES ('twitter_author_png', 'Author PNG', 'twitter')`)
-	d.ExecRaw(`INSERT INTO channel_follows (user_id, channel_id) VALUES ('', 'twitter_author_png')`)
-	seedAvatarCache(t, d, "twitter_author_png", "https://pbs.twimg.com/profile_images/png_normal.webp", "twitter_author_png.webp", []byte("RIFFxxxxWEBP"))
-
-	d.ExecRaw(`INSERT INTO channels (channel_id, name, platform) VALUES ('youtube_chan_1', 'Channel 1', 'youtube')`)
-	d.ExecRaw(`INSERT INTO channel_follows (user_id, channel_id) VALUES ('', 'youtube_chan_1')`)
-	d.ExecRaw(`INSERT INTO videos (video_id, channel_id, title, thumbnail_path, file_path, file_size, published_at) VALUES
+	_ = d.ExecRaw(`INSERT INTO feed_items (tweet_id, source_handle, author_handle, media_json) VALUES
+		('sample_tweet_png', 'sample_source', 'sample_author_png', '[{"type":"photo"}]')`)
+	_ = d.ExecRaw(`INSERT INTO feed_media_jobs (tweet_id, status) VALUES ('sample_tweet_png', 'completed')`)
+	_ = d.ExecRaw(`INSERT INTO media_files (owner_type, owner_id, media_index, file_path, media_type, file_size) VALUES
+		('feed_media', 'sample_tweet_png', 0, 'feed_media/sample_tweet_png_0.png', 'photo', 5)`)
+	_ = d.ExecRaw(`INSERT INTO channels (channel_id, name, platform) VALUES ('twitter_sample_author_png', 'Sample Author PNG', 'twitter')`)
+	_ = d.ExecRaw(`INSERT INTO channel_follows (user_id, channel_id) VALUES ('', 'twitter_sample_author_png')`)
+	seedAvatarCache(t, d, "twitter_sample_author_png", "https://pbs.twimg.com/profile_images/png_normal.webp", "twitter_sample_author_png.webp", []byte("RIFFxxxxWEBP"))
+	_ = d.ExecRaw(`INSERT INTO channels (channel_id, name, platform) VALUES ('youtube_chan_1', 'Channel 1', 'youtube')`)
+	_ = d.ExecRaw(`INSERT INTO channel_follows (user_id, channel_id) VALUES ('', 'youtube_chan_1')`)
+	_ = d.ExecRaw(`INSERT INTO videos (video_id, channel_id, title, thumbnail_path, file_path, file_size, published_at) VALUES
 		('youtube_vid_1', 'youtube_chan_1', 'Video 1', 'thumbs/youtube_vid_1.webp', 'videos/youtube_vid_1.webm', 123, 1)`)
 
 	entries, _, _, err := d.GetMediaManifestV2("subscriptions", "", "", 40)
@@ -811,19 +796,19 @@ func TestGetMediaManifestV2_UsesActualFileContentTypes(t *testing.T) {
 		byKey[e.AssetKind+"/"+e.OwnerID] = e
 	}
 
-	if e, ok := byKey["post_media/tweet_png"]; !ok {
-		t.Fatal("expected post_media entry for tweet_png")
+	if e, ok := byKey["post_media/sample_tweet_png"]; !ok {
+		t.Fatal("expected post_media entry for sample_tweet_png")
 	} else {
 		if e.ContentType != "image/png" {
 			t.Fatalf("post_media content_type = %q, want image/png", e.ContentType)
 		}
-		if e.ServerURL != "/api/media/slide/tweet_png/0" {
-			t.Fatalf("post_media server_url = %q, want /api/media/slide/tweet_png/0", e.ServerURL)
+		if e.ServerURL != "/api/media/slide/sample_tweet_png/0" {
+			t.Fatalf("post_media server_url = %q, want /api/media/slide/sample_tweet_png/0", e.ServerURL)
 		}
 	}
 
-	if e, ok := byKey["avatar/twitter_author_png"]; !ok {
-		t.Fatal("expected avatar entry for twitter_author_png")
+	if e, ok := byKey["avatar/twitter_sample_author_png"]; !ok {
+		t.Fatal("expected avatar entry for twitter_sample_author_png")
 	} else if e.ContentType != "image/webp" {
 		t.Fatalf("avatar content_type = %q, want image/webp", e.ContentType)
 	}
@@ -865,15 +850,15 @@ func TestGetMediaManifestV2_UsesActualFileContentTypes(t *testing.T) {
 
 func TestGetMediaManifestV2_SkipsAudioOnlyFeedMediaAndUsesSlideTransportForImageFrames(t *testing.T) {
 	d := openFreshTestDB(t)
-	d.ExecRaw(`INSERT INTO feed_items (tweet_id, source_handle, author_handle, media_json) VALUES
+	_ = d.ExecRaw(`INSERT INTO feed_items (tweet_id, source_handle, author_handle, media_json) VALUES
 		('tiktok_slide', 'creator_a', 'creator_a', '[{"type":"video"}]')`)
-	d.ExecRaw(`INSERT INTO feed_media_jobs (tweet_id, status, media_kind) VALUES
+	_ = d.ExecRaw(`INSERT INTO feed_media_jobs (tweet_id, status, media_kind) VALUES
 		('tiktok_slide', 'completed', 'slideshow')`)
-	d.ExecRaw(`INSERT INTO media_files (owner_type, owner_id, media_index, file_path, media_type, file_size) VALUES
+	_ = d.ExecRaw(`INSERT INTO media_files (owner_type, owner_id, media_index, file_path, media_type, file_size) VALUES
 		('feed_media', 'tiktok_slide', 0, 'media/tiktok_slide_1.jpg', 'video', 100),
 		('feed_media', 'tiktok_slide', 1, 'media/tiktok_slide_2.jpg', 'video', 100),
 		('feed_media', 'tiktok_slide', 2, 'media/tiktok_slide.mp3', 'video', 100)`)
-	d.ExecRaw(`INSERT INTO bookmarks (user_id, video_id) VALUES ('', 'tiktok_slide')`)
+	_ = d.ExecRaw(`INSERT INTO bookmarks (user_id, video_id) VALUES ('', 'tiktok_slide')`)
 
 	entries, _, _, err := d.GetMediaManifestV2("bookmarked", "", "", 40)
 	if err != nil {
@@ -918,24 +903,28 @@ func TestGetMediaManifestV2_UnknownScope(t *testing.T) {
 
 func TestGetMediaManifest_Bookmarked(t *testing.T) {
 	d := openFreshTestDB(t)
+	_ =
 
-	// Insert feed items — two tweets, only one bookmarked
-	d.ExecRaw(`INSERT INTO feed_items (tweet_id, source_handle, author_handle, media_json) VALUES
+		// Insert feed items — two tweets, only one bookmarked
+		d.ExecRaw(`INSERT INTO feed_items (tweet_id, source_handle, author_handle, media_json) VALUES
 		('tweet_100', 'handle_x', 'author_x', '[{"type":"photo"}]'),
 		('tweet_200', 'handle_y', 'author_y', '[{"type":"photo"}]')
 	`)
+	_ =
 
-	// Both have completed jobs
-	d.ExecRaw(`INSERT INTO feed_media_jobs (tweet_id, status, media_kind) VALUES
+		// Both have completed jobs
+		d.ExecRaw(`INSERT INTO feed_media_jobs (tweet_id, status, media_kind) VALUES
 		('tweet_100', 'completed', 'image'),
 		('tweet_200', 'completed', 'image')
 	`)
+	_ =
 
-	// Only tweet_100 is bookmarked
-	d.ExecRaw(`INSERT INTO bookmarks (user_id, video_id) VALUES ('', 'tweet_100')`)
+		// Only tweet_100 is bookmarked
+		d.ExecRaw(`INSERT INTO bookmarks (user_id, video_id) VALUES ('', 'tweet_100')`)
+	_ =
 
-	// Media files for both
-	d.ExecRaw(`INSERT INTO media_files (owner_type, owner_id, media_index, file_path, media_type, file_size) VALUES
+		// Media files for both
+		d.ExecRaw(`INSERT INTO media_files (owner_type, owner_id, media_index, file_path, media_type, file_size) VALUES
 		('feed_media', 'tweet_100', 0, 'feed_media/tweet_100_0.jpg', 'photo', 5000),
 		('feed_media', 'tweet_200', 0, 'feed_media/tweet_200_0.jpg', 'photo', 5000)
 	`)
@@ -960,22 +949,24 @@ func TestGetMediaManifest_Bookmarked(t *testing.T) {
 
 func TestGetMediaManifest_Liked(t *testing.T) {
 	d := openFreshTestDB(t)
+	_ =
 
-	// Two tweets, only one liked by testuser
-	d.ExecRaw(`INSERT INTO feed_items (tweet_id, source_handle, author_handle, media_json) VALUES
+		// Two tweets, only one liked by testuser
+		d.ExecRaw(`INSERT INTO feed_items (tweet_id, source_handle, author_handle, media_json) VALUES
 		('tweet_l1', 'handle_l', 'author_l', '[{"type":"photo"}]'),
 		('tweet_l2', 'handle_m', 'author_m', '[{"type":"photo"}]')
 	`)
-	d.ExecRaw(`INSERT INTO feed_media_jobs (tweet_id, status, media_kind) VALUES
+	_ = d.ExecRaw(`INSERT INTO feed_media_jobs (tweet_id, status, media_kind) VALUES
 		('tweet_l1', 'completed', 'image'),
 		('tweet_l2', 'completed', 'image')
 	`)
-	d.ExecRaw(`INSERT INTO media_files (owner_type, owner_id, media_index, file_path, media_type, file_size) VALUES
+	_ = d.ExecRaw(`INSERT INTO media_files (owner_type, owner_id, media_index, file_path, media_type, file_size) VALUES
 		('feed_media', 'tweet_l1', 0, 'feed_media/tweet_l1_0.jpg', 'photo', 5000),
 		('feed_media', 'tweet_l2', 0, 'feed_media/tweet_l2_0.jpg', 'photo', 5000)
 	`)
-	// Only tweet_l1 liked by testuser
-	d.ExecRaw(`INSERT INTO feed_likes (username, tweet_id) VALUES ('testuser', 'tweet_l1')`)
+	_ =
+		// Only tweet_l1 liked by testuser
+		d.ExecRaw(`INSERT INTO feed_likes (username, tweet_id) VALUES ('testuser', 'tweet_l1')`)
 
 	entries, _, _, err := d.GetMediaManifestV2("liked", "testuser", "", 40)
 	if err != nil {
@@ -996,18 +987,20 @@ func TestGetMediaManifest_Liked(t *testing.T) {
 
 func TestGetMediaHealth(t *testing.T) {
 	d := openFreshTestDB(t)
+	_ =
 
-	// Insert feed items with media
-	d.ExecRaw(`INSERT INTO feed_items (tweet_id, source_handle, author_handle, media_json) VALUES
+		// Insert feed items with media
+		d.ExecRaw(`INSERT INTO feed_items (tweet_id, source_handle, author_handle, media_json) VALUES
 		('tw_a', 'src_a', 'auth_a', '[{"type":"photo"}]'),
 		('tw_b', 'src_b', 'auth_b', '[{"type":"video"}]'),
 		('tw_c', 'src_c', 'auth_c', '[{"type":"photo"}]'),
 		('tw_d', 'src_d', 'auth_d', '[{"type":"photo"}]'),
 		('tw_e', 'src_e', 'auth_e', NULL)
 	`)
+	_ =
 
-	// Jobs: 2 completed, 1 queued, 1 failed; tw_e has no media so no job
-	d.ExecRaw(`INSERT INTO feed_media_jobs (tweet_id, status, media_kind) VALUES
+		// Jobs: 2 completed, 1 queued, 1 failed; tw_e has no media so no job
+		d.ExecRaw(`INSERT INTO feed_media_jobs (tweet_id, status, media_kind) VALUES
 		('tw_a', 'completed', 'image'),
 		('tw_b', 'completed', 'video'),
 		('tw_c', 'queued', 'image'),

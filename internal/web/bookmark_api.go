@@ -48,7 +48,10 @@ func (s *Server) handleBookmarkAdd(w http.ResponseWriter, r *http.Request) {
 		AccountHandles []string `json:"account_handles"`
 		MediaIndices   []int    `json:"media_indices"`
 	}
-	json.NewDecoder(r.Body).Decode(&body)
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil && !errors.Is(err, io.EOF) {
+		writeJSON(w, 400, map[string]any{"success": false, "error": "invalid json"})
+		return
+	}
 
 	accountHandlesJSON := ""
 	if len(body.AccountHandles) > 0 {
@@ -309,8 +312,10 @@ func (s *Server) handleBookmarkCategoryBatch(w http.ResponseWriter, r *http.Requ
 	if user != nil {
 		userID = user.Username
 	}
-
-	r.ParseForm()
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "invalid form", http.StatusBadRequest)
+		return
+	}
 	ids := r.Form["id"]
 	names := r.Form["name"]
 	paths := r.Form["archive_path"]
@@ -339,9 +344,17 @@ func (s *Server) handleBookmarkCategoryBatch(w http.ResponseWriter, r *http.Requ
 			continue
 		}
 		if id > 0 {
-			s.db.UpdateBookmarkCategory(userID, id, name, archivePath)
+			if err := s.db.UpdateBookmarkCategory(userID, id, name, archivePath); err != nil {
+				slog.Error("UpdateBookmarkCategory", "id", id, "err", err)
+				http.Error(w, "db error", http.StatusInternalServerError)
+				return
+			}
 		} else {
-			s.db.CreateBookmarkCategory(userID, name, archivePath)
+			if _, err := s.db.CreateBookmarkCategory(userID, name, archivePath); err != nil {
+				slog.Error("CreateBookmarkCategory", "err", err)
+				http.Error(w, "db error", http.StatusInternalServerError)
+				return
+			}
 		}
 	}
 
@@ -357,7 +370,7 @@ func (s *Server) renderBookmarkCategoriesHTML(w http.ResponseWriter, r *http.Req
 			Slug: slugRe.ReplaceAllString(strings.ToLower(c.Name), "-"),
 		})
 	}
-	components.BookmarkCategoryPathsPanel(s.pageProps(w, r), display).Render(r.Context(), w)
+	_ = components.BookmarkCategoryPathsPanel(s.pageProps(w, r), display).Render(r.Context(), w)
 }
 
 func (s *Server) handleBookmarkCategoryCreate(w http.ResponseWriter, r *http.Request) {
@@ -602,12 +615,12 @@ func (s *Server) archiveBookmarkCombined(tweetID, archivePath, customTitle, acco
 		}
 		dst, err := os.Create(destFile)
 		if err != nil {
-			src.Close()
+			_ = src.Close()
 			continue
 		}
-		io.Copy(dst, src)
-		dst.Close()
-		src.Close()
+		_, _ = io.Copy(dst, src)
+		_ = dst.Close()
+		_ = src.Close()
 	}
 	slog.Info("[Bookmark] archived", "tweet", tweetID, "slides", len(allSlides), "dest", archivePath)
 }

@@ -97,8 +97,9 @@ func extractFirstFrame(ctx context.Context, videoPath, outPath string) error {
 	)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		// Clean up partial file.
-		os.Remove(outPath)
+		_ =
+			// Clean up partial file.
+			os.Remove(outPath)
 		return fmt.Errorf("%w: %s", err, out)
 	}
 	return nil

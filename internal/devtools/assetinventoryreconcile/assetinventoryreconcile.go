@@ -53,13 +53,13 @@ func parseOptions(args []string) (options, error) {
 func Run(args []string, stdout, stderr io.Writer) int {
 	opts, err := parseOptions(args)
 	if err != nil {
-		fmt.Fprintf(stderr, "asset inventory reconcile: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "asset inventory reconcile: %v\n", err)
 		return 2
 	}
 
 	cfg := config.Load()
 	if cfg.ConfigError != nil {
-		fmt.Fprintf(stderr, "asset inventory reconcile: invalid configuration: %v\n", cfg.ConfigError)
+		_, _ = fmt.Fprintf(stderr, "asset inventory reconcile: invalid configuration: %v\n", cfg.ConfigError)
 		return 1
 	}
 	dbPath := strings.TrimSpace(opts.DBPath)
@@ -79,10 +79,12 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		store, err = db.OpenReadOnly(dbPath, dataDir)
 	}
 	if err != nil {
-		fmt.Fprintf(stderr, "asset inventory reconcile: open db: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "asset inventory reconcile: open db: %v\n", err)
 		return 1
 	}
-	defer store.Close()
+	defer func() {
+		_ = store.Close()
+	}()
 
 	result, err := store.ReconcileAssetInventoryFromExistingPaths(db.AssetInventoryReconcileOptions{
 		NowMs:  time.Now().UnixMilli(),
@@ -90,7 +92,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		DryRun: !opts.Apply,
 	})
 	if err != nil {
-		fmt.Fprintf(stderr, "asset inventory reconcile: run: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "asset inventory reconcile: run: %v\n", err)
 		return 1
 	}
 	mode := "dry_run"
@@ -108,12 +110,12 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		enc := json.NewEncoder(stdout)
 		enc.SetIndent("", "  ")
 		if err := enc.Encode(out); err != nil {
-			fmt.Fprintf(stderr, "asset inventory reconcile: encode JSON: %v\n", err)
+			_, _ = fmt.Fprintf(stderr, "asset inventory reconcile: encode JSON: %v\n", err)
 			return 1
 		}
 		return 0
 	}
-	fmt.Fprint(stdout, formatText(out))
+	_, _ = fmt.Fprint(stdout, formatText(out))
 	return 0
 }
 

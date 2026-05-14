@@ -43,7 +43,9 @@ func (db *DB) EnqueueFeedMediaJobs(jobs []FeedMediaJobRow) error {
 		if err != nil {
 			return err
 		}
-		defer stmt.Close()
+		defer func() {
+			_ = stmt.Close()
+		}()
 		for _, j := range jobs {
 			if _, err := stmt.Exec(
 				j.TweetID, nilIfEmpty(j.TweetURL), nilIfEmpty(j.SourceHandle),
@@ -369,7 +371,9 @@ func (db *DB) GetFeedMediaJobsByStatus() (processing, pending []FeedMediaJobRow,
 	if qErr != nil {
 		return nil, nil, qErr
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	for rows.Next() {
 		var j FeedMediaJobRow
@@ -404,7 +408,9 @@ func (db *DB) CountPendingFeedMediaJobs() (queued int, processing int, err error
 	if err != nil {
 		return 0, 0, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	for rows.Next() {
 		var status string
@@ -526,7 +532,9 @@ func (db *DB) EnsureBookmarkVideoStubs() (int, error) {
 		if err != nil {
 			return err
 		}
-		defer rows.Close()
+		defer func() {
+			_ = rows.Close()
+		}()
 		for rows.Next() {
 			var videoID string
 			if err := rows.Scan(&videoID); err != nil {

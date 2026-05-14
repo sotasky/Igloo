@@ -52,7 +52,9 @@ func (db *DB) deriveFeedMediaShape(ownerType, ownerID string) (derivedMediaShape
 	if err != nil {
 		return derivedMediaShape{}, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	var paths []string
 	for rows.Next() {
@@ -164,7 +166,9 @@ func (db *DB) repairVideoMediaShapesForIDs(videoIDs []string) error {
 		if err != nil {
 			return err
 		}
-		defer stmt.Close()
+		defer func() {
+			_ = stmt.Close()
+		}()
 
 		for _, repair := range repairs {
 			if _, err := stmt.Exec(
@@ -198,7 +202,9 @@ func (db *DB) RepairVideoMediaShapes() error {
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	var videoIDs []string
 	for rows.Next() {

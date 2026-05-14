@@ -120,8 +120,8 @@ func (m *Manager) createBackup(dir string) error {
 		return fmt.Errorf("create temp file: %w", err)
 	}
 	defer func() {
-		f.Close()
-		os.Remove(tmpPath)
+		_ = f.Close()
+		_ = os.Remove(tmpPath)
 	}()
 
 	gw := gzip.NewWriter(f)
@@ -133,7 +133,7 @@ func (m *Manager) createBackup(dir string) error {
 	}
 	dbSnap := dbSnapFile.Name()
 	if err := dbSnapFile.Close(); err != nil {
-		os.Remove(dbSnap)
+		_ = os.Remove(dbSnap)
 		return fmt.Errorf("close db snapshot temp path: %w", err)
 	}
 	if err := os.Remove(dbSnap); err != nil && !os.IsNotExist(err) {
@@ -142,7 +142,9 @@ func (m *Manager) createBackup(dir string) error {
 	if err := m.db.VacuumInto(dbSnap); err != nil {
 		return fmt.Errorf("vacuum into: %w", err)
 	}
-	defer os.Remove(dbSnap)
+	defer func() {
+		_ = os.Remove(dbSnap)
+	}()
 
 	if err := addFileToTar(tw, dbSnap, config.DatabaseFilename); err != nil {
 		return fmt.Errorf("tar db: %w", err)
@@ -200,7 +202,9 @@ func addFileToTar(tw *tar.Writer, srcPath, tarName string) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() {
+		_ = f.Close()
+	}()
 
 	info, err := f.Stat()
 	if err != nil {
@@ -258,7 +262,9 @@ func addDirToTar(tw *tar.Writer, srcDir, tarPrefix string) error {
 		if err != nil {
 			return err
 		}
-		defer f.Close()
+		defer func() {
+			_ = f.Close()
+		}()
 		_, err = io.Copy(tw, f)
 		return err
 	})

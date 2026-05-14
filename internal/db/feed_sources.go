@@ -55,7 +55,9 @@ func (db *DB) ListFeedSources(platform string) ([]model.FeedSource, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 	var sources []model.FeedSource
 	for rows.Next() {
 		var src model.FeedSource

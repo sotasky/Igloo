@@ -112,7 +112,9 @@ func TestRunDryRunReportsDebtWithoutDeletingRows(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open readonly db: %v", err)
 	}
-	defer readonly.Close()
+	defer func() {
+		_ = readonly.Close()
+	}()
 	var count int
 	if err := readonly.QueryRow(`SELECT COUNT(*) FROM android_sync_generations`).Scan(&count); err != nil {
 		t.Fatalf("count generations: %v", err)

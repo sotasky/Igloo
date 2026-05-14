@@ -341,9 +341,9 @@ func writeZipEntryFile(dest string, src io.Reader) (int64, error) {
 	closed := false
 	defer func() {
 		if !closed {
-			tmp.Close()
+			_ = tmp.Close()
 		}
-		os.Remove(tmpPath)
+		_ = os.Remove(tmpPath)
 	}()
 	wrote, err := io.Copy(tmp, src)
 	if err != nil {
@@ -372,9 +372,9 @@ func writeZipEntryBytes(dest string, data []byte, tmpPattern string, mode os.Fil
 	closed := false
 	defer func() {
 		if !closed {
-			tmp.Close()
+			_ = tmp.Close()
 		}
-		os.Remove(tmpPath)
+		_ = os.Remove(tmpPath)
 	}()
 	if _, err := tmp.Write(data); err != nil {
 		return err

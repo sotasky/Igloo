@@ -39,14 +39,18 @@ func TestQuoteMediaDBInsertion(t *testing.T) {
 		t.Fatalf("create temp db: %v", err)
 	}
 	tmpPath := tmpFile.Name()
-	tmpFile.Close()
-	defer os.Remove(tmpPath)
+	_ = tmpFile.Close()
+	defer func() {
+		_ = os.Remove(tmpPath)
+	}()
 
 	d, err := db.Open(tmpPath, t.TempDir())
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	defer d.Close()
+	defer func() {
+		_ = d.Close()
+	}()
 
 	// Insert parent media + quote media for the same parent tweet.
 	files := []model.MediaFile{

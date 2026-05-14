@@ -597,10 +597,10 @@ type IngestState struct {
 // ParseMedia parses MediaJSON into the Media slice.
 func (f *FeedItem) ParseMedia() {
 	if f.MediaJSON != "" && f.Media == nil {
-		json.Unmarshal([]byte(f.MediaJSON), &f.Media)
+		_ = json.Unmarshal([]byte(f.MediaJSON), &f.Media)
 	}
 	if f.QuoteMediaJSON != "" && f.QuoteMedia == nil {
-		json.Unmarshal([]byte(f.QuoteMediaJSON), &f.QuoteMedia)
+		_ = json.Unmarshal([]byte(f.QuoteMediaJSON), &f.QuoteMedia)
 	}
 }
 

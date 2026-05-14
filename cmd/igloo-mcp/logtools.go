@@ -26,8 +26,7 @@ func listLogFiles() (string, error) {
 		path string
 		size int64
 	}
-
-	filepath.WalkDir(logsDir, func(path string, d os.DirEntry, err error) error {
+	_ = filepath.WalkDir(logsDir, func(path string, d os.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return nil
 		}
@@ -215,7 +214,7 @@ func searchLogs(pattern, file string, contextLines int) (string, error) {
 		}
 		searchFile(logPath, file)
 	} else {
-		filepath.WalkDir(logsDir, func(path string, d os.DirEntry, err error) error {
+		_ = filepath.WalkDir(logsDir, func(path string, d os.DirEntry, err error) error {
 			if err != nil || d.IsDir() {
 				return nil
 			}
@@ -264,8 +263,7 @@ func recentErrors(minutes int, source string) (string, error) {
 		}
 		return "server"
 	}
-
-	filepath.WalkDir(logsDir, func(path string, d os.DirEntry, err error) error {
+	_ = filepath.WalkDir(logsDir, func(path string, d os.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return nil
 		}

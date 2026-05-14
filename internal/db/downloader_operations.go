@@ -55,7 +55,9 @@ func (db *DB) ListDownloaderOperations(limit int) ([]model.DownloaderOperation, 
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	var out []model.DownloaderOperation
 	for rows.Next() {
@@ -82,7 +84,9 @@ func (db *DB) DownloaderOperationCountsSince(startedAtMs int64) ([]map[string]an
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 	var out []map[string]any
 	for rows.Next() {
 		var platform, operation, status, errorKind string

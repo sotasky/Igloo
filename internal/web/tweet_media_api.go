@@ -137,8 +137,7 @@ func (s *Server) handleTweetMediaMove(w http.ResponseWriter, r *http.Request) {
 
 	safeName := sanitizeArchiveName(body.Handle + " " + body.Label)
 	startNum := findNextArchiveIndex(archivePath, safeName) - 1
-
-	os.MkdirAll(archivePath, 0o755)
+	_ = os.MkdirAll(archivePath, 0o755)
 
 	var moved, failed []string
 	for i, item := range body.StagedFiles {
@@ -246,7 +245,9 @@ func (s *Server) handleTweetMediaDl(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 500, map[string]any{"success": false, "error": "cannot create temp dir"})
 		return
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() {
+		_ = os.RemoveAll(tmpDir)
+	}()
 
 	paths, dlErr := dl.YtDlp.Download(ctx, body.TweetURL, download.Opts{
 		OutputDir: tmpDir,
@@ -415,7 +416,9 @@ func validateTweetMediaStagingFile(path, ext string) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() {
+		_ = f.Close()
+	}()
 
 	buf := make([]byte, 512)
 	n, err := f.Read(buf)
@@ -459,7 +462,9 @@ func moveFile(src, dst string) error {
 	if err != nil {
 		return err
 	}
-	defer in.Close()
+	defer func() {
+		_ = in.Close()
+	}()
 
 	tmp, err := os.CreateTemp(filepath.Dir(dst), "."+filepath.Base(dst)+".tmp-*")
 	if err != nil {

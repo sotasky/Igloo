@@ -26,7 +26,9 @@ func main() {
 		fmt.Fprintf(os.Stderr, "open db: %v\n", err)
 		os.Exit(1)
 	}
-	defer d.Close()
+	defer func() {
+		_ = d.Close()
+	}()
 
 	fmt.Println("=== Page Load Benchmark ===")
 	fmt.Println()
@@ -51,7 +53,7 @@ func main() {
 
 	t = time.Now()
 	var shortsHTML bytes.Buffer
-	components.ShortsPage(benchPageProps("Moments", "shorts"), shortsPage, nil, false, model.Pager{Page: 1, PerPage: 10000, Total: count}, "", "all", 96, 96).Render(context.Background(), &shortsHTML)
+	_ = components.ShortsPage(benchPageProps("Moments", "shorts"), shortsPage, nil, false, model.Pager{Page: 1, PerPage: 10000, Total: count}, "", "all", 96, 96).Render(context.Background(), &shortsHTML)
 	fmt.Printf("  Render ShortsPage:           %6dms  (%d KB)\n", time.Since(t).Milliseconds(), shortsHTML.Len()/1024)
 
 	fmt.Println()
@@ -86,8 +88,8 @@ func main() {
 	// --- Sidebar ---
 	fmt.Println("-- Sidebar --")
 	t = time.Now()
-	d.GetSubscribedChannels()
-	d.GetAllVideoCountsByChannel()
+	_, _ = d.GetSubscribedChannels()
+	_, _ = d.GetAllVideoCountsByChannel()
 	fmt.Printf("  Combined sidebar:            %6dms\n", time.Since(t).Milliseconds())
 
 	fmt.Println()
@@ -128,8 +130,8 @@ func main() {
 		}
 	}
 	t = time.Now()
-	d.GetLatestVideosPerChannel(8, sampleVideoIDs...)
-	d.GetLatestFeedMediaPerAuthor(8, sampleHandles...)
+	_, _ = d.GetLatestVideosPerChannel(8, sampleVideoIDs...)
+	_, _ = d.GetLatestFeedMediaPerAuthor(8, sampleHandles...)
 	fmt.Printf("  Filtered batch (20 ch):     %6dms\n", time.Since(t).Milliseconds())
 
 	t = time.Now()
@@ -162,7 +164,7 @@ func main() {
 	cats, _ := d.GetBookmarkCategories(username)
 	t = time.Now()
 	var bookmarksHTML bytes.Buffer
-	components.BookmarksPage(benchPageProps("Bookmarks", "bookmarks"), bmarksPage, cats, 0, model.Pager{Page: 1, PerPage: webPageSize, Total: bCount}).Render(context.Background(), &bookmarksHTML)
+	_ = components.BookmarksPage(benchPageProps("Bookmarks", "bookmarks"), bmarksPage, cats, 0, model.Pager{Page: 1, PerPage: webPageSize, Total: bCount}).Render(context.Background(), &bookmarksHTML)
 	fmt.Printf("  Render BookmarksPage:        %6dms  (%d KB)\n", time.Since(t).Milliseconds(), bookmarksHTML.Len()/1024)
 
 	fmt.Println()

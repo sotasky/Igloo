@@ -59,7 +59,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("open db: %v", err)
 	}
-	defer db.Close()
+	defer func() {
+		_ = db.Close()
+	}()
 
 	var totalTranslations int
 	if err := db.QueryRow("SELECT COUNT(*) FROM translations").Scan(&totalTranslations); err != nil {

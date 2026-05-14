@@ -50,7 +50,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("db.Open: %v", err)
 	}
-	defer d.Close()
+	defer func() {
+		_ = d.Close()
+	}()
 
 	fetcher := &dearrow.Fetcher{
 		Client:   dearrow.NewClient(dearrow.DefaultBaseURL),

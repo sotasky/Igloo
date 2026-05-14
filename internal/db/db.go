@@ -47,7 +47,7 @@ func OpenWithOptions(path, dataDir string, opts OpenOptions) (*DB, error) {
 
 	phaseStart = time.Now()
 	if err := conn.Ping(); err != nil {
-		conn.Close()
+		_ = conn.Close()
 		reportPhase(opts.Phase, "db.ping", phaseStart)
 		return nil, fmt.Errorf("ping db: %w", err)
 	}
@@ -56,7 +56,7 @@ func OpenWithOptions(path, dataDir string, opts OpenOptions) (*DB, error) {
 	d := &DB{conn: conn, dataDir: dataDir}
 	phaseStart = time.Now()
 	if err := EnsureSchemaWithOptions(conn, EnsureSchemaOptions{Phase: opts.Phase}); err != nil {
-		conn.Close()
+		_ = conn.Close()
 		reportPhase(opts.Phase, "db.ensure_schema", phaseStart)
 		return nil, fmt.Errorf("ensure schema: %w", err)
 	}
@@ -64,7 +64,7 @@ func OpenWithOptions(path, dataDir string, opts OpenOptions) (*DB, error) {
 
 	phaseStart = time.Now()
 	if err := d.cleanupRetiredReadingFeature(); err != nil {
-		conn.Close()
+		_ = conn.Close()
 		reportPhase(opts.Phase, "db.cleanup_retired_reading", phaseStart)
 		return nil, fmt.Errorf("cleanup retired reading feature: %w", err)
 	}
@@ -72,7 +72,7 @@ func OpenWithOptions(path, dataDir string, opts OpenOptions) (*DB, error) {
 
 	phaseStart = time.Now()
 	if err := d.initSyncSeq(); err != nil {
-		conn.Close()
+		_ = conn.Close()
 		reportPhase(opts.Phase, "db.init_sync_seq", phaseStart)
 		return nil, fmt.Errorf("init sync_seq: %w", err)
 	}
@@ -80,7 +80,7 @@ func OpenWithOptions(path, dataDir string, opts OpenOptions) (*DB, error) {
 
 	phaseStart = time.Now()
 	if err := d.repairTwitterPlaceholderAuthorsOnce(); err != nil {
-		conn.Close()
+		_ = conn.Close()
 		reportPhase(opts.Phase, "db.repair_twitter_placeholder_authors", phaseStart)
 		return nil, fmt.Errorf("repair twitter placeholder authors: %w", err)
 	}
@@ -88,7 +88,7 @@ func OpenWithOptions(path, dataDir string, opts OpenOptions) (*DB, error) {
 
 	phaseStart = time.Now()
 	if err := d.RepairVideoMediaShapesOnce(); err != nil {
-		conn.Close()
+		_ = conn.Close()
 		reportPhase(opts.Phase, "db.repair_video_media_shapes", phaseStart)
 		return nil, fmt.Errorf("repair video media shapes: %w", err)
 	}
@@ -96,7 +96,7 @@ func OpenWithOptions(path, dataDir string, opts OpenOptions) (*DB, error) {
 
 	phaseStart = time.Now()
 	if err := d.PruneDownloaderOperations(DownloaderOperationMaxRows, DownloaderOperationMaxAge); err != nil {
-		conn.Close()
+		_ = conn.Close()
 		reportPhase(opts.Phase, "db.prune_downloader_operations", phaseStart)
 		return nil, fmt.Errorf("prune downloader operations: %w", err)
 	}
@@ -113,7 +113,7 @@ func OpenReadOnly(path, dataDir string) (*DB, error) {
 		return nil, fmt.Errorf("open db readonly: %w", err)
 	}
 	if err := conn.Ping(); err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return nil, fmt.Errorf("ping db: %w", err)
 	}
 	return &DB{conn: conn, dataDir: dataDir}, nil
@@ -180,7 +180,7 @@ func (db *DB) WithWrite(fn func(tx *sql.Tx) error) error {
 		return fmt.Errorf("begin tx: %w", err)
 	}
 	if err := fn(tx); err != nil {
-		tx.Rollback()
+		_ = tx.Rollback()
 		return err
 	}
 	return tx.Commit()

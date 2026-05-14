@@ -117,7 +117,7 @@ func TestGetAllVideoCountsByChannel(t *testing.T) {
 func TestToggleChannelStar(t *testing.T) {
 	d := openWritableTestDB(t)
 	var channelID string
-	d.conn.QueryRow("SELECT channel_id FROM channel_follows LIMIT 1").Scan(&channelID)
+	_ = d.conn.QueryRow("SELECT channel_id FROM channel_follows LIMIT 1").Scan(&channelID)
 	if channelID == "" {
 		t.Skip("no subscribed channels")
 	}
@@ -142,7 +142,7 @@ func TestToggleChannelStar(t *testing.T) {
 func TestGetAndUpdateChannelSettings(t *testing.T) {
 	d := openWritableTestDB(t)
 	var channelID string
-	d.conn.QueryRow("SELECT channel_id FROM channel_follows LIMIT 1").Scan(&channelID)
+	_ = d.conn.QueryRow("SELECT channel_id FROM channel_follows LIMIT 1").Scan(&channelID)
 	if channelID == "" {
 		t.Skip("no subscribed channels")
 	}

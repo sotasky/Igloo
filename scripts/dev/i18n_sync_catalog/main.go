@@ -464,7 +464,7 @@ func sortedKeys(messages map[string]string) []string {
 
 func xmlEscape(s string) string {
 	var buf bytes.Buffer
-	xml.EscapeText(&buf, []byte(s))
+	_ = xml.EscapeText(&buf, []byte(s))
 	return buf.String()
 }
 

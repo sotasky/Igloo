@@ -87,7 +87,9 @@ func run(args []string) int {
 		fmt.Fprintf(os.Stderr, "open database: %v\n", err)
 		return 1
 	}
-	defer conn.Close()
+	defer func() {
+		_ = conn.Close()
+	}()
 	if err := conn.Ping(); err != nil {
 		fmt.Fprintf(os.Stderr, "ping database: %v\n", err)
 		return 1
@@ -100,12 +102,12 @@ func run(args []string) int {
 	}
 	stats, err := repair(tx, exportCfg, owner, *overwrite, *resyncBookmarkContent, strings.TrimSpace(*sourceDB))
 	if err != nil {
-		tx.Rollback()
+		_ = tx.Rollback()
 		fmt.Fprintf(os.Stderr, "repair: %v\n", err)
 		return 1
 	}
 	if !*apply {
-		tx.Rollback()
+		_ = tx.Rollback()
 		fmt.Println("mode=dry_run")
 	} else if err := tx.Commit(); err != nil {
 		fmt.Fprintf(os.Stderr, "commit: %v\n", err)
@@ -243,7 +245,9 @@ func repairBookmarkDatesFromSourceDB(tx *sql.Tx, sourceDB, owner string, overwri
 	if _, err := tx.Exec(`ATTACH DATABASE ? AS source_db`, sourceDB); err != nil {
 		return 0, fmt.Errorf("attach source db: %w", err)
 	}
-	defer tx.Exec(`DETACH DATABASE source_db`)
+	defer func() {
+		_, _ = tx.Exec(`DETACH DATABASE source_db`)
+	}()
 
 	if _, err := tx.Exec(`DROP TABLE IF EXISTS temp.repair_bookmark_dates`); err != nil {
 		return 0, err
@@ -433,7 +437,7 @@ func repairLocalPublishedAt(tx *sql.Tx, seqs *syncSeqAllocator, owner string, ov
 	for likeRows.Next() {
 		var username, tweetID string
 		if err := likeRows.Scan(&username, &tweetID); err != nil {
-			likeRows.Close()
+			_ = likeRows.Close()
 			return stats, err
 		}
 		publishedAt := twitterSnowflakeMillis(tweetID)
@@ -446,7 +450,7 @@ func repairLocalPublishedAt(tx *sql.Tx, seqs *syncSeqAllocator, owner string, ov
 		)
 		n, err := rowsAffected(res, err)
 		if err != nil {
-			likeRows.Close()
+			_ = likeRows.Close()
 			return stats, err
 		}
 		stats.likeSnowflakeUpdated += n
@@ -484,7 +488,7 @@ func repairLocalPublishedAt(tx *sql.Tx, seqs *syncSeqAllocator, owner string, ov
 	for feedRows.Next() {
 		var tweetID string
 		if err := feedRows.Scan(&tweetID); err != nil {
-			feedRows.Close()
+			_ = feedRows.Close()
 			return stats, err
 		}
 		publishedAt := twitterSnowflakeMillis(tweetID)
@@ -497,7 +501,7 @@ func repairLocalPublishedAt(tx *sql.Tx, seqs *syncSeqAllocator, owner string, ov
 		)
 		n, err := rowsAffected(res, err)
 		if err != nil {
-			feedRows.Close()
+			_ = feedRows.Close()
 			return stats, err
 		}
 		stats.feedItemPublishedUpdated += n
@@ -517,7 +521,7 @@ func repairLocalPublishedAt(tx *sql.Tx, seqs *syncSeqAllocator, owner string, ov
 	for videoRows.Next() {
 		var videoID, channelID string
 		if err := videoRows.Scan(&videoID, &channelID); err != nil {
-			videoRows.Close()
+			_ = videoRows.Close()
 			return stats, err
 		}
 		publishedAt := platformSnowflakeMillis(videoID, channelID)
@@ -530,7 +534,7 @@ func repairLocalPublishedAt(tx *sql.Tx, seqs *syncSeqAllocator, owner string, ov
 		)
 		n, err := rowsAffected(res, err)
 		if err != nil {
-			videoRows.Close()
+			_ = videoRows.Close()
 			return stats, err
 		}
 		stats.videoSnowflakeUpdated += n
@@ -687,13 +691,13 @@ func resyncBookmarkedFallbackContent(tx *sql.Tx, seqs *syncSeqAllocator, owner s
 	for videoRows.Next() {
 		var videoID string
 		if err := videoRows.Scan(&videoID); err != nil {
-			videoRows.Close()
+			_ = videoRows.Close()
 			return 0, 0, err
 		}
 		res, err := tx.Exec(`UPDATE videos SET sync_seq = ? WHERE video_id = ?`, seqs.Next(), videoID)
 		n, err := rowsAffected(res, err)
 		if err != nil {
-			videoRows.Close()
+			_ = videoRows.Close()
 			return 0, 0, err
 		}
 		videoCount += n
@@ -715,13 +719,13 @@ func resyncBookmarkedFallbackContent(tx *sql.Tx, seqs *syncSeqAllocator, owner s
 	for feedRows.Next() {
 		var tweetID string
 		if err := feedRows.Scan(&tweetID); err != nil {
-			feedRows.Close()
+			_ = feedRows.Close()
 			return 0, 0, err
 		}
 		res, err := tx.Exec(`UPDATE feed_items SET sync_seq = ? WHERE tweet_id = ?`, seqs.Next(), tweetID)
 		n, err := rowsAffected(res, err)
 		if err != nil {
-			feedRows.Close()
+			_ = feedRows.Close()
 			return 0, 0, err
 		}
 		feedCount += n

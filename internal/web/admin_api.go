@@ -102,7 +102,7 @@ func (s *Server) handleSettingsForm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/html")
-	w.Write(buf.Bytes())
+	_, _ = w.Write(buf.Bytes())
 }
 
 var shortcutDefaults = map[string]string{
@@ -398,7 +398,7 @@ func requireAdmin(w http.ResponseWriter, r *http.Request) bool {
 	if r.Header.Get("HX-Request") != "" {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(http.StatusForbidden)
-		fmt.Fprint(w, `<span class="status-message error">Admin access required.</span>`)
+		_, _ = fmt.Fprint(w, `<span class="status-message error">Admin access required.</span>`)
 		return false
 	}
 	if user == nil {
@@ -478,7 +478,7 @@ func (s *Server) renderCookieRowsHTML(w http.ResponseWriter, r *http.Request) {
 			FileCount: len(candidates),
 		})
 	}
-	components.CookieRowsPanel(s.pageProps(w, r), rows).Render(r.Context(), w)
+	_ = components.CookieRowsPanel(s.pageProps(w, r), rows).Render(r.Context(), w)
 }
 
 func (s *Server) handleUploadCookie(w http.ResponseWriter, r *http.Request) {
@@ -499,7 +499,9 @@ func (s *Server) handleUploadCookie(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]any{"error": "missing file"})
 		return
 	}
-	defer r.MultipartForm.RemoveAll()
+	defer func() {
+		_ = r.MultipartForm.RemoveAll()
+	}()
 	files := r.MultipartForm.File["file"]
 	if len(files) == 0 {
 		writeJSON(w, 400, map[string]any{"error": "missing file"})
@@ -715,11 +717,11 @@ func (s *Server) handleListUsers(w http.ResponseWriter, r *http.Request) {
 				users := auth.GetCachedUsers()
 				if rec, ok := users[username]; ok {
 					u := components.UserDisplay{Username: username, Role: rec.Role, Platforms: s.effectivePlatforms(rec.Platforms)}
-					components.UserForm(s.pageProps(w, r), "edit", &u, s.platformChoices()).Render(r.Context(), w)
+					_ = components.UserForm(s.pageProps(w, r), "edit", &u, s.platformChoices()).Render(r.Context(), w)
 					return
 				}
 			}
-			components.UserForm(s.pageProps(w, r), "create", nil, s.platformChoices()).Render(r.Context(), w)
+			_ = components.UserForm(s.pageProps(w, r), "create", nil, s.platformChoices()).Render(r.Context(), w)
 			return
 		}
 		// Default: return full users panel
@@ -749,7 +751,7 @@ func (s *Server) renderUsersPanelHTML(w http.ResponseWriter, r *http.Request) {
 			Platforms: s.effectivePlatforms(rec.Platforms),
 		})
 	}
-	components.UsersPanel(s.pageProps(w, r), display).Render(r.Context(), w)
+	_ = components.UsersPanel(s.pageProps(w, r), display).Render(r.Context(), w)
 }
 
 func (s *Server) handleCreateUser(w http.ResponseWriter, r *http.Request) {
@@ -763,7 +765,7 @@ func (s *Server) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 
 	// HTMX form: dispatch to create or update based on _method hidden field
 	if isHTMX && r.Header.Get("Content-Type") == "application/x-www-form-urlencoded" {
-		r.ParseForm()
+		_ = r.ParseForm()
 		method := r.FormValue("_method")
 		if method == "PUT" {
 			editUser := r.FormValue("_edit_user")
@@ -794,7 +796,7 @@ func (s *Server) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 		if isHTMX {
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
 			w.WriteHeader(422)
-			fmt.Fprint(w, `<span class="status-message error">Username and password required.</span>`)
+			_, _ = fmt.Fprint(w, `<span class="status-message error">Username and password required.</span>`)
 			return
 		}
 		writeJSON(w, 400, map[string]any{"error": "username and password required"})
@@ -805,7 +807,7 @@ func (s *Server) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 		if isHTMX {
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
 			w.WriteHeader(422)
-			fmt.Fprintf(w, `<span class="status-message error">%s</span>`, template.HTMLEscapeString(platformErr.Error()))
+			_, _ = fmt.Fprintf(w, `<span class="status-message error">%s</span>`, template.HTMLEscapeString(platformErr.Error()))
 			return
 		}
 		writeJSON(w, 422, map[string]any{"error": platformErr.Error()})
@@ -825,7 +827,7 @@ func (s *Server) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 		if isHTMX {
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
 			w.WriteHeader(409)
-			fmt.Fprint(w, `<span class="status-message error">User already exists.</span>`)
+			_, _ = fmt.Fprint(w, `<span class="status-message error">User already exists.</span>`)
 			return
 		}
 		writeJSON(w, 409, map[string]any{"error": "user already exists"})
@@ -877,7 +879,7 @@ func (s *Server) doUpdateUser(w http.ResponseWriter, r *http.Request, username, 
 			if isHTMX {
 				w.Header().Set("Content-Type", "text/html; charset=utf-8")
 				w.WriteHeader(422)
-				fmt.Fprintf(w, `<span class="status-message error">%s</span>`, template.HTMLEscapeString(platformErr.Error()))
+				_, _ = fmt.Fprintf(w, `<span class="status-message error">%s</span>`, template.HTMLEscapeString(platformErr.Error()))
 				return
 			}
 			writeJSON(w, 422, map[string]any{"error": platformErr.Error()})
@@ -989,7 +991,7 @@ func (s *Server) handleSubscribe(w http.ResponseWriter, r *http.Request) {
 	if rawURL == "" {
 		if isHTMX {
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			fmt.Fprint(w, `<span class="status-message error">Paste a URL first.</span>`)
+			_, _ = fmt.Fprint(w, `<span class="status-message error">Paste a URL first.</span>`)
 			return
 		}
 		writeJSON(w, 400, map[string]any{"error": "url required"})
@@ -1002,7 +1004,7 @@ func (s *Server) handleSubscribe(w http.ResponseWriter, r *http.Request) {
 		if isHTMX {
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
 			w.WriteHeader(422)
-			fmt.Fprintf(w, `<span class="status-message error">%s</span>`, template.HTMLEscapeString(msg))
+			_, _ = fmt.Fprintf(w, `<span class="status-message error">%s</span>`, template.HTMLEscapeString(msg))
 			return
 		}
 		writeJSON(w, 422, map[string]any{"error": msg, "platform": platform})
@@ -1020,7 +1022,7 @@ func (s *Server) handleSubscribe(w http.ResponseWriter, r *http.Request) {
 		slog.Error("ResolveChannel", "url", rawURL, "platform", platform, "err", err)
 		if isHTMX {
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			fmt.Fprintf(w, `<span class="status-message error">%s</span>`, template.HTMLEscapeString(err.Error()))
+			_, _ = fmt.Fprintf(w, `<span class="status-message error">%s</span>`, template.HTMLEscapeString(err.Error()))
 			return
 		}
 		writeJSON(w, 422, map[string]any{"error": err.Error()})
@@ -1035,7 +1037,7 @@ func (s *Server) handleSubscribe(w http.ResponseWriter, r *http.Request) {
 					slog.Error("FollowChannel existing", "channel", ch.ChannelID, "err", followErr)
 					if isHTMX {
 						w.Header().Set("Content-Type", "text/html; charset=utf-8")
-						fmt.Fprint(w, `<span class="status-message error">Database error.</span>`)
+						_, _ = fmt.Fprint(w, `<span class="status-message error">Database error.</span>`)
 						return
 					}
 					writeJSON(w, 500, map[string]any{"error": "db error"})
@@ -1045,7 +1047,7 @@ func (s *Server) handleSubscribe(w http.ResponseWriter, r *http.Request) {
 			} else {
 				if isHTMX {
 					w.Header().Set("Content-Type", "text/html; charset=utf-8")
-					fmt.Fprint(w, `<span class="status-message error">Already subscribed.</span>`)
+					_, _ = fmt.Fprint(w, `<span class="status-message error">Already subscribed.</span>`)
 					return
 				}
 				writeJSON(w, 409, map[string]any{"error": "already subscribed", "channel_id": ch.ChannelID})
@@ -1055,7 +1057,7 @@ func (s *Server) handleSubscribe(w http.ResponseWriter, r *http.Request) {
 			slog.Error("AddChannel", "channel", ch.ChannelID, "err", err)
 			if isHTMX {
 				w.Header().Set("Content-Type", "text/html; charset=utf-8")
-				fmt.Fprint(w, `<span class="status-message error">Database error.</span>`)
+				_, _ = fmt.Fprint(w, `<span class="status-message error">Database error.</span>`)
 				return
 			}
 			writeJSON(w, 500, map[string]any{"error": "db error"})
@@ -1077,7 +1079,7 @@ func (s *Server) handleSubscribe(w http.ResponseWriter, r *http.Request) {
 		// Modal form: show success + close modal after brief delay
 		if r.URL.Query().Get("handle") == "" {
 			msg := template.HTMLEscapeString(ch.Name) + " added."
-			fmt.Fprintf(w, `<span class="status-message success">%s</span><script>setTimeout(function(){var m=document.getElementById('add-sub-modal');if(m){m.classList.add('hidden');m.setAttribute('aria-hidden','true');document.body.style.overflow=''}},900)</script>`, msg)
+			_, _ = fmt.Fprintf(w, `<span class="status-message success">%s</span><script>setTimeout(function(){var m=document.getElementById('add-sub-modal');if(m){m.classList.add('hidden');m.setAttribute('aria-hidden','true');document.body.style.overflow=''}},900)</script>`, msg)
 		}
 		return
 	}
@@ -1227,11 +1229,11 @@ func writeConfigExportJSON(w io.Writer, cfg db.ConfigExport) error {
 func writeFullExportZip(w io.Writer, cfg db.ConfigExport, mediaFiles []fullExportMediaFile, runtimeFiles []fullExportRuntimeFile, runtimeManifest fullimport.RuntimeManifest) error {
 	zw := zip.NewWriter(w)
 	if err := writeFullExportJSON(zw, cfg); err != nil {
-		zw.Close()
+		_ = zw.Close()
 		return err
 	}
 	if err := writeFullExportRuntimeManifest(zw, runtimeManifest); err != nil {
-		zw.Close()
+		_ = zw.Close()
 		return err
 	}
 	for _, file := range runtimeFiles {
@@ -1278,9 +1280,9 @@ func writeExportFile(dir, prefix, ext string, write func(io.Writer) error) (stri
 	closed := false
 	defer func() {
 		if !closed {
-			tmp.Close()
+			_ = tmp.Close()
 		}
-		os.Remove(tmpPath)
+		_ = os.Remove(tmpPath)
 	}()
 	if err := write(tmp); err != nil {
 		return "", err
@@ -1332,7 +1334,9 @@ func writeFullExportRuntimeConfigFile(zw *zip.Writer, file fullExportRuntimeFile
 	if err != nil {
 		return err
 	}
-	defer src.Close()
+	defer func() {
+		_ = src.Close()
+	}()
 	info, err := src.Stat()
 	if err != nil {
 		return err
@@ -1359,7 +1363,9 @@ func writeFullExportMediaFile(zw *zip.Writer, file fullExportMediaFile) error {
 	if err != nil {
 		return err
 	}
-	defer src.Close()
+	defer func() {
+		_ = src.Close()
+	}()
 	info, err := src.Stat()
 	if err != nil {
 		return err
@@ -1588,7 +1594,7 @@ func (s *Server) handleConfigImport(w http.ResponseWriter, r *http.Request) {
 		if isHTMX {
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
 			w.WriteHeader(code)
-			fmt.Fprintf(w, `<span class="status-message error">%s</span>`, template.HTMLEscapeString(msg))
+			_, _ = fmt.Fprintf(w, `<span class="status-message error">%s</span>`, template.HTMLEscapeString(msg))
 			return
 		}
 		writeJSON(w, code, map[string]any{"error": msg})
@@ -1596,7 +1602,7 @@ func (s *Server) handleConfigImport(w http.ResponseWriter, r *http.Request) {
 	importOK := func(msg string) {
 		if isHTMX {
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			fmt.Fprintf(w, `<span class="status-message success">%s</span><script>setTimeout(function(){window.location.reload()},2000)</script>`, template.HTMLEscapeString(msg))
+			_, _ = fmt.Fprintf(w, `<span class="status-message success">%s</span><script>setTimeout(function(){window.location.reload()},2000)</script>`, template.HTMLEscapeString(msg))
 			return
 		}
 	}
@@ -1610,7 +1616,9 @@ func (s *Server) handleConfigImport(w http.ResponseWriter, r *http.Request) {
 		importErr(400, "missing file")
 		return
 	}
-	defer file.Close()
+	defer func() {
+		_ = file.Close()
+	}()
 
 	data, err := io.ReadAll(file)
 	if err != nil {
@@ -1627,7 +1635,7 @@ func (s *Server) handleConfigImport(w http.ResponseWriter, r *http.Request) {
 		slog.Info("restore: staged, exiting for systemd restart")
 		if isHTMX {
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			fmt.Fprint(w, `<span class="status-message success">Restore staged. Igloo is restarting…</span><script>setTimeout(function(){window.location.reload()},12000)</script>`)
+			_, _ = fmt.Fprint(w, `<span class="status-message success">Restore staged. Igloo is restarting…</span><script>setTimeout(function(){window.location.reload()},12000)</script>`)
 		} else {
 			writeJSON(w, 200, map[string]any{"success": true, "format": "tarball", "restart": true})
 		}
@@ -1776,16 +1784,16 @@ func atomicWrite(dest string, data []byte, perm os.FileMode) error {
 	}
 	tmpPath := tmp.Name()
 	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		os.Remove(tmpPath)
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
 		return err
 	}
 	if err := tmp.Close(); err != nil {
-		os.Remove(tmpPath)
+		_ = os.Remove(tmpPath)
 		return err
 	}
 	if err := os.Chmod(tmpPath, perm); err != nil {
-		os.Remove(tmpPath)
+		_ = os.Remove(tmpPath)
 		return err
 	}
 	return os.Rename(tmpPath, dest)
@@ -1934,7 +1942,7 @@ func (s *Server) handleChangeCredentials(w http.ResponseWriter, r *http.Request)
 	if user == nil {
 		if isHTMX {
 			w.Header().Set("Content-Type", "text/html")
-			fmt.Fprint(w, `<span class="status-msg error">Not authenticated</span>`)
+			_, _ = fmt.Fprint(w, `<span class="status-msg error">Not authenticated</span>`)
 		} else {
 			writeJSON(w, 401, map[string]any{"error": "not authenticated"})
 		}
@@ -1944,7 +1952,7 @@ func (s *Server) handleChangeCredentials(w http.ResponseWriter, r *http.Request)
 	var currentPassword, newUsername, newPassword, confirmPassword string
 	ct := r.Header.Get("Content-Type")
 	if strings.HasPrefix(ct, "application/x-www-form-urlencoded") || strings.HasPrefix(ct, "multipart/form-data") {
-		r.ParseForm()
+		_ = r.ParseForm()
 		currentPassword = r.FormValue("current_password")
 		newUsername = r.FormValue("new_username")
 		newPassword = r.FormValue("new_password")
@@ -1967,7 +1975,7 @@ func (s *Server) handleChangeCredentials(w http.ResponseWriter, r *http.Request)
 	credErr := func(msg string) {
 		if isHTMX {
 			w.Header().Set("Content-Type", "text/html")
-			fmt.Fprintf(w, `<span class="status-msg error">%s</span>`, template.HTMLEscapeString(msg))
+			_, _ = fmt.Fprintf(w, `<span class="status-msg error">%s</span>`, template.HTMLEscapeString(msg))
 		} else {
 			writeJSON(w, 400, map[string]any{"error": msg})
 		}
@@ -2043,7 +2051,7 @@ func (s *Server) handleChangeCredentials(w http.ResponseWriter, r *http.Request)
 			msg += " Reloading..."
 			w.Header().Set("HX-Refresh", "true")
 		}
-		fmt.Fprintf(w, `<span class="status-msg success">%s</span>`, template.HTMLEscapeString(msg))
+		_, _ = fmt.Fprintf(w, `<span class="status-msg success">%s</span>`, template.HTMLEscapeString(msg))
 	} else {
 		writeJSON(w, 200, map[string]any{
 			"success":          true,

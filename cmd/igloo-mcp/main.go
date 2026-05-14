@@ -367,7 +367,7 @@ func roomQuery(sql string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to post query: %w", err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
 		return "", fmt.Errorf("server returned %d for room-query POST", resp.StatusCode)
 	}
@@ -380,7 +380,7 @@ func roomQuery(sql string) (string, error) {
 			continue
 		}
 		data, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		if len(data) == 0 {
 			continue
 		}

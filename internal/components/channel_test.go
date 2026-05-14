@@ -115,7 +115,7 @@ func TestVideoCardTitleFallback(t *testing.T) {
 			Description: "Fallback description",
 		}
 		var buf bytes.Buffer
-		VideoCard(newTestPageProps(), v).Render(context.Background(), &buf)
+		_ = VideoCard(newTestPageProps(), v).Render(context.Background(), &buf)
 		if !strings.Contains(buf.String(), "Fallback description") {
 			t.Error("expected description as fallback title")
 		}
@@ -124,7 +124,7 @@ func TestVideoCardTitleFallback(t *testing.T) {
 	t.Run("falls back to video ID", func(t *testing.T) {
 		v := model.Video{VideoID: "vid_002"}
 		var buf bytes.Buffer
-		VideoCard(newTestPageProps(), v).Render(context.Background(), &buf)
+		_ = VideoCard(newTestPageProps(), v).Render(context.Background(), &buf)
 		if !strings.Contains(buf.String(), "vid_002") {
 			t.Error("expected video ID as fallback title")
 		}
@@ -137,7 +137,7 @@ func TestVideoCardNoDuration(t *testing.T) {
 		Title:   "No Duration",
 	}
 	var buf bytes.Buffer
-	VideoCard(newTestPageProps(), v).Render(context.Background(), &buf)
+	_ = VideoCard(newTestPageProps(), v).Render(context.Background(), &buf)
 	if strings.Contains(buf.String(), "video-duration") {
 		t.Error("duration span should not appear when duration is 0")
 	}
@@ -178,7 +178,7 @@ func TestVideoCardDefaultThumb(t *testing.T) {
 		Title:   "No Thumb",
 	}
 	var buf bytes.Buffer
-	VideoCard(newTestPageProps(), v).Render(context.Background(), &buf)
+	_ = VideoCard(newTestPageProps(), v).Render(context.Background(), &buf)
 	if !strings.Contains(buf.String(), "/static/default_thumb.png") {
 		t.Error("expected default thumbnail URL")
 	}

@@ -21,7 +21,9 @@ func TestCreateBackupWritesIglooDBAndSkipsStaleSnapshotName(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	defer database.Close()
+	defer func() {
+		_ = database.Close()
+	}()
 	if err := database.ExecRaw(`INSERT OR REPLACE INTO settings (user_id, key, value) VALUES ('', 'sample', 'ok')`); err != nil {
 		t.Fatalf("seed db: %v", err)
 	}
@@ -60,7 +62,9 @@ func TestCreateBackupRejectsRelativeDir(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	defer database.Close()
+	defer func() {
+		_ = database.Close()
+	}()
 
 	m := NewManager(database, &config.Config{DataDir: dataDir})
 	if err := m.createBackup(filepath.Join("var", "mnt", "external_drive")); err == nil {
@@ -77,12 +81,16 @@ func tarEntryNames(t *testing.T, path string) map[string]bool {
 	if err != nil {
 		t.Fatalf("open backup: %v", err)
 	}
-	defer f.Close()
+	defer func() {
+		_ = f.Close()
+	}()
 	gz, err := gzip.NewReader(f)
 	if err != nil {
 		t.Fatalf("gzip backup: %v", err)
 	}
-	defer gz.Close()
+	defer func() {
+		_ = gz.Close()
+	}()
 	tr := tar.NewReader(gz)
 	out := map[string]bool{}
 	for {

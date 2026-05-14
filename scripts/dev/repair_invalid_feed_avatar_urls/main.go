@@ -45,7 +45,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("open db: %v", err)
 	}
-	defer conn.Close()
+	defer func() {
+		_ = conn.Close()
+	}()
 
 	rows, err := findBadRows(conn)
 	if err != nil {
@@ -75,7 +77,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("begin: %v", err)
 	}
-	defer tx.Rollback()
+	defer func() {
+		_ = tx.Rollback()
+	}()
 
 	var seq int64
 	if err := tx.QueryRow(`SELECT COALESCE(MAX(sync_seq), 0) FROM feed_items`).Scan(&seq); err != nil {
@@ -91,7 +95,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("prepare update: %v", err)
 	}
-	defer stmt.Close()
+	defer func() {
+		_ = stmt.Close()
+	}()
 
 	for _, row := range rows {
 		seq++
@@ -127,7 +133,9 @@ func findBadRows(conn *sql.DB) ([]badRow, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	var out []badRow
 	for rows.Next() {

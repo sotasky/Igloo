@@ -55,7 +55,9 @@ func StageTarball(reader io.Reader, dataDir string) error {
 	if err != nil {
 		return fmt.Errorf("gzip reader: %w", err)
 	}
-	defer gz.Close()
+	defer func() {
+		_ = gz.Close()
+	}()
 
 	tr := tar.NewReader(gz)
 	dbSeen := false
@@ -170,7 +172,7 @@ func writeStream(path string, src io.Reader, mode os.FileMode) error {
 		return fmt.Errorf("open %s: %w", path, err)
 	}
 	if _, err := io.Copy(f, src); err != nil {
-		f.Close()
+		_ = f.Close()
 		return fmt.Errorf("write %s: %w", path, err)
 	}
 	return f.Close()
@@ -209,13 +211,15 @@ func mirrorDir(src, dst string) (int, error) {
 		if err != nil {
 			return err
 		}
-		defer in.Close()
+		defer func() {
+			_ = in.Close()
+		}()
 		out, err := os.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, mode)
 		if err != nil {
 			return err
 		}
 		if _, err := io.Copy(out, in); err != nil {
-			out.Close()
+			_ = out.Close()
 			return err
 		}
 		if err := out.Close(); err != nil {

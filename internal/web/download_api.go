@@ -28,7 +28,7 @@ func (s *Server) handleQuickDownload(w http.ResponseWriter, r *http.Request) {
 		if isHTMX {
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
 			w.WriteHeader(http.StatusForbidden)
-			fmt.Fprint(w, "Quick download is restricted to admins")
+			_, _ = fmt.Fprint(w, "Quick download is restricted to admins")
 			return
 		}
 		writeJSONError(w, http.StatusForbidden, "forbidden", "Quick download is restricted to admins")
@@ -55,7 +55,7 @@ func (s *Server) handleQuickDownload(w http.ResponseWriter, r *http.Request) {
 		if isHTMX {
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
 			w.WriteHeader(422)
-			fmt.Fprint(w, `Enter a supported YouTube, TikTok, or X URL`)
+			_, _ = fmt.Fprint(w, `Enter a supported YouTube, TikTok, or X URL`)
 			return
 		}
 		writeJSON(w, 400, map[string]any{"error": "supported YouTube, TikTok, or X URL required"})
@@ -66,7 +66,7 @@ func (s *Server) handleQuickDownload(w http.ResponseWriter, r *http.Request) {
 		if isHTMX {
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
 			w.WriteHeader(422)
-			fmt.Fprint(w, template.HTMLEscapeString(msg))
+			_, _ = fmt.Fprint(w, template.HTMLEscapeString(msg))
 			return
 		}
 		writeJSON(w, 422, map[string]any{"error": msg, "platform": platform})
@@ -85,17 +85,17 @@ func (s *Server) handleQuickDownload(w http.ResponseWriter, r *http.Request) {
 	result := s.workers.DownloadTemp(r.Context(), rawURL, false)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if result.Success && result.VideoID != "" {
-		fmt.Fprintf(w, `Downloaded. <a href="/player/%s?autoplay=1" style="text-decoration:underline">Watch</a>`,
+		_, _ = fmt.Fprintf(w, `Downloaded. <a href="/player/%s?autoplay=1" style="text-decoration:underline">Watch</a>`,
 			template.HTMLEscapeString(template.URLQueryEscaper(result.VideoID)))
 	} else if result.Success {
-		fmt.Fprint(w, `Download complete`)
+		_, _ = fmt.Fprint(w, `Download complete`)
 	} else {
 		msg := result.Message
 		if msg == "" {
 			msg = "Download failed"
 		}
 		w.WriteHeader(422)
-		fmt.Fprint(w, template.HTMLEscapeString(msg))
+		_, _ = fmt.Fprint(w, template.HTMLEscapeString(msg))
 	}
 }
 
@@ -117,7 +117,7 @@ func writeQuickDownloadJSONWithKeepalive(w http.ResponseWriter, results <-chan w
 			}
 			return
 		case <-ticker.C:
-			fmt.Fprint(w, "\n")
+			_, _ = fmt.Fprint(w, "\n")
 			if flusher != nil {
 				flusher.Flush()
 			}
@@ -138,7 +138,7 @@ func (s *Server) handleCancelDownload(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		VideoID string `json:"video_id"`
 	}
-	json.NewDecoder(r.Body).Decode(&body)
+	_ = json.NewDecoder(r.Body).Decode(&body)
 	// Stub: full cancellation requires tracking active download contexts
 	writeJSON(w, 200, map[string]any{"success": true, "video_id": body.VideoID})
 }
@@ -147,7 +147,7 @@ func (s *Server) handleStop(w http.ResponseWriter, r *http.Request) {
 	s.workers.SetStopRequested(true)
 	s.workers.SetIngestPaused(true)
 	if r.Header.Get("HX-Request") != "" {
-		components.StopPlayButton(s.pageProps(w, r), true).Render(r.Context(), w)
+		_ = components.StopPlayButton(s.pageProps(w, r), true).Render(r.Context(), w)
 		return
 	}
 	writeJSON(w, 200, map[string]any{"success": true, "stopped": true})
@@ -160,12 +160,12 @@ func (s *Server) handleResume(w http.ResponseWriter, r *http.Request) {
 	s.workers.KickFeedMedia()
 	s.workers.KickIngest()
 	if r.Header.Get("HX-Request") != "" {
-		components.StopPlayButton(s.pageProps(w, r), false).Render(r.Context(), w)
+		_ = components.StopPlayButton(s.pageProps(w, r), false).Render(r.Context(), w)
 		return
 	}
 	writeJSON(w, 200, map[string]any{"success": true, "resumed": true})
 }
 
 func (s *Server) handleStopPlayBtn(w http.ResponseWriter, r *http.Request) {
-	components.StopPlayButton(s.pageProps(w, r), s.workers.IsStopRequested()).Render(r.Context(), w)
+	_ = components.StopPlayButton(s.pageProps(w, r), s.workers.IsStopRequested()).Render(r.Context(), w)
 }

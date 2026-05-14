@@ -102,7 +102,7 @@ func (m *Manager) runSchedulerCycle(ctx context.Context, force bool) {
 				if err != nil {
 					log.Printf("[scheduler] check %s failed: %v", ch.Name, err)
 					m.emitSchedulerEvent(fmt.Sprintf("Check failed: %s — %v", ch.Name, err), "error", ch.ChannelID, ch.Platform)
-					m.db.UpdateChannelChecked(ch.ChannelID)
+					_ = m.db.UpdateChannelChecked(ch.ChannelID)
 					continue
 				}
 				if ch.Platform == "instagram" {
@@ -119,7 +119,7 @@ func (m *Manager) runSchedulerCycle(ctx context.Context, force bool) {
 				}
 
 				added := m.reconcileSourceWindow(ch, refs)
-				m.db.UpdateChannelChecked(ch.ChannelID)
+				_ = m.db.UpdateChannelChecked(ch.ChannelID)
 
 				if added > 0 {
 					queuedMu.Lock()

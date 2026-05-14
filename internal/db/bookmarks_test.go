@@ -105,7 +105,7 @@ func TestAddAndRemoveBookmark(t *testing.T) {
 
 	// Use a real video_id from the DB (FK constraint)
 	var videoID string
-	d.conn.QueryRow("SELECT video_id FROM videos LIMIT 1").Scan(&videoID)
+	_ = d.conn.QueryRow("SELECT video_id FROM videos LIMIT 1").Scan(&videoID)
 	if videoID == "" {
 		t.Skip("no videos in test DB")
 	}

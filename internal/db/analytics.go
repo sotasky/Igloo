@@ -37,7 +37,9 @@ func (db *DB) GetAnalyticsRollups(limit int) ([]AnalyticsRollup, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	var rollups []AnalyticsRollup
 	for rows.Next() {
@@ -86,7 +88,9 @@ func (db *DB) GetAnalyticsRecentEvents(limit int) ([]AnalyticsEvent, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	var events []AnalyticsEvent
 	for rows.Next() {

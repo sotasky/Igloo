@@ -67,7 +67,9 @@ func (db *DB) ListVideosNeedingDearrow(nowMs int64, limit int) ([]string, error)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 	var out []string
 	for rows.Next() {
 		var id string
@@ -137,7 +139,9 @@ func (db *DB) ListVideosNeedingYoutubeEnrichment(nowMs int64, limit int) ([]Yout
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 	var out []YoutubeEnrichTask
 	for rows.Next() {
 		var t YoutubeEnrichTask

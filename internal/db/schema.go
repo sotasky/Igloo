@@ -72,7 +72,7 @@ func EnsureSchemaWithOptions(conn *sql.DB, opts EnsureSchemaOptions) error {
 		"ALTER TABLE assets ADD COLUMN lease_until_ms INTEGER NOT NULL DEFAULT 0",
 	}
 	for _, m := range migrations {
-		conn.Exec(m) // errors are expected when column already exists
+		_, _ = conn.Exec(m) // errors are expected when column already exists
 	}
 	reportPhase(opts.Phase, "schema.add_columns", phaseStart)
 
@@ -84,40 +84,41 @@ func EnsureSchemaWithOptions(conn *sql.DB, opts EnsureSchemaOptions) error {
 
 	// Create indexes for sync_seq delta-sync queries.
 	phaseStart = time.Now()
-	conn.Exec("CREATE INDEX IF NOT EXISTS idx_feed_items_sync_seq ON feed_items(sync_seq)")
-	conn.Exec("CREATE INDEX IF NOT EXISTS idx_videos_sync_seq ON videos(sync_seq)")
-	conn.Exec("CREATE INDEX IF NOT EXISTS idx_channels_sync_seq ON channels(sync_seq)")
+	_, _ = conn.Exec("CREATE INDEX IF NOT EXISTS idx_feed_items_sync_seq ON feed_items(sync_seq)")
+	_, _ = conn.Exec("CREATE INDEX IF NOT EXISTS idx_videos_sync_seq ON videos(sync_seq)")
+	_, _ = conn.Exec("CREATE INDEX IF NOT EXISTS idx_channels_sync_seq ON channels(sync_seq)")
+	_, _ =
 
-	// Performance indexes for page load queries.
-	conn.Exec("CREATE INDEX IF NOT EXISTS idx_videos_channel_published ON videos(channel_id, published_at DESC)")
-	conn.Exec("CREATE INDEX IF NOT EXISTS idx_videos_source_kind ON videos(source_kind, published_at DESC)")
-	conn.Exec("CREATE INDEX IF NOT EXISTS idx_videos_media_shape ON videos(media_kind, slide_count)")
-	conn.Exec("CREATE INDEX IF NOT EXISTS idx_media_files_owner ON media_files(owner_id, media_index)")
-	conn.Exec("CREATE INDEX IF NOT EXISTS idx_media_files_type_id ON media_files(owner_type, id)")
-	conn.Exec("CREATE INDEX IF NOT EXISTS idx_media_files_type_owner ON media_files(owner_type, owner_id, media_index)")
-	conn.Exec("CREATE INDEX IF NOT EXISTS idx_feed_media_jobs_status_tweet ON feed_media_jobs(status, tweet_id)")
-	conn.Exec("CREATE INDEX IF NOT EXISTS idx_feed_media_jobs_ready ON feed_media_jobs(status, next_attempt_at_ms, lease_until_ms, priority, updated_at)")
-	conn.Exec("CREATE INDEX IF NOT EXISTS idx_download_queue_ready ON download_queue(status, next_attempt_at_ms, lease_until_ms, priority, added_at)")
-	conn.Exec("CREATE INDEX IF NOT EXISTS idx_translation_jobs_ready ON translation_jobs(status, next_attempt_at, priority, updated_at)")
-	conn.Exec("CREATE INDEX IF NOT EXISTS idx_feed_items_author_lower ON feed_items(LOWER(author_handle))")
-	conn.Exec("CREATE INDEX IF NOT EXISTS idx_feed_items_media_author ON feed_items(author_handle COLLATE NOCASE, published_at DESC) WHERE media_json IS NOT NULL AND media_json != '' AND media_json != '[]' AND is_retweet = 0")
-	conn.Exec("CREATE INDEX IF NOT EXISTS idx_bookmarks_user_date ON bookmarks(user_id, bookmarked_at DESC)")
-	conn.Exec("CREATE INDEX IF NOT EXISTS idx_bookmarks_video_id ON bookmarks(video_id)")
-	conn.Exec("CREATE INDEX IF NOT EXISTS idx_channels_platform ON channels(platform)")
-	conn.Exec("CREATE INDEX IF NOT EXISTS idx_feed_items_algo ON feed_items(algo_interest DESC, published_at DESC)")
-	conn.Exec("CREATE INDEX IF NOT EXISTS idx_feed_items_published ON feed_items(published_at DESC, tweet_id DESC)")
-	conn.Exec("CREATE INDEX IF NOT EXISTS idx_feed_items_reply_parent ON feed_items(reply_to_status, published_at, tweet_id) WHERE reply_to_status IS NOT NULL AND reply_to_status != ''")
-	conn.Exec("CREATE INDEX IF NOT EXISTS idx_feed_items_unscored ON feed_items(algo_scored_at) WHERE algo_scored_at = 0")
-	conn.Exec("CREATE INDEX IF NOT EXISTS idx_feed_items_quote ON feed_items(quote_tweet_id) WHERE quote_tweet_id IS NOT NULL AND quote_tweet_id != ''")
-	conn.Exec("CREATE INDEX IF NOT EXISTS idx_feed_items_content_hash ON feed_items(content_hash) WHERE content_hash IS NOT NULL AND content_hash != ''")
-	conn.Exec("CREATE INDEX IF NOT EXISTS idx_channel_profiles_refresh ON channel_profiles(tombstone, fetched_at) WHERE tombstone = 0")
-	conn.Exec("CREATE INDEX IF NOT EXISTS idx_channel_profiles_platform ON channel_profiles(platform)")
-	conn.Exec("CREATE INDEX IF NOT EXISTS idx_feed_rank_snapshot_pos ON feed_rank_snapshot(username, rank_position)")
-	conn.Exec("CREATE INDEX IF NOT EXISTS idx_feed_rank_snapshot_at ON feed_rank_snapshot(username, computed_at)")
-	conn.Exec("CREATE INDEX IF NOT EXISTS idx_feed_rank_snapshot_score ON feed_rank_snapshot(username, final_score DESC)")
-	conn.Exec("CREATE INDEX IF NOT EXISTS idx_video_repost_sources_video ON video_repost_sources(video_id)")
-	conn.Exec("CREATE INDEX IF NOT EXISTS idx_video_repost_sources_reposter ON video_repost_sources(reposter_channel_id)")
-	conn.Exec("CREATE INDEX IF NOT EXISTS idx_video_repost_sources_time ON video_repost_sources(reposted_at_ms DESC, first_seen_at_ms DESC)")
+		// Performance indexes for page load queries.
+		conn.Exec("CREATE INDEX IF NOT EXISTS idx_videos_channel_published ON videos(channel_id, published_at DESC)")
+	_, _ = conn.Exec("CREATE INDEX IF NOT EXISTS idx_videos_source_kind ON videos(source_kind, published_at DESC)")
+	_, _ = conn.Exec("CREATE INDEX IF NOT EXISTS idx_videos_media_shape ON videos(media_kind, slide_count)")
+	_, _ = conn.Exec("CREATE INDEX IF NOT EXISTS idx_media_files_owner ON media_files(owner_id, media_index)")
+	_, _ = conn.Exec("CREATE INDEX IF NOT EXISTS idx_media_files_type_id ON media_files(owner_type, id)")
+	_, _ = conn.Exec("CREATE INDEX IF NOT EXISTS idx_media_files_type_owner ON media_files(owner_type, owner_id, media_index)")
+	_, _ = conn.Exec("CREATE INDEX IF NOT EXISTS idx_feed_media_jobs_status_tweet ON feed_media_jobs(status, tweet_id)")
+	_, _ = conn.Exec("CREATE INDEX IF NOT EXISTS idx_feed_media_jobs_ready ON feed_media_jobs(status, next_attempt_at_ms, lease_until_ms, priority, updated_at)")
+	_, _ = conn.Exec("CREATE INDEX IF NOT EXISTS idx_download_queue_ready ON download_queue(status, next_attempt_at_ms, lease_until_ms, priority, added_at)")
+	_, _ = conn.Exec("CREATE INDEX IF NOT EXISTS idx_translation_jobs_ready ON translation_jobs(status, next_attempt_at, priority, updated_at)")
+	_, _ = conn.Exec("CREATE INDEX IF NOT EXISTS idx_feed_items_author_lower ON feed_items(LOWER(author_handle))")
+	_, _ = conn.Exec("CREATE INDEX IF NOT EXISTS idx_feed_items_media_author ON feed_items(author_handle COLLATE NOCASE, published_at DESC) WHERE media_json IS NOT NULL AND media_json != '' AND media_json != '[]' AND is_retweet = 0")
+	_, _ = conn.Exec("CREATE INDEX IF NOT EXISTS idx_bookmarks_user_date ON bookmarks(user_id, bookmarked_at DESC)")
+	_, _ = conn.Exec("CREATE INDEX IF NOT EXISTS idx_bookmarks_video_id ON bookmarks(video_id)")
+	_, _ = conn.Exec("CREATE INDEX IF NOT EXISTS idx_channels_platform ON channels(platform)")
+	_, _ = conn.Exec("CREATE INDEX IF NOT EXISTS idx_feed_items_algo ON feed_items(algo_interest DESC, published_at DESC)")
+	_, _ = conn.Exec("CREATE INDEX IF NOT EXISTS idx_feed_items_published ON feed_items(published_at DESC, tweet_id DESC)")
+	_, _ = conn.Exec("CREATE INDEX IF NOT EXISTS idx_feed_items_reply_parent ON feed_items(reply_to_status, published_at, tweet_id) WHERE reply_to_status IS NOT NULL AND reply_to_status != ''")
+	_, _ = conn.Exec("CREATE INDEX IF NOT EXISTS idx_feed_items_unscored ON feed_items(algo_scored_at) WHERE algo_scored_at = 0")
+	_, _ = conn.Exec("CREATE INDEX IF NOT EXISTS idx_feed_items_quote ON feed_items(quote_tweet_id) WHERE quote_tweet_id IS NOT NULL AND quote_tweet_id != ''")
+	_, _ = conn.Exec("CREATE INDEX IF NOT EXISTS idx_feed_items_content_hash ON feed_items(content_hash) WHERE content_hash IS NOT NULL AND content_hash != ''")
+	_, _ = conn.Exec("CREATE INDEX IF NOT EXISTS idx_channel_profiles_refresh ON channel_profiles(tombstone, fetched_at) WHERE tombstone = 0")
+	_, _ = conn.Exec("CREATE INDEX IF NOT EXISTS idx_channel_profiles_platform ON channel_profiles(platform)")
+	_, _ = conn.Exec("CREATE INDEX IF NOT EXISTS idx_feed_rank_snapshot_pos ON feed_rank_snapshot(username, rank_position)")
+	_, _ = conn.Exec("CREATE INDEX IF NOT EXISTS idx_feed_rank_snapshot_at ON feed_rank_snapshot(username, computed_at)")
+	_, _ = conn.Exec("CREATE INDEX IF NOT EXISTS idx_feed_rank_snapshot_score ON feed_rank_snapshot(username, final_score DESC)")
+	_, _ = conn.Exec("CREATE INDEX IF NOT EXISTS idx_video_repost_sources_video ON video_repost_sources(video_id)")
+	_, _ = conn.Exec("CREATE INDEX IF NOT EXISTS idx_video_repost_sources_reposter ON video_repost_sources(reposter_channel_id)")
+	_, _ = conn.Exec("CREATE INDEX IF NOT EXISTS idx_video_repost_sources_time ON video_repost_sources(reposted_at_ms DESC, first_seen_at_ms DESC)")
 	reportPhase(opts.Phase, "schema.indexes", phaseStart)
 
 	phaseStart = time.Now()

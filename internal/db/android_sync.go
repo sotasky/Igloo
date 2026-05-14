@@ -370,7 +370,9 @@ func (db *DB) collectStrings(query string, args []any, into map[string]struct{})
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 	for rows.Next() {
 		var value string
 		if err := rows.Scan(&value); err != nil {
@@ -416,7 +418,7 @@ func (db *DB) ListAndroidSyncQuoteTweetIDs(tweetIDs []string) ([]string, error) 
 		for rows.Next() {
 			var id string
 			if err := rows.Scan(&id); err != nil {
-				rows.Close()
+				_ = rows.Close()
 				return nil, err
 			}
 			if strings.TrimSpace(id) != "" {
@@ -424,10 +426,10 @@ func (db *DB) ListAndroidSyncQuoteTweetIDs(tweetIDs []string) ([]string, error) 
 			}
 		}
 		if err := rows.Err(); err != nil {
-			rows.Close()
+			_ = rows.Close()
 			return nil, err
 		}
-		rows.Close()
+		_ = rows.Close()
 	}
 	return sortedKeys(out), nil
 }
@@ -485,16 +487,16 @@ func (db *DB) ListAndroidSyncMediaAssetRows(ownerType string, ownerIDs []string)
 				&row.SourceURL,
 				&row.RecencyMs,
 			); err != nil {
-				rows.Close()
+				_ = rows.Close()
 				return nil, err
 			}
 			out = append(out, row)
 		}
 		if err := rows.Err(); err != nil {
-			rows.Close()
+			_ = rows.Close()
 			return nil, err
 		}
-		rows.Close()
+		_ = rows.Close()
 	}
 	return out, nil
 }
@@ -524,7 +526,7 @@ func (db *DB) ListAndroidSyncQuoteMediaAssetRows(parentTweetIDs []string) ([]And
 			var quoteID string
 			var recency int64
 			if err := rows.Scan(&quoteID, &recency); err != nil {
-				rows.Close()
+				_ = rows.Close()
 				return nil, err
 			}
 			if strings.TrimSpace(quoteID) == "" {
@@ -536,10 +538,10 @@ func (db *DB) ListAndroidSyncQuoteMediaAssetRows(parentTweetIDs []string) ([]And
 			}
 		}
 		if err := rows.Err(); err != nil {
-			rows.Close()
+			_ = rows.Close()
 			return nil, err
 		}
-		rows.Close()
+		_ = rows.Close()
 	}
 
 	out, err := db.ListAndroidSyncMediaAssetRows("quote_media", sortedKeys(quoteSet))
@@ -655,7 +657,9 @@ func (db *DB) androidSyncProfileHash() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 	h := sha256.New()
 	for rows.Next() {
 		var channelID, platform, handle, displayName, bio, website, verifiedType, avatarURL, bannerURL string
@@ -703,7 +707,9 @@ func (db *DB) androidSyncChannelFollowHash() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 	h := sha256.New()
 	for rows.Next() {
 		var userID, channelID string
@@ -738,7 +744,7 @@ func (db *DB) androidSyncBookmarkMetadataHash() (string, error) {
 		var userID, name, archivePath string
 		var id, createdAt int64
 		if err := categoryRows.Scan(&userID, &id, &name, &archivePath, &createdAt); err != nil {
-			categoryRows.Close()
+			_ = categoryRows.Close()
 			return "", err
 		}
 		h.Write([]byte("category"))
@@ -755,10 +761,10 @@ func (db *DB) androidSyncBookmarkMetadataHash() (string, error) {
 		h.Write([]byte{0})
 	}
 	if err := categoryRows.Err(); err != nil {
-		categoryRows.Close()
+		_ = categoryRows.Close()
 		return "", err
 	}
-	categoryRows.Close()
+	_ = categoryRows.Close()
 
 	bookmarkRows, err := db.conn.Query(`
 		SELECT COALESCE(user_id, ''), video_id, COALESCE(category_id, 0),
@@ -770,7 +776,9 @@ func (db *DB) androidSyncBookmarkMetadataHash() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer bookmarkRows.Close()
+	defer func() {
+		_ = bookmarkRows.Close()
+	}()
 	for bookmarkRows.Next() {
 		var userID, videoID, customTitle, accountHandles, mediaIndices string
 		var categoryID, bookmarkedAt int64
@@ -833,7 +841,9 @@ func (db *DB) androidSyncSourceFileStats() ([]androidSyncSourceFileStat, error) 
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	var out []androidSyncSourceFileStat
 	for rows.Next() {
@@ -987,7 +997,9 @@ func (db *DB) StoreAndroidSyncGeneration(gen model.AndroidSyncGeneration, items 
 		if err != nil {
 			return err
 		}
-		defer itemStmt.Close()
+		defer func() {
+			_ = itemStmt.Close()
+		}()
 		for _, item := range items {
 			if _, err := itemStmt.Exec(gen.GenerationID, item.Seq, item.ItemKind, item.ItemID, string(item.PayloadJSON)); err != nil {
 				return err
@@ -1004,7 +1016,9 @@ func (db *DB) StoreAndroidSyncGeneration(gen model.AndroidSyncGeneration, items 
 		if err != nil {
 			return err
 		}
-		defer assetStmt.Close()
+		defer func() {
+			_ = assetStmt.Close()
+		}()
 		for _, asset := range assets {
 			if _, err := assetStmt.Exec(
 				gen.GenerationID,
@@ -1344,7 +1358,9 @@ func (db *DB) ListAndroidSyncItems(generationID string, afterSeq int64, limit in
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 	var out []model.AndroidSyncItem
 	for rows.Next() {
 		var item model.AndroidSyncItem
@@ -1374,7 +1390,9 @@ func (db *DB) ListAndroidSyncAssets(generationID string, afterSeq int64, limit i
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 	var out []model.AndroidSyncAsset
 	for rows.Next() {
 		asset, err := scanAndroidSyncAsset(rows)
@@ -1400,7 +1418,9 @@ func (db *DB) GetAndroidSyncAsset(assetID string) (*model.AndroidSyncAsset, erro
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 	if !rows.Next() {
 		return nil, nil
 	}
@@ -1423,7 +1443,9 @@ func (db *DB) GetAndroidSyncGenerationAsset(generationID, assetID string) (*mode
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 	if !rows.Next() {
 		return nil, nil
 	}

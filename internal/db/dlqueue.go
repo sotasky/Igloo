@@ -63,7 +63,9 @@ func (db *DB) GetPendingChannelQueue(limit int) ([]ChannelQueueRow, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	var result []ChannelQueueRow
 	for rows.Next() {
@@ -545,7 +547,9 @@ func (db *DB) GetExcessVideoIDs(channelID string, limit int) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	var ids []string
 	for rows.Next() {
@@ -625,7 +629,9 @@ func (db *DB) GetSourceWindowPrunableVideoIDs(sourceChannelID string, allowedIDs
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	var ids []string
 	for rows.Next() {
@@ -665,14 +671,14 @@ func (db *DB) DeleteVideoWithFile(videoID, dataDir string) error {
 		if !filepath.IsAbs(absPath) {
 			absPath = filepath.Join(dataDir, absPath)
 		}
-		os.Remove(absPath)
+		_ = os.Remove(absPath)
 		// Remove sibling files (thumbnail, info.json).
 		dir := filepath.Dir(absPath)
 		base := strings.TrimSuffix(filepath.Base(absPath), filepath.Ext(absPath))
 		if entries, err := os.ReadDir(dir); err == nil {
 			for _, e := range entries {
 				if strings.HasPrefix(e.Name(), base) && e.Name() != filepath.Base(absPath) {
-					os.Remove(filepath.Join(dir, e.Name()))
+					_ = os.Remove(filepath.Join(dir, e.Name()))
 				}
 			}
 		}
@@ -709,7 +715,9 @@ func (db *DB) queryTempVideosByPin(pinned bool) ([]model.Video, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 	var videos []model.Video
 	for rows.Next() {
 		var v model.Video
@@ -742,7 +750,9 @@ func (db *DB) GetCurrentlyWatchingVideos(limit int) ([]model.Video, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 	var videos []model.Video
 	for rows.Next() {
 		var v model.Video
@@ -763,7 +773,9 @@ func (db *DB) GetTempVideos() ([]model.Video, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	var videos []model.Video
 	for rows.Next() {

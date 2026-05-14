@@ -42,7 +42,9 @@ func TestClientLogServerAppendsBatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open log: %v", err)
 	}
-	defer f.Close()
+	defer func() {
+		_ = f.Close()
+	}()
 
 	var rows []map[string]any
 	sc := bufio.NewScanner(f)

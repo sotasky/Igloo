@@ -236,7 +236,7 @@ func TestSearchChannelsFast(t *testing.T) {
 	d := openTestDB(t)
 	// Check if FTS5 index exists
 	var ready int
-	d.conn.QueryRow("SELECT COALESCE((SELECT 1 FROM settings WHERE key='search_index_ready' AND value='1'),0)").Scan(&ready)
+	_ = d.conn.QueryRow("SELECT COALESCE((SELECT 1 FROM settings WHERE key='search_index_ready' AND value='1'),0)").Scan(&ready)
 	if ready == 0 {
 		t.Skip("search index not ready")
 	}

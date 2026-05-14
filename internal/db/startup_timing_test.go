@@ -26,7 +26,7 @@ func TestOpenWithOptionsReportsStartupPhases(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenWithOptions: %v", err)
 	}
-	t.Cleanup(func() { d.Close() })
+	t.Cleanup(func() { _ = d.Close() })
 
 	assertPhaseSubsequence(t, phases, []string{
 		"db.sql_open",
@@ -44,7 +44,7 @@ func TestEnsureSchemaWithOptionsReportsSubPhases(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
-	t.Cleanup(func() { conn.Close() })
+	t.Cleanup(func() { _ = conn.Close() })
 
 	var phases []string
 	if err := EnsureSchemaWithOptions(conn, EnsureSchemaOptions{

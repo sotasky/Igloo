@@ -502,7 +502,7 @@ func (m *Manager) IsIngestRunning() bool {
 
 // TriggerChannelCheck queues a single channel for immediate check.
 func (m *Manager) TriggerChannelCheck(channelID string) {
-	m.db.AddChannelToQueue(channelID, 10) // high priority
+	_ = m.db.AddChannelToQueue(channelID, 10) // high priority
 	m.KickDownloadPool()
 }
 

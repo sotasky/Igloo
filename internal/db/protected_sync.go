@@ -36,7 +36,9 @@ func (db *DB) bumpFeedItemAndSiblingsSyncSeqTx(tx *sql.Tx, tweetID string) error
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	var ids []string
 	for rows.Next() {
@@ -242,7 +244,9 @@ func (db *DB) EnsureProtectedFeedItemStubs() (int, error) {
 		if err != nil {
 			return err
 		}
-		defer likeRows.Close()
+		defer func() {
+			_ = likeRows.Close()
+		}()
 		for likeRows.Next() {
 			var tweetID, sourceHandle, authorHandle, authorName, avatarURL, bodyText, mediaJSON, canonicalURL string
 			var publishedAt int64
@@ -304,7 +308,9 @@ func (db *DB) EnsureProtectedFeedItemStubs() (int, error) {
 		if err != nil {
 			return err
 		}
-		defer bookmarkRows.Close()
+		defer func() {
+			_ = bookmarkRows.Close()
+		}()
 		for bookmarkRows.Next() {
 			var videoID, authorHandle, authorName, avatarURL, bodyText, mediaJSON string
 			var publishedAt int64

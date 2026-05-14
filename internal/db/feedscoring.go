@@ -34,7 +34,9 @@ func (db *DB) GetUnscoredFeedItems(limit int) ([]ScoringItem, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	var items []ScoringItem
 	for rows.Next() {
@@ -59,7 +61,9 @@ func (db *DB) UpdateAlgoInterest(scores map[string]float64) error {
 		if err != nil {
 			return err
 		}
-		defer stmt.Close()
+		defer func() {
+			_ = stmt.Close()
+		}()
 		for tweetID, score := range scores {
 			if _, err := stmt.Exec(score, now, tweetID); err != nil {
 				return err
@@ -195,7 +199,9 @@ func (db *DB) ListRankedFeedItems(username string, limit int, offset int) ([]mod
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	var items []model.FeedItem
 	for rows.Next() {

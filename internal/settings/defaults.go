@@ -166,7 +166,7 @@ func IntDefault(key string) int {
 		return int(n)
 	case string:
 		var i int
-		fmt.Sscanf(n, "%d", &i)
+		_, _ = fmt.Sscanf(n, "%d", &i)
 		return i
 	}
 	return 0

@@ -13,8 +13,8 @@ func TestCodeIndexBuild(t *testing.T) {
 
 	// Create internal/web/
 	webDir := filepath.Join(root, "internal", "web")
-	os.MkdirAll(webDir, 0755)
-	os.WriteFile(filepath.Join(webDir, "feed.go"), []byte(`package web
+	_ = os.MkdirAll(webDir, 0755)
+	_ = os.WriteFile(filepath.Join(webDir, "feed.go"), []byte(`package web
 
 func (s *Server) setupRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/feed/list", s.FeedList)
@@ -28,15 +28,15 @@ func (s *Server) FeedList(w http.ResponseWriter, r *http.Request) {
 
 	// Create static/js/
 	jsDir := filepath.Join(root, "static", "js")
-	os.MkdirAll(jsDir, 0755)
-	os.WriteFile(filepath.Join(jsDir, "feed.js"), []byte(`
+	_ = os.MkdirAll(jsDir, 0755)
+	_ = os.WriteFile(filepath.Join(jsDir, "feed.js"), []byte(`
 function load() { apiJson('/api/feed/list'); }
 `), 0644)
 
 	// Create templates/
 	tmplDir := filepath.Join(root, "templates")
-	os.MkdirAll(tmplDir, 0755)
-	os.WriteFile(filepath.Join(tmplDir, "feed.html"), []byte(`{{define "content"}}{{template "header" .}}{{end}}`), 0644)
+	_ = os.MkdirAll(tmplDir, 0755)
+	_ = os.WriteFile(filepath.Join(tmplDir, "feed.html"), []byte(`{{define "content"}}{{template "header" .}}{{end}}`), 0644)
 
 	idx := New(root)
 	idx.Build()

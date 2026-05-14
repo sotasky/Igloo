@@ -65,7 +65,9 @@ func claimLeasedIDsWithStateColumn(tx *sql.Tx, table, keyColumn, stateColumn str
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	var candidates []string
 	for rows.Next() {

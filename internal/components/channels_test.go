@@ -63,13 +63,13 @@ func TestChannelSectionGridClass(t *testing.T) {
 	}
 
 	var buf1 bytes.Buffer
-	ChannelSection(newTestPageProps(), ytSection).Render(context.Background(), &buf1)
+	_ = ChannelSection(newTestPageProps(), ytSection).Render(context.Background(), &buf1)
 	if strings.Contains(buf1.String(), "shorts-grid") {
 		t.Error("YouTube channel should not have shorts-grid class")
 	}
 
 	var buf2 bytes.Buffer
-	ChannelSection(newTestPageProps(), ttSection).Render(context.Background(), &buf2)
+	_ = ChannelSection(newTestPageProps(), ttSection).Render(context.Background(), &buf2)
 	if !strings.Contains(buf2.String(), "shorts-grid") {
 		t.Error("TikTok channel should have shorts-grid class")
 	}
@@ -77,7 +77,7 @@ func TestChannelSectionGridClass(t *testing.T) {
 
 func TestChannelSectionsEmpty(t *testing.T) {
 	var buf bytes.Buffer
-	ChannelSections(newTestPageProps(), nil).Render(context.Background(), &buf)
+	_ = ChannelSections(newTestPageProps(), nil).Render(context.Background(), &buf)
 	if !strings.Contains(buf.String(), "No channels") {
 		t.Error("empty state not rendered")
 	}
@@ -87,13 +87,13 @@ func TestChannelStarButtonStates(t *testing.T) {
 	p := newTestPageProps()
 
 	var buf1 bytes.Buffer
-	ChannelStarButton(p, "ch1", true).Render(context.Background(), &buf1)
+	_ = ChannelStarButton(p, "ch1", true).Render(context.Background(), &buf1)
 	if !strings.Contains(buf1.String(), "Unstar") {
 		t.Error("starred channel should show Unstar")
 	}
 
 	var buf2 bytes.Buffer
-	ChannelStarButton(p, "ch2", false).Render(context.Background(), &buf2)
+	_ = ChannelStarButton(p, "ch2", false).Render(context.Background(), &buf2)
 	if !strings.Contains(buf2.String(), "Star") {
 		t.Error("unstarred channel should show Star")
 	}

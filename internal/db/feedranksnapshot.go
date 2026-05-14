@@ -269,7 +269,9 @@ func (db *DB) ReplaceFeedRankSnapshot(username string, rows []SnapshotRow) error
 		if err != nil {
 			return fmt.Errorf("prepare insert: %w", err)
 		}
-		defer stmt.Close()
+		defer func() {
+			_ = stmt.Close()
+		}()
 		for _, r := range rows {
 			if _, err := stmt.Exec(
 				username, r.TweetID, r.RankPosition,
@@ -393,7 +395,9 @@ func (db *DB) ListPreDiversityRankedContext(ctx context.Context, username string
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	out := make([]PreDiversitySnapshotRow, 0, snapshotMaxItems)
 	for rows.Next() {
@@ -469,7 +473,9 @@ func (db *DB) ListSnapshotPage(username string, afterPos int, limit int) ([]Snap
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	var out []SnapshotPageItem
 	for rows.Next() {

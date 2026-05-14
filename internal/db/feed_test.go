@@ -31,7 +31,7 @@ func TestListFeedItemsPage(t *testing.T) {
 func TestGetFeedItemsForTweetIDs(t *testing.T) {
 	d := openTestDB(t)
 	var tweetID string
-	d.conn.QueryRow("SELECT tweet_id FROM feed_items LIMIT 1").Scan(&tweetID)
+	_ = d.conn.QueryRow("SELECT tweet_id FROM feed_items LIMIT 1").Scan(&tweetID)
 	if tweetID == "" {
 		t.Skip("no feed items in test DB")
 	}
@@ -79,7 +79,7 @@ func TestGetMutedAccounts(t *testing.T) {
 func TestGetFeedLikedPage(t *testing.T) {
 	d := openTestDB(t)
 	var username string
-	d.conn.QueryRow("SELECT username FROM feed_likes LIMIT 1").Scan(&username)
+	_ = d.conn.QueryRow("SELECT username FROM feed_likes LIMIT 1").Scan(&username)
 	if username == "" {
 		t.Skip("no feed likes in test DB")
 	}
@@ -309,8 +309,8 @@ func TestSyncSeqAssignment(t *testing.T) {
 
 	// Read back sync_seq values.
 	var seq1, seq2 int64
-	d.conn.QueryRow("SELECT sync_seq FROM feed_items WHERE tweet_id = ?", "sync_test_1").Scan(&seq1)
-	d.conn.QueryRow("SELECT sync_seq FROM feed_items WHERE tweet_id = ?", "sync_test_2").Scan(&seq2)
+	_ = d.conn.QueryRow("SELECT sync_seq FROM feed_items WHERE tweet_id = ?", "sync_test_1").Scan(&seq1)
+	_ = d.conn.QueryRow("SELECT sync_seq FROM feed_items WHERE tweet_id = ?", "sync_test_2").Scan(&seq2)
 
 	if seq1 == 0 {
 		t.Fatal("sync_seq for item 1 should be non-zero")
@@ -331,7 +331,7 @@ func TestSyncSeqAssignment(t *testing.T) {
 	}
 
 	var seq1After int64
-	d.conn.QueryRow("SELECT sync_seq FROM feed_items WHERE tweet_id = ?", "sync_test_1").Scan(&seq1After)
+	_ = d.conn.QueryRow("SELECT sync_seq FROM feed_items WHERE tweet_id = ?", "sync_test_1").Scan(&seq1After)
 
 	if seq1After <= seq2 {
 		t.Errorf("after re-upsert, sync_seq should bump past seq2: seq1After=%d seq2=%d", seq1After, seq2)

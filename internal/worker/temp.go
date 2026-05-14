@@ -102,7 +102,7 @@ func (m *Manager) DownloadTemp(ctx context.Context, rawURL string, saveChannel b
 
 	// Download to temp dir.
 	tempDir := filepath.Join(m.cfg.DataDir, "media", "temp")
-	os.MkdirAll(tempDir, 0755)
+	_ = os.MkdirAll(tempDir, 0755)
 
 	opts := download.Opts{
 		OutputDir:          tempDir,
@@ -158,16 +158,17 @@ func (m *Manager) DownloadTemp(ctx context.Context, rawURL string, saveChannel b
 	if mediaKind == "" {
 		mediaKind, slideCount = model.ComputeMediaKind(nil, relPath)
 	}
+	_ =
 
-	// Upsert channel.
-	m.db.AddChannel(model.Channel{
-		ChannelID:    channelID,
-		SourceID:     strings.TrimPrefix(stringFromMap(info, "uploader_id"), "@"),
-		Name:         channelName,
-		URL:          channelURL,
-		Platform:     platform,
-		IsSubscribed: saveChannel,
-	})
+		// Upsert channel.
+		m.db.AddChannel(model.Channel{
+			ChannelID:    channelID,
+			SourceID:     strings.TrimPrefix(stringFromMap(info, "uploader_id"), "@"),
+			Name:         channelName,
+			URL:          channelURL,
+			Platform:     platform,
+			IsSubscribed: saveChannel,
+		})
 
 	// Insert video.
 	if err := m.db.InsertVideo(videoID, channelID, title, description,
@@ -235,7 +236,7 @@ func (m *Manager) downloadPlaylist(ctx context.Context, rawURL, playlistID strin
 	}
 
 	targetDir := filepath.Join(m.cfg.DataDir, "media", "playlists", safeFolderName(playlistTitle))
-	os.MkdirAll(targetDir, 0755)
+	_ = os.MkdirAll(targetDir, 0755)
 
 	playlistChannelID := "playlist_" + playlistID
 
@@ -296,8 +297,7 @@ func (m *Manager) downloadPlaylist(ctx context.Context, rawURL, playlistID strin
 		if b, err := json.Marshal(metadata); err == nil {
 			metaJSON = string(b)
 		}
-
-		m.db.InsertVideo(videoID, playlistChannelID, entryTitle, description,
+		_ = m.db.InsertVideo(videoID, playlistChannelID, entryTitle, description,
 			duration, relThumb, relPath, fileSize, publishedAt, metaJSON, "", 0, false)
 		downloaded++
 	}

@@ -34,7 +34,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("open db: %v", err)
 	}
-	defer db.Close()
+	defer func() {
+		_ = db.Close()
+	}()
 
 	var failedCount int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM download_queue WHERE status='failed'`).Scan(&failedCount); err != nil {
@@ -52,7 +54,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("breakdown: %v", err)
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 	for rows.Next() {
 		var ch string
 		var n int

@@ -42,14 +42,14 @@ func run(args []string, stdout, stderr io.Writer) int {
 		printUsage(stdout)
 		return 0
 	default:
-		fmt.Fprintf(stderr, "igloo-dev: unknown command %q\n\n", command)
+		_, _ = fmt.Fprintf(stderr, "igloo-dev: unknown command %q\n\n", command)
 		printUsage(stderr)
 		return 2
 	}
 }
 
 func printUsage(w io.Writer) {
-	fmt.Fprint(w, strings.TrimSpace(`Usage: igloo-dev <command> [args]
+	_, _ = fmt.Fprint(w, strings.TrimSpace(`Usage: igloo-dev <command> [args]
 
 Commands:
   android-sync-maintenance    Drain bounded Android sync derived-cache debt

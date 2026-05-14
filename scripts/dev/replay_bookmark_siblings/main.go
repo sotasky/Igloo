@@ -35,7 +35,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("open db: %v", err)
 	}
-	defer conn.Close()
+	defer func() {
+		_ = conn.Close()
+	}()
 
 	rows, err := targetRows(conn)
 	if err != nil {
@@ -119,7 +121,9 @@ func targetRows(conn *sql.DB) ([]targetRow, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	var out []targetRow
 	for rows.Next() {

@@ -68,7 +68,9 @@ func (db *DB) GetSubscribedChannels() ([]model.Channel, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	var channels []model.Channel
 	for rows.Next() {
@@ -187,7 +189,9 @@ func (db *DB) GetAllVideoCountsByChannel() (map[string]int, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	counts := make(map[string]int)
 	for rows.Next() {
@@ -717,17 +721,17 @@ func (db *DB) purgeVideoChannelAfterUnfollowTx(tx *sql.Tx, channelID string, use
 	for rows.Next() {
 		var v model.Video
 		if err := rows.Scan(&v.VideoID, &v.FilePath, &v.ThumbnailPath); err != nil {
-			rows.Close()
+			_ = rows.Close()
 			return nil, err
 		}
 		v.ChannelID = channelID
 		deleted = append(deleted, v)
 	}
 	if err := rows.Err(); err != nil {
-		rows.Close()
+		_ = rows.Close()
 		return nil, err
 	}
-	rows.Close()
+	_ = rows.Close()
 
 	mediaRows, err := tx.Query(`
 		SELECT COALESCE(mf.file_path, '')
@@ -751,7 +755,7 @@ func (db *DB) purgeVideoChannelAfterUnfollowTx(tx *sql.Tx, channelID string, use
 	for mediaRows.Next() {
 		var path string
 		if err := mediaRows.Scan(&path); err != nil {
-			mediaRows.Close()
+			_ = mediaRows.Close()
 			return nil, err
 		}
 		if strings.TrimSpace(path) != "" {
@@ -759,10 +763,10 @@ func (db *DB) purgeVideoChannelAfterUnfollowTx(tx *sql.Tx, channelID string, use
 		}
 	}
 	if err := mediaRows.Err(); err != nil {
-		mediaRows.Close()
+		_ = mediaRows.Close()
 		return nil, err
 	}
-	mediaRows.Close()
+	_ = mediaRows.Close()
 
 	if _, err := tx.Exec(`
 		DELETE FROM media_files
@@ -811,7 +815,7 @@ func (db *DB) purgeVideoChannelAfterUnfollowTx(tx *sql.Tx, channelID string, use
 		for profileMediaRows.Next() {
 			var path string
 			if err := profileMediaRows.Scan(&path); err != nil {
-				profileMediaRows.Close()
+				_ = profileMediaRows.Close()
 				return nil, err
 			}
 			if strings.TrimSpace(path) != "" {
@@ -819,10 +823,10 @@ func (db *DB) purgeVideoChannelAfterUnfollowTx(tx *sql.Tx, channelID string, use
 			}
 		}
 		if err := profileMediaRows.Err(); err != nil {
-			profileMediaRows.Close()
+			_ = profileMediaRows.Close()
 			return nil, err
 		}
-		profileMediaRows.Close()
+		_ = profileMediaRows.Close()
 
 		if _, err := tx.Exec(`DELETE FROM media_files WHERE owner_id = ? AND owner_type IN ('avatar', 'banner')`, channelID); err != nil {
 			return nil, err
@@ -894,16 +898,16 @@ func (db *DB) PruneStaleOrphanChannelMetadata(cutoffMs int64, limit int) (Channe
 		for rows.Next() {
 			var id string
 			if err := rows.Scan(&id); err != nil {
-				rows.Close()
+				_ = rows.Close()
 				return err
 			}
 			ids = append(ids, id)
 		}
 		if err := rows.Err(); err != nil {
-			rows.Close()
+			_ = rows.Close()
 			return err
 		}
-		rows.Close()
+		_ = rows.Close()
 		if len(ids) == 0 {
 			return nil
 		}
@@ -998,7 +1002,7 @@ func (db *DB) purgeTwitterAfterUnfollowTx(tx *sql.Tx, channelID string, username
 	for mediaRows.Next() {
 		var path string
 		if err := mediaRows.Scan(&path); err != nil {
-			mediaRows.Close()
+			_ = mediaRows.Close()
 			return nil, err
 		}
 		if strings.TrimSpace(path) != "" {
@@ -1006,10 +1010,10 @@ func (db *DB) purgeTwitterAfterUnfollowTx(tx *sql.Tx, channelID string, username
 		}
 	}
 	if err := mediaRows.Err(); err != nil {
-		mediaRows.Close()
+		_ = mediaRows.Close()
 		return nil, err
 	}
-	mediaRows.Close()
+	_ = mediaRows.Close()
 
 	if _, err := tx.Exec(`
 		DELETE FROM media_files
@@ -1069,7 +1073,9 @@ func (db *DB) GetVideosByChannel(channelID string) ([]model.Video, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	var videos []model.Video
 	for rows.Next() {
@@ -1094,7 +1100,9 @@ func (db *DB) GetUnsubscribedChannelIDs() ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	var ids []string
 	for rows.Next() {
@@ -1118,7 +1126,9 @@ func (db *DB) GetStarredChannelIDs() (map[string]bool, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	starred := make(map[string]bool)
 	for rows.Next() {

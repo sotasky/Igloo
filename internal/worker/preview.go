@@ -113,12 +113,14 @@ func (m *Manager) generatePreview(ctx context.Context, req PreviewRequest) error
 
 	// Create temp directory on the same filesystem as the output to allow os.Rename.
 	tmpParent := filepath.Join(m.cfg.DataDir, "tmp")
-	os.MkdirAll(tmpParent, 0o755)
+	_ = os.MkdirAll(tmpParent, 0o755)
 	tmpDir, err := os.MkdirTemp(tmpParent, "preview_"+req.VideoID+"_")
 	if err != nil {
 		return fmt.Errorf("mktemp: %w", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() {
+		_ = os.RemoveAll(tmpDir)
+	}()
 
 	// Extract one frame per timestamp.
 	for i, ts := range timestamps {

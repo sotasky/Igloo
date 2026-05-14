@@ -95,7 +95,9 @@ func (h *HTTPDownloader) DownloadFileWithOptions(ctx context.Context, url, destD
 	if err != nil {
 		return "", fmt.Errorf("http get: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 
 	if resp.StatusCode != http.StatusOK {
 		return "", &HTTPStatusError{StatusCode: resp.StatusCode, URL: url}
@@ -119,18 +121,18 @@ func (h *HTTPDownloader) DownloadFileWithOptions(ctx context.Context, url, destD
 	success := false
 	defer func() {
 		if !success {
-			os.Remove(tmpPath)
+			_ = os.Remove(tmpPath)
 		}
 	}()
 
 	limited := &io.LimitedReader{R: resp.Body, N: maxBytes + 1}
 	written, err := io.Copy(f, limited)
 	if err != nil {
-		f.Close()
+		_ = f.Close()
 		return "", fmt.Errorf("write body: %w", err)
 	}
 	if written > maxBytes {
-		f.Close()
+		_ = f.Close()
 		return "", fmt.Errorf("response too large")
 	}
 	if err := f.Close(); err != nil {

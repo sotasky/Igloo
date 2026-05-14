@@ -60,7 +60,7 @@ func parseOptions(args []string) (options, error) {
 func Run(args []string, stdout, stderr io.Writer) int {
 	opts, err := parseOptions(args)
 	if err != nil {
-		fmt.Fprintf(stderr, "sqlite repack: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "sqlite repack: %v\n", err)
 		return 2
 	}
 
@@ -68,7 +68,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	if dbPath == "" {
 		cfg := config.Load()
 		if cfg.ConfigError != nil {
-			fmt.Fprintf(stderr, "sqlite repack: invalid configuration: %v\n", cfg.ConfigError)
+			_, _ = fmt.Fprintf(stderr, "sqlite repack: invalid configuration: %v\n", cfg.ConfigError)
 			return 1
 		}
 		dbPath = cfg.DatabasePath
@@ -76,14 +76,14 @@ func Run(args []string, stdout, stderr io.Writer) int {
 
 	rep, err := readReport(dbPath)
 	if err != nil {
-		fmt.Fprintf(stderr, "sqlite repack: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "sqlite repack: %v\n", err)
 		return 1
 	}
 
 	if opts.VacuumInto != "" {
 		started := time.Now()
 		if err := vacuumInto(dbPath, opts.VacuumInto, rep.CompactEstimateBytes); err != nil {
-			fmt.Fprintf(stderr, "sqlite repack: %v\n", err)
+			_, _ = fmt.Fprintf(stderr, "sqlite repack: %v\n", err)
 			return 1
 		}
 		rep.VacuumInto = opts.VacuumInto
@@ -97,12 +97,12 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		enc := json.NewEncoder(stdout)
 		enc.SetIndent("", "  ")
 		if err := enc.Encode(rep); err != nil {
-			fmt.Fprintf(stderr, "sqlite repack: encode JSON: %v\n", err)
+			_, _ = fmt.Fprintf(stderr, "sqlite repack: encode JSON: %v\n", err)
 			return 1
 		}
 		return 0
 	}
-	fmt.Fprint(stdout, formatText(rep))
+	_, _ = fmt.Fprint(stdout, formatText(rep))
 	return 0
 }
 
@@ -112,7 +112,9 @@ func readReport(dbPath string) (report, error) {
 	if err != nil {
 		return report{}, fmt.Errorf("open readonly db: %w", err)
 	}
-	defer conn.Close()
+	defer func() {
+		_ = conn.Close()
+	}()
 	if err := conn.Ping(); err != nil {
 		return report{}, fmt.Errorf("ping readonly db: %w", err)
 	}
@@ -176,7 +178,9 @@ func vacuumInto(dbPath, outputPath string, compactEstimateBytes int64) error {
 	if err != nil {
 		return fmt.Errorf("open writable db: %w", err)
 	}
-	defer conn.Close()
+	defer func() {
+		_ = conn.Close()
+	}()
 	if err := conn.Ping(); err != nil {
 		return fmt.Errorf("ping writable db: %w", err)
 	}

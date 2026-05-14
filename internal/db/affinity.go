@@ -53,7 +53,9 @@ func (db *DB) queryAffinityTable(table, keyCol, username string, keys []string, 
 	if err != nil {
 		return // Table may not exist — graceful fallback
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	for rows.Next() {
 		var key string
@@ -130,11 +132,13 @@ func (db *DB) BuildStateAccountScores(username string) (map[string]float64, erro
 		GROUP BY LOWER(COALESCE(fl.author_handle, fl.source_handle))
 	`, username)
 	if err == nil {
-		defer rows.Close()
+		defer func() {
+			_ = rows.Close()
+		}()
 		for rows.Next() {
 			var handle string
 			var count float64
-			rows.Scan(&handle, &count)
+			_ = rows.Scan(&handle, &count)
 			accountScores[handle] += count
 		}
 	}
@@ -149,11 +153,13 @@ func (db *DB) BuildStateAccountScores(username string) (map[string]float64, erro
 		GROUP BY LOWER(COALESCE(fi.source_handle, fi.author_handle))
 	`, username)
 	if err == nil {
-		defer bRows.Close()
+		defer func() {
+			_ = bRows.Close()
+		}()
 		for bRows.Next() {
 			var handle string
 			var count float64
-			bRows.Scan(&handle, &count)
+			_ = bRows.Scan(&handle, &count)
 			accountScores[handle] += count * 2
 		}
 	}
@@ -184,13 +190,15 @@ func (db *DB) FindSiblingTweetIDsForLikes(tweetIDs []string) (map[string][]strin
 	if err != nil {
 		return nil, err
 	}
-	defer hashRows.Close()
+	defer func() {
+		_ = hashRows.Close()
+	}()
 
 	tweetToHash := make(map[string]string)
 	hashSet := make(map[string]bool)
 	for hashRows.Next() {
 		var tid, hash string
-		hashRows.Scan(&tid, &hash)
+		_ = hashRows.Scan(&tid, &hash)
 		tweetToHash[tid] = hash
 		hashSet[hash] = true
 	}
@@ -218,12 +226,14 @@ func (db *DB) FindSiblingTweetIDsForLikes(tweetIDs []string) (map[string][]strin
 	if err != nil {
 		return nil, err
 	}
-	defer sibRows.Close()
+	defer func() {
+		_ = sibRows.Close()
+	}()
 
 	hashToTweets := make(map[string][]string)
 	for sibRows.Next() {
 		var tid, hash string
-		sibRows.Scan(&tid, &hash)
+		_ = sibRows.Scan(&tid, &hash)
 		hashToTweets[hash] = append(hashToTweets[hash], tid)
 	}
 

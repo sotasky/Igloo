@@ -371,16 +371,16 @@ func (db *DB) ListAndroidSyncAssetInventoryRows(sets AndroidSyncDesiredSets) ([]
 			for rows.Next() {
 				asset, err := scanAsset(rows)
 				if err != nil {
-					rows.Close()
+					_ = rows.Close()
 					return nil, err
 				}
 				out = append(out, asset)
 			}
 			if err := rows.Err(); err != nil {
-				rows.Close()
+				_ = rows.Close()
 				return nil, err
 			}
-			rows.Close()
+			_ = rows.Close()
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
@@ -408,7 +408,7 @@ func (db *DB) androidSyncInventoryVideoOwnerKinds(videoIDs []string) (map[string
 		for rows.Next() {
 			var videoID, channelID string
 			if err := rows.Scan(&videoID, &channelID); err != nil {
-				rows.Close()
+				_ = rows.Close()
 				return nil, err
 			}
 			platform := videoPlatformFromChannelID(channelID)
@@ -418,10 +418,10 @@ func (db *DB) androidSyncInventoryVideoOwnerKinds(videoIDs []string) (map[string
 			out[videoID] = videoOwnerKindForPlatform(platform)
 		}
 		if err := rows.Err(); err != nil {
-			rows.Close()
+			_ = rows.Close()
 			return nil, err
 		}
-		rows.Close()
+		_ = rows.Close()
 	}
 	return out, nil
 }
@@ -700,7 +700,9 @@ func (db *DB) backfillMediaFileAssets(run *assetInventoryReconcileRun) error {
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	for rows.Next() {
 		if run.exhausted() {
@@ -880,7 +882,9 @@ func (db *DB) backfillVideoAssets(run *assetInventoryReconcileRun) error {
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	for rows.Next() {
 		if run.exhausted() {
@@ -986,7 +990,9 @@ func (db *DB) backfillProfileAssets(run *assetInventoryReconcileRun) error {
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	for rows.Next() {
 		if run.exhausted() {

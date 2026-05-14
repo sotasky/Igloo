@@ -390,7 +390,7 @@ func (s *Server) handleVideoWatched(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Watched *bool `json:"watched"`
 	}
-	json.NewDecoder(r.Body).Decode(&body)
+	_ = json.NewDecoder(r.Body).Decode(&body)
 
 	watched := true
 	if body.Watched != nil {
@@ -452,14 +452,14 @@ func (s *Server) handleVideoPin(w http.ResponseWriter, r *http.Request) {
 		}
 		p := s.pageProps(w, r)
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		components.PlayerPinButton(p, videoID, pinned, isTemp).Render(r.Context(), w)
+		_ = components.PlayerPinButton(p, videoID, pinned, isTemp).Render(r.Context(), w)
 		return
 	}
 
 	var body struct {
 		Pinned *bool `json:"pinned"`
 	}
-	json.NewDecoder(r.Body).Decode(&body)
+	_ = json.NewDecoder(r.Body).Decode(&body)
 
 	pinned := true
 	if body.Pinned != nil {
@@ -549,7 +549,7 @@ func (s *Server) handleVideoProgressPost(w http.ResponseWriter, r *http.Request)
 		UpdatedAtMs int64   `json:"updated_at_ms"`
 		ClientType  string  `json:"client_type"`
 	}
-	json.NewDecoder(r.Body).Decode(&body)
+	_ = json.NewDecoder(r.Body).Decode(&body)
 
 	result, err := s.db.SaveProgress(user.Username, videoID, body.Position, body.Duration, body.UpdatedAtMs, body.ClientType)
 	if err != nil {
@@ -585,7 +585,7 @@ func (s *Server) handleVideoComments(w http.ResponseWriter, r *http.Request) {
 		slog.Error("GetComments", "video", videoID, "err", err)
 		if r.URL.Query().Get("fmt") == "html" {
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			components.PlayerComments(s.pageProps(w, r), nil, "").Render(r.Context(), w)
+			_ = components.PlayerComments(s.pageProps(w, r), nil, "").Render(r.Context(), w)
 			return
 		}
 		writeJSON(w, 500, map[string]any{"success": false, "error": "db error"})
@@ -601,7 +601,7 @@ func (s *Server) handleVideoComments(w http.ResponseWriter, r *http.Request) {
 			creatorAuthorID = components.CommentCreatorAuthorID(video.ChannelID)
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		components.PlayerComments(s.pageProps(w, r), comments, creatorAuthorID).Render(r.Context(), w)
+		_ = components.PlayerComments(s.pageProps(w, r), comments, creatorAuthorID).Render(r.Context(), w)
 		return
 	}
 
@@ -701,7 +701,7 @@ func (s *Server) handleVideoCommentsRefresh(w http.ResponseWriter, r *http.Reque
 
 	// Save: delete old, insert new
 	oldComments, _ := s.db.GetComments(videoID, 100000)
-	s.db.DeleteComments(videoID)
+	_, _ = s.db.DeleteComments(videoID)
 	saved, err := s.db.AddComments(videoID, parsed, video.Platform)
 	if err != nil {
 		slog.Error("AddComments", "video", videoID, "err", err)
@@ -726,7 +726,7 @@ func (s *Server) handleVideoCommentsRefresh(w http.ResponseWriter, r *http.Reque
 	if r.URL.Query().Get("fmt") == "html" {
 		creatorAuthorID := components.CommentCreatorAuthorID(video.ChannelID)
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		components.PlayerComments(s.pageProps(w, r), comments, creatorAuthorID).Render(r.Context(), w)
+		_ = components.PlayerComments(s.pageProps(w, r), comments, creatorAuthorID).Render(r.Context(), w)
 		return
 	}
 
@@ -773,7 +773,7 @@ func (s *Server) handleVideoSegments(w http.ResponseWriter, r *http.Request) {
 	// Should we fetch from API?
 	if !sbShouldFetch(checked) {
 		if checked == nil {
-			s.db.MarkSponsorBlockChecked(videoID, "old")
+			_ = s.db.MarkSponsorBlockChecked(videoID, "old")
 		}
 		segments, _ := s.db.GetSponsorBlockSegments(videoID)
 		if segments == nil {
@@ -994,7 +994,9 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 404, map[string]any{"success": false, "error": "cannot open file", "video_id": videoID})
 		return
 	}
-	defer f.Close()
+	defer func() {
+		_ = f.Close()
+	}()
 
 	fi, _ := f.Stat()
 	http.ServeContent(w, r, "", fi.ModTime(), f)
@@ -1245,12 +1247,11 @@ func (s *Server) findDirectFeedMediaFile(tweetID string, index int) string {
 // findFeedMediaByQuoteTweetID searches for media from quote tweets.
 func (s *Server) findFeedMediaByQuoteTweetID(quoteTweetID string, index int) string {
 	var sourceHandle string
-	s.db.WithRead(func(conn *sql.DB) error {
-		conn.QueryRow(
+	_ = s.db.WithRead(func(conn *sql.DB) error {
+		return conn.QueryRow(
 			"SELECT COALESCE(quote_author_handle, author_handle) FROM feed_items WHERE quote_tweet_id = ? LIMIT 1",
 			quoteTweetID,
 		).Scan(&sourceHandle)
-		return nil
 	})
 	if sourceHandle == "" {
 		return ""
@@ -1370,12 +1371,11 @@ func (s *Server) findCDNSlideURL(tweetID string, index int) string {
 
 	// Try quote_media_json (tweet is a quoted post)
 	var quoteMediaJSON string
-	s.db.WithRead(func(conn *sql.DB) error {
-		conn.QueryRow(
+	_ = s.db.WithRead(func(conn *sql.DB) error {
+		return conn.QueryRow(
 			"SELECT COALESCE(quote_media_json,'') FROM feed_items WHERE quote_tweet_id = ? LIMIT 1",
 			tweetID,
 		).Scan(&quoteMediaJSON)
-		return nil
 	})
 	if quoteMediaJSON != "" {
 		if url := pickCDNURL(quoteMediaJSON, index); url != "" {
@@ -1523,7 +1523,9 @@ func (s *Server) proxyCDNMedia(w http.ResponseWriter, r *http.Request, cdnURL st
 		http.NotFound(w, r)
 		return
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 
 	reader := bufio.NewReader(resp.Body)
 	sniff, _ := reader.Peek(512)

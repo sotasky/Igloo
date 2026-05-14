@@ -312,7 +312,9 @@ func (g *GalleryDLWrapper) Download(ctx context.Context, rawURL, destDir, id, co
 	if err != nil {
 		return nil, fmt.Errorf("gallery-dl tmpdir: %w", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() {
+		_ = os.RemoveAll(tmpDir)
+	}()
 	browser := ""
 	if len(cookiesBrowser) > 0 {
 		browser = strings.TrimSpace(cookiesBrowser[0])
@@ -486,7 +488,9 @@ func copyFileStreaming(srcPath, destPath string) error {
 	if err != nil {
 		return err
 	}
-	defer src.Close()
+	defer func() {
+		_ = src.Close()
+	}()
 
 	dest, err := os.OpenFile(destPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
 	if err != nil {

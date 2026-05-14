@@ -92,14 +92,14 @@ func defaultOptions() Options {
 func Run(args []string, stdout, stderr io.Writer) int {
 	opts, err := parseOptions(args)
 	if err != nil {
-		fmt.Fprintf(stderr, "query audit: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "query audit: %v\n", err)
 		return 2
 	}
 	dbPath := strings.TrimSpace(opts.DBPath)
 	if dbPath == "" {
 		cfg := config.Load()
 		if cfg.ConfigError != nil {
-			fmt.Fprintf(stderr, "query audit: invalid configuration: %v\n", cfg.ConfigError)
+			_, _ = fmt.Fprintf(stderr, "query audit: invalid configuration: %v\n", cfg.ConfigError)
 			return 1
 		}
 		dbPath = cfg.DatabasePath
@@ -108,19 +108,19 @@ func Run(args []string, stdout, stderr io.Writer) int {
 
 	report, err := ReadReport(dbPath, opts)
 	if err != nil {
-		fmt.Fprintf(stderr, "query audit: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "query audit: %v\n", err)
 		return 1
 	}
 	if opts.JSON {
 		enc := json.NewEncoder(stdout)
 		enc.SetIndent("", "  ")
 		if err := enc.Encode(report); err != nil {
-			fmt.Fprintf(stderr, "query audit: encode JSON: %v\n", err)
+			_, _ = fmt.Fprintf(stderr, "query audit: encode JSON: %v\n", err)
 			return 1
 		}
 		return 0
 	}
-	fmt.Fprint(stdout, formatText(report))
+	_, _ = fmt.Fprint(stdout, formatText(report))
 	return 0
 }
 
@@ -131,7 +131,9 @@ func ReadReport(dbPath string, opts Options) (Report, error) {
 	if err != nil {
 		return Report{}, fmt.Errorf("open readonly db: %w", err)
 	}
-	defer conn.Close()
+	defer func() {
+		_ = conn.Close()
+	}()
 	if err := conn.Ping(); err != nil {
 		return Report{}, fmt.Errorf("ping readonly db: %w", err)
 	}
@@ -193,7 +195,9 @@ func explainPlan(ctx context.Context, conn *sql.DB, sqlText string, args []any) 
 	if err != nil {
 		return nil, fmt.Errorf("explain: %w", err)
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	var plan []string
 	for rows.Next() {
@@ -215,7 +219,9 @@ func readRows(ctx context.Context, conn *sql.DB, sqlText string, args []any) (in
 	if err != nil {
 		return 0, fmt.Errorf("query: %w", err)
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	cols, err := rows.Columns()
 	if err != nil {

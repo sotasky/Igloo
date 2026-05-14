@@ -51,7 +51,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("open db: %v", err)
 	}
-	defer db.Close()
+	defer func() {
+		_ = db.Close()
+	}()
 
 	rows, err := loadRows(db)
 	if err != nil {
@@ -176,7 +178,9 @@ func loadRows(db *dbpkg.DB) ([]videoRow, error) {
 		if err != nil {
 			return err
 		}
-		defer rows.Close()
+		defer func() {
+			_ = rows.Close()
+		}()
 		for rows.Next() {
 			var row videoRow
 			if err := rows.Scan(

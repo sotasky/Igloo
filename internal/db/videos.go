@@ -289,7 +289,9 @@ func (db *DB) GetVideos(opts GetVideosOpts) ([]model.Video, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	var videos []model.Video
 	for rows.Next() {
@@ -389,7 +391,9 @@ func (db *DB) GetLatestVideosPerChannel(perChannel int, channelIDs ...string) (m
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	result := make(map[string][]model.Video)
 	for rows.Next() {
@@ -484,7 +488,9 @@ func (db *DB) GetLatestFeedMediaPerAuthor(perAuthor int, handles ...string) (map
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	items, err := scanFeedItems(rows)
 	if err != nil {
@@ -837,7 +843,9 @@ func (db *DB) GetComments(videoID string, limit int) ([]model.Comment, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	var comments []model.Comment
 	for rows.Next() {
@@ -901,7 +909,9 @@ func (db *DB) AddComments(videoID string, comments []CommentInput, platform stri
 		if err != nil {
 			return err
 		}
-		defer stmt.Close()
+		defer func() {
+			_ = stmt.Close()
+		}()
 		for _, c := range comments {
 			var publishedAtMs int64
 			if c.Timestamp > 0 {
@@ -973,7 +983,9 @@ func (db *DB) GetPlaybackPositions(videoIDs []string, userID string) (map[string
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 	m := make(map[string]float64, len(videoIDs))
 	for rows.Next() {
 		var id string
@@ -1046,7 +1058,9 @@ func (db *DB) QueryVideoThumbnails() ([]ThumbnailRow, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	var result []ThumbnailRow
 	for rows.Next() {
@@ -1425,7 +1439,9 @@ func (db *DB) SaveSponsorBlockSegments(videoID string, segments []SponsorBlockSe
 			if err != nil {
 				return err
 			}
-			defer stmt.Close()
+			defer func() {
+				_ = stmt.Close()
+			}()
 			for _, s := range segments {
 				if _, err := stmt.Exec(videoID, s.Start, s.End, s.Category); err != nil {
 					return err
@@ -1446,7 +1462,9 @@ func (db *DB) GetSponsorBlockSegments(videoID string) ([]SponsorBlockSegment, er
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	segments := []SponsorBlockSegment{}
 	for rows.Next() {
@@ -1502,7 +1520,9 @@ func (db *DB) GetPreviewCandidates() ([]PreviewCandidate, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	var candidates []PreviewCandidate
 	for rows.Next() {

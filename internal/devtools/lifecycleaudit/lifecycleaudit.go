@@ -69,24 +69,24 @@ type parsedOptions struct {
 func Run(args []string, stdout, stderr io.Writer) int {
 	opts, err := parseOptions(args)
 	if err != nil {
-		fmt.Fprintf(stderr, "lifecycle audit: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "lifecycle audit: %v\n", err)
 		return 2
 	}
 
 	report, err := ReadReport(opts.Options)
 	if err != nil {
-		fmt.Fprintf(stderr, "lifecycle audit: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "lifecycle audit: %v\n", err)
 		return 1
 	}
 	if opts.JSON {
 		enc := json.NewEncoder(stdout)
 		enc.SetIndent("", "  ")
 		if err := enc.Encode(report); err != nil {
-			fmt.Fprintf(stderr, "lifecycle audit: encode JSON: %v\n", err)
+			_, _ = fmt.Fprintf(stderr, "lifecycle audit: encode JSON: %v\n", err)
 			return 1
 		}
 	} else {
-		fmt.Fprint(stdout, formatText(report))
+		_, _ = fmt.Fprint(stdout, formatText(report))
 	}
 	if opts.Strict && len(report.Warnings) > 0 {
 		return 1

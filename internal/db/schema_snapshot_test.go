@@ -111,7 +111,9 @@ func freshSchemaTableNames(t *testing.T, d *DB) []string {
 	if err != nil {
 		t.Fatalf("query schema tables: %v", err)
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	var tables []string
 	for rows.Next() {
@@ -140,7 +142,9 @@ func dumpSchemaSnapshot(t *testing.T, d *DB) string {
 	if err != nil {
 		t.Fatalf("query sqlite_master: %v", err)
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	type schemaEntry struct {
 		typ   string

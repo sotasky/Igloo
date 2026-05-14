@@ -17,7 +17,9 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	defer d.Close()
+	defer func() {
+		_ = d.Close()
+	}()
 
 	mode, _ := d.GetSetting("dearrow_mode", "off")
 	fmt.Println("dearrow_mode setting:", mode)

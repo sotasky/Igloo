@@ -513,7 +513,9 @@ func googleTranslate(ctx context.Context, endpoint, apiKey, text, targetLang str
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		return nil, fmt.Errorf("google translate status %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
@@ -563,7 +565,9 @@ func deeplTranslate(ctx context.Context, endpoint, apiKey, text, targetLang stri
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		return nil, fmt.Errorf("deepl translate status %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
@@ -645,7 +649,9 @@ func openAICompatTranslate(ctx context.Context, endpoint, apiKey, model, text, t
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		return nil, fmt.Errorf("openai-compatible translate status %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))

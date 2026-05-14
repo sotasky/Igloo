@@ -566,7 +566,7 @@ func (m *Manager) primeFeedItemProfiles(ctx context.Context, items []model.FeedI
 func (m *Manager) downloadNewAuthorAvatars(ctx context.Context, items []model.FeedItem) {
 	seen := make(map[string]bool)
 	avatarDir := filepath.Join(m.cfg.DataDir, "thumbnails", "avatars")
-	os.MkdirAll(avatarDir, 0o755)
+	_ = os.MkdirAll(avatarDir, 0o755)
 
 	queueAvatarRecovery := func(handle, avatarURL string) {
 		channelID := model.TwitterAvatarChannelID(handle, avatarURL)

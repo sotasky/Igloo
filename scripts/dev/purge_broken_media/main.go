@@ -29,13 +29,17 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer db.Close()
+	defer func() {
+		_ = db.Close()
+	}()
 
 	rows, err := db.Query("SELECT id, owner_type, owner_id, media_index, file_path FROM media_files WHERE file_path != ''")
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	type broken struct {
 		id      int64

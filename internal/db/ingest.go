@@ -192,7 +192,9 @@ func (db *DB) FilterReadyHandles(handles []string, intervalSec float64) (ready [
 	blocked := make(map[string]string) // handle → reason
 	rows, err := db.conn.Query(query, args...)
 	if err == nil {
-		defer rows.Close()
+		defer func() {
+			_ = rows.Close()
+		}()
 		for rows.Next() {
 			var h, reason string
 			if rows.Scan(&h, &reason) == nil {
@@ -223,7 +225,9 @@ func (db *DB) FilterReadyHandles(handles []string, intervalSec float64) (ready [
 			 WHERE handle IN (`+placeholders(len(ready))+`)`,
 			stringsToAny(ready)...)
 		if staleErr == nil {
-			defer staleRows.Close()
+			defer func() {
+				_ = staleRows.Close()
+			}()
 			for staleRows.Next() {
 				var h string
 				var ts float64
@@ -275,7 +279,9 @@ func (db *DB) GetAllIngestStates() ([]model.IngestState, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	var result []model.IngestState
 	for rows.Next() {
@@ -302,7 +308,9 @@ func (db *DB) CountFeedItemsBySource() (map[string]int, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	counts := make(map[string]int)
 	for rows.Next() {

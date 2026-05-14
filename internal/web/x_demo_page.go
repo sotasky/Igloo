@@ -34,5 +34,5 @@ func (s *Server) handlePageXDemo(w http.ResponseWriter, r *http.Request) {
 	p.Sidebar = s.mustBuildSidebar(r)
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	components.FeedPage(p, items, false, "", false, false, nil, "").Render(r.Context(), w)
+	_ = components.FeedPage(p, items, false, "", false, false, nil, "").Render(r.Context(), w)
 }

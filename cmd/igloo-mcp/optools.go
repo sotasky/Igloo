@@ -123,10 +123,10 @@ func pipelineStatus() (string, error) {
 		for rows.Next() {
 			var status string
 			var count int
-			rows.Scan(&status, &count)
+			_ = rows.Scan(&status, &count)
 			parts = append(parts, fmt.Sprintf("%s=%d", status, count))
 		}
-		rows.Close()
+		_ = rows.Close()
 		if len(parts) > 0 {
 			fmt.Fprintf(&sb, "  counts: %s\n", strings.Join(parts, ", "))
 		} else {
@@ -143,10 +143,10 @@ func pipelineStatus() (string, error) {
 
 		// Stuck jobs (processing > 10 min)
 		var stuckCount int
-		conn.QueryRow(fmt.Sprintf(
+		err = conn.QueryRow(fmt.Sprintf(
 			"SELECT COUNT(*) FROM %s WHERE %s IN ('processing', 'running') AND %s < datetime('now', '-10 minutes')",
 			q.table, q.statusCol, q.timeCol)).Scan(&stuckCount)
-		if stuckCount > 0 {
+		if err == nil && stuckCount > 0 {
 			fmt.Fprintf(&sb, "  STUCK: %d jobs processing > 10 min\n", stuckCount)
 		}
 
@@ -162,13 +162,13 @@ func pipelineStatus() (string, error) {
 			var errors []string
 			for errRows.Next() {
 				var ts, errMsg string
-				errRows.Scan(&ts, &errMsg)
+				_ = errRows.Scan(&ts, &errMsg)
 				if len(errMsg) > 100 {
 					errMsg = errMsg[:97] + "..."
 				}
 				errors = append(errors, fmt.Sprintf("    %s: %s", ts, errMsg))
 			}
-			errRows.Close()
+			_ = errRows.Close()
 			if len(errors) > 0 {
 				sb.WriteString("  recent errors:\n")
 				for _, e := range errors {

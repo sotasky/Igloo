@@ -231,7 +231,9 @@ func queryFeedDebugSources(conn *sql.DB, tweetID string) ([]feedDebugSourceEntry
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	var out []feedDebugSourceEntry
 	for rows.Next() {
@@ -374,7 +376,9 @@ func queryFeedDebugRelatedSeen(conn *sql.DB, username string, item feedDebugItem
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	var out []feedDebugRelatedSeen
 	for rows.Next() {

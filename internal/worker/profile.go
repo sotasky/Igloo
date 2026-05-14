@@ -860,7 +860,9 @@ func (m *Manager) downloadInstagramProfileAvatar(ctx context.Context, channelID,
 		log.Printf("[profile] instagram avatar tmpdir %s: %v", channelID, err)
 		return false
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() {
+		_ = os.RemoveAll(tmpDir)
+	}()
 
 	cookiesFile := ""
 	if m.db != nil {

@@ -26,12 +26,12 @@ func (db *DB) GetDashboardStats() (map[string]any, error) {
 	// Each query is wrapped in a helper that returns 0 on error (table may not exist).
 	queryInt := func(query string) int {
 		var n int
-		db.conn.QueryRow(query).Scan(&n)
+		_ = db.conn.QueryRow(query).Scan(&n)
 		return n
 	}
 	queryInt64 := func(query string) int64 {
 		var n int64
-		db.conn.QueryRow(query).Scan(&n)
+		_ = db.conn.QueryRow(query).Scan(&n)
 		return n
 	}
 
@@ -71,7 +71,9 @@ func (db *DB) GetDashboardStats() (map[string]any, error) {
 		GROUP BY c.platform
 	`)
 	if err == nil {
-		defer platformRows.Close()
+		defer func() {
+			_ = platformRows.Close()
+		}()
 		for platformRows.Next() {
 			var platform string
 			var count int
@@ -89,7 +91,7 @@ func (db *DB) GetDashboardStats() (map[string]any, error) {
 		"failed":  queryInt("SELECT COUNT(*) FROM ingest_state WHERE fail_count>3"),
 		"avg_latency_ms": func() int {
 			var n int
-			db.conn.QueryRow("SELECT COALESCE(CAST(AVG(avg_latency_ms) AS INTEGER),0) FROM ingest_state WHERE avg_latency_ms>0").Scan(&n)
+			_ = db.conn.QueryRow("SELECT COALESCE(CAST(AVG(avg_latency_ms) AS INTEGER),0) FROM ingest_state WHERE avg_latency_ms>0").Scan(&n)
 			return n
 		}(),
 	}
@@ -149,21 +151,21 @@ func (db *DB) GetDashboardStats() (map[string]any, error) {
 // CountFeedItemsWithMedia returns count of feed items that have media.
 func (db *DB) CountFeedItemsWithMedia() int {
 	var n int
-	db.conn.QueryRow("SELECT COUNT(*) FROM feed_items WHERE media_json IS NOT NULL AND media_json <> ''").Scan(&n)
+	_ = db.conn.QueryRow("SELECT COUNT(*) FROM feed_items WHERE media_json IS NOT NULL AND media_json <> ''").Scan(&n)
 	return n
 }
 
 // CountFeedItemsTextOnly returns count of feed items without media.
 func (db *DB) CountFeedItemsTextOnly() int {
 	var n int
-	db.conn.QueryRow("SELECT COUNT(*) FROM feed_items WHERE media_json IS NULL OR media_json = ''").Scan(&n)
+	_ = db.conn.QueryRow("SELECT COUNT(*) FROM feed_items WHERE media_json IS NULL OR media_json = ''").Scan(&n)
 	return n
 }
 
 // CountSubscribedTwitterChannels returns the count of subscribed Twitter channels.
 func (db *DB) CountSubscribedTwitterChannels() int {
 	var n int
-	db.conn.QueryRow(`
+	_ = db.conn.QueryRow(`
 		SELECT COUNT(*) FROM channels c
 		INNER JOIN channel_follows cf ON cf.channel_id = c.channel_id AND cf.user_id = ''
 		WHERE c.platform = 'twitter'
@@ -242,6 +244,6 @@ func dirUsageBytes(root string) (int64, error) {
 // IngestCoverageCounts returns aggregate counts for the feed dashboard coverage panel.
 // coolingSources = handles in backoff (fail_count 1-3).
 func (db *DB) IngestCoverageCounts() (coolingSources int, err error) {
-	db.conn.QueryRow("SELECT COUNT(*) FROM ingest_state WHERE fail_count BETWEEN 1 AND 3").Scan(&coolingSources)
+	_ = db.conn.QueryRow("SELECT COUNT(*) FROM ingest_state WHERE fail_count BETWEEN 1 AND 3").Scan(&coolingSources)
 	return
 }

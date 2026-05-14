@@ -17,7 +17,9 @@ func TestOpenMigratesProductionLikeLegacySchema(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open legacy fixture: %v", err)
 	}
-	defer d.Close()
+	defer func() {
+		_ = d.Close()
+	}()
 
 	assertSchemaColumnMissing(t, d.conn, "channels", "check_interval")
 	for table, columns := range map[string][]string{
@@ -104,7 +106,9 @@ func seedProductionLikeLegacySchema(t *testing.T, dbPath string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer seed.Close()
+	defer func() {
+		_ = seed.Close()
+	}()
 
 	for _, stmt := range []string{
 		`CREATE TABLE channels (
@@ -361,7 +365,9 @@ func schemaTestColumnExists(t *testing.T, conn *sql.DB, tableName, columnName st
 	if err != nil {
 		t.Fatalf("table_info %s: %v", tableName, err)
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 	for rows.Next() {
 		var (
 			cid     int

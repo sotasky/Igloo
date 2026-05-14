@@ -75,7 +75,9 @@ func (c *Client) Fetch(ctx context.Context, videoID string) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 
 	if resp.StatusCode == 404 {
 		return Result{}, nil

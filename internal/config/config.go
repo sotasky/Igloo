@@ -145,25 +145,25 @@ func (c *Config) SaveRuntimeConfig(platforms []string) error {
 	}
 	tmpPath := tmp.Name()
 	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		os.Remove(tmpPath)
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
 		return fmt.Errorf("write runtime config: %w", err)
 	}
 	if _, err := tmp.Write([]byte("\n")); err != nil {
-		tmp.Close()
-		os.Remove(tmpPath)
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
 		return fmt.Errorf("write runtime config newline: %w", err)
 	}
 	if err := tmp.Close(); err != nil {
-		os.Remove(tmpPath)
+		_ = os.Remove(tmpPath)
 		return fmt.Errorf("close runtime config: %w", err)
 	}
 	if err := os.Chmod(tmpPath, 0o600); err != nil {
-		os.Remove(tmpPath)
+		_ = os.Remove(tmpPath)
 		return fmt.Errorf("chmod runtime config: %w", err)
 	}
 	if err := os.Rename(tmpPath, path); err != nil {
-		os.Remove(tmpPath)
+		_ = os.Remove(tmpPath)
 		return fmt.Errorf("rename runtime config: %w", err)
 	}
 	return nil
@@ -322,8 +322,12 @@ func loadSecretKey(configDir string) string {
 		panic(fmt.Sprintf("config: generate secret key: %v", err))
 	}
 	secret := hex.EncodeToString(b)
-	os.MkdirAll(configDir, 0o700)
-	os.WriteFile(path, []byte(secret), 0o600)
+	if err := os.MkdirAll(configDir, 0o700); err != nil {
+		panic(fmt.Sprintf("config: create secret key dir: %v", err))
+	}
+	if err := os.WriteFile(path, []byte(secret), 0o600); err != nil {
+		panic(fmt.Sprintf("config: write secret key: %v", err))
+	}
 	return secret
 }
 

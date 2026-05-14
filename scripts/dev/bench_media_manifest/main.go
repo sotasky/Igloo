@@ -35,7 +35,9 @@ func main() {
 		fmt.Fprintf(os.Stderr, "open db: %v\n", err)
 		os.Exit(1)
 	}
-	defer d.Close()
+	defer func() {
+		_ = d.Close()
+	}()
 
 	start := time.Now()
 	entries, nextMarker, endOfStream, err := d.GetMediaManifestV2(*scope, *user, *since, *limit)

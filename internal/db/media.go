@@ -61,7 +61,9 @@ func (db *DB) InsertMediaFileBatch(files []model.MediaFile) error {
 		if err != nil {
 			return err
 		}
-		defer stmt.Close()
+		defer func() {
+			_ = stmt.Close()
+		}()
 		for _, mf := range files {
 			if mf.OwnerType == "feed_media" && strings.TrimSpace(mf.OwnerID) != "" {
 				repairOwners = append(repairOwners, mf.OwnerID)
@@ -236,7 +238,9 @@ func (db *DB) GetMediaFilesByOwnerType(ownerType string) ([]model.MediaFile, err
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	var files []model.MediaFile
 	for rows.Next() {
@@ -289,7 +293,9 @@ func (db *DB) BatchUpdateMediaFilePaths(updates []MediaFilePathUpdate) error {
 		if err != nil {
 			return err
 		}
-		defer stmt.Close()
+		defer func() {
+			_ = stmt.Close()
+		}()
 		for _, u := range updates {
 			if _, err := stmt.Exec(u.NewPath, u.OwnerType, u.OwnerID, u.MediaIndex); err != nil {
 				return err
@@ -372,7 +378,9 @@ func (db *DB) GetMediaHealth(scope, username string) (MediaHealthStats, error) {
 	if err != nil {
 		return stats, fmt.Errorf("GetMediaHealth failed: %w", err)
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	for rows.Next() {
 		var tid string

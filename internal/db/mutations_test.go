@@ -45,7 +45,9 @@ func TestBookmarkMutationBumpsContentHashSiblings(t *testing.T) {
 	if err != nil {
 		t.Fatalf("query sync seqs: %v", err)
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 	for rows.Next() {
 		var tweetID string
 		var syncSeq int64

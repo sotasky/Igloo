@@ -92,7 +92,9 @@ func writeDoctorDBStat(sb *strings.Builder, conn *sql.DB) {
 		fmt.Fprintf(sb, "  unavailable: %v\n\n", err)
 		return
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 	wrote := false
 	for rows.Next() {
 		var name string
@@ -241,7 +243,9 @@ func doctorUserTables(conn *sql.DB) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("query user tables: %w", err)
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	var tables []string
 	for rows.Next() {
@@ -269,7 +273,9 @@ func doctorTableStorageBytes(conn *sql.DB) (map[string]int64, error) {
 	if err != nil {
 		return nil, fmt.Errorf("query table storage bytes: %w", err)
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	out := make(map[string]int64)
 	for rows.Next() {
@@ -579,7 +585,9 @@ func doctorProfileAssetTargetCount(conn *sql.DB, dataDir, kind string) int {
 	if err != nil {
 		return 0
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 	count := 0
 	for rows.Next() {
 		var channelID, sourceURL string
@@ -822,7 +830,9 @@ func doctorStatusCounts(conn *sql.DB, table, groupColumn, where string) []string
 	if err != nil {
 		return nil
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 	var parts []string
 	for rows.Next() {
 		var key string

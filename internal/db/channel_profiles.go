@@ -205,7 +205,9 @@ func (db *DB) GetChannelIDsByAvatarURLs(urls []string) (map[string]string, error
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	out := make(map[string]string, len(keys))
 	for rows.Next() {
@@ -262,7 +264,9 @@ func (db *DB) GetTwitterChannelProfilesByHandles(handles []string) (map[string]m
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	out := make(map[string]model.ChannelProfile, len(keys))
 	for rows.Next() {
@@ -405,7 +409,9 @@ func (db *DB) ListQuoteAvatarProfileIDs() ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	var ids []string
 	for rows.Next() {
@@ -534,7 +540,9 @@ func (db *DB) ListFeedAvatarProfileIDs() ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	var ids []string
 	for rows.Next() {
@@ -647,7 +655,9 @@ func (db *DB) SeedChannelProfileRowsForFeedItems(items []model.FeedItem) (int, e
 		if err != nil {
 			return err
 		}
-		defer stmt.Close()
+		defer func() {
+			_ = stmt.Close()
+		}()
 		for channelID, row := range rowsByChannel {
 			res, err := stmt.Exec(channelID, row.handle, nilIfEmpty(row.displayName), nilIfEmpty(row.avatarURL))
 			if err != nil {
@@ -834,7 +844,9 @@ func seedShortVideoOwnerProfileRows(tx *sql.Tx) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	byChannelID := map[string]mentionSeedRow{}
 	for rows.Next() {
@@ -896,7 +908,9 @@ func seedShortDescriptionMentionProfileRows(tx *sql.Tx) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	byChannelID := map[string]mentionSeedRow{}
 	for rows.Next() {
@@ -972,7 +986,9 @@ func seedProfileBioMentionProfileRows(tx *sql.Tx) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	byChannelID := map[string]mentionSeedRow{}
 	for rows.Next() {
@@ -1037,7 +1053,9 @@ func seedTwitterTextMentionProfileRows(tx *sql.Tx) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	byChannelID := map[string]mentionSeedRow{}
 	for rows.Next() {
@@ -1180,7 +1198,9 @@ func (db *DB) SeedSyntheticTwitterAvatarProfiles() (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	var inserted int
 	err = db.WithWrite(func(tx *sql.Tx) error {

@@ -74,7 +74,7 @@ func parseOptions(args []string) (options, error) {
 func Run(args []string, stdout, stderr io.Writer) int {
 	opts, err := parseOptions(args)
 	if err != nil {
-		fmt.Fprintf(stderr, "persistence audit: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "persistence audit: %v\n", err)
 		return 2
 	}
 
@@ -82,7 +82,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	if dbPath == "" {
 		cfg := config.Load()
 		if cfg.ConfigError != nil {
-			fmt.Fprintf(stderr, "persistence audit: invalid configuration: %v\n", cfg.ConfigError)
+			_, _ = fmt.Fprintf(stderr, "persistence audit: invalid configuration: %v\n", cfg.ConfigError)
 			return 1
 		}
 		dbPath = cfg.DatabasePath
@@ -90,19 +90,19 @@ func Run(args []string, stdout, stderr io.Writer) int {
 
 	report, err := ReadReport(dbPath, opts.Top)
 	if err != nil {
-		fmt.Fprintf(stderr, "persistence audit: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "persistence audit: %v\n", err)
 		return 1
 	}
 	if opts.JSON {
 		enc := json.NewEncoder(stdout)
 		enc.SetIndent("", "  ")
 		if err := enc.Encode(report); err != nil {
-			fmt.Fprintf(stderr, "persistence audit: encode JSON: %v\n", err)
+			_, _ = fmt.Fprintf(stderr, "persistence audit: encode JSON: %v\n", err)
 			return 1
 		}
 		return 0
 	}
-	fmt.Fprint(stdout, formatText(report))
+	_, _ = fmt.Fprint(stdout, formatText(report))
 	return 0
 }
 
@@ -112,7 +112,9 @@ func ReadReport(dbPath string, top int) (Report, error) {
 	if err != nil {
 		return Report{}, fmt.Errorf("open readonly db: %w", err)
 	}
-	defer conn.Close()
+	defer func() {
+		_ = conn.Close()
+	}()
 	if err := conn.Ping(); err != nil {
 		return Report{}, fmt.Errorf("ping readonly db: %w", err)
 	}
@@ -226,7 +228,9 @@ func userTables(conn *sql.DB) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("query user tables: %w", err)
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	var tables []string
 	for rows.Next() {
@@ -254,7 +258,9 @@ func tableStorageBytes(conn *sql.DB) (map[string]int64, error) {
 	if err != nil {
 		return nil, fmt.Errorf("query table storage bytes: %w", err)
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	out := make(map[string]int64)
 	for rows.Next() {

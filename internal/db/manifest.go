@@ -654,7 +654,9 @@ func (db *DB) queryManifestRawRows(query string, args ...any) ([]manifestRawRow,
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	var out []manifestRawRow
 	for rows.Next() {
@@ -984,7 +986,9 @@ func detectManifestContentType(path, fallback string) string {
 	if err != nil {
 		return fallback
 	}
-	defer f.Close()
+	defer func() {
+		_ = f.Close()
+	}()
 	buf := make([]byte, 512)
 	n, err := f.Read(buf)
 	if err != nil || n == 0 {
@@ -1104,7 +1108,9 @@ func (db *DB) populateEffectiveRecency(entries []model.ManifestEntry, tweetIDs m
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	recencyBy := make(map[string]int64, len(tweetIDs))
 	for rows.Next() {
@@ -1151,7 +1157,9 @@ func (db *DB) populateVideoRecency(entries []model.ManifestEntry, videoIDs map[s
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	recencyBy := make(map[string]int64, len(videoIDs))
 	for rows.Next() {

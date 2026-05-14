@@ -211,7 +211,7 @@ func (idx *CodeIndex) scanGoDBTables() {
 
 func (idx *CodeIndex) scanJS() {
 	jsDir := filepath.Join(idx.root, "static", "js")
-	filepath.WalkDir(jsDir, func(path string, d os.DirEntry, err error) error {
+	_ = filepath.WalkDir(jsDir, func(path string, d os.DirEntry, err error) error {
 		if err != nil || d.IsDir() || !strings.HasSuffix(path, ".js") {
 			return nil
 		}
@@ -250,7 +250,7 @@ func (idx *CodeIndex) scanJS() {
 
 func (idx *CodeIndex) scanAndroid() {
 	ktBase := filepath.Join(idx.root, "android", "app", "src", "main", "java")
-	filepath.WalkDir(ktBase, func(path string, d os.DirEntry, err error) error {
+	_ = filepath.WalkDir(ktBase, func(path string, d os.DirEntry, err error) error {
 		if err != nil || d.IsDir() || !strings.HasSuffix(path, ".kt") {
 			return nil
 		}
@@ -321,7 +321,7 @@ func (idx *CodeIndex) scanGoSymbols() {
 
 func (idx *CodeIndex) scanCSSSymbols() {
 	cssDir := filepath.Join(idx.root, "static")
-	filepath.WalkDir(cssDir, func(path string, d os.DirEntry, err error) error {
+	_ = filepath.WalkDir(cssDir, func(path string, d os.DirEntry, err error) error {
 		if err != nil || d.IsDir() || !strings.HasSuffix(path, ".css") {
 			return nil
 		}
@@ -368,7 +368,7 @@ func (idx *CodeIndex) configCandidates() []string {
 	}
 
 	workflowsDir := filepath.Join(idx.root, ".github", "workflows")
-	filepath.WalkDir(workflowsDir, func(path string, d os.DirEntry, err error) error {
+	_ = filepath.WalkDir(workflowsDir, func(path string, d os.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return nil
 		}
@@ -1651,7 +1651,7 @@ func (idx *CodeIndex) computeAndroidGraph() {
 	idx.androidClasses = map[string]*AndroidClassInfo{}
 
 	ktBase := filepath.Join(idx.root, "android", "app", "src", "main", "java")
-	filepath.WalkDir(ktBase, func(path string, d os.DirEntry, err error) error {
+	_ = filepath.WalkDir(ktBase, func(path string, d os.DirEntry, err error) error {
 		if err != nil || d.IsDir() || !strings.HasSuffix(path, ".kt") {
 			return nil
 		}
@@ -2344,7 +2344,7 @@ func (idx *CodeIndex) TraceSetting(key string) string {
 
 	// Scan Kotlin files
 	ktBase := filepath.Join(idx.root, "android", "app", "src", "main", "java")
-	filepath.WalkDir(ktBase, func(path string, d os.DirEntry, err error) error {
+	_ = filepath.WalkDir(ktBase, func(path string, d os.DirEntry, err error) error {
 		if err != nil || d.IsDir() || !strings.HasSuffix(path, ".kt") {
 			return nil
 		}

@@ -130,7 +130,9 @@ func (db *DB) GetThreadChain(tweetID string) ([]model.FeedItem, error) {
 	if err != nil {
 		return nil, fmt.Errorf("GetThreadChain query: %w", err)
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	var ids []string
 	for rows.Next() {
@@ -189,7 +191,9 @@ func (db *DB) GetThreadTree(tweetID string) ([]model.FeedItem, error) {
 	if err != nil {
 		return nil, fmt.Errorf("GetThreadTree query: %w", err)
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	type node struct {
 		tweetID     string
@@ -277,7 +281,9 @@ func (db *DB) FindUnresolvedReplies(limit int) ([]model.FeedItem, error) {
 	if err != nil {
 		return nil, fmt.Errorf("FindUnresolvedReplies: %w", err)
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	var out []model.FeedItem
 	for rows.Next() {

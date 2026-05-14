@@ -119,7 +119,9 @@ func createQueryAuditProductionFixture(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("open production fixture db: %v", err)
 	}
-	defer d.Close()
+	defer func() {
+		_ = d.Close()
+	}()
 
 	stmts := []string{
 		`INSERT INTO channels (channel_id, source_id, name, platform)
@@ -144,7 +146,9 @@ func createQueryAuditFixture(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("open fixture db: %v", err)
 	}
-	defer conn.Close()
+	defer func() {
+		_ = conn.Close()
+	}()
 	stmts := []string{
 		`CREATE TABLE feed_items (
 			tweet_id TEXT PRIMARY KEY,

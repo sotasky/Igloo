@@ -81,7 +81,9 @@ func readLastLines(path string, n int) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer func() {
+		_ = f.Close()
+	}()
 
 	const chunkSize = 64 * 1024
 	fi, err := f.Stat()
@@ -171,11 +173,13 @@ func appendToFile(path string, lines []string) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() {
+		_ = f.Close()
+	}()
 	w := bufio.NewWriter(f)
 	for _, l := range lines {
-		w.WriteString(l)
-		w.WriteByte('\n')
+		_, _ = w.WriteString(l)
+		_ = w.WriteByte('\n')
 	}
 	return w.Flush()
 }
@@ -271,7 +275,7 @@ func (s *Server) handleLogsServer(w http.ResponseWriter, r *http.Request) {
 			d.Lines = append(d.Lines, components.ServerRawLogLine{Text: line, Level: level})
 		}
 		w.Header().Set("Content-Type", "text/html")
-		components.ServerRawLog(s.pageProps(w, r), d).Render(r.Context(), w)
+		_ = components.ServerRawLog(s.pageProps(w, r), d).Render(r.Context(), w)
 		return
 	}
 
@@ -1779,7 +1783,7 @@ func (s *Server) handleAndroidStatus(w http.ResponseWriter, r *http.Request) {
 			d.RoomQuery = &rr
 		}
 		w.Header().Set("Content-Type", "text/html")
-		components.AndroidDashboard(s.pageProps(w, r), d).Render(r.Context(), w)
+		_ = components.AndroidDashboard(s.pageProps(w, r), d).Render(r.Context(), w)
 		return
 	}
 

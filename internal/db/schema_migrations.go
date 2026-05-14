@@ -14,7 +14,7 @@ func runSchemaMigrationOnce(conn *sql.DB, name string, fn func(*sql.Tx) error) (
 
 	var exists int
 	if err := tx.QueryRow(`SELECT COUNT(*) FROM schema_migrations WHERE name = ?`, name).Scan(&exists); err != nil {
-		tx.Rollback()
+		_ = tx.Rollback()
 		return false, fmt.Errorf("check schema migration %s: %w", name, err)
 	}
 	if exists > 0 {
@@ -25,7 +25,7 @@ func runSchemaMigrationOnce(conn *sql.DB, name string, fn func(*sql.Tx) error) (
 	}
 
 	if err := fn(tx); err != nil {
-		tx.Rollback()
+		_ = tx.Rollback()
 		return false, fmt.Errorf("run schema migration %s: %w", name, err)
 	}
 	if _, err := tx.Exec(
@@ -33,7 +33,7 @@ func runSchemaMigrationOnce(conn *sql.DB, name string, fn func(*sql.Tx) error) (
 		name,
 		time.Now().UnixMilli(),
 	); err != nil {
-		tx.Rollback()
+		_ = tx.Rollback()
 		return false, fmt.Errorf("record schema migration %s: %w", name, err)
 	}
 	if err := tx.Commit(); err != nil {

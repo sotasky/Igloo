@@ -34,16 +34,16 @@ func newTestServer(t *testing.T) *testServer {
 		t.Fatalf("temp db: %v", err)
 	}
 	path := tmp.Name()
-	tmp.Close()
+	_ = tmp.Close()
 
 	d, err := db.Open(path, t.TempDir())
 	if err != nil {
-		os.Remove(path)
+		_ = os.Remove(path)
 		t.Fatalf("db.Open: %v", err)
 	}
 	t.Cleanup(func() {
-		d.Close()
-		os.Remove(path)
+		_ = d.Close()
+		_ = os.Remove(path)
 	})
 
 	cfg := &config.Config{SecretKey: "test-key", DataDir: t.TempDir()}

@@ -117,15 +117,15 @@ func (s *Server) handlePageChannels(w http.ResponseWriter, r *http.Request) {
 	// HTMX request — return sections + load-more sentinel
 	if r.Header.Get("HX-Request") != "" {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		components.ChannelSections(p, sections).Render(r.Context(), w)
+		_ = components.ChannelSections(p, sections).Render(r.Context(), w)
 		if !isSearch && end < len(channels) {
-			components.ChannelLoadMore(end).Render(r.Context(), w)
+			_ = components.ChannelLoadMore(end).Render(r.Context(), w)
 		}
 		return
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	components.ChannelsPage(p, sections, q, hasMore, end).Render(r.Context(), w)
+	_ = components.ChannelsPage(p, sections, q, hasMore, end).Render(r.Context(), w)
 }
 
 const channelPreviewTTL = 2 * time.Minute
@@ -243,7 +243,7 @@ func (s *Server) handleLoginPage(w http.ResponseWriter, r *http.Request) {
 	p := s.pageProps(w, r)
 	p.PageTitle = p.T("login_title", "Igloo Login")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	components.LoginPage(p, csrfToken, "", next).Render(r.Context(), w)
+	_ = components.LoginPage(p, csrfToken, "", next).Render(r.Context(), w)
 }
 
 var loginInvalidMessage = components.N("login_error_invalid_credentials", "Invalid username or password")
@@ -273,7 +273,7 @@ func (s *Server) handleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 	p := s.pageProps(w, r)
 	p.PageTitle = p.T("login_title", "Igloo Login")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	components.LoginPage(p, csrfToken, p.T(loginInvalidMessage, "Invalid username or password"), "").Render(r.Context(), w)
+	_ = components.LoginPage(p, csrfToken, p.T(loginInvalidMessage, "Invalid username or password"), "").Render(r.Context(), w)
 }
 
 func (s *Server) handleSetupPage(w http.ResponseWriter, r *http.Request) {
@@ -298,7 +298,7 @@ func (s *Server) handleSetupPage(w http.ResponseWriter, r *http.Request) {
 	p := s.pageProps(w, r)
 	p.PageTitle = p.T("setup_title", "Create First Admin")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	components.SetupPage(p, csrfToken, "", s.setupPlatformChoices(), nil).Render(r.Context(), w)
+	_ = components.SetupPage(p, csrfToken, "", s.setupPlatformChoices(), nil).Render(r.Context(), w)
 }
 
 func (s *Server) handleSetupSubmit(w http.ResponseWriter, r *http.Request) {
@@ -389,7 +389,7 @@ func (s *Server) renderSetupError(w http.ResponseWriter, r *http.Request, sess *
 	p.PageTitle = p.T("setup_title", "Create First Admin")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusUnprocessableEntity)
-	components.SetupPage(p, csrfToken, p.T(key, fallback), s.setupPlatformChoices(), r.Form["platforms"]).Render(r.Context(), w)
+	_ = components.SetupPage(p, csrfToken, p.T(key, fallback), s.setupPlatformChoices(), r.Form["platforms"]).Render(r.Context(), w)
 }
 
 func (s *Server) setupPlatformChoices() []components.PlatformChoice {
@@ -553,7 +553,7 @@ func (s *Server) loginSuccess(w http.ResponseWriter, r *http.Request, username, 
 	sess.Options.MaxAge = 86400 * 30
 	sess.Options.HttpOnly = true
 	sess.Options.SameSite = http.SameSiteLaxMode
-	sess.Save(r, w)
+	_ = sess.Save(r, w)
 
 	next := safeLoginNext(r.FormValue("next"))
 	http.Redirect(w, r, next, http.StatusSeeOther)
@@ -581,7 +581,7 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	sess, _ := s.store.Get(r, "session")
 	sess.Values["auth_user"] = ""
 	sess.Options.MaxAge = -1
-	sess.Save(r, w)
+	_ = sess.Save(r, w)
 	http.Redirect(w, r, "/login", http.StatusSeeOther)
 }
 
@@ -691,12 +691,12 @@ func (s *Server) handlePageVideos(w http.ResponseWriter, r *http.Request) {
 	// HTMX request — return video cards for infinite scroll
 	if r.Header.Get("HX-Request") != "" {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		components.VideosPartial(p, videos, pager, q).Render(r.Context(), w)
+		_ = components.VideosPartial(p, videos, pager, q).Render(r.Context(), w)
 		return
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	components.VideosPage(p, videos, pager, q).Render(r.Context(), w)
+	_ = components.VideosPage(p, videos, pager, q).Render(r.Context(), w)
 }
 
 func (s *Server) handlePageChannel(w http.ResponseWriter, r *http.Request) {
@@ -818,12 +818,12 @@ func (s *Server) handlePageChannel(w http.ResponseWriter, r *http.Request) {
 	// HTMX request — return video cards + next trigger for infinite scroll
 	if r.Header.Get("HX-Request") != "" {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		components.VideoGrid(p, videos, *channel, pager, q, usesShorts, true).Render(r.Context(), w)
+		_ = components.VideoGrid(p, videos, *channel, pager, q, usesShorts, true).Render(r.Context(), w)
 		return
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	components.ChannelPage(p, *channel, profile, videos, pager, q, channel.AvatarURL, usesShorts).Render(r.Context(), w)
+	_ = components.ChannelPage(p, *channel, profile, videos, pager, q, channel.AvatarURL, usesShorts).Render(r.Context(), w)
 }
 
 func channelFromProfileOnly(channelID string, profile *model.ChannelProfile, url string) *model.Channel {
@@ -935,7 +935,7 @@ func (s *Server) renderTwitterChannelFeed(w http.ResponseWriter, r *http.Request
 	p.Sidebar = s.mustBuildSidebar(r)
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	components.FeedPage(p, items, false, "", false, false, xCh, "").Render(r.Context(), w)
+	_ = components.FeedPage(p, items, false, "", false, false, xCh, "").Render(r.Context(), w)
 }
 
 func (s *Server) handlePagePlayer(w http.ResponseWriter, r *http.Request) {
@@ -958,7 +958,7 @@ func (s *Server) handlePagePlayer(w http.ResponseWriter, r *http.Request) {
 		if !hasLocalAvatar {
 			var rawMeta map[string]any
 			if video.MetadataJSON != "" {
-				json.Unmarshal([]byte(video.MetadataJSON), &rawMeta)
+				_ = json.Unmarshal([]byte(video.MetadataJSON), &rawMeta)
 			}
 			handle := ""
 			if v, _ := rawMeta["uploader_id"].(string); v != "" {
@@ -1018,7 +1018,7 @@ func (s *Server) handlePagePlayer(w http.ResponseWriter, r *http.Request) {
 	p.ESBundle = "js/dist/player.js"
 	p.Sidebar = s.mustBuildSidebar(r)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	components.PlayerPage(p, *video, comments, moreFromChannel, nextVideo, sbCategories).Render(r.Context(), w)
+	_ = components.PlayerPage(p, *video, comments, moreFromChannel, nextVideo, sbCategories).Render(r.Context(), w)
 }
 
 func (s *Server) handlePageFeed(w http.ResponseWriter, r *http.Request) {
@@ -1111,8 +1111,8 @@ func (s *Server) handlePageFeed(w http.ResponseWriter, r *http.Request) {
 	// HTMX infinite scroll — return just items + next sentinel
 	if isHTMX {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		components.FeedItemsPartial(p, items).Render(r.Context(), w)
-		components.FeedScrollSentinel(nextPageURL).Render(r.Context(), w)
+		_ = components.FeedItemsPartial(p, items).Render(r.Context(), w)
+		_ = components.FeedScrollSentinel(nextPageURL).Render(r.Context(), w)
 		return
 	}
 
@@ -1127,7 +1127,7 @@ func (s *Server) handlePageFeed(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	components.FeedPage(p, items, hasMore, nextPageURL, true, true, nil, feedHeadAnchor).Render(r.Context(), w)
+	_ = components.FeedPage(p, items, hasMore, nextPageURL, true, true, nil, feedHeadAnchor).Render(r.Context(), w)
 }
 
 func (s *Server) handlePageThread(w http.ResponseWriter, r *http.Request) {
@@ -1166,10 +1166,10 @@ func (s *Server) handlePageThread(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if r.URL.Query().Get("fmt") == "partial" {
-		components.ThreadRoutePartial(p, items, returnHref).Render(r.Context(), w)
+		_ = components.ThreadRoutePartial(p, items, returnHref).Render(r.Context(), w)
 		return
 	}
-	components.ThreadPage(p, items, returnHref).Render(r.Context(), w)
+	_ = components.ThreadPage(p, items, returnHref).Render(r.Context(), w)
 }
 
 func (s *Server) handlePageLiked(w http.ResponseWriter, r *http.Request) {
@@ -1241,8 +1241,8 @@ func (s *Server) handlePageLiked(w http.ResponseWriter, r *http.Request) {
 	// HTMX infinite scroll
 	if r.Header.Get("HX-Request") != "" {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		components.FeedItemsPartial(p, items).Render(r.Context(), w)
-		components.FeedScrollSentinel(nextPageURL).Render(r.Context(), w)
+		_ = components.FeedItemsPartial(p, items).Render(r.Context(), w)
+		_ = components.FeedScrollSentinel(nextPageURL).Render(r.Context(), w)
 		return
 	}
 
@@ -1253,7 +1253,7 @@ func (s *Server) handlePageLiked(w http.ResponseWriter, r *http.Request) {
 	p.Sidebar = s.mustBuildSidebar(r)
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	components.LikedPage(p, items, hasMore, nextPageURL).Render(r.Context(), w)
+	_ = components.LikedPage(p, items, hasMore, nextPageURL).Render(r.Context(), w)
 }
 
 func (s *Server) handlePageShorts(w http.ResponseWriter, r *http.Request) {
@@ -1306,7 +1306,7 @@ func (s *Server) handlePageShorts(w http.ResponseWriter, r *http.Request) {
 	p.ESBundle = "js/dist/shorts.js"
 	p.Sidebar = s.mustBuildSidebar(r)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	components.ShortsPage(p, shorts, storyChannels, hasUnseenStories, pager, videoHint, tab, shortsInitialCardLimit, shortsHydrateBatchSize).Render(r.Context(), w)
+	_ = components.ShortsPage(p, shorts, storyChannels, hasUnseenStories, pager, videoHint, tab, shortsInitialCardLimit, shortsHydrateBatchSize).Render(r.Context(), w)
 }
 
 func (s *Server) handlePageBookmarks(w http.ResponseWriter, r *http.Request) {
@@ -1360,12 +1360,12 @@ func (s *Server) handlePageBookmarks(w http.ResponseWriter, r *http.Request) {
 	// HTMX request — return bookmark cards for infinite scroll
 	if r.Header.Get("HX-Request") != "" {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		components.BookmarksPartial(p, bookmarks, pager, categoryID).Render(r.Context(), w)
+		_ = components.BookmarksPartial(p, bookmarks, pager, categoryID).Render(r.Context(), w)
 		return
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	components.BookmarksPage(p, bookmarks, categories, categoryID, pager).Render(r.Context(), w)
+	_ = components.BookmarksPage(p, bookmarks, categories, categoryID, pager).Render(r.Context(), w)
 }
 
 func (s *Server) handlePageSearch(w http.ResponseWriter, r *http.Request) {
@@ -1429,7 +1429,7 @@ func (s *Server) handlePageSearch(w http.ResponseWriter, r *http.Request) {
 	p.Sidebar = s.mustBuildSidebar(r)
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	components.SearchPage(p, q, ytChannels, ytVideos, tiktokChannels, tiktokVideos, xChannels, xPosts).Render(r.Context(), w)
+	_ = components.SearchPage(p, q, ytChannels, ytVideos, tiktokChannels, tiktokVideos, xChannels, xPosts).Render(r.Context(), w)
 }
 
 func (s *Server) handlePageYouTubeSearch(w http.ResponseWriter, r *http.Request) {
@@ -1453,7 +1453,7 @@ func (s *Server) handlePageYouTubeSearch(w http.ResponseWriter, r *http.Request)
 	p.Sidebar = s.mustBuildSidebar(r)
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	components.YouTubeSearchPage(p, q, results, searchErr).Render(r.Context(), w)
+	_ = components.YouTubeSearchPage(p, q, results, searchErr).Render(r.Context(), w)
 }
 
 // youtubeSearch runs yt-dlp ytsearch to find YouTube videos.
@@ -1568,7 +1568,7 @@ func (s *Server) handlePageTempWatch(w http.ResponseWriter, r *http.Request) {
 	p.Sidebar = s.mustBuildSidebar(r)
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	components.TempDownloadPage(p, videoID, "https://www.youtube.com/watch?v="+videoID).Render(r.Context(), w)
+	_ = components.TempDownloadPage(p, videoID, "https://www.youtube.com/watch?v="+videoID).Render(r.Context(), w)
 }
 
 func boolToInt(b bool) int {

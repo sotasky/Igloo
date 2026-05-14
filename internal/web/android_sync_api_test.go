@@ -2218,16 +2218,16 @@ func newAndroidSyncTestServer(t *testing.T) *testServer {
 		t.Fatalf("temp db: %v", err)
 	}
 	dbPath := tmp.Name()
-	tmp.Close()
+	_ = tmp.Close()
 	dataDir := t.TempDir()
 	d, err := db.Open(dbPath, dataDir)
 	if err != nil {
-		os.Remove(dbPath)
+		_ = os.Remove(dbPath)
 		t.Fatalf("db.Open: %v", err)
 	}
 	t.Cleanup(func() {
-		d.Close()
-		os.Remove(dbPath)
+		_ = d.Close()
+		_ = os.Remove(dbPath)
 	})
 
 	cfg := &config.Config{SecretKey: "test-key", DataDir: dataDir}

@@ -306,7 +306,9 @@ func (db *DB) countAndroidAvatars(username string, feedCutoffMs, youtubeCutoffMs
 	if err != nil {
 		return 0, fmt.Errorf("count android avatars: %w", err)
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	n := 0
 	for rows.Next() {

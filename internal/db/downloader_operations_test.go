@@ -15,14 +15,16 @@ func TestDownloaderOperationInsertListAndPrune(t *testing.T) {
 		t.Fatalf("temp db: %v", err)
 	}
 	path := tmp.Name()
-	tmp.Close()
-	t.Cleanup(func() { os.Remove(path) })
+	_ = tmp.Close()
+	t.Cleanup(func() { _ = os.Remove(path) })
 
 	d, err := Open(path, t.TempDir())
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	defer d.Close()
+	defer func() {
+		_ = d.Close()
+	}()
 
 	now := time.Now().UnixMilli()
 	if err := d.RecordDownloaderOperation(context.Background(), model.DownloaderOperation{

@@ -47,9 +47,9 @@ func (s *Server) handleShortsCards(w http.ResponseWriter, r *http.Request) {
 	}
 
 	videos, err := s.db.GetVideos(db.GetVideosOpts{
-		Platform:    "shorts",
-		Limit:       limit,
-		Offset:      offset,
+		Platform: "shorts",
+		Limit:    limit,
+		Offset:   offset,
 		// Hydrated batches must match the initial Moments page order:
 		// oldest -> newest, with newly discovered items appended at the end.
 		OrderAsc:    true,
@@ -71,7 +71,7 @@ func (s *Server) handleShortsCards(w http.ResponseWriter, r *http.Request) {
 	p := s.pageProps(w, r)
 	p.ActiveNav = "shorts"
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	components.ShortsCardsPartial(p, videos).Render(r.Context(), w)
+	_ = components.ShortsCardsPartial(p, videos).Render(r.Context(), w)
 }
 
 func (s *Server) handleStoryCards(w http.ResponseWriter, r *http.Request) {
@@ -95,7 +95,7 @@ func (s *Server) handleStoryCards(w http.ResponseWriter, r *http.Request) {
 		p := s.pageProps(w, r)
 		p.ActiveNav = "shorts"
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		components.ShortsCardsPartial(p, nil).Render(r.Context(), w)
+		_ = components.ShortsCardsPartial(p, nil).Render(r.Context(), w)
 		return
 	}
 	videos, err := s.db.GetStoryVideos(userID, channelID, nowMs)
@@ -107,7 +107,7 @@ func (s *Server) handleStoryCards(w http.ResponseWriter, r *http.Request) {
 	p := s.pageProps(w, r)
 	p.ActiveNav = "shorts"
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	components.ShortsCardsPartial(p, videos).Render(r.Context(), w)
+	_ = components.ShortsCardsPartial(p, videos).Render(r.Context(), w)
 }
 
 // POST /api/shorts/watched/{videoID}

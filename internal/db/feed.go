@@ -85,7 +85,9 @@ func (db *DB) ListFeedItemsPage(limit int, cursor *model.FeedCursor, username st
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 	return scanFeedItems(rows)
 }
 
@@ -126,7 +128,9 @@ func (db *DB) ListFeedItemsSince(afterSeq int64, limit int) ([]model.FeedItem, e
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 	return scanFeedItemsWithSeq(rows)
 }
 
@@ -205,7 +209,9 @@ func (db *DB) GetFeedItemsForTweetIDs(tweetIDs []string) (map[string]model.FeedI
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	items, err := scanFeedItems(rows)
 	if err != nil {
@@ -238,7 +244,9 @@ func (db *DB) GetSeenTweetIDs(username string, tweetIDs []string) (map[string]bo
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	seen := make(map[string]bool)
 	for rows.Next() {
@@ -271,7 +279,9 @@ func (db *DB) GetFeedLikesForTweetIDs(username string, tweetIDs []string) (map[s
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	liked := make(map[string]bool)
 	for rows.Next() {
@@ -304,7 +314,9 @@ func (db *DB) GetBookmarksForVideoIDs(videoIDs []string) (map[string]bool, error
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	bookmarked := make(map[string]bool)
 	for rows.Next() {
@@ -349,7 +361,9 @@ func (db *DB) GetBookmarksForVideoIDsRich(videoIDs []string) (map[string]Bookmar
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	result := make(map[string]BookmarkInfo)
 	for rows.Next() {
@@ -395,7 +409,9 @@ func (db *DB) GetMutedAccounts() ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	var handles []string
 	for rows.Next() {
@@ -443,7 +459,9 @@ func (db *DB) GetFeedLikedPage(username string, limit int, cursor *model.FeedCur
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	var likes []model.FeedLike
 	for rows.Next() {
@@ -492,7 +510,9 @@ func (db *DB) GetFeedMediaJobs(tweetIDs []string) (map[string]model.FeedMediaJob
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	jobs := make(map[string]model.FeedMediaJob)
 	for rows.Next() {
@@ -528,7 +548,9 @@ func (db *DB) GetRetweetSources(contentHashes []string) (map[string][]model.Retw
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	result := make(map[string][]model.RetweeterInfo)
 	for rows.Next() {
@@ -571,7 +593,9 @@ func (db *DB) GetVideosByIDs(videoIDs []string) (map[string]model.Video, error) 
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	result := make(map[string]model.Video)
 	for rows.Next() {
@@ -621,7 +645,9 @@ func (db *DB) GetDisplayNamesForHandles(handles []string) (map[string]string, er
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	result := make(map[string]string)
 	for rows.Next() {
@@ -664,7 +690,9 @@ func (db *DB) GetFeedItemsByAuthor(handle string, limit int) ([]model.FeedItem, 
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 	return scanFeedItems(rows)
 }
 
@@ -1006,7 +1034,9 @@ func (db *DB) UpsertFeedItems(items []model.FeedItem) (int, error) {
 		if err != nil {
 			return err
 		}
-		defer stmt.Close()
+		defer func() {
+			_ = stmt.Close()
+		}()
 
 		nowMs := time.Now().UnixMilli()
 		for _, item := range items {
@@ -1066,7 +1096,9 @@ func (db *DB) UpsertFeedItems(items []model.FeedItem) (int, error) {
 		if err != nil {
 			return err
 		}
-		defer rtStmt.Close()
+		defer func() {
+			_ = rtStmt.Close()
+		}()
 
 		hashSet := make(map[string]bool)
 		for _, item := range items {
@@ -1181,7 +1213,9 @@ func (db *DB) GetLatestFeedItem() (*model.FeedItem, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 	items, err := scanFeedItems(rows)
 	if err != nil {
 		return nil, err
@@ -1218,7 +1252,9 @@ func (db *DB) GetLatestFetchedFeedItem() (*model.FeedItem, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 	items, err := scanFeedItems(rows)
 	if err != nil {
 		return nil, err
@@ -1321,7 +1357,7 @@ func (db *DB) GetNewPosterAvatars(username, knownHeadTweetID string, limit int) 
 				}
 				appendRow(handle, display, avatarURL)
 			}
-			rows.Close()
+			_ = rows.Close()
 		}
 	}
 
@@ -1347,7 +1383,7 @@ func (db *DB) GetNewPosterAvatars(username, knownHeadTweetID string, limit int) 
 				}
 				appendRow(handle, display, avatarURL)
 			}
-			rows.Close()
+			_ = rows.Close()
 		}
 	}
 
@@ -1451,7 +1487,9 @@ func (db *DB) ListFeedItemsFiltered(limit int, cursor *model.FeedCursor, sourceH
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 	return scanFeedItems(rows)
 }
 
@@ -1492,7 +1530,9 @@ func (db *DB) ListFeedItemsBySourceID(sourceID string, limit int) ([]model.FeedI
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 	return scanFeedItems(rows)
 }
 
@@ -1543,7 +1583,9 @@ func (db *DB) GetBookmarkedFeedItems(limit int, cursor *model.FeedCursor) ([]mod
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 	return scanFeedItems(rows)
 }
 
