@@ -24,6 +24,7 @@ const (
 	shortsInitialCardLimit = 96
 	shortsHydrateBatchSize = 96
 	bookmarksPageSize      = 200
+	sessionCookieMaxAge    = 86400 * 30
 )
 
 func init() {
@@ -39,6 +40,7 @@ type Server struct {
 	requestAvatar func(string)
 	staticV       func(string) string
 	i18n          *i18n.Catalog
+	authLimiter   *authAttemptLimiter
 
 	// Channel preview cache — populated in background on first page load
 	channelPreviewMu   sync.Mutex
@@ -68,12 +70,13 @@ func NewServer(database *db.DB, cfg *config.Config, workers *worker.Manager, sta
 	s := &Server{
 		db:            database,
 		cfg:           cfg,
-		store:         sessions.NewCookieStore([]byte(cfg.SecretKey)),
+		store:         newSessionStore(cfg.SecretKey),
 		workers:       workers,
 		requestAvatar: workers.RequestAvatar,
 		staticV:       staticV,
 		i18n:          catalog,
 		profileFlight: newProfileFlight(),
+		authLimiter:   newAuthAttemptLimiter(time.Now),
 	}
 
 	mux := http.NewServeMux()
@@ -145,9 +148,23 @@ func NewServer(database *db.DB, cfg *config.Config, workers *worker.Manager, sta
 	return chain(mux,
 		requestLogger,
 		recoverPanic,
+		s.authRateLimitMiddleware,
 		s.enforceAuth,
 		s.csrfProtect,
 	)
+}
+
+func newSessionStore(secret string) *sessions.CookieStore {
+	store := sessions.NewCookieStore([]byte(secret))
+	store.Options = &sessions.Options{
+		Path:     "/",
+		MaxAge:   sessionCookieMaxAge,
+		Secure:   true,
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+	}
+	store.MaxAge(sessionCookieMaxAge)
+	return store
 }
 
 // chain wraps an http.Handler with middleware (applied in order, outermost first).

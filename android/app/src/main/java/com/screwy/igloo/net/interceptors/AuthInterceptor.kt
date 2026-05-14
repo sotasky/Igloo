@@ -23,6 +23,8 @@ import kotlinx.serialization.json.jsonPrimitive
  *
  * Request side: only requests to the Igloo server get the Bearer token. Image
  * loads from CDNs (twimg.com, yt3.ggpht) don't leak the token.
+ * Cleartext requests only get a Bearer token for local development hosts; LAN
+ * and public Igloo origins must use HTTPS before credentials are attached.
  *
  * Response side: on a 401 from the Igloo server (other than `/api/auth/login`
  * or `/api/auth/refresh`), the plugin:
@@ -71,6 +73,7 @@ val AuthInterceptor = createClientPlugin("IglooAuthInterceptor", ::AuthIntercept
         val requestHost = request.url.host.lowercase()
         val iglooHost = resolveHost()
         if (iglooHost.isEmpty() || requestHost != iglooHost) return@onRequest
+        if (!bearerAllowedForScheme(request.url.protocol.name, requestHost)) return@onRequest
         val token = tokens.bearerTokenSync() ?: return@onRequest
         request.headers {
             if (!contains(HttpHeaders.Authorization)) {
@@ -86,6 +89,7 @@ val AuthInterceptor = createClientPlugin("IglooAuthInterceptor", ::AuthIntercept
         val requestHost = call.request.url.host.lowercase()
         val iglooHost = resolveHost()
         if (iglooHost.isEmpty() || requestHost != iglooHost) return@on call
+        if (!bearerAllowedForScheme(call.request.url.protocol.name, requestHost)) return@on call
 
         val path = call.request.url.encodedPath
         if (path in SkipAuthPaths) return@on call
@@ -116,6 +120,19 @@ val AuthInterceptor = createClientPlugin("IglooAuthInterceptor", ::AuthIntercept
         proceed(retry)
     }
 }
+
+private fun bearerAllowedForScheme(scheme: String, host: String): Boolean =
+    when (scheme.lowercase()) {
+        "https" -> true
+        "http" -> isLocalCleartextHost(host)
+        else -> false
+    }
+
+private fun isLocalCleartextHost(host: String): Boolean =
+    when (host.trim().trim('[', ']').lowercase()) {
+        "localhost", "127.0.0.1", "::1", "10.0.2.2" -> true
+        else -> false
+    }
 
 private suspend fun extractErrorCode(call: HttpClientCall): String? {
     val text = runCatching { call.response.bodyAsText() }.getOrNull() ?: return null

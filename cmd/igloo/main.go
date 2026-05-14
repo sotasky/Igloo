@@ -90,10 +90,7 @@ func main() {
 	logStartupPhase("worker_launch", time.Since(phaseStart))
 
 	handler := web.NewServer(database, cfg, workers, staticV)
-	srv := &http.Server{
-		Addr:    cfg.ListenAddr,
-		Handler: handler,
-	}
+	srv := newHTTPServer(cfg.ListenAddr, handler)
 
 	go func() {
 		sig := make(chan os.Signal, 1)
@@ -128,6 +125,17 @@ func main() {
 			slog.Error("server error", "err", err)
 			os.Exit(1)
 		}
+	}
+}
+
+func newHTTPServer(addr string, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      5 * time.Minute,
+		IdleTimeout:       120 * time.Second,
 	}
 }
 
