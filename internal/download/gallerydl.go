@@ -17,7 +17,27 @@ import (
 	"github.com/screwys/igloo/internal/model"
 )
 
-const galleryDLDefaultTimeout = 2 * time.Hour
+const (
+	galleryDLDefaultTimeout         = 2 * time.Hour
+	maxGalleryDLMetadataBytes int64 = 16 << 20
+	maxGalleryDLOutputBytes   int64 = maxHTTPVideoDownloadBytes + maxHTTPDownloadBytes
+)
+
+var defaultGalleryDLOutputLimits = galleryDLOutputLimits{
+	imageAudioFileBytes: maxHTTPDownloadBytes,
+	videoFileBytes:      maxHTTPVideoDownloadBytes,
+	metadataFileBytes:   maxGalleryDLMetadataBytes,
+	otherFileBytes:      maxHTTPDownloadBytes,
+	totalBytes:          maxGalleryDLOutputBytes,
+}
+
+type galleryDLOutputLimits struct {
+	imageAudioFileBytes int64
+	videoFileBytes      int64
+	metadataFileBytes   int64
+	otherFileBytes      int64
+	totalBytes          int64
+}
 
 // GalleryDLWrapper wraps the gallery-dl CLI for downloading image slideshows.
 type GalleryDLWrapper struct {
@@ -354,6 +374,10 @@ func (g *GalleryDLWrapper) Download(ctx context.Context, rawURL, destDir, id, co
 		return entries[i].Name() < entries[j].Name()
 	})
 
+	if err := enforceGalleryDLOutputLimits(entries, defaultGalleryDLOutputLimits); err != nil {
+		return nil, err
+	}
+
 	if err := os.MkdirAll(destDir, 0o755); err != nil {
 		return nil, fmt.Errorf("gallery-dl mkdir: %w", err)
 	}
@@ -361,23 +385,9 @@ func (g *GalleryDLWrapper) Download(ctx context.Context, rawURL, destDir, id, co
 	// Copy gallery-dl metadata → {id}.info.json so extractPublishedAt can read it.
 	// gallery-dl creates per-file .json sidecars (not a single info.json), so
 	// look for info.json first, then fall back to the first .json file found.
-	var infoData []byte
-	srcInfoJSON := filepath.Join(tmpDir, "info.json")
-	if data, err := os.ReadFile(srcInfoJSON); err == nil {
-		infoData = data
-	} else {
-		for _, e := range entries {
-			if !e.IsDir() && strings.HasSuffix(strings.ToLower(e.Name()), ".json") {
-				if data, err := os.ReadFile(filepath.Join(tmpDir, e.Name())); err == nil {
-					infoData = data
-					break
-				}
-			}
-		}
-	}
 	safeID := sanitizeDownloadID(id)
-	if infoData != nil {
-		_ = os.WriteFile(filepath.Join(destDir, safeID+".info.json"), infoData, 0o644)
+	if srcInfoJSON := galleryDLInfoJSONPath(tmpDir, entries); srcInfoJSON != "" {
+		_ = copyFileStreaming(srcInfoJSON, filepath.Join(destDir, safeID+".info.json"))
 	}
 
 	// Separate media. Videos win over images for reel-style posts; image-only
@@ -420,9 +430,7 @@ func (g *GalleryDLWrapper) Download(ctx context.Context, rawURL, destDir, id, co
 			e := imageEntries[0]
 			ext := strings.ToLower(filepath.Ext(e.Name()))
 			destPath := filepath.Join(destDir, safeID+ext)
-			if data, err := os.ReadFile(filepath.Join(tmpDir, e.Name())); err == nil {
-				_ = os.WriteFile(destPath, data, 0o644)
-			}
+			_ = copyFileStreaming(filepath.Join(tmpDir, e.Name()), destPath)
 		}
 		if len(paths) == 0 {
 			return nil, fmt.Errorf("gallery-dl: no files after rename")
@@ -436,11 +444,7 @@ func (g *GalleryDLWrapper) Download(ctx context.Context, rawURL, destDir, id, co
 		destName := fmt.Sprintf("%s_%d%s", safeID, idx+1, ext)
 		destPath := filepath.Join(destDir, destName)
 		srcPath := filepath.Join(tmpDir, e.Name())
-		data, err := os.ReadFile(srcPath)
-		if err != nil {
-			continue
-		}
-		if err := os.WriteFile(destPath, data, 0o644); err != nil {
+		if err := copyFileStreaming(srcPath, destPath); err != nil {
 			continue
 		}
 		paths = append(paths, destPath)
@@ -452,11 +456,7 @@ func (g *GalleryDLWrapper) Download(ctx context.Context, rawURL, destDir, id, co
 		destName := safeID + ext
 		destPath := filepath.Join(destDir, destName)
 		srcPath := filepath.Join(tmpDir, e.Name())
-		data, err := os.ReadFile(srcPath)
-		if err != nil {
-			continue
-		}
-		if err := os.WriteFile(destPath, data, 0o644); err != nil {
+		if err := copyFileStreaming(srcPath, destPath); err != nil {
 			continue
 		}
 		// Audio path included so caller knows it exists, but listed after images
@@ -481,6 +481,58 @@ func sanitizeDownloadID(id string) string {
 		return "unknown"
 	}
 	return id
+}
+
+func galleryDLInfoJSONPath(tmpDir string, entries []os.DirEntry) string {
+	for _, e := range entries {
+		if !e.IsDir() && e.Name() == "info.json" {
+			return filepath.Join(tmpDir, e.Name())
+		}
+	}
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(strings.ToLower(e.Name()), ".json") {
+			return filepath.Join(tmpDir, e.Name())
+		}
+	}
+	return ""
+}
+
+func enforceGalleryDLOutputLimits(entries []os.DirEntry, limits galleryDLOutputLimits) error {
+	var total int64
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			return fmt.Errorf("gallery-dl stat %s: %w", e.Name(), err)
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("gallery-dl output contains non-regular file: %s", e.Name())
+		}
+		size := info.Size()
+		if limit := limits.fileLimit(e.Name()); limit > 0 && size > limit {
+			return fmt.Errorf("gallery-dl output too large: %s is %d bytes (limit %d)", e.Name(), size, limit)
+		}
+		if limits.totalBytes > 0 && size > limits.totalBytes-total {
+			return fmt.Errorf("gallery-dl output too large: total exceeds %d bytes", limits.totalBytes)
+		}
+		total += size
+	}
+	return nil
+}
+
+func (limits galleryDLOutputLimits) fileLimit(name string) int64 {
+	switch strings.ToLower(filepath.Ext(name)) {
+	case ".mp4", ".mov", ".m4v", ".webm":
+		return limits.videoFileBytes
+	case ".jpg", ".jpeg", ".png", ".webp", ".mp3", ".m4a", ".ogg", ".aac":
+		return limits.imageAudioFileBytes
+	case ".json":
+		return limits.metadataFileBytes
+	default:
+		return limits.otherFileBytes
+	}
 }
 
 func copyFileStreaming(srcPath, destPath string) error {
