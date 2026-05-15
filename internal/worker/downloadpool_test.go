@@ -291,6 +291,30 @@ func TestCookiesForFallsBackToBrowserWhenCookieFileDisabled(t *testing.T) {
 	}
 }
 
+func TestCookieFileAndBrowserForKeepsBrowserFallbackWithCookieFile(t *testing.T) {
+	dir := t.TempDir()
+	cookiePath := filepath.Join(dir, "instagram_cookies.txt")
+	if err := os.WriteFile(cookiePath, []byte("# stale\n"), 0o600); err != nil {
+		t.Fatalf("write cookie file: %v", err)
+	}
+	d := newTestWorkerDB(t)
+	if err := d.SetSetting("", "cookies_instagram_browser", "firefox"); err != nil {
+		t.Fatalf("SetSetting browser: %v", err)
+	}
+
+	m := &Manager{
+		cfg: &config.Config{CookiesDir: dir},
+		db:  d,
+	}
+	gotFile, gotBrowser := m.cookieFileAndBrowserFor("instagram")
+	if gotFile != cookiePath {
+		t.Fatalf("cookieFileAndBrowserFor file = %q, want %q", gotFile, cookiePath)
+	}
+	if gotBrowser != "firefox" {
+		t.Fatalf("cookieFileAndBrowserFor browser = %q, want firefox", gotBrowser)
+	}
+}
+
 func TestDownloadPoolLeaseOwnerIsProcessScoped(t *testing.T) {
 	got := downloadPoolLeaseOwner()
 	if got == "" || got == "downloadpool:legacy" {

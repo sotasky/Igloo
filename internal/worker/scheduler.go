@@ -268,7 +268,7 @@ func (m *Manager) checkChannel(ctx context.Context, ch model.Channel) ([]downloa
 	limit := m.getChannelMaxVideos(ch)
 	if ch.Platform == "instagram" && m.downloader != nil && m.downloader.GalleryDL != nil {
 		handle := instagramHandleForChannel(ch)
-		cookiesFile, cookiesBrowser := m.cookiesFor("instagram")
+		cookiesFile, cookiesBrowser := m.cookieFileAndBrowserFor("instagram")
 		refs, err := m.downloader.GalleryDL.InstagramChannel(ctx, handle, limit, cookiesFile, cookiesBrowser)
 		if err != nil {
 			return refs, err

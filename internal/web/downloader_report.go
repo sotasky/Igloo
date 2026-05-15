@@ -481,9 +481,10 @@ func (s *Server) reportDownloadOpts(platform, outputDir, id string) download.Opt
 	if s.cfg != nil {
 		cookiesDir = s.cfg.CookiesDir
 	}
-	set := download.ResolveCookieSet(cookiesDir, platform, fileEnabled != "0", browser)
+	sets := download.ResolveCookieSets(cookiesDir, platform, fileEnabled != "0", browser)
+	cookiesFile, cookiesBrowser := download.CookieFileAndBrowser(sets)
 	_ = os.MkdirAll(outputDir, 0o755)
-	return download.Opts{OutputDir: outputDir, ID: id, Cookies: set.File, CookiesFromBrowser: set.Browser}
+	return download.Opts{OutputDir: outputDir, ID: id, Cookies: cookiesFile, CookiesFromBrowser: cookiesBrowser, CookieAlternates: sets}
 }
 
 func (s *Server) reportVideoSample(platform string) reportVideoSample {

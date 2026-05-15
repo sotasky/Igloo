@@ -45,6 +45,9 @@ func (m *Manager) refreshNativeStoriesForChannel(ctx context.Context, channelID,
 		return 0
 	}
 	cookiesFile, cookiesBrowser := m.cookiesFor(platform)
+	if platform == "instagram" {
+		cookiesFile, cookiesBrowser = m.cookieFileAndBrowserFor(platform)
+	}
 	var (
 		refs []download.StoryRef
 		err  error

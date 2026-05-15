@@ -1700,6 +1700,73 @@ func TestRefreshFeedProfileCompletenessDownloadsInstagramAvatarWithoutStoredURL(
 	}
 }
 
+func TestInstagramAvatarDownloadRetriesBrowserCookiesAfterCookieFileAuthFailure(t *testing.T) {
+	d := newTestWorkerDB(t)
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "instagram_cookies.txt"), []byte("# stale\n"), 0o600); err != nil {
+		t.Fatalf("write stale cookies: %v", err)
+	}
+	if err := d.SetSetting("", "cookies_instagram_browser", "firefox"); err != nil {
+		t.Fatalf("SetSetting browser: %v", err)
+	}
+	installGalleryDLAvatarBrowserFallbackStub(t, dir)
+
+	cfg := testCfg(dir)
+	cfg.CookiesDir = dir
+	m := &Manager{db: d, cfg: cfg, downloader: testDownloader()}
+	avDir := filepath.Join(dir, "avatars")
+
+	if downloaded, err := m.downloadInstagramProfileAvatar(context.Background(), "instagram_source.owner", avDir); !downloaded || err != nil {
+		t.Fatal("expected instagram avatar download to retry browser cookies")
+	}
+	if !hasConventionalMediaFile(avDir, "instagram_source.owner") {
+		t.Fatal("expected instagram avatar file from browser-cookie retry")
+	}
+}
+
+func TestRefreshFeedProfileCompletenessBacksOffFailedInstagramAvatarFallback(t *testing.T) {
+	d := newTestWorkerDB(t)
+	dir := t.TempDir()
+	installGalleryDLFailureStub(t, dir)
+
+	now := time.Now().UTC()
+	if err := d.UpsertChannelProfile(model.ChannelProfile{
+		ChannelID:   "instagram_sample_avatar",
+		Platform:    "instagram",
+		Handle:      "sample_avatar",
+		DisplayName: "Missing Avatar",
+		FetchedAt:   &now,
+	}); err != nil {
+		t.Fatalf("seed profile: %v", err)
+	}
+	if err := d.InsertVideo(
+		"instagram_sample_avatar_video", "instagram_sample_avatar", "source window", "",
+		0, "", "media/instagram/source/post.mp4", 0,
+		now.UnixMilli(), "", "video", 0, false,
+	); err != nil {
+		t.Fatalf("insert instagram video: %v", err)
+	}
+
+	m := &Manager{db: d, cfg: testCfg(dir), downloader: testDownloader()}
+	avDir, bnDir := filepath.Join(dir, "avatars"), filepath.Join(dir, "banners")
+
+	m.refreshFeedProfileCompletenessBatch(context.Background(), newFakeFetcher().Fetch, avDir, bnDir, 1)
+
+	got, err := d.GetChannelProfile("instagram_sample_avatar")
+	if err != nil {
+		t.Fatalf("GetChannelProfile: %v", err)
+	}
+	if got == nil || got.NextRetryAt == nil || !got.NextRetryAt.After(time.Now()) {
+		t.Fatalf("NextRetryAt = %v, want failed avatar fallback to back off", got)
+	}
+	if got.NextRetryAt.Before(time.Now().Add(10 * time.Minute)) {
+		t.Fatalf("NextRetryAt = %v, want instagram avatar fallback backoff", got.NextRetryAt)
+	}
+	if got.FailCount == 0 {
+		t.Fatalf("FailCount = %d, want failed avatar fallback recorded", got.FailCount)
+	}
+}
+
 func installGalleryDLAvatarStub(t *testing.T, dir string) {
 	t.Helper()
 	binDir := filepath.Join(dir, "bin")
@@ -1722,6 +1789,68 @@ while [ "$#" -gt 0 ]; do
   esac
   shift || true
 done
+mkdir -p "$out"
+cp "$IGLOO_TEST_AVATAR" "$out/avatar.png"
+`
+	if err := os.WriteFile(filepath.Join(binDir, "gallery-dl"), []byte(script), 0o755); err != nil {
+		t.Fatalf("write gallery-dl stub: %v", err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("IGLOO_TEST_AVATAR", sourceAvatar)
+}
+
+func installGalleryDLFailureStub(t *testing.T, dir string) {
+	t.Helper()
+	binDir := filepath.Join(dir, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatalf("mkdir bin: %v", err)
+	}
+	script := `#!/bin/sh
+echo '[instagram][error] An unexpected error occurred: KeyError - profile_pic_url' >&2
+exit 5
+`
+	if err := os.WriteFile(filepath.Join(binDir, "gallery-dl"), []byte(script), 0o755); err != nil {
+		t.Fatalf("write gallery-dl stub: %v", err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+func installGalleryDLAvatarBrowserFallbackStub(t *testing.T, dir string) {
+	t.Helper()
+	binDir := filepath.Join(dir, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatalf("mkdir bin: %v", err)
+	}
+	sourceAvatar := filepath.Join(dir, "source.png")
+	if err := os.WriteFile(sourceAvatar, testProfilePNGBytes(), 0o644); err != nil {
+		t.Fatalf("write source avatar: %v", err)
+	}
+	script := `#!/bin/sh
+set -eu
+out=""
+browser=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -D)
+      shift
+      out="$1"
+      ;;
+    --cookies)
+      shift
+      echo '[instagram][error] HTTP redirect to login page (https://www.instagram.com/accounts/login/)' >&2
+      exit 4
+      ;;
+    --cookies-from-browser)
+      shift
+      browser="$1"
+      ;;
+  esac
+  shift || true
+done
+if [ "$browser" != "firefox" ]; then
+  echo 'missing browser cookies' >&2
+  exit 4
+fi
 mkdir -p "$out"
 cp "$IGLOO_TEST_AVATAR" "$out/avatar.png"
 `

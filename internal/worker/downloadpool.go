@@ -451,6 +451,10 @@ func (m *Manager) cookiesFor(platform string) (string, string) {
 	return sets[0].File, sets[0].Browser
 }
 
+func (m *Manager) cookieFileAndBrowserFor(platform string) (string, string) {
+	return download.CookieFileAndBrowser(m.cookieSetsFor(platform))
+}
+
 func (m *Manager) cookieSetsFor(platform string) []download.CookieSet {
 	fileEnabled := "1"
 	if m.db != nil {

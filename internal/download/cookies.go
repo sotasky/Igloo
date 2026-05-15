@@ -24,6 +24,23 @@ func ResolveCookieSet(cookiesDir, platform string, fileEnabled bool, browser str
 	return CookieSet{}
 }
 
+func CookieFileAndBrowser(sets []CookieSet) (string, string) {
+	file := ""
+	browser := ""
+	for _, set := range sets {
+		if file == "" {
+			file = strings.TrimSpace(set.File)
+		}
+		if browser == "" {
+			browser = strings.TrimSpace(set.Browser)
+		}
+		if file != "" && browser != "" {
+			return file, browser
+		}
+	}
+	return file, browser
+}
+
 func ResolveCookieSets(cookiesDir, platform string, fileEnabled bool, browser string) []CookieSet {
 	var sets []CookieSet
 	if fileEnabled {

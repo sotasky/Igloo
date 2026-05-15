@@ -208,6 +208,11 @@ func TestCookieResolverUsesPlatformSpecificFilesAndRotationCandidates(t *testing
 	if youtube.File != "" || youtube.Browser != "firefox" {
 		t.Fatalf("youtube browser fallback = %#v", youtube)
 	}
+
+	file, browser := CookieFileAndBrowser(instaSets)
+	if filepath.Base(file) != "www.instagram.com_cookies.txt" || browser != "firefox" {
+		t.Fatalf("instagram file/browser = %q/%q, want cookie file and firefox", file, browser)
+	}
 }
 
 func TestDownloaderRecordsDirectHTTPFailureOperation(t *testing.T) {

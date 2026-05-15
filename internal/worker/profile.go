@@ -195,9 +195,13 @@ func (m *Manager) refreshFeedProfileCompletenessIDs(ctx context.Context, fetch f
 		if strings.HasPrefix(channelID, "instagram_") &&
 			existing.AvatarURL == "" &&
 			!profileFetchDue(existing, now) &&
-			!hasConventionalMediaFile(avDir, channelID) &&
-			m.downloadInstagramProfileAvatar(ctx, channelID, avDir) {
-			worked = true
+			!hasConventionalMediaFile(avDir, channelID) {
+			downloaded, err := m.downloadInstagramProfileAvatar(ctx, channelID, avDir)
+			if downloaded {
+				worked = true
+			} else if err != nil {
+				m.recordInstagramAvatarFallbackError(channelID, existing, err, now)
+			}
 			attempts++
 			continue
 		}
@@ -641,7 +645,9 @@ func (m *Manager) refreshInstagramStoredProfile(ctx context.Context, channelID, 
 	if row.AvatarURL != "" && !hasConventionalMediaFile(avDir, channelID) {
 		m.downloadProfileMedia(ctx, channelID, "avatar", row.AvatarURL, avDir)
 	} else if row.AvatarURL == "" && !hasConventionalMediaFile(avDir, channelID) {
-		m.downloadInstagramProfileAvatar(ctx, channelID, avDir)
+		if downloaded, err := m.downloadInstagramProfileAvatar(ctx, channelID, avDir); !downloaded && err != nil {
+			m.recordInstagramAvatarFallbackError(channelID, &row, err, now)
+		}
 	}
 }
 
@@ -695,7 +701,7 @@ func (m *Manager) fetchInstagramProfile(ctx context.Context, channelID, handle s
 	if m == nil || m.downloader == nil || m.downloader.GalleryDL == nil {
 		return nil, nil
 	}
-	cookiesFile, cookiesBrowser := m.cookiesFor("instagram")
+	cookiesFile, cookiesBrowser := m.cookieFileAndBrowserFor("instagram")
 	profile, err := m.downloader.GalleryDL.InstagramProfile(ctx, handle, cookiesFile, cookiesBrowser)
 	if err != nil {
 		return nil, err
@@ -749,8 +755,10 @@ func (m *Manager) downloadProfileMedia(ctx context.Context, channelID, kind, url
 	if m == nil || m.downloader == nil {
 		return false
 	}
-	if kind == "avatar" && strings.HasPrefix(channelID, "instagram_") && m.downloadInstagramProfileAvatar(ctx, channelID, dir) {
-		return true
+	if kind == "avatar" && strings.HasPrefix(channelID, "instagram_") {
+		if downloaded, _ := m.downloadInstagramProfileAvatar(ctx, channelID, dir); downloaded {
+			return true
+		}
 	}
 	if m.downloader.HTTP == nil {
 		return false
@@ -843,58 +851,66 @@ func errorText(err error) string {
 	return err.Error()
 }
 
-func (m *Manager) downloadInstagramProfileAvatar(ctx context.Context, channelID, dir string) bool {
+func (m *Manager) downloadInstagramProfileAvatar(ctx context.Context, channelID, dir string) (bool, error) {
 	if m == nil || m.downloader == nil || m.downloader.GalleryDL == nil {
-		return false
+		return false, nil
 	}
 	handle := strings.TrimPrefix(channelID, "instagram_")
 	if handle == "" || handle == channelID {
-		return false
+		return false, nil
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		log.Printf("[profile] instagram avatar mkdir %s: %v", channelID, err)
-		return false
+		return false, err
 	}
 	tmpDir, err := os.MkdirTemp(dir, ".igloo-instagram-avatar-*")
 	if err != nil {
 		log.Printf("[profile] instagram avatar tmpdir %s: %v", channelID, err)
-		return false
+		return false, err
 	}
 	defer func() {
 		_ = os.RemoveAll(tmpDir)
 	}()
 
-	cookiesFile := ""
+	var cookieSets []download.CookieSet
 	if m.db != nil {
-		cookiesFile, _ = m.cookiesFor("instagram")
+		cookieSets = m.cookieSetsFor("instagram")
 	} else if m.cfg != nil && m.cfg.CookiesDir != "" {
 		for _, path := range cookieFileCandidates(m.cfg.CookiesDir, "instagram") {
 			if _, err := os.Stat(path); err == nil {
-				cookiesFile = path
-				break
+				cookieSets = append(cookieSets, download.CookieSet{File: path})
 			}
 		}
 	}
-	paths, err := m.downloader.GalleryDL.Download(ctx, "https://www.instagram.com/"+handle+"/avatar", tmpDir, channelID, cookiesFile)
-	if err != nil {
-		log.Printf("[profile] instagram avatar gallery-dl %s: %v", channelID, err)
-		return false
+	if len(cookieSets) == 0 {
+		cookieSets = []download.CookieSet{{}}
 	}
+
 	var lastErr error
-	for _, path := range paths {
-		if _, err := normalizeDownloadedImage(path, dir, channelID); err == nil {
-			if err := m.maintainProfileAssets(channelID); err != nil {
-				log.Printf("[profile] maintain instagram avatar assets %s: %v", channelID, err)
-			}
-			return true
-		} else {
+	for i, cookies := range cookieSets {
+		paths, err := m.downloader.GalleryDL.Download(ctx, "https://www.instagram.com/"+handle+"/avatar", tmpDir, channelID, cookies.File, cookies.Browser)
+		if err != nil {
 			lastErr = err
+			if i+1 < len(cookieSets) && download.ClassifyError(err, nil) == download.ErrorKindAuth {
+				continue
+			}
+			break
+		}
+		for _, path := range paths {
+			if _, err := normalizeDownloadedImage(path, dir, channelID); err == nil {
+				if err := m.maintainProfileAssets(channelID); err != nil {
+					log.Printf("[profile] maintain instagram avatar assets %s: %v", channelID, err)
+				}
+				return true, nil
+			} else {
+				lastErr = err
+			}
 		}
 	}
 	if lastErr != nil {
-		log.Printf("[profile] instagram avatar normalize %s: %v", channelID, lastErr)
+		log.Printf("[profile] instagram avatar gallery-dl %s: %v", channelID, lastErr)
 	}
-	return false
+	return false, lastErr
 }
 
 // maybePromoteChannelName updates channels.name to displayName when the
@@ -962,6 +978,53 @@ func (m *Manager) recordProfileFetchError(channelID string, existing *model.Chan
 	} else {
 		log.Printf("[profile] transient error %s (backoff %s): %v", channelID, retryDelay, err)
 	}
+}
+
+func (m *Manager) recordInstagramAvatarFallbackError(channelID string, existing *model.ChannelProfile, err error, now time.Time) {
+	if err == nil || m == nil || m.db == nil {
+		return
+	}
+	next := now.Add(instagramProfileBackoff)
+	failCount := 1
+	row := model.ChannelProfile{
+		ChannelID:   channelID,
+		Platform:    "instagram",
+		Handle:      strings.TrimPrefix(channelID, "instagram_"),
+		DisplayName: strings.TrimPrefix(channelID, "instagram_"),
+		FailCount:   failCount,
+		NextRetryAt: &next,
+	}
+	if existing != nil {
+		row.Platform = existing.Platform
+		if row.Platform == "" {
+			row.Platform = "instagram"
+		}
+		row.Handle = existing.Handle
+		if row.Handle == "" {
+			row.Handle = strings.TrimPrefix(channelID, "instagram_")
+		}
+		row.DisplayName = existing.DisplayName
+		if row.DisplayName == "" {
+			row.DisplayName = row.Handle
+		}
+		row.Bio = existing.Bio
+		row.Website = existing.Website
+		row.Followers = existing.Followers
+		row.Following = existing.Following
+		row.Verified = existing.Verified
+		row.VerifiedType = existing.VerifiedType
+		row.Protected = existing.Protected
+		row.AvatarURL = existing.AvatarURL
+		row.BannerURL = existing.BannerURL
+		row.FetchedAt = existing.FetchedAt
+		row.Tombstone = existing.Tombstone
+		row.FailCount = existing.FailCount + 1
+	}
+	if e := m.db.UpsertChannelProfile(row); e != nil {
+		log.Printf("[profile] upsert instagram avatar fallback error %s: %v", channelID, e)
+		return
+	}
+	log.Printf("[profile] instagram avatar fallback error %s (backoff %s): %v", channelID, instagramProfileBackoff, err)
 }
 
 func platformForChannelID(channelID string) string {
