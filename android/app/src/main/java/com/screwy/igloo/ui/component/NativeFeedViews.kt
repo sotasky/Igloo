@@ -261,9 +261,21 @@ internal class NativeFeedCardViews(context: Context) {
         orientation = LinearLayout.HORIZONTAL
         gravity = Gravity.CENTER_VERTICAL
     }
-    val threadCapsule: TextView = smallText(context).apply {
+    val threadCapsule: LinearLayout = LinearLayout(context).apply {
+        orientation = LinearLayout.HORIZONTAL
         gravity = Gravity.CENTER
         setPadding(dp(10), dp(7), dp(10), dp(7))
+    }
+    val threadCapsuleAvatars: LinearLayout = LinearLayout(context).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        clipChildren = false
+        clipToPadding = false
+    }
+    val threadCapsuleText: TextView = smallText(context).apply {
+        gravity = Gravity.CENTER
+        maxLines = 1
+        ellipsize = TextUtils.TruncateAt.END
     }
     val menu: ImageButton = ImageButton(context).apply {
         background = null
@@ -290,12 +302,22 @@ internal class NativeFeedCardViews(context: Context) {
         actionContainer.addView(View(context), LinearLayout.LayoutParams(0, dp(40), 1f))
         actionContainer.addView(actions, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(40)))
         root.addView(actionContainer)
+        threadCapsule.addView(
+            threadCapsuleAvatars,
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(22)).apply {
+                marginEnd = dp(7)
+            },
+        )
+        threadCapsule.addView(
+            threadCapsuleText,
+            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f),
+        )
         root.addView(threadCapsule, verticalSpacingLayoutParams())
     }
 
     fun applyColors(colors: NativeFeedColors) {
         root.background = roundedFill(colors.surfaceElevated, dp(8))
-        listOf(retweeter, reply, showMore, threadCapsule).forEach { it.setTextColor(colors.onSurfaceMuted) }
+        listOf(retweeter, reply, showMore, threadCapsuleText).forEach { it.setTextColor(colors.onSurfaceMuted) }
         body.setTextColor(colors.onSurface)
         quoteBody.setTextColor(colors.onSurface)
     }

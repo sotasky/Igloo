@@ -206,22 +206,26 @@ internal class NativeFeedViewHolder(
         if (chain.isEmpty()) {
             views.threadCapsule.visibility = View.GONE
             views.threadCapsule.setOnClickListener(null)
+            views.threadCapsuleText.text = ""
+            cancelAvatarJobsUnder(views.threadCapsuleAvatars)
+            views.threadCapsuleAvatars.removeAllViews()
             return
         }
         val context = views.root.context
         val postCount = threadCapsulePostCount(threaded)
         val peopleCount = threadCapsulePeopleCount(threaded)
         views.threadCapsule.visibility = View.VISIBLE
-        views.threadCapsule.text = context.getString(R.string.feed_thread_capsule, postCount, peopleCount) +
+        views.threadCapsuleText.text = context.getString(R.string.feed_thread_capsule, postCount, peopleCount) +
             " - " + context.getString(R.string.feed_thread_open_inline)
         views.threadCapsule.contentDescription = context.getString(
             R.string.feed_thread_open_capsule_a11y,
             postCount,
             peopleCount,
         )
-        views.threadCapsule.setTextColor(colors.onSurfaceMuted)
+        views.threadCapsuleText.setTextColor(colors.onSurfaceMuted)
         views.threadCapsule.background = roundedStroke(Color.TRANSPARENT, colors.borderSubtle, dp(1), dp(14))
         views.threadCapsule.setOnClickListener { callbacks.onRowClick(threaded.row) }
+        bindThreadCapsuleAvatars(threaded, colors)
     }
 
     private fun threadAncestorView(
@@ -611,6 +615,40 @@ internal class NativeFeedViewHolder(
                 ?.let(handles::add)
         }
         return handles.size
+    }
+
+    private fun bindThreadCapsuleAvatars(threaded: ThreadedFeedRow, colors: NativeFeedColors) {
+        cancelAvatarJobsUnder(views.threadCapsuleAvatars)
+        views.threadCapsuleAvatars.removeAllViews()
+
+        val participants = threadCapsuleParticipantRows(threaded).take(3)
+        views.threadCapsuleAvatars.visibility = if (participants.isEmpty()) View.GONE else View.VISIBLE
+        participants.forEachIndexed { index, row ->
+            val avatar = ImageView(views.root.context).apply {
+                scaleType = ImageView.ScaleType.CENTER_CROP
+                background = roundedFill(colors.surfaceVariant, dp(999))
+                clipToOutline = true
+            }
+            loadAvatar(
+                imageView = avatar,
+                channelId = row.item.channelId.orEmpty(),
+                explicitAvatarUrl = row.item.authorAvatarUrl,
+            )
+            views.threadCapsuleAvatars.addView(
+                avatar,
+                LinearLayout.LayoutParams(dp(20), dp(20)).apply {
+                    if (index > 0) marginStart = -dp(6)
+                },
+            )
+        }
+    }
+
+    private fun threadCapsuleParticipantRows(threaded: ThreadedFeedRow): List<FeedRow> {
+        val seenHandles = linkedSetOf<String>()
+        return (threaded.chain + threaded.row).filter { row ->
+            val handle = normalizeHandle(row.item.authorHandle)
+            handle.isNotBlank() && seenHandles.add(handle)
+        }
     }
 
     private fun bindHeader(
