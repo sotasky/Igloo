@@ -99,7 +99,6 @@ templ feedThreadCard(p PageProps, item model.FeedItem, collapsed bool) {
 		data-media-count={ fmt.Sprintf("%d", len(item.Media)) }
 	>
 		@feedHeader(p, item, authorLabel, pure)
-		@feedReplyContext(p, item)
 		if item.BodyText != "" {
 			@feedBodyText(p, item)
 		}
@@ -168,7 +167,6 @@ templ feedLeafCard(p PageProps, item model.FeedItem) {
 			@feedRepostLine(p, item, repostList)
 		}
 		@feedHeader(p, item, authorLabel, pure)
-		@feedReplyContext(p, item)
 		if item.BodyText != "" {
 			@feedBodyText(p, item)
 		}
@@ -184,12 +182,6 @@ templ feedLeafCard(p PageProps, item model.FeedItem) {
 		@feedActions(p, item)
 		@feedFallbackForms(p, item)
 	</article>
-}
-
-templ feedReplyContext(p PageProps, item model.FeedItem) {
-	if feedReplyTargetHandle(item) != "" {
-		<div class="feed-reply-context">{ LF(p, "feed_replying_to", "Replying to @%1$s", feedReplyTargetHandle(item)) }</div>
-	}
 }
 
 templ feedRepostLine(p PageProps, item model.FeedItem, entries []repostEntry) {

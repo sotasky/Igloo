@@ -104,7 +104,6 @@ func TestFeedItemThreadPreviewUsesRootAndLeaf(t *testing.T) {
 	for _, want := range []string{
 		`data-tweet-id="root_1"`,
 		`data-tweet-id="leaf_1"`,
-		`Replying to @sample_author_c`,
 		`thank you`,
 	} {
 		if !strings.Contains(html, want) {
@@ -114,6 +113,8 @@ func TestFeedItemThreadPreviewUsesRootAndLeaf(t *testing.T) {
 	for _, notWant := range []string{
 		`data-tweet-id="parent_1"`,
 		`parent body`,
+		`feed-reply-context`,
+		`Replying to @sample_author_c`,
 	} {
 		if strings.Contains(html, notWant) {
 			t.Fatalf("should not render hidden intermediate parent %q in html: %s", notWant, html)

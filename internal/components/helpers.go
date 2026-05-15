@@ -557,13 +557,6 @@ func threadCapsulePeopleCount(item model.FeedItem) int {
 	return len(seen)
 }
 
-func feedReplyTargetHandle(item model.FeedItem) string {
-	if !item.IsReply {
-		return ""
-	}
-	return strings.TrimPrefix(strings.TrimSpace(item.ReplyToHandle), "@")
-}
-
 func threadDepthAttr(depth int) string {
 	return strconv.Itoa(clampThreadDepth(depth))
 }
