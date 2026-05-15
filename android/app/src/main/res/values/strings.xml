@@ -502,7 +502,8 @@
     <string name="settings_backup_dir_placeholder">/path/to/igloo-backups</string>
     <string name="settings_backup_enabled">Enable automatic backups</string>
     <string name="settings_backup_folder">Backup Folder</string>
-    <string name="settings_backup_help">Please use a dedicated folder. Daily backups include the database, non-secret config, and bookmarked media. Keep count is limited to 1-5.</string>
+    <string name="settings_backup_help">Please use a dedicated folder. Daily backups include the database and non-secret config. Bookmarked media can be included separately. Keep count is limited to 1-5.</string>
+    <string name="settings_backup_include_media">Include bookmarked media in automatic backups</string>
     <string name="settings_backup_keep_count">Backups to keep</string>
     <string name="settings_bookmark_per_category">Per-Category Settings</string>
     <string name="settings_clear_muted_help">All muted accounts will be unmuted, and their posts can appear in your feed again.</string>

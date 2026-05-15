@@ -386,6 +386,16 @@ templ prefsGeneralTab(p PageProps, prefs PrefsData) {
 							{ L(p, "settings_backup_enabled", "Enable automatic backups") }
 						</label>
 					</div>
+					<div class="form-group checkbox-group">
+						<label>
+							if prefs.Bool("backup_include_media") {
+								<input type="checkbox" name="backup_include_media" value="true" checked disabled?={ !prefs.Bool("backup_enabled") } data-backup-controlled/>
+							} else {
+								<input type="checkbox" name="backup_include_media" value="true" disabled?={ !prefs.Bool("backup_enabled") } data-backup-controlled/>
+							}
+							{ L(p, "settings_backup_include_media", "Include bookmarked media in automatic backups") }
+						</label>
+					</div>
 					<div class="form-group">
 						<label for="global-setting-backup-dir">{ L(p, "settings_backup_folder", "Backup Folder") }</label>
 						<input type="text" id="global-setting-backup-dir" name="backup_dir" class="input" placeholder={ L(p, "settings_backup_dir_placeholder", "/path/to/igloo-backups") } value={ prefs.Str("backup_dir", "") } disabled?={ !prefs.Bool("backup_enabled") } data-backup-controlled/>
@@ -393,7 +403,7 @@ templ prefsGeneralTab(p PageProps, prefs PrefsData) {
 					<div class="form-group">
 						<label for="global-setting-backup-keep-count">{ L(p, "settings_backup_keep_count", "Backups to keep") }</label>
 						<input type="number" id="global-setting-backup-keep-count" name="backup_keep_count" class="input" min="1" max="5" value={ prefs.Str("backup_keep_count", "5") } disabled?={ !prefs.Bool("backup_enabled") } data-backup-controlled/>
-						<small style="display:block; margin-top:0.35rem; color:var(--text-secondary); font-size:0.75rem;">{ L(p, "settings_backup_help", "Please use a dedicated folder. Daily backups include the database, non-secret config, and bookmarked media. Keep count is limited to 1-5.") }</small>
+						<small style="display:block; margin-top:0.35rem; color:var(--text-secondary); font-size:0.75rem;">{ L(p, "settings_backup_help", "Please use a dedicated folder. Daily backups include the database and non-secret config. Bookmarked media can be included separately. Keep count is limited to 1-5.") }</small>
 					</div>
 				</div>
 				<div>

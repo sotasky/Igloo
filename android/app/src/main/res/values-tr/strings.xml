@@ -501,7 +501,8 @@
     <string name="settings_backup_dir_placeholder">/path/to/igloo-backups</string>
     <string name="settings_backup_enabled">Otomatik yedekleme</string>
     <string name="settings_backup_folder">Yedekleme klasörü</string>
-    <string name="settings_backup_help">Ayrı bir klasör seçin. Günlük yedekler veritabanını, gizli olmayan ayarları ve kaydedilen medyayı içerir. Saklama sayısı 1-5 ile sınırlıdır.</string>
+    <string name="settings_backup_help">Ayrı bir klasör seçin. Günlük yedekler veritabanını ve gizli olmayan ayarları içerir. Kaydedilen medya ayrıca dahil edilebilir. Saklama sayısı 1-5 ile sınırlıdır.</string>
+    <string name="settings_backup_include_media">Kaydedilen medyayı yedeklere dahil et</string>
     <string name="settings_backup_keep_count">Saklanacak yedek</string>
     <string name="settings_bookmark_per_category">Kategoriye göre ayarlar</string>
     <string name="settings_clear_muted_help">Sessize alınan tüm hesaplar sessizden çıkarılır.</string>

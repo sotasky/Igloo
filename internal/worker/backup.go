@@ -156,15 +156,17 @@ func (m *Manager) createBackup(dir string) error {
 		}
 	}
 
-	cfg, err := m.db.ExportFullData("")
-	if err != nil {
-		return fmt.Errorf("export bookmark data: %w", err)
-	}
-	mediaFiles := exportbundle.CollectBookmarkMedia(m.db, m.cfg.DataDir, cfg.Bookmarks)
-	mediaFiles = append(mediaFiles, exportbundle.CollectAvatarMedia(m.cfg.DataDir)...)
-	for _, file := range mediaFiles {
-		if err := addFileToZip(zw, file.SourcePath, file.ArchivePath); err != nil {
-			return fmt.Errorf("zip media %s: %w", file.ArchivePath, err)
+	if m.backupIncludeMedia() {
+		cfg, err := m.db.ExportFullData("")
+		if err != nil {
+			return fmt.Errorf("export bookmark data: %w", err)
+		}
+		mediaFiles := exportbundle.CollectBookmarkMedia(m.db, m.cfg.DataDir, cfg.Bookmarks)
+		mediaFiles = append(mediaFiles, exportbundle.CollectAvatarMedia(m.cfg.DataDir)...)
+		for _, file := range mediaFiles {
+			if err := addFileToZip(zw, file.SourcePath, file.ArchivePath); err != nil {
+				return fmt.Errorf("zip media %s: %w", file.ArchivePath, err)
+			}
 		}
 	}
 
@@ -183,6 +185,10 @@ func (m *Manager) createBackup(dir string) error {
 
 func (m *Manager) backupKeepCount() int {
 	return settings.ClampBackupKeepCount(m.db.IntSetting("backup_keep_count"))
+}
+
+func (m *Manager) backupIncludeMedia() bool {
+	return m.db.BoolSetting("backup_include_media")
 }
 
 func (m *Manager) pruneBackups(dir string, keepCount int) {

@@ -13,90 +13,18 @@ import (
 )
 
 func TestCreateBackupWritesIglooDBAndSkipsStaleSnapshotName(t *testing.T) {
-	dataDir := t.TempDir()
-	backupDir := t.TempDir()
-	confDir := t.TempDir()
-	configFiles := map[string]string{
-		"config.json":                 `{"enabled_platforms":["youtube"]}` + "\n",
-		"auth_secret":                 "secret-key",
-		"auth_users.json":             `{"admin":{"role":"admin"}}` + "\n",
-		"cookies/twitter_cookies.txt": "cookie-data",
-		"custom.env":                  "CUSTOM_SECRET=example\n",
-		"nested/refresh_token.txt":    "token-data",
-		"nginx.conf":                  "pid /run/nginx.pid;\n",
-		"server.key":                  "tls-key",
-		"server.crt":                  "tls-cert",
-	}
-	for rel, content := range configFiles {
-		path := filepath.Join(confDir, rel)
-		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-			t.Fatalf("mkdir config fixture %s: %v", rel, err)
-		}
-		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
-			t.Fatalf("write config fixture %s: %v", rel, err)
-		}
-	}
-	database, err := db.Open(config.DefaultDatabasePath(dataDir), dataDir)
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	defer func() {
-		_ = database.Close()
-	}()
-	if err := database.ExecRaw(`INSERT OR REPLACE INTO settings (user_id, key, value) VALUES ('', 'sample', 'ok')`); err != nil {
-		t.Fatalf("seed db: %v", err)
-	}
-	mediaRelPath := filepath.Join("media", "youtube", "sample_channel", "sample_video.mp4")
-	mediaAbsPath := filepath.Join(dataDir, mediaRelPath)
-	if err := os.MkdirAll(filepath.Dir(mediaAbsPath), 0o755); err != nil {
-		t.Fatalf("mkdir media fixture: %v", err)
-	}
-	if err := os.WriteFile(mediaAbsPath, []byte("bookmarked-video-bytes"), 0o644); err != nil {
-		t.Fatalf("write media fixture: %v", err)
-	}
-	avatarPath := filepath.Join(dataDir, "thumbnails", "avatars", "sample_channel.jpg")
-	if err := os.MkdirAll(filepath.Dir(avatarPath), 0o755); err != nil {
-		t.Fatalf("mkdir avatar fixture: %v", err)
-	}
-	if err := os.WriteFile(avatarPath, []byte("avatar-bytes"), 0o644); err != nil {
-		t.Fatalf("write avatar fixture: %v", err)
-	}
-	if err := database.WithWrite(func(tx *sql.Tx) error {
-		for _, stmt := range []struct {
-			sql  string
-			args []any
-		}{
-			{`INSERT INTO channels (channel_id, name, url, platform)
-				VALUES ('sample_channel', 'Sample Channel', 'https://example.com/channel', 'youtube')`, nil},
-			{`INSERT INTO videos (video_id, channel_id, title, duration, file_path, published_at)
-				VALUES ('sample_video', 'sample_channel', 'Sample Video', 12, ?, 1000)`, []any{mediaAbsPath}},
-			{`INSERT INTO bookmark_categories (id, user_id, name, created_at)
-				VALUES (7, '', 'Saved', 1000)`, nil},
-			{`INSERT INTO bookmarks (user_id, video_id, category_id, custom_title, bookmarked_at)
-				VALUES ('', 'sample_video', 7, 'Watch Later', 2000)`, nil},
-		} {
-			if _, err := tx.Exec(stmt.sql, stmt.args...); err != nil {
-				return err
-			}
-		}
-		return nil
-	}); err != nil {
-		t.Fatalf("seed bookmark fixture: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(backupDir, "db-snapshot.tmp"), []byte("stale"), 0o644); err != nil {
-		t.Fatalf("seed stale snapshot: %v", err)
-	}
+	fx := newBackupFixture(t)
 
-	m := NewManager(database, &config.Config{
-		DataDir:    dataDir,
-		ConfDir:    confDir,
-		CookiesDir: filepath.Join(confDir, "cookies"),
+	m := NewManager(fx.database, &config.Config{
+		DataDir:    fx.dataDir,
+		ConfDir:    fx.confDir,
+		CookiesDir: filepath.Join(fx.confDir, "cookies"),
 	})
-	if err := m.createBackup(backupDir); err != nil {
+	if err := m.createBackup(fx.backupDir); err != nil {
 		t.Fatalf("createBackup: %v", err)
 	}
 
-	matches, err := filepath.Glob(filepath.Join(backupDir, backupPrefix+"*.zip"))
+	matches, err := filepath.Glob(filepath.Join(fx.backupDir, backupPrefix+"*.zip"))
 	if err != nil {
 		t.Fatalf("glob backups: %v", err)
 	}
@@ -113,8 +41,8 @@ func TestCreateBackupWritesIglooDBAndSkipsStaleSnapshotName(t *testing.T) {
 		}
 	}
 	for _, name := range []string{"media/bookmarks/sample_video/000.mp4", "media/avatars/sample_channel.jpg"} {
-		if !names[name] {
-			t.Fatalf("backup missing bookmark media entry %s; entries=%v", name, names)
+		if names[name] {
+			t.Fatalf("backup included media entry by default %s; entries=%v", name, names)
 		}
 	}
 	for _, name := range []string{
@@ -129,8 +57,38 @@ func TestCreateBackupWritesIglooDBAndSkipsStaleSnapshotName(t *testing.T) {
 			t.Fatalf("backup included sensitive config entry %s; entries=%v", name, names)
 		}
 	}
-	if _, err := os.Stat(filepath.Join(backupDir, "db-snapshot.tmp")); err != nil {
+	if _, err := os.Stat(filepath.Join(fx.backupDir, "db-snapshot.tmp")); err != nil {
 		t.Fatalf("stale snapshot should be left untouched: %v", err)
+	}
+}
+
+func TestCreateBackupIncludesMediaWhenEnabled(t *testing.T) {
+	fx := newBackupFixture(t)
+	if err := fx.database.SetSetting("", "backup_include_media", "true"); err != nil {
+		t.Fatalf("set backup_include_media: %v", err)
+	}
+
+	m := NewManager(fx.database, &config.Config{
+		DataDir:    fx.dataDir,
+		ConfDir:    fx.confDir,
+		CookiesDir: filepath.Join(fx.confDir, "cookies"),
+	})
+	if err := m.createBackup(fx.backupDir); err != nil {
+		t.Fatalf("createBackup: %v", err)
+	}
+
+	matches, err := filepath.Glob(filepath.Join(fx.backupDir, backupPrefix+"*.zip"))
+	if err != nil {
+		t.Fatalf("glob backups: %v", err)
+	}
+	if len(matches) != 1 {
+		t.Fatalf("backups = %v, want exactly one", matches)
+	}
+	names := zipEntryNames(t, matches[0])
+	for _, name := range []string{"media/bookmarks/sample_video/000.mp4", "media/avatars/sample_channel.jpg"} {
+		if !names[name] {
+			t.Fatalf("backup missing media entry %s; entries=%v", name, names)
+		}
 	}
 }
 
@@ -212,6 +170,100 @@ func TestCreateBackupRejectsRelativeDir(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join("var", "mnt", "external_drive")); !os.IsNotExist(err) {
 		t.Fatalf("relative backup dir was created or stat failed: %v", err)
+	}
+}
+
+type backupFixture struct {
+	dataDir   string
+	backupDir string
+	confDir   string
+	database  *db.DB
+}
+
+func newBackupFixture(t *testing.T) backupFixture {
+	t.Helper()
+
+	dataDir := t.TempDir()
+	backupDir := t.TempDir()
+	confDir := t.TempDir()
+	configFiles := map[string]string{
+		"config.json":                 `{"enabled_platforms":["youtube"]}` + "\n",
+		"auth_secret":                 "secret-key",
+		"auth_users.json":             `{"admin":{"role":"admin"}}` + "\n",
+		"cookies/twitter_cookies.txt": "cookie-data",
+		"custom.env":                  "CUSTOM_SECRET=example\n",
+		"nested/refresh_token.txt":    "token-data",
+		"nginx.conf":                  "pid /run/nginx.pid;\n",
+		"server.key":                  "tls-key",
+		"server.crt":                  "tls-cert",
+	}
+	for rel, content := range configFiles {
+		path := filepath.Join(confDir, rel)
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatalf("mkdir config fixture %s: %v", rel, err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatalf("write config fixture %s: %v", rel, err)
+		}
+	}
+
+	database, err := db.Open(config.DefaultDatabasePath(dataDir), dataDir)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = database.Close()
+	})
+	if err := database.ExecRaw(`INSERT OR REPLACE INTO settings (user_id, key, value) VALUES ('', 'sample', 'ok')`); err != nil {
+		t.Fatalf("seed db: %v", err)
+	}
+
+	mediaRelPath := filepath.Join("media", "youtube", "sample_channel", "sample_video.mp4")
+	mediaAbsPath := filepath.Join(dataDir, mediaRelPath)
+	if err := os.MkdirAll(filepath.Dir(mediaAbsPath), 0o755); err != nil {
+		t.Fatalf("mkdir media fixture: %v", err)
+	}
+	if err := os.WriteFile(mediaAbsPath, []byte("bookmarked-video-bytes"), 0o644); err != nil {
+		t.Fatalf("write media fixture: %v", err)
+	}
+	avatarPath := filepath.Join(dataDir, "thumbnails", "avatars", "sample_channel.jpg")
+	if err := os.MkdirAll(filepath.Dir(avatarPath), 0o755); err != nil {
+		t.Fatalf("mkdir avatar fixture: %v", err)
+	}
+	if err := os.WriteFile(avatarPath, []byte("avatar-bytes"), 0o644); err != nil {
+		t.Fatalf("write avatar fixture: %v", err)
+	}
+	if err := database.WithWrite(func(tx *sql.Tx) error {
+		for _, stmt := range []struct {
+			sql  string
+			args []any
+		}{
+			{`INSERT INTO channels (channel_id, name, url, platform)
+				VALUES ('sample_channel', 'Sample Channel', 'https://example.com/channel', 'youtube')`, nil},
+			{`INSERT INTO videos (video_id, channel_id, title, duration, file_path, published_at)
+				VALUES ('sample_video', 'sample_channel', 'Sample Video', 12, ?, 1000)`, []any{mediaAbsPath}},
+			{`INSERT INTO bookmark_categories (id, user_id, name, created_at)
+				VALUES (7, '', 'Saved', 1000)`, nil},
+			{`INSERT INTO bookmarks (user_id, video_id, category_id, custom_title, bookmarked_at)
+				VALUES ('', 'sample_video', 7, 'Watch Later', 2000)`, nil},
+		} {
+			if _, err := tx.Exec(stmt.sql, stmt.args...); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("seed bookmark fixture: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(backupDir, "db-snapshot.tmp"), []byte("stale"), 0o644); err != nil {
+		t.Fatalf("seed stale snapshot: %v", err)
+	}
+
+	return backupFixture{
+		dataDir:   dataDir,
+		backupDir: backupDir,
+		confDir:   confDir,
+		database:  database,
 	}
 }
 

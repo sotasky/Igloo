@@ -54,6 +54,22 @@ func TestSettingsFromForm_PersistsShareEmbedFriendlyLinks(t *testing.T) {
 	}
 }
 
+func TestSettingsFromForm_PersistsBackupIncludeMedia(t *testing.T) {
+	srv := newTestServer(t)
+	form := url.Values{}
+	form.Set("backup_include_media", "true")
+	req := httptest.NewRequest("POST", "/api/settings", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	if err := req.ParseForm(); err != nil {
+		t.Fatalf("ParseForm: %v", err)
+	}
+
+	body := srv.settingsFromForm(req)
+	if got := body["backup_include_media"]; got != "true" {
+		t.Errorf("backup_include_media = %q, want true", got)
+	}
+}
+
 func TestSettingsToAPIFormat_DefaultsShareEmbedFriendlyLinksOff(t *testing.T) {
 	got := settingsToAPIFormat(nil)
 	if got["share_embed_friendly_links"] != false {
