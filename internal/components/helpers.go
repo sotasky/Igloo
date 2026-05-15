@@ -504,11 +504,8 @@ func feedAlgoScore(score float64) string {
 	return fmt.Sprintf("%.1f", score)
 }
 
-func threadVisibleAncestorStart(chain []model.FeedItem) int {
-	if len(chain) <= 1 {
-		return 0
-	}
-	return len(chain) - 1
+func threadPreviewAncestorVisible(index int, chain []model.FeedItem) bool {
+	return len(chain) > 0 && index == 0
 }
 
 func threadCapsuleVisible(chain []model.FeedItem) bool {
@@ -517,6 +514,32 @@ func threadCapsuleVisible(chain []model.FeedItem) bool {
 
 func threadCapsulePostCount(item model.FeedItem) int {
 	return len(item.ThreadChain) + 1
+}
+
+type threadCapsuleParticipant struct {
+	Label     string
+	AvatarURL string
+}
+
+func threadCapsuleParticipants(item model.FeedItem) []threadCapsuleParticipant {
+	seen := make(map[string]bool, len(item.ThreadChain)+1)
+	participants := make([]threadCapsuleParticipant, 0, len(item.ThreadChain)+1)
+	add := func(row model.FeedItem) {
+		key := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(row.AuthorHandle)), "@")
+		if key == "" || seen[key] {
+			return
+		}
+		seen[key] = true
+		participants = append(participants, threadCapsuleParticipant{
+			Label:     feedAuthorLabel(row),
+			AvatarURL: strings.TrimSpace(row.AuthorAvatarURL),
+		})
+	}
+	for _, ancestor := range item.ThreadChain {
+		add(ancestor)
+	}
+	add(item)
+	return participants
 }
 
 func threadCapsulePeopleCount(item model.FeedItem) int {
@@ -532,6 +555,13 @@ func threadCapsulePeopleCount(item model.FeedItem) int {
 	}
 	add(item.AuthorHandle)
 	return len(seen)
+}
+
+func feedReplyTargetHandle(item model.FeedItem) string {
+	if !item.IsReply {
+		return ""
+	}
+	return strings.TrimPrefix(strings.TrimSpace(item.ReplyToHandle), "@")
 }
 
 func threadDepthAttr(depth int) string {

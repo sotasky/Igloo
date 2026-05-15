@@ -7262,6 +7262,7 @@ body.shorts-mode .sidebar {
 .feed-card.feed-card-seen .feed-body-text,
 .feed-card.feed-card-seen .feed-text,
 .feed-card.feed-card-seen .feed-summary,
+.feed-card.feed-card-seen .feed-reply-context,
 .feed-card.feed-card-seen .feed-repost-line,
 .feed-card.feed-card-seen .feed-action-btn,
 .feed-card.feed-card-seen .feed-follow-btn {
@@ -7308,6 +7309,13 @@ body.shorts-mode .sidebar {
 .feed-repost-more:hover {
     color: var(--text-secondary);
     text-decoration: underline;
+}
+
+.feed-reply-context {
+    color: var(--text-muted);
+    font-size: 0.8rem;
+    line-height: 1.25;
+    margin: -0.1rem 0 0.25rem;
 }
 
 .feed-card-header {
@@ -9196,16 +9204,37 @@ body.shorts-mode .sidebar {
     padding-left: 0.25rem;
 }
 
-.feed-thread-capsule-dot {
-    width: 13px;
-    height: 13px;
+.feed-thread-capsule-avatar,
+.feed-thread-capsule-fallback {
+    display: inline-flex;
+    width: 18px;
+    height: 18px;
     border-radius: 50%;
-    background: var(--text-muted);
     border: 1px solid rgba(var(--surface-soft-rgb), 0.95);
-    margin-left: -0.25rem;
+    margin-left: -0.35rem;
 }
 
-.feed-thread-capsule-dot:first-child {
+.feed-thread-capsule-avatar {
+    object-fit: cover;
+    background: var(--surface-soft);
+}
+
+.feed-thread-capsule-fallback {
+    align-items: center;
+    justify-content: center;
+    background: var(--surface-soft);
+    color: var(--text-secondary);
+    font-size: 0.58rem;
+    font-weight: 700;
+    line-height: 1;
+}
+
+.feed-thread-capsule-avatar:first-child,
+.feed-thread-capsule-fallback:first-child {
+    margin-left: 0;
+}
+
+.feed-thread-capsule-avatar:first-child + .feed-thread-capsule-fallback {
     margin-left: 0;
 }
 

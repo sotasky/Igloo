@@ -63,7 +63,6 @@ internal class NativeFeedViewHolder(
     private var showTranslatedBody = true
     private var showTranslatedQuote = true
     private var bodyExpanded = false
-    private var threadExpanded = false
 
     fun bind(adapterRow: NativeFeedAdapterItem.Post) {
         val previousId = boundRow?.id
@@ -71,7 +70,6 @@ internal class NativeFeedViewHolder(
             showTranslatedBody = true
             showTranslatedQuote = true
             bodyExpanded = false
-            threadExpanded = false
         }
         boundRow = adapterRow
         videoSlots.forEach { inlineVideoManager.detachSlot(it.key) }
@@ -188,13 +186,10 @@ internal class NativeFeedViewHolder(
         }
 
         views.thread.visibility = View.VISIBLE
-        val visibleStart = if (threadExpanded) 0 else nativeThreadVisibleAncestorStart(chain.size)
-        if (visibleStart > 0) {
-            views.thread.addView(threadMoreButton(colors), verticalSpacingLayoutParams())
-        }
-        chain.drop(visibleStart).forEachIndexed { index, row ->
+        val visibleChain = nativeThreadPreviewAncestors(chain)
+        visibleChain.forEachIndexed { index, row ->
             val params = verticalSpacingLayoutParams().apply {
-                if (index == 0 && visibleStart == 0) topMargin = 0
+                if (index == 0) topMargin = 0
             }
             views.thread.addView(threadAncestorView(row, colors, callbacks), params)
         }
@@ -226,19 +221,6 @@ internal class NativeFeedViewHolder(
         views.threadCapsule.background = roundedStroke(Color.TRANSPARENT, colors.borderSubtle, dp(1), dp(14))
         views.threadCapsule.setOnClickListener { callbacks.onRowClick(threaded.row) }
     }
-
-    private fun threadMoreButton(colors: NativeFeedColors): TextView =
-        smallText(views.root.context).apply {
-            text = context.getString(R.string.feed_thread_load_more_replies)
-            gravity = Gravity.CENTER
-            setTextColor(colors.primary)
-            background = roundedStroke(Color.TRANSPARENT, colors.borderSubtle, dp(1), dp(14))
-            setPadding(dp(10), dp(7), dp(10), dp(7))
-            setOnClickListener {
-                threadExpanded = true
-                boundRow?.let { bind(it) }
-            }
-        }
 
     private fun threadAncestorView(
         row: FeedRow,

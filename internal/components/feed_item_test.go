@@ -12,18 +12,20 @@ import (
 func TestFeedItemThreadRendersCapsuleBelowReply(t *testing.T) {
 	item := model.FeedItem{
 		TweetID:                "leaf_1",
-		AuthorHandle:           "author_a",
+		AuthorHandle:           "sample_author_a",
 		AuthorDisplayName:      "Author A",
+		AuthorAvatarURL:        "/api/media/avatar/twitter_sample_author_a",
 		BodyText:               "reply body",
 		IsRetweet:              true,
-		RetweetedByHandle:      "reposter_a",
+		RetweetedByHandle:      "sample_reposter_a",
 		RetweetedByDisplayName: "Reposter A",
-		ReposterChannelID:      "twitter_reposter_a",
+		ReposterChannelID:      "twitter_sample_reposter_a",
 		ThreadChain: []model.FeedItem{
 			{
 				TweetID:           "root_1",
-				AuthorHandle:      "root_author",
+				AuthorHandle:      "sample_root_author",
 				AuthorDisplayName: "Root Author",
+				AuthorAvatarURL:   "/api/media/avatar/twitter_sample_root_author",
 				BodyText:          "root body",
 			},
 		},
@@ -41,10 +43,16 @@ func TestFeedItemThreadRendersCapsuleBelowReply(t *testing.T) {
 		`reply body`,
 		`data-feed-thread-capsule`,
 		`href="/thread/leaf_1"`,
+		`class="feed-thread-capsule-avatar"`,
+		`src="/api/media/avatar/twitter_sample_root_author"`,
+		`src="/api/media/avatar/twitter_sample_author_a"`,
 	} {
 		if !strings.Contains(html, want) {
 			t.Fatalf("missing %q in html: %s", want, html)
 		}
+	}
+	if strings.Contains(html, `feed-thread-capsule-dot`) {
+		t.Fatalf("thread capsule should render participant avatars, not placeholder dots: %s", html)
 	}
 	rootAt := strings.Index(html, `data-tweet-id="root_1"`)
 	leafAt := strings.Index(html, `data-tweet-id="leaf_1"`)
@@ -60,10 +68,68 @@ func TestFeedItemThreadRendersCapsuleBelowReply(t *testing.T) {
 	}
 }
 
+func TestFeedItemThreadPreviewUsesRootAndLeaf(t *testing.T) {
+	item := model.FeedItem{
+		TweetID:           "leaf_1",
+		AuthorHandle:      "sample_author_b",
+		AuthorDisplayName: "Leaf Author",
+		BodyText:          "thank you",
+		IsReply:           true,
+		ReplyToHandle:     "sample_author_c",
+		ReplyToStatus:     "parent_1",
+		ThreadChain: []model.FeedItem{
+			{
+				TweetID:           "root_1",
+				AuthorHandle:      "sample_author_a",
+				AuthorDisplayName: "Root Author",
+				BodyText:          "root body",
+			},
+			{
+				TweetID:           "parent_1",
+				AuthorHandle:      "sample_author_c",
+				AuthorDisplayName: "Parent Author",
+				BodyText:          "parent body",
+				IsReply:           true,
+				ReplyToHandle:     "sample_author_a",
+				ReplyToStatus:     "root_1",
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	if err := FeedItem(PageProps{}, item).Render(context.Background(), &buf); err != nil {
+		t.Fatalf("render feed item: %v", err)
+	}
+	html := buf.String()
+	for _, want := range []string{
+		`data-tweet-id="root_1"`,
+		`data-tweet-id="leaf_1"`,
+		`Replying to @sample_author_c`,
+		`thank you`,
+	} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("missing %q in html: %s", want, html)
+		}
+	}
+	for _, notWant := range []string{
+		`data-tweet-id="parent_1"`,
+		`parent body`,
+	} {
+		if strings.Contains(html, notWant) {
+			t.Fatalf("should not render hidden intermediate parent %q in html: %s", notWant, html)
+		}
+	}
+	rootAt := strings.Index(html, `data-tweet-id="root_1"`)
+	leafAt := strings.Index(html, `data-tweet-id="leaf_1"`)
+	if rootAt < 0 || leafAt < 0 || rootAt > leafAt {
+		t.Fatalf("thread preview should render root before leaf; root=%d leaf=%d html=%s", rootAt, leafAt, html)
+	}
+}
+
 func TestFeedItemActionsDoNotShowStandaloneThreadButton(t *testing.T) {
 	item := model.FeedItem{
 		TweetID:      "leaf_1",
-		AuthorHandle: "author_a",
+		AuthorHandle: "sample_author_a",
 		BodyText:     "leaf body",
 	}
 

@@ -10,7 +10,6 @@ import (
 templ FeedItem(p PageProps, item model.FeedItem) {
 	if len(item.ThreadChain) > 0 {
 		{{ repostList := repostEntries(item) }}
-		{{ visibleAncestorStart := threadVisibleAncestorStart(item.ThreadChain) }}
 		<div class="feed-thread" data-feed-thread data-leaf-tweet-id={ item.TweetID }>
 			if len(repostList) > 0 {
 				<div class="feed-thread-repost">
@@ -18,7 +17,7 @@ templ FeedItem(p PageProps, item model.FeedItem) {
 				</div>
 			}
 			for i, ancestor := range item.ThreadChain {
-				if i >= visibleAncestorStart {
+				if threadPreviewAncestorVisible(i, item.ThreadChain) {
 					@feedThreadCard(p, stripThreadNoise(ancestor), false)
 				}
 			}
@@ -33,6 +32,7 @@ templ FeedItem(p PageProps, item model.FeedItem) {
 }
 
 templ feedThreadCapsule(p PageProps, item model.FeedItem) {
+	{{ participants := threadCapsuleParticipants(item) }}
 	<a
 		class="feed-thread-capsule"
 		href={ templ.SafeURL("/thread/" + item.TweetID) }
@@ -42,8 +42,22 @@ templ feedThreadCapsule(p PageProps, item model.FeedItem) {
 		aria-label={ LF(p, "feed_thread_open_capsule_a11y", "Open thread with %1$d posts across %2$d people", threadCapsulePostCount(item), threadCapsulePeopleCount(item)) }
 	>
 		<span class="feed-thread-capsule-avatars" aria-hidden="true">
-			for i := 0; i < 3 && i < threadCapsulePeopleCount(item); i++ {
-				<span class="feed-thread-capsule-dot"></span>
+			for i, participant := range participants {
+				if i < 3 {
+					if participant.AvatarURL != "" {
+						<img
+							class="feed-thread-capsule-avatar"
+							src={ participant.AvatarURL }
+							loading="lazy"
+							alt=""
+							onload="window.MpaSiteBase&&window.MpaSiteBase.avatarLoad(this)"
+							onerror="if(window.MpaSiteBase&&window.MpaSiteBase.avatarError(this))return; this.style.display='none'; this.nextElementSibling.style.display='inline-flex';"
+						/>
+						<span class="feed-thread-capsule-fallback" style="display:none;">{ strings.ToUpper(FirstChar(participant.Label)) }</span>
+					} else {
+						<span class="feed-thread-capsule-fallback">{ strings.ToUpper(FirstChar(participant.Label)) }</span>
+					}
+				}
 			}
 		</span>
 		<span class="feed-thread-capsule-text">
@@ -85,6 +99,7 @@ templ feedThreadCard(p PageProps, item model.FeedItem, collapsed bool) {
 		data-media-count={ fmt.Sprintf("%d", len(item.Media)) }
 	>
 		@feedHeader(p, item, authorLabel, pure)
+		@feedReplyContext(p, item)
 		if item.BodyText != "" {
 			@feedBodyText(p, item)
 		}
@@ -153,6 +168,7 @@ templ feedLeafCard(p PageProps, item model.FeedItem) {
 			@feedRepostLine(p, item, repostList)
 		}
 		@feedHeader(p, item, authorLabel, pure)
+		@feedReplyContext(p, item)
 		if item.BodyText != "" {
 			@feedBodyText(p, item)
 		}
@@ -168,6 +184,12 @@ templ feedLeafCard(p PageProps, item model.FeedItem) {
 		@feedActions(p, item)
 		@feedFallbackForms(p, item)
 	</article>
+}
+
+templ feedReplyContext(p PageProps, item model.FeedItem) {
+	if feedReplyTargetHandle(item) != "" {
+		<div class="feed-reply-context">{ LF(p, "feed_replying_to", "Replying to @%1$s", feedReplyTargetHandle(item)) }</div>
+	}
 }
 
 templ feedRepostLine(p PageProps, item model.FeedItem, entries []repostEntry) {

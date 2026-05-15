@@ -263,13 +263,13 @@ class NativeMainFeedSurfaceTest {
     }
 
     @Test
-    fun nativeFeedRendersThreadChainsWithCollapsedAncestorButton() {
+    fun nativeFeedRendersThreadChainsWithRootPreviewAndCapsule() {
         val text = nativeFeedSource()
         val threadText = text.substringAfter("private fun bindThread")
             .substringBefore("private fun bindRetweeter")
 
-        assertTrue(threadText.contains("nativeThreadVisibleAncestorStart(chain.size)"))
-        assertTrue(threadText.contains("R.string.feed_thread_load_more_replies"))
+        assertTrue(threadText.contains("nativeThreadPreviewAncestors(chain)"))
+        assertFalse(threadText.contains("feed_thread_load_more_replies"))
         assertTrue(threadText.contains("R.string.feed_thread_capsule"))
         assertTrue(threadText.contains("callbacks.onRowClick(threaded.row)"))
         assertTrue(threadText.contains("stripReplyPrefix(item, item.bodyText.orEmpty())"))

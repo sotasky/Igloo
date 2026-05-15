@@ -126,11 +126,8 @@ private fun nativeLooksLikeLanguageTag(value: String): Boolean =
 internal fun nativeShouldClampBody(text: String): Boolean =
     text.length > 420 || text.count { it == '\n' } + 1 > NativeFeedBodyCollapsedLines
 
-internal fun nativeThreadVisibleAncestorStart(chainSize: Int): Int {
-    val total = chainSize + 1
-    if (total <= 2) return 0
-    return (total - 2).coerceAtMost(chainSize)
-}
+internal fun <T> nativeThreadPreviewAncestors(chain: List<T>): List<T> =
+    chain.take(1)
 
 internal fun remoteUriFor(url: String, baseUrl: String): MediaUri.Remote {
     val resolved = when {

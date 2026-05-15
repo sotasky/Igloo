@@ -165,11 +165,10 @@ class FeedTextUtilsTest {
     }
 
     @Test
-    fun native_thread_visible_ancestor_start_matches_web_collapse_rule() {
-        assertEquals(0, nativeThreadVisibleAncestorStart(0))
-        assertEquals(0, nativeThreadVisibleAncestorStart(1))
-        assertEquals(1, nativeThreadVisibleAncestorStart(2))
-        assertEquals(2, nativeThreadVisibleAncestorStart(3))
+    fun native_thread_preview_ancestors_match_web_root_leaf_rule() {
+        assertEquals(emptyList<String>(), nativeThreadPreviewAncestors(emptyList<String>()))
+        assertEquals(listOf("root"), nativeThreadPreviewAncestors(listOf("root")))
+        assertEquals(listOf("root"), nativeThreadPreviewAncestors(listOf("root", "parent")))
     }
 
     @Test
