@@ -1025,7 +1025,7 @@ test("downloads videos through the server backend", async () => {
       {
         kind: "video",
         tweetId: "222",
-        tweetUrl: "https://x.com/quote/status/222",
+        tweetUrl: "https://x.com/sample_quote/status/222",
         mediaId: "999",
         url: "https://video.twimg.com/ext_tw_video/999/pu/vid/640x360/high.mp4?tag=12",
         ext: ".mp4",
@@ -1048,7 +1048,7 @@ test("downloads videos through the server backend", async () => {
   );
   assert.ok(call, "expected server video download request");
   assert.deepEqual(JSON.parse(call.data), {
-    tweet_url: "https://x.com/quote/status/222",
+    tweet_url: "https://x.com/sample_quote/status/222",
     media_url:
       "https://video.twimg.com/ext_tw_video/999/pu/vid/640x360/high.mp4?tag=12",
     media_id: "999",
@@ -1072,7 +1072,7 @@ test("reports server video download failures", async () => {
       {
         kind: "video",
         tweetId: "222",
-        tweetUrl: "https://x.com/quote/status/222",
+        tweetUrl: "https://x.com/sample_quote/status/222",
         ext: ".mp4",
         index: 0,
       },
@@ -1103,7 +1103,7 @@ test("accepts server video downloads when the response contains moved files", as
       {
         kind: "video",
         tweetId: "222",
-        tweetUrl: "https://x.com/quote/status/222",
+        tweetUrl: "https://x.com/sample_quote/status/222",
         ext: ".mp4",
         index: 0,
       },
