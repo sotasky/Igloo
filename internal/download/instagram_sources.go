@@ -53,26 +53,25 @@ func (g *GalleryDLWrapper) InstagramChannel(ctx context.Context, handle string, 
 	anySuccess := false
 	for _, suffix := range instagramSourceSuffixes {
 		rawURL := "https://www.instagram.com/" + handle + "/" + suffix + "/"
-		refs, err := g.instagramDump(ctx, rawURL, limit, CookieSet{}, handle)
-		if err != nil || len(refs) == 0 {
-			authSucceeded := false
-			for _, auth := range authAttempts {
-				cookieRefs, cookieErr := g.instagramDump(ctx, rawURL, limit, auth, handle)
-				if cookieErr == nil {
-					authSucceeded = true
-					refs, err = cookieRefs, nil
-					if len(cookieRefs) > 0 {
-						break
-					}
-					continue
+		var refs []VideoRef
+		var err error
+		authSucceeded := false
+		for _, auth := range authAttempts {
+			cookieRefs, cookieErr := g.instagramDump(ctx, rawURL, limit, auth, handle)
+			if cookieErr == nil {
+				authSucceeded = true
+				refs, err = cookieRefs, nil
+				if len(cookieRefs) > 0 {
+					break
 				}
-				if err == nil {
-					err = cookieErr
-				}
+				continue
 			}
-			if authSucceeded && len(refs) == 0 {
-				err = nil
+			if err == nil {
+				err = cookieErr
 			}
+		}
+		if authSucceeded && len(refs) == 0 {
+			err = nil
 		}
 		if err != nil {
 			if firstErr == nil {
@@ -102,28 +101,26 @@ func (g *GalleryDLWrapper) InstagramTagged(ctx context.Context, handle string, l
 	}
 	authAttempts := instagramCookieAuthAttempts(cookiesFile, optionalCookieBrowser(cookiesBrowser))
 	rawURL := "https://www.instagram.com/" + handle + "/tagged/"
-	output, err := g.instagramTaggedDumpOutput(ctx, rawURL, limit, "")
-	refs := ParseInstagramTaggedDumpForHandle(output, handle)
-	if err != nil || len(refs) == 0 {
-		authSucceeded := false
-		for _, auth := range authAttempts {
-			cookieOutput, cookieErr := g.instagramTaggedDumpOutput(ctx, rawURL, limit, auth.File, auth.Browser)
-			cookieRefs := ParseInstagramTaggedDumpForHandle(cookieOutput, handle)
-			if cookieErr == nil {
-				authSucceeded = true
-				err, refs = nil, cookieRefs
-				if len(cookieRefs) > 0 {
-					break
-				}
-				continue
+	var refs []VideoRef
+	var err error
+	authSucceeded := false
+	for _, auth := range authAttempts {
+		cookieOutput, cookieErr := g.instagramTaggedDumpOutput(ctx, rawURL, limit, auth.File, auth.Browser)
+		cookieRefs := ParseInstagramTaggedDumpForHandle(cookieOutput, handle)
+		if cookieErr == nil {
+			authSucceeded = true
+			err, refs = nil, cookieRefs
+			if len(cookieRefs) > 0 {
+				break
 			}
-			if err == nil {
-				err = cookieErr
-			}
+			continue
 		}
-		if authSucceeded && len(refs) == 0 {
-			err = nil
+		if err == nil {
+			err = cookieErr
 		}
+	}
+	if authSucceeded && len(refs) == 0 {
+		err = nil
 	}
 	if err != nil {
 		return refs, err
@@ -167,13 +164,13 @@ func instagramProfileCookieAttempts(cookiesFile, cookiesBrowser string) []Cookie
 		if strings.TrimSpace(cookiesBrowser) == "" {
 			return []CookieSet{{}}
 		}
-		return []CookieSet{{Browser: strings.TrimSpace(cookiesBrowser)}, {}}
+		return []CookieSet{{Browser: strings.TrimSpace(cookiesBrowser)}}
 	}
 	out := []CookieSet{{File: strings.TrimSpace(cookiesFile)}}
 	if strings.TrimSpace(cookiesBrowser) != "" {
 		out = append(out, CookieSet{Browser: strings.TrimSpace(cookiesBrowser)})
 	}
-	return append(out, CookieSet{})
+	return out
 }
 
 func instagramCookieAuthAttempts(cookiesFile, cookiesBrowser string) []CookieSet {
@@ -183,6 +180,9 @@ func instagramCookieAuthAttempts(cookiesFile, cookiesBrowser string) []CookieSet
 	}
 	if strings.TrimSpace(cookiesBrowser) != "" {
 		out = append(out, CookieSet{Browser: strings.TrimSpace(cookiesBrowser)})
+	}
+	if len(out) == 0 {
+		return []CookieSet{{}}
 	}
 	return out
 }

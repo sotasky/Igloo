@@ -123,7 +123,7 @@ func TestInstagramTaggedArgsUseBrowserCookies(t *testing.T) {
 
 func TestInstagramProfileCookieAttemptsPreferConfiguredCookies(t *testing.T) {
 	got := instagramProfileCookieAttempts("/tmp/instagram-cookies.txt", "firefox")
-	want := []CookieSet{{File: "/tmp/instagram-cookies.txt"}, {Browser: "firefox"}, {}}
+	want := []CookieSet{{File: "/tmp/instagram-cookies.txt"}, {Browser: "firefox"}}
 	if len(got) != len(want) {
 		t.Fatalf("cookie attempts = %#v, want %#v", got, want)
 	}
@@ -136,7 +136,33 @@ func TestInstagramProfileCookieAttemptsPreferConfiguredCookies(t *testing.T) {
 
 func TestInstagramProfileCookieAttemptsUseBrowserWhenFileDisabled(t *testing.T) {
 	got := instagramProfileCookieAttempts("", "firefox")
-	want := []CookieSet{{Browser: "firefox"}, {}}
+	want := []CookieSet{{Browser: "firefox"}}
+	if len(got) != len(want) {
+		t.Fatalf("cookie attempts = %#v, want %#v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("cookie attempts = %#v, want %#v", got, want)
+		}
+	}
+}
+
+func TestInstagramCookieAuthAttemptsUseOnlyBrowserWhenFileDisabled(t *testing.T) {
+	got := instagramCookieAuthAttempts("", "firefox")
+	want := []CookieSet{{Browser: "firefox"}}
+	if len(got) != len(want) {
+		t.Fatalf("cookie attempts = %#v, want %#v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("cookie attempts = %#v, want %#v", got, want)
+		}
+	}
+}
+
+func TestInstagramCookieAuthAttemptsAllowAnonymousOnlyWithoutConfiguredCookies(t *testing.T) {
+	got := instagramCookieAuthAttempts("", "")
+	want := []CookieSet{{}}
 	if len(got) != len(want) {
 		t.Fatalf("cookie attempts = %#v, want %#v", got, want)
 	}
