@@ -130,6 +130,10 @@
     <string name="bookmark_delete_label">Başlığı sil</string>
     <string name="bookmark_delete_label_failed">Başlık silinemedi</string>
     <string name="bookmark_enter_category">Bir kategori adı girin.</string>
+    <string name="bookmark_filter_labels">Başlıklar</string>
+    <string name="bookmark_filter_no_label">Başlıksız</string>
+    <string name="bookmark_filter_no_labels_found">Başlık bulunamadı</string>
+    <string name="bookmark_filter_search_labels">Başlık ara</string>
     <string name="bookmark_label">Başlık</string>
     <string name="bookmark_label_deleted">Başlık silindi</string>
     <string name="bookmark_label_optional">başlık (isteğe bağlı)</string>

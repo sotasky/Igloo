@@ -2,22 +2,45 @@ package components
 
 import (
 	"fmt"
+	"net/url"
 	"strconv"
+	"strings"
 	"github.com/screwys/igloo/internal/db"
 	"github.com/screwys/igloo/internal/model"
 )
 
+// BookmarkLabelSelection holds the active bookmarks label filter.
+type BookmarkLabelSelection struct {
+	Label     string
+	IsNoLabel bool
+}
+
+func (s BookmarkLabelSelection) Active() bool {
+	return s.IsNoLabel || strings.TrimSpace(s.Label) != ""
+}
+
+func (s BookmarkLabelSelection) Display(p PageProps) string {
+	if s.IsNoLabel {
+		return L(p, "bookmark_filter_no_label", "No label")
+	}
+	if label := strings.TrimSpace(s.Label); label != "" {
+		return label
+	}
+	return L(p, "bookmark_filter_labels", "Labels")
+}
+
 // BookmarksPage renders the full bookmarks page with category filter pills and shorts overlay.
-templ BookmarksPage(p PageProps, bookmarks []model.Video, categories []db.BookmarkCategoryRow, selectedCategoryID int64, pager model.Pager) {
+templ BookmarksPage(p PageProps, bookmarks []model.Video, categories []db.BookmarkCategoryRow, labelCounts []db.BookmarkLabelCountRow, selectedCategoryID int64, selectedLabel BookmarkLabelSelection, pager model.Pager) {
 	@Base(p) {
-		<div class="bookmarks-filter-bar" style="display:flex; gap:0.5rem; flex-wrap:wrap; margin-bottom:1rem;">
-			<a class={ "bookmark-filter-pill", templ.KV("active", selectedCategoryID == 0) } href="/bookmarks">{ L(p, "logs_filter_all", "All") }</a>
+		<div class="bookmarks-filter-bar">
+			<a class={ "bookmark-filter-pill", templ.KV("active", selectedCategoryID == 0 && !selectedLabel.Active()) } href="/bookmarks">{ L(p, "logs_filter_all", "All") }</a>
 			for _, cat := range categories {
 				<a
-					class={ "bookmark-filter-pill", templ.KV("active", selectedCategoryID == cat.ID) }
+					class={ "bookmark-filter-pill", templ.KV("active", !selectedLabel.Active() && selectedCategoryID == cat.ID) }
 					href={ templ.SafeURL(fmt.Sprintf("/bookmarks?category_id=%d", cat.ID)) }
 				>{ cat.Name }</a>
 			}
+			@bookmarkLabelFilter(p, labelCounts, selectedLabel)
 		</div>
 		<div id="shorts-grid-shell">
 			<div id="video-grid" class="video-grid shorts-grid bookmarks-grid">
@@ -30,7 +53,7 @@ templ BookmarksPage(p PageProps, bookmarks []model.Video, categories []db.Bookma
 				}
 			</div>
 			if pager.HasNext() {
-				@VideoGridInfiniteScrollTrigger(bookmarksNextURL(pager, selectedCategoryID))
+				@VideoGridInfiniteScrollTrigger(bookmarksNextURL(pager, selectedCategoryID, selectedLabel))
 			}
 		</div>
 		<div
@@ -51,22 +74,90 @@ templ BookmarksPage(p PageProps, bookmarks []model.Video, categories []db.Bookma
 	}
 }
 
+templ bookmarkLabelFilter(p PageProps, labelCounts []db.BookmarkLabelCountRow, selectedLabel BookmarkLabelSelection) {
+	<div class="bookmark-label-filter" data-bookmark-label-filter>
+		<button
+			class={ "bookmark-filter-pill", "bookmark-label-filter-toggle", templ.KV("active", selectedLabel.Active()) }
+			type="button"
+			aria-haspopup="dialog"
+			aria-expanded="false"
+			data-bookmark-label-toggle
+		>
+			<span>{ selectedLabel.Display(p) }</span>
+			<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+				<polyline points="6 9 12 15 18 9"></polyline>
+			</svg>
+		</button>
+		<div class="bookmark-label-panel hidden" role="dialog" aria-label={ L(p, "bookmark_filter_labels", "Labels") } data-bookmark-label-panel>
+			<input
+				class="bookmark-label-search-input"
+				type="search"
+				placeholder={ L(p, "bookmark_filter_search_labels", "Search labels") }
+				autocomplete="off"
+				data-bookmark-label-search
+			/>
+			<div class="bookmark-label-result-list" data-bookmark-label-list>
+				for _, row := range labelCounts {
+					<a
+						class={ "bookmark-label-result-row", templ.KV("active", bookmarkLabelRowSelected(row, selectedLabel)) }
+						href={ templ.SafeURL(bookmarkLabelURL(row)) }
+						data-bookmark-label-row
+						data-label={ bookmarkLabelDisplay(p, row) }
+					>
+						<span class="bookmark-label-result-name">{ bookmarkLabelDisplay(p, row) }</span>
+						<span class="bookmark-label-result-count">{ strconv.Itoa(row.BookmarkCount) }</span>
+					</a>
+				}
+				<div class="bookmark-label-empty hidden" data-bookmark-label-empty>{ L(p, "bookmark_filter_no_labels_found", "No labels found") }</div>
+			</div>
+		</div>
+	</div>
+}
+
 // BookmarksPartial renders just the bookmark cards and next trigger for HTMX infinite scroll responses.
-templ BookmarksPartial(p PageProps, bookmarks []model.Video, pager model.Pager, selectedCategoryID int64) {
+templ BookmarksPartial(p PageProps, bookmarks []model.Video, pager model.Pager, selectedCategoryID int64, selectedLabel BookmarkLabelSelection) {
 	for _, v := range bookmarks {
 		@VideoCard(p, v)
 	}
 	if pager.HasNext() {
-		@VideoGridInfiniteScrollTrigger(bookmarksNextURL(pager, selectedCategoryID))
+		@VideoGridInfiniteScrollTrigger(bookmarksNextURL(pager, selectedCategoryID, selectedLabel))
 	}
 }
 
-func bookmarksNextURL(pager model.Pager, categoryID int64) string {
-	url := fmt.Sprintf("/bookmarks?page=%d", pager.Page+1)
-	if categoryID > 0 {
-		url += fmt.Sprintf("&category_id=%d", categoryID)
+func bookmarksNextURL(pager model.Pager, categoryID int64, selectedLabel BookmarkLabelSelection) string {
+	values := url.Values{}
+	values.Set("page", strconv.Itoa(pager.Page+1))
+	if selectedLabel.IsNoLabel {
+		values.Set("label_empty", "1")
+	} else if label := strings.TrimSpace(selectedLabel.Label); label != "" {
+		values.Set("label", label)
+	} else if categoryID > 0 {
+		values.Set("category_id", strconv.FormatInt(categoryID, 10))
 	}
-	return url
+	return "/bookmarks?" + values.Encode()
+}
+
+func bookmarkLabelURL(row db.BookmarkLabelCountRow) string {
+	if row.IsNoLabel {
+		return "/bookmarks?label_empty=1"
+	}
+	values := url.Values{}
+	values.Set("label", strings.TrimSpace(row.Label))
+	return "/bookmarks?" + values.Encode()
+}
+
+func bookmarkLabelDisplay(p PageProps, row db.BookmarkLabelCountRow) string {
+	if row.IsNoLabel {
+		return L(p, "bookmark_filter_no_label", "No label")
+	}
+	return row.Label
+}
+
+func bookmarkLabelRowSelected(row db.BookmarkLabelCountRow, selected BookmarkLabelSelection) bool {
+	if row.IsNoLabel || selected.IsNoLabel {
+		return row.IsNoLabel && selected.IsNoLabel
+	}
+	return strings.EqualFold(strings.TrimSpace(row.Label), strings.TrimSpace(selected.Label))
 }
 
 func bookmarksInitialPage(pager model.Pager) int {

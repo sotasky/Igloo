@@ -100,6 +100,133 @@ func TestGetBookmarkCount(t *testing.T) {
 	}
 }
 
+func TestBookmarkLabelFiltersAndCounts(t *testing.T) {
+	d := openFreshTestDB(t)
+
+	for _, videoID := range []string{
+		"alice_cinema_one",
+		"alice_cinema_two",
+		"alice_japan",
+		"alice_no_label_null",
+		"alice_no_label_empty",
+		"alice_no_label_space",
+		"bob_cinema",
+	} {
+		seedTestVideo(t, d, videoID, "youtube_bookmark_labels")
+	}
+
+	fixtures := []struct {
+		userID      string
+		videoID     string
+		categoryID  int64
+		customTitle string
+		insertNull  bool
+		bookmarked  int64
+	}{
+		{"alice", "alice_cinema_one", 1, " cinema ", false, 10},
+		{"alice", "alice_cinema_two", 2, "cinema", false, 20},
+		{"alice", "alice_japan", 1, "japan", false, 30},
+		{"alice", "alice_no_label_null", 1, "", true, 40},
+		{"alice", "alice_no_label_empty", 2, "", false, 50},
+		{"alice", "alice_no_label_space", 2, "   ", false, 60},
+		{"bob", "bob_cinema", 1, "cinema", false, 70},
+	}
+	for _, f := range fixtures {
+		var err error
+		if f.insertNull {
+			err = d.ExecRaw(`
+				INSERT INTO bookmarks (user_id, video_id, category_id, bookmarked_at)
+				VALUES (?, ?, ?, ?)
+			`, f.userID, f.videoID, f.categoryID, f.bookmarked)
+		} else {
+			err = d.ExecRaw(`
+				INSERT INTO bookmarks (user_id, video_id, category_id, custom_title, bookmarked_at)
+				VALUES (?, ?, ?, ?, ?)
+			`, f.userID, f.videoID, f.categoryID, f.customTitle, f.bookmarked)
+		}
+		if err != nil {
+			t.Fatalf("insert bookmark %s: %v", f.videoID, err)
+		}
+	}
+
+	exactOpts := GetBookmarksOpts{
+		UserID:          "alice",
+		CategoryID:      999,
+		LabelFilterMode: BookmarkLabelFilterExact,
+		Label:           "cinema",
+		Limit:           10,
+	}
+	count, err := d.GetBookmarkCount(exactOpts)
+	if err != nil {
+		t.Fatalf("GetBookmarkCount exact label: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("exact label count = %d, want 2", count)
+	}
+	bookmarks, err := d.GetBookmarks(exactOpts)
+	if err != nil {
+		t.Fatalf("GetBookmarks exact label: %v", err)
+	}
+	if got := bookmarkVideoIDs(bookmarks); strings.Join(got, ",") != "alice_cinema_two,alice_cinema_one" {
+		t.Fatalf("exact label videos = %v", got)
+	}
+
+	noLabelOpts := GetBookmarksOpts{
+		UserID:          "alice",
+		LabelFilterMode: BookmarkLabelFilterNoLabel,
+		Limit:           10,
+	}
+	count, err = d.GetBookmarkCount(noLabelOpts)
+	if err != nil {
+		t.Fatalf("GetBookmarkCount no label: %v", err)
+	}
+	if count != 3 {
+		t.Fatalf("no-label count = %d, want 3", count)
+	}
+	bookmarks, err = d.GetBookmarks(noLabelOpts)
+	if err != nil {
+		t.Fatalf("GetBookmarks no label: %v", err)
+	}
+	if got := bookmarkVideoIDs(bookmarks); strings.Join(got, ",") != "alice_no_label_space,alice_no_label_empty,alice_no_label_null" {
+		t.Fatalf("no-label videos = %v", got)
+	}
+
+	categoryCount, err := d.GetBookmarkCount(GetBookmarksOpts{UserID: "alice", CategoryID: 1})
+	if err != nil {
+		t.Fatalf("GetBookmarkCount category: %v", err)
+	}
+	if categoryCount != 3 {
+		t.Fatalf("category count = %d, want 3", categoryCount)
+	}
+
+	labelCounts, err := d.GetBookmarkLabelCounts("alice")
+	if err != nil {
+		t.Fatalf("GetBookmarkLabelCounts: %v", err)
+	}
+	if len(labelCounts) != 3 {
+		t.Fatalf("label count rows = %#v, want 3 rows", labelCounts)
+	}
+	wantLabels := []BookmarkLabelCountRow{
+		{Label: "", IsNoLabel: true, BookmarkCount: 3},
+		{Label: "cinema", BookmarkCount: 2},
+		{Label: "japan", BookmarkCount: 1},
+	}
+	for i, want := range wantLabels {
+		got := labelCounts[i]
+		if got.Label != want.Label || got.IsNoLabel != want.IsNoLabel || got.BookmarkCount != want.BookmarkCount {
+			t.Fatalf("labelCounts[%d] = %#v, want %#v", i, got, want)
+		}
+	}
+}
+
+func bookmarkVideoIDs(bookmarks []model.Video) []string {
+	ids := make([]string, 0, len(bookmarks))
+	for _, bookmark := range bookmarks {
+		ids = append(ids, bookmark.VideoID)
+	}
+	return ids
+}
+
 func TestAddAndRemoveBookmark(t *testing.T) {
 	d := openWritableTestDB(t)
 	const videoID = "fixture_bookmark_video"

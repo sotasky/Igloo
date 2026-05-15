@@ -36,6 +36,13 @@ type BookmarkCategoryRow struct {
 	BookmarkCount int
 }
 
+// BookmarkLabelCountRow represents one bookmark label filter option.
+type BookmarkLabelCountRow struct {
+	Label         string
+	IsNoLabel     bool
+	BookmarkCount int
+}
+
 // GetBookmarkCategories returns all categories for a user with bookmark counts.
 func (db *DB) GetBookmarkCategories(userID string) ([]BookmarkCategoryRow, error) {
 	rows, err := db.conn.Query(`
@@ -65,12 +72,23 @@ func (db *DB) GetBookmarkCategories(userID string) ([]BookmarkCategoryRow, error
 	return categories, rows.Err()
 }
 
+// BookmarkLabelFilterMode controls label filtering for bookmark list queries.
+type BookmarkLabelFilterMode int
+
+const (
+	BookmarkLabelFilterNone BookmarkLabelFilterMode = iota
+	BookmarkLabelFilterExact
+	BookmarkLabelFilterNoLabel
+)
+
 // GetBookmarksOpts holds filter options for bookmark queries.
 type GetBookmarksOpts struct {
-	CategoryID int64
-	UserID     string
-	Limit      int
-	Offset     int
+	CategoryID      int64
+	LabelFilterMode BookmarkLabelFilterMode
+	Label           string
+	UserID          string
+	Limit           int
+	Offset          int
 }
 
 // GetBookmarks returns bookmarked videos with full metadata, newest first.
@@ -85,10 +103,7 @@ func (db *DB) GetBookmarks(opts GetBookmarksOpts) ([]model.Video, error) {
 	where = append(where, "b.user_id = ?")
 	args = append(args, opts.UserID)
 
-	if opts.CategoryID > 0 {
-		where = append(where, "b.category_id = ?")
-		args = append(args, opts.CategoryID)
-	}
+	where, args = appendBookmarkFilterWhere(where, args, opts, "b.")
 
 	whereClause := "WHERE " + strings.Join(where, " AND ")
 
@@ -264,10 +279,7 @@ func (db *DB) GetBookmarkCount(opts GetBookmarksOpts) (int, error) {
 	where = append(where, "user_id = ?")
 	args = append(args, opts.UserID)
 
-	if opts.CategoryID > 0 {
-		where = append(where, "category_id = ?")
-		args = append(args, opts.CategoryID)
-	}
+	where, args = appendBookmarkFilterWhere(where, args, opts, "")
 
 	var count int
 	err := db.conn.QueryRow(
@@ -275,6 +287,65 @@ func (db *DB) GetBookmarkCount(opts GetBookmarksOpts) (int, error) {
 		args...,
 	).Scan(&count)
 	return count, err
+}
+
+func appendBookmarkFilterWhere(where []string, args []any, opts GetBookmarksOpts, prefix string) ([]string, []any) {
+	switch opts.LabelFilterMode {
+	case BookmarkLabelFilterExact:
+		label := strings.TrimSpace(opts.Label)
+		if label == "" {
+			where = append(where, "NULLIF(TRIM(COALESCE("+prefix+"custom_title, '')), '') IS NULL")
+			return where, args
+		}
+		where = append(where, "TRIM(COALESCE("+prefix+"custom_title, '')) = ?")
+		args = append(args, label)
+	case BookmarkLabelFilterNoLabel:
+		where = append(where, "NULLIF(TRIM(COALESCE("+prefix+"custom_title, '')), '') IS NULL")
+	default:
+		if opts.CategoryID > 0 {
+			where = append(where, prefix+"category_id = ?")
+			args = append(args, opts.CategoryID)
+		}
+	}
+	return where, args
+}
+
+// GetBookmarkLabelCounts returns bookmark label filters ordered by frequency.
+func (db *DB) GetBookmarkLabelCounts(userID string) ([]BookmarkLabelCountRow, error) {
+	rows, err := db.conn.Query(`
+		SELECT label, COUNT(*) AS bookmark_count
+		FROM (
+			SELECT
+				CASE
+					WHEN NULLIF(TRIM(COALESCE(custom_title, '')), '') IS NULL THEN ''
+					ELSE TRIM(custom_title)
+				END AS label
+			FROM bookmarks
+			WHERE user_id = ?
+		)
+		GROUP BY label
+		ORDER BY bookmark_count DESC, LOWER(label) ASC
+	`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		_ = rows.Close()
+	}()
+
+	var labels []BookmarkLabelCountRow
+	for rows.Next() {
+		var row BookmarkLabelCountRow
+		if err := rows.Scan(&row.Label, &row.BookmarkCount); err != nil {
+			return nil, err
+		}
+		row.IsNoLabel = row.Label == ""
+		labels = append(labels, row)
+	}
+	if labels == nil {
+		labels = []BookmarkLabelCountRow{}
+	}
+	return labels, rows.Err()
 }
 
 // AddBookmark creates or updates a bookmark.
@@ -443,12 +514,12 @@ func (db *DB) GetBookmarkLabels(userID, categoryID string) ([]string, error) {
 	var err error
 	if categoryID != "" {
 		rows, err = db.conn.Query(
-			"SELECT DISTINCT custom_title FROM bookmarks WHERE user_id = ? AND category_id = ? AND custom_title IS NOT NULL AND custom_title != '' ORDER BY custom_title",
+			"SELECT DISTINCT TRIM(custom_title) FROM bookmarks WHERE user_id = ? AND category_id = ? AND NULLIF(TRIM(COALESCE(custom_title, '')), '') IS NOT NULL ORDER BY LOWER(TRIM(custom_title))",
 			userID, categoryID,
 		)
 	} else {
 		rows, err = db.conn.Query(
-			"SELECT DISTINCT custom_title FROM bookmarks WHERE user_id = ? AND custom_title IS NOT NULL AND custom_title != '' ORDER BY custom_title",
+			"SELECT DISTINCT TRIM(custom_title) FROM bookmarks WHERE user_id = ? AND NULLIF(TRIM(COALESCE(custom_title, '')), '') IS NOT NULL ORDER BY LOWER(TRIM(custom_title))",
 			userID,
 		)
 	}

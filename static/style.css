@@ -1843,6 +1843,77 @@ select.input:focus {
 .bookmark-filter-pill:hover { border-color: var(--accent-primary); color: var(--text-primary); }
 .bookmark-filter-pill.active { background: rgba(var(--accent-primary-rgb), 0.16); border-color: var(--accent-secondary); color: var(--accent-secondary); }
 .bookmark-filter-pill.add { font-weight: 700; width: 30px; text-align: center; padding: 0.32rem 0; }
+.bookmark-label-filter { position: relative; }
+.bookmark-label-filter-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+}
+.bookmark-label-filter-toggle svg { flex-shrink: 0; }
+.bookmark-label-panel {
+    position: absolute;
+    top: calc(100% + 8px);
+    left: 0;
+    z-index: 30010;
+    width: min(320px, calc(100vw - 2rem));
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    box-shadow: 0 18px 46px rgba(0, 0, 0, 0.45);
+    overflow: hidden;
+}
+.bookmark-label-panel.hidden { display: none; }
+.bookmark-label-search-input {
+    width: 100%;
+    box-sizing: border-box;
+    border: none;
+    border-bottom: 1px solid var(--border-color);
+    background: rgba(255,255,255,0.05);
+    color: var(--text-primary);
+    outline: none;
+    font: inherit;
+    font-size: 0.85rem;
+    padding: 0.7rem 0.85rem;
+}
+.bookmark-label-search-input::placeholder { color: var(--text-secondary); opacity: 0.72; }
+.bookmark-label-result-list {
+    max-height: min(360px, 52vh);
+    overflow-y: auto;
+    padding: 0.35rem;
+}
+.bookmark-label-result-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    border-radius: 8px;
+    color: var(--text-secondary);
+    text-decoration: none;
+    padding: 0.5rem 0.6rem;
+    font-size: 0.84rem;
+}
+.bookmark-label-result-row:hover,
+.bookmark-label-result-row.active {
+    background: rgba(var(--accent-primary-rgb), 0.14);
+    color: var(--text-primary);
+}
+.bookmark-label-result-row.hidden,
+.bookmark-label-empty.hidden { display: none; }
+.bookmark-label-result-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.bookmark-label-result-count {
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+}
+.bookmark-label-empty {
+    color: var(--text-muted);
+    font-size: 0.84rem;
+    padding: 0.7rem 0.6rem;
+}
 
 /* DeArrow section — heading + description on the left, mode pills on the right. */
 .dearrow-section {

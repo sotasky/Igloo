@@ -189,6 +189,67 @@ class BookmarksRouteTest {
         assertEquals(MediaUri.Remote("https://igloo.example/api/media/thumbnail/tweet_1"), playerItem.fallbackThumbnailUri)
     }
 
+    @Test
+    fun label_counts_trim_group_and_sort_by_frequency() {
+        val rows = bookmarkLabelCounts(
+            listOf(
+                videoBookmark(videoId = "a", customTitle = " cinema "),
+                videoBookmark(videoId = "b", customTitle = "cinema"),
+                videoBookmark(videoId = "c", customTitle = "japan"),
+                videoBookmark(videoId = "d", customTitle = null),
+                videoBookmark(videoId = "e", customTitle = ""),
+                videoBookmark(videoId = "f", customTitle = "   "),
+            ),
+        )
+
+        assertEquals(
+            listOf(
+                BookmarkLabelCount(label = null, count = 3),
+                BookmarkLabelCount(label = "cinema", count = 2),
+                BookmarkLabelCount(label = "japan", count = 1),
+            ),
+            rows,
+        )
+    }
+
+    @Test
+    fun bookmark_filters_are_single_active_modes() {
+        val rows = listOf(
+            videoBookmark(videoId = "cat_one", categoryId = 1L, customTitle = "cinema"),
+            videoBookmark(videoId = "cat_two", categoryId = 2L, customTitle = "cinema"),
+            videoBookmark(videoId = "unlabelled", categoryId = 1L, customTitle = " "),
+        )
+
+        assertEquals(
+            listOf("cat_one", "cat_two", "unlabelled"),
+            filterBookmarkItems(rows, BookmarkFilter.All).map { it.bookmark.videoId },
+        )
+        assertEquals(
+            listOf("cat_one", "unlabelled"),
+            filterBookmarkItems(rows, BookmarkFilter.Category(1L)).map { it.bookmark.videoId },
+        )
+        assertEquals(
+            listOf("cat_one", "cat_two"),
+            filterBookmarkItems(rows, BookmarkFilter.Label("cinema")).map { it.bookmark.videoId },
+        )
+        assertEquals(
+            listOf("unlabelled"),
+            filterBookmarkItems(rows, BookmarkFilter.NoLabel).map { it.bookmark.videoId },
+        )
+    }
+
+    @Test
+    fun label_search_matches_displayed_no_label_row() {
+        val rows = listOf(
+            BookmarkLabelCount(label = null, count = 3),
+            BookmarkLabelCount(label = "cinema", count = 2),
+            BookmarkLabelCount(label = "japan", count = 1),
+        )
+
+        assertEquals(listOf("cinema"), filterBookmarkLabelCounts(rows, "cine").map { it.label })
+        assertEquals(listOf(null), filterBookmarkLabelCounts(rows, "no", "No label").map { it.label })
+    }
+
     private fun videoBookmark(
         videoId: String = "youtube_video_1",
         channelId: String = "youtube_channel_1",
@@ -197,8 +258,15 @@ class BookmarksRouteTest {
         channelName: String? = "Demo Channel",
         channelSourceId: String? = "demo_channel",
         isFollowed: Boolean = false,
+        categoryId: Long = 1L,
+        customTitle: String? = null,
     ): BookmarkItem = BookmarkItem(
-        bookmark = BookmarkEntity(videoId = videoId, categoryId = 1L, bookmarkedAt = 10L),
+        bookmark = BookmarkEntity(
+            videoId = videoId,
+            categoryId = categoryId,
+            customTitle = customTitle,
+            bookmarkedAt = 10L,
+        ),
         feedItem = null,
         video = VideoEntity(
             videoId = videoId,

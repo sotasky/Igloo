@@ -1326,14 +1326,31 @@ func (s *Server) handlePageBookmarks(w http.ResponseWriter, r *http.Request) {
 		page = 1
 	}
 	categoryID, _ := strconv.ParseInt(r.URL.Query().Get("category_id"), 10, 64)
+	selectedLabel := components.BookmarkLabelSelection{
+		Label:     strings.TrimSpace(r.URL.Query().Get("label")),
+		IsNoLabel: r.URL.Query().Get("label_empty") == "1",
+	}
+	if selectedLabel.Active() {
+		categoryID = 0
+	}
 	perPage := bookmarksPageSize
 
 	categories, _ := s.db.GetBookmarkCategories(userID)
+	labelCounts, err := s.db.GetBookmarkLabelCounts(userID)
+	if err != nil {
+		slog.Error("GetBookmarkLabelCounts", "err", err)
+	}
 
 	opts := db.GetBookmarksOpts{
 		CategoryID: categoryID,
 		UserID:     userID,
 		Limit:      perPage,
+	}
+	if selectedLabel.IsNoLabel {
+		opts.LabelFilterMode = db.BookmarkLabelFilterNoLabel
+	} else if selectedLabel.Label != "" {
+		opts.LabelFilterMode = db.BookmarkLabelFilterExact
+		opts.Label = selectedLabel.Label
 	}
 	count, _ := s.db.GetBookmarkCount(opts)
 	pager := model.Pager{Page: page, PerPage: perPage, Total: count}
@@ -1358,19 +1375,19 @@ func (s *Server) handlePageBookmarks(w http.ResponseWriter, r *http.Request) {
 	p.PageTitle = "Bookmarks"
 	p.ActiveNav = "bookmarks"
 	p.PageBadge = fmt.Sprintf("%d bookmarks", count)
-	p.PageScripts = []string{"js/infinite_page.js"}
+	p.PageScripts = []string{"js/infinite_page.js", "js/bookmark_label_filter.js"}
 	p.ESBundle = "js/dist/shorts.js"
 	p.Sidebar = s.mustBuildSidebar(r)
 
 	// HTMX request — return bookmark cards for infinite scroll
 	if r.Header.Get("HX-Request") != "" {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_ = components.BookmarksPartial(p, bookmarks, pager, categoryID).Render(r.Context(), w)
+		_ = components.BookmarksPartial(p, bookmarks, pager, categoryID, selectedLabel).Render(r.Context(), w)
 		return
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_ = components.BookmarksPage(p, bookmarks, categories, categoryID, pager).Render(r.Context(), w)
+	_ = components.BookmarksPage(p, bookmarks, categories, labelCounts, categoryID, selectedLabel, pager).Render(r.Context(), w)
 }
 
 func (s *Server) handlePageSearch(w http.ResponseWriter, r *http.Request) {

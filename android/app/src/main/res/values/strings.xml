@@ -131,6 +131,10 @@
     <string name="bookmark_delete_label">Delete label</string>
     <string name="bookmark_delete_label_failed">Failed to delete label</string>
     <string name="bookmark_enter_category">Enter a category name.</string>
+    <string name="bookmark_filter_labels">Labels</string>
+    <string name="bookmark_filter_no_label">No label</string>
+    <string name="bookmark_filter_no_labels_found">No labels found</string>
+    <string name="bookmark_filter_search_labels">Search labels</string>
     <string name="bookmark_label">Label</string>
     <string name="bookmark_label_deleted">Label deleted</string>
     <string name="bookmark_label_optional">label (optional)</string>

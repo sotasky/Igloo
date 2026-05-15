@@ -26,7 +26,19 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
-/** Bookmarks route state holder for the category-filtered grid. */
+sealed class BookmarkFilter {
+    object All : BookmarkFilter()
+    data class Category(val categoryId: Long) : BookmarkFilter()
+    data class Label(val label: String) : BookmarkFilter()
+    object NoLabel : BookmarkFilter()
+}
+
+data class BookmarkLabelCount(
+    val label: String?,
+    val count: Int,
+)
+
+/** Bookmarks route state holder for the category/label-filtered grid. */
 class BookmarksViewModel(
     private val db: IglooDatabase,
     private val outboxWriter: OutboxWriter,
@@ -60,11 +72,25 @@ class BookmarksViewModel(
     }
 
 
-    /** `null` = "All"; otherwise matches `BookmarkEntity.categoryId`. */
-    private val selectedCategoryId = MutableStateFlow<Long?>(null)
-    val selectedCategory: StateFlow<Long?> = selectedCategoryId.asStateFlow()
+    private val selectedBookmarkFilter = MutableStateFlow<BookmarkFilter>(BookmarkFilter.All)
+    val selectedFilter: StateFlow<BookmarkFilter> = selectedBookmarkFilter.asStateFlow()
 
-    fun selectCategory(id: Long?) { selectedCategoryId.value = id }
+    fun selectAll() {
+        selectedBookmarkFilter.value = BookmarkFilter.All
+    }
+
+    fun selectCategory(id: Long?) {
+        selectedBookmarkFilter.value = id?.let(BookmarkFilter::Category) ?: BookmarkFilter.All
+    }
+
+    fun selectLabel(label: String) {
+        val normalized = normalizeBookmarkLabel(label)
+        selectedBookmarkFilter.value = normalized?.let(BookmarkFilter::Label) ?: BookmarkFilter.NoLabel
+    }
+
+    fun selectNoLabel() {
+        selectedBookmarkFilter.value = BookmarkFilter.NoLabel
+    }
 
     private val allItems: StateFlow<List<BookmarkItem>?> = db.bookmarkReadDao()
         .bookmarksFlow()
@@ -104,16 +130,23 @@ class BookmarksViewModel(
             initialValue = emptyMap(),
         )
 
-    val items: StateFlow<List<BookmarkItem>> = combine(allItems, selectedCategoryId) { list, cat ->
-        val base = list.orEmpty()
-        if (cat == null) base else base.filter { it.bookmark.categoryId == cat }
+    val labelCounts: StateFlow<List<BookmarkLabelCount>> = allItems
+        .map { items -> bookmarkLabelCounts(items.orEmpty()) }
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000L),
+            initialValue = emptyList(),
+        )
+
+    val items: StateFlow<List<BookmarkItem>> = combine(allItems, selectedBookmarkFilter) { list, filter ->
+        filterBookmarkItems(list.orEmpty(), filter)
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5_000L),
         initialValue = emptyList(),
     )
 
-    val uiState: StateFlow<UiState<Unit>> = combine(allItems, selectedCategoryId) { list, _ ->
+    val uiState: StateFlow<UiState<Unit>> = combine(allItems, selectedBookmarkFilter) { list, _ ->
         when {
             list == null -> UiState.Loading
             list.isEmpty() -> UiState.Empty
@@ -218,4 +251,46 @@ class BookmarksViewModel(
             ?: item.video?.title?.takeIf { !it.isNullOrBlank() }
             ?: item.video?.description?.lineSequence()?.firstOrNull { it.isNotBlank() }
 
+}
+
+internal fun normalizeBookmarkLabel(label: String?): String? =
+    label?.trim()?.takeIf { it.isNotEmpty() }
+
+internal fun bookmarkLabelCounts(items: List<BookmarkItem>): List<BookmarkLabelCount> =
+    items
+        .groupingBy { normalizeBookmarkLabel(it.bookmark.customTitle) }
+        .eachCount()
+        .map { (label, count) -> BookmarkLabelCount(label = label, count = count) }
+        .sortedWith(
+            compareByDescending<BookmarkLabelCount> { it.count }
+                .thenBy { it.label.orEmpty().lowercase() },
+        )
+
+internal fun filterBookmarkItems(
+    items: List<BookmarkItem>,
+    filter: BookmarkFilter,
+): List<BookmarkItem> = when (filter) {
+    BookmarkFilter.All -> items
+    is BookmarkFilter.Category -> items.filter { it.bookmark.categoryId == filter.categoryId }
+    is BookmarkFilter.Label -> {
+        val label = normalizeBookmarkLabel(filter.label)
+        if (label == null) {
+            items.filter { normalizeBookmarkLabel(it.bookmark.customTitle) == null }
+        } else {
+            items.filter { normalizeBookmarkLabel(it.bookmark.customTitle) == label }
+        }
+    }
+    BookmarkFilter.NoLabel -> items.filter { normalizeBookmarkLabel(it.bookmark.customTitle) == null }
+}
+
+internal fun filterBookmarkLabelCounts(
+    labels: List<BookmarkLabelCount>,
+    query: String,
+    noLabelText: String = "No label",
+): List<BookmarkLabelCount> {
+    val normalized = query.trim().lowercase()
+    if (normalized.isEmpty()) return labels
+    return labels.filter { row ->
+        (row.label ?: noLabelText).lowercase().contains(normalized)
+    }
 }
