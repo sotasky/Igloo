@@ -75,6 +75,9 @@ func TestShortsPlayerHeaderRendersStoriesTabTrigger(t *testing.T) {
 	if !strings.Contains(src, `href="/shorts?tab=stories"`) {
 		t.Fatal("shorts player header should include the Stories tab trigger for the story tray")
 	}
+	if !strings.Contains(src, "(_state && _state.storyMode) ? 'stories'") {
+		t.Fatal("shorts player header should select the Stories tab while story playback is active")
+	}
 }
 
 func TestShortsStoryTrayOpensByDefaultForNormalMoments(t *testing.T) {
@@ -120,6 +123,44 @@ func TestShortsStoryGridButtonLabelsStoryPlaybackAsMoments(t *testing.T) {
 	for _, check := range checks {
 		if !strings.Contains(src, check) {
 			t.Errorf("shorts story grid button wiring missing %q", check)
+		}
+	}
+}
+
+func TestShortsStoryTabOpensFirstTrayStory(t *testing.T) {
+	srcBytes, err := os.ReadFile("../../static/js/src/shorts/index.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := string(srcBytes)
+	checks := []string{
+		"function openFirstStoryFromTray()",
+		"function firstStoryTrayRow()",
+		"return Promise.resolve(openStoryRow(row, { continueAcrossAccounts: true }))",
+		"if (state.overlayOpen && tab === 'stories')",
+		"openFirstStoryFromTray()",
+	}
+	for _, check := range checks {
+		if !strings.Contains(src, check) {
+			t.Errorf("story tab first-story wiring missing %q", check)
+		}
+	}
+}
+
+func TestShortsStoryModePreviousTabExitsWithoutSwitchingTabs(t *testing.T) {
+	srcBytes, err := os.ReadFile("../../static/js/src/shorts/index.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := string(srcBytes)
+	checks := []string{
+		"if (state.storyMode)",
+		"if (tab === currentTab)",
+		"exitStoryMode({ restore: true })",
+	}
+	for _, check := range checks {
+		if !strings.Contains(src, check) {
+			t.Errorf("story mode tab return wiring missing %q", check)
 		}
 	}
 }

@@ -409,6 +409,28 @@ if (layout) {
       if (text) text.textContent = label
     }
 
+    function showStoryTray() {
+      var tray = ensureStoryTray()
+      updateStoryGridButton()
+      tray.classList.add('open')
+      tray.setAttribute('aria-hidden', 'false')
+      return tray
+    }
+
+    function startStoryTrayRefreshTimer() {
+      if (state.storyTrayRefreshTimer) return
+      state.storyTrayRefreshTimer = setInterval(function () {
+        if (!state.storyTray || !state.storyTray.classList.contains('open')) {
+          if (state.storyTrayRefreshTimer) {
+            clearInterval(state.storyTrayRefreshTimer)
+            state.storyTrayRefreshTimer = 0
+          }
+          return
+        }
+        refreshStoryTray(true)
+      }, 30000)
+    }
+
     function activateStoryGridButton() {
       if (state.storyMode) {
         if (exitStoryMode({ restore: true }) !== false) return
@@ -449,21 +471,46 @@ if (layout) {
         var row = event.target && event.target.closest ? event.target.closest('.story-channel-row[data-story-channel-id]') : null
         if (!row) return
         event.preventDefault()
-        var queued = storyQueueFromRow(row)
-        var accountTransition = ''
-        if (state.storyMode && queued.index >= 0 && state.storyQueueIndex >= 0 && queued.index !== state.storyQueueIndex) {
-          accountTransition = queued.index > state.storyQueueIndex ? 'next' : 'prev'
-        }
-        openStoryChannel(
-          row.getAttribute('data-story-channel-id'),
-          row.getAttribute('data-story-first-video-id'),
-          { queue: queued.queue, queueIndex: queued.index, continueAcrossAccounts: true, accountTransition: accountTransition }
-        )
+        openStoryRow(row, { continueAcrossAccounts: true })
       })
       layout.appendChild(tray)
       state.storyTray = tray
       updateStoryGridButton()
       return tray
+    }
+
+    function firstStoryTrayRow() {
+      if (!state.storyTray) return null
+      var root = q('.shorts-story-tray-body', state.storyTray) || state.storyTray
+      return q('.story-channel-row[data-story-channel-id]', root)
+    }
+
+    function openStoryRow(row, options) {
+      if (!row) return false
+      var opts = options || {}
+      var queued = storyQueueFromRow(row)
+      var accountTransition = opts.accountTransition || ''
+      if (!accountTransition && state.storyMode && queued.index >= 0 && state.storyQueueIndex >= 0 && queued.index !== state.storyQueueIndex) {
+        accountTransition = queued.index > state.storyQueueIndex ? 'next' : 'prev'
+      }
+      return openStoryChannel(
+        row.getAttribute('data-story-channel-id'),
+        row.getAttribute('data-story-first-video-id'),
+        { queue: queued.queue, queueIndex: queued.index, continueAcrossAccounts: opts.continueAcrossAccounts !== false, accountTransition: accountTransition }
+      )
+    }
+
+    function openFirstStoryFromTray() {
+      showStoryTray()
+      startStoryTrayRefreshTimer()
+      var row = firstStoryTrayRow()
+      if (row) return Promise.resolve(openStoryRow(row, { continueAcrossAccounts: true }))
+      return refreshStoryTray(true).then(function () {
+        row = firstStoryTrayRow()
+        if (row) return openStoryRow(row, { continueAcrossAccounts: true })
+        showToast(t('stories_empty', 'No stories'))
+        return false
+      })
     }
 
     function refreshStoryTray(silent) {
@@ -534,23 +581,9 @@ if (layout) {
     }
 
     function openStoryTray() {
-      var tray = ensureStoryTray()
-      updateStoryGridButton()
-      tray.classList.add('open')
-      tray.setAttribute('aria-hidden', 'false')
+      showStoryTray()
       refreshStoryTray()
-      if (!state.storyTrayRefreshTimer) {
-        state.storyTrayRefreshTimer = setInterval(function () {
-          if (!state.storyTray || !state.storyTray.classList.contains('open')) {
-            if (state.storyTrayRefreshTimer) {
-              clearInterval(state.storyTrayRefreshTimer)
-              state.storyTrayRefreshTimer = 0
-            }
-            return
-          }
-          refreshStoryTray(true)
-        }, 30000)
-      }
+      startStoryTrayRefreshTimer()
     }
 
     function openDefaultStoryTray() {
@@ -1194,13 +1227,8 @@ if (layout) {
       if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
       var storyRow = event.target && event.target.closest ? event.target.closest('.story-channel-row[data-story-channel-id]') : null
       if (storyRow && sourceContainer.contains(storyRow)) {
-        var queued = storyQueueFromRow(storyRow)
         event.preventDefault()
-        openStoryChannel(
-          storyRow.getAttribute('data-story-channel-id'),
-          storyRow.getAttribute('data-story-first-video-id'),
-          { queue: queued.queue, queueIndex: queued.index, continueAcrossAccounts: true }
-        )
+        openStoryRow(storyRow, { continueAcrossAccounts: true })
         return
       }
       if (event.target && event.target.closest && event.target.closest('.video-card-action, button, input, textarea, select')) return
@@ -1364,8 +1392,19 @@ if (layout) {
       if (!anchor) return
       var tab = tabFromLink(anchor)
       event.preventDefault()
+      if (state.storyMode) {
+        if (tab === 'stories') return
+        if (tab === currentTab) {
+          exitStoryMode({ restore: true })
+          return
+        }
+        if (exitStoryMode({ restore: true }) !== false) {
+          switchShortsTab(tab)
+          return
+        }
+      }
       if (state.overlayOpen && tab === 'stories') {
-        openStoryTray()
+        openFirstStoryFromTray()
         return
       }
       switchShortsTab(tab)

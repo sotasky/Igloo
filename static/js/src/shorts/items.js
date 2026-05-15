@@ -322,7 +322,7 @@ export function makeShortItem(entryData, existingEl) {
   var channelHref = entryData.channelId
     ? ('/channels/' + encodeURIComponent(entryData.channelId))
     : '#'
-  var currentTab = (_state && _state.currentTab === 'stories') ? 'stories' : ((_state && _state.currentTab === 'following') ? 'following' : 'all')
+  var currentTab = (_state && _state.storyMode) ? 'stories' : ((_state && _state.currentTab === 'stories') ? 'stories' : ((_state && _state.currentTab === 'following') ? 'following' : 'all'))
   var headerHtml = '' +
     '<div class="shorts-player-header-row">' +
     '<nav class="shorts-player-tabs" role="tablist" aria-label="' + escapeHtml(t('shorts_timeline_tabs_aria', 'Moments timeline')) + '">' +
