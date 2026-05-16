@@ -709,21 +709,28 @@ func (s *Server) buildAndroidSyncItems(username string, sets db.AndroidSyncDesir
 	mutedHandles, _ := s.db.GetMutedAccounts()
 	mutedHandleSet := normalizeHandleSet(mutedHandles)
 	subscribeURLs := map[string]string{}
+	enrichedTweets := make([]model.FeedItem, 0, len(tweetIDs))
 	for _, id := range tweetIDs {
 		item, ok := tweetsByID[id]
 		if !ok {
 			continue
 		}
+		enrichedTweets = append(enrichedTweets, item)
 		if item.ChannelID != "" {
 			if _, ok := subscribeURLs[item.ChannelID]; !ok {
 				subscribeURLs[item.ChannelID] = s.db.ResolveSubscribeURL(item.ChannelID)
 			}
 		}
+	}
+	retweetSourceRowsByHash, _ := s.db.GetRetweetSourceRows(collectRetweetSourceHashes(enrichedTweets))
+	for _, id := range tweetIDs {
+		item, ok := tweetsByID[id]
+		if !ok {
+			continue
+		}
 		attachments := map[string]any{}
 		attachments["feed_thread_context"] = feed.ThreadContextRows(s.db, item)
-		if len(item.Retweeters) > 0 {
-			attachments["retweet_sources"] = item.Retweeters
-		}
+		attachRetweetSourceRows(item, retweetSourceRowsByHash, attachments)
 		primary := feedItemToBundlePrimary(item, bookmarks, subscribeURLs, mutedHandleSet)
 		attachUserStateFromPrimary("feed_items", primary, attachments)
 		row, err := marshalAndroidSyncItem("feed_items", id, deltaBundle{

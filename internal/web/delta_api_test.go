@@ -102,6 +102,60 @@ func TestFeedDeltaCarriesSeenAndMutedStateAttachment(t *testing.T) {
 	}
 }
 
+func TestFeedDeltaRetweetSourcesAttachmentMatchesRoomSchema(t *testing.T) {
+	srv := newTestServer(t)
+	now := time.Now().UnixMilli()
+	if err := srv.db.ExecRaw(`
+		INSERT INTO feed_items (
+			tweet_id, source_handle, author_handle, body_text,
+			is_retweet, content_hash, published_at, fetched_at, sync_seq
+		)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"tw_hash", "orig", "orig", "body",
+		0, "hash_1", now, now, 300,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := srv.db.ExecRaw(
+		`INSERT INTO retweet_sources (content_hash, retweeter_handle, retweeter_display_name, tweet_id, published_at)
+		 VALUES (?, ?, ?, ?, ?), (?, ?, ?, ?, ?)`,
+		"hash_1", "rt1", "RT One", "tw_rt1", now-1000,
+		"hash_1", "rt2", "RT Two", "tw_rt2", now-2000,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	body := callFeedDelta(t, srv, "alice", "")
+	byID := make(map[string]deltaBundle, len(body.Bundles))
+	for _, b := range body.Bundles {
+		byID[toString(b.Primary["tweet_id"])] = b
+	}
+	bundle, ok := byID["tw_hash"]
+	if !ok {
+		t.Fatalf("tw_hash missing from delta response: %#v", body.Bundles)
+	}
+	raw, ok := bundle.Attachments["retweet_sources"]
+	if !ok {
+		t.Fatalf("retweet_sources missing from attachments: %#v", bundle.Attachments)
+	}
+	rows, ok := raw.([]any)
+	if !ok || len(rows) == 0 {
+		t.Fatalf("retweet_sources=%#v, want non-empty array", raw)
+	}
+	row0, ok := rows[0].(map[string]any)
+	if !ok {
+		t.Fatalf("retweet_sources[0]=%#v, want object", rows[0])
+	}
+	for _, key := range []string{"content_hash", "retweeter_handle", "tweet_id", "published_at"} {
+		if _, ok := row0[key]; !ok {
+			t.Fatalf("retweet_sources row missing %q: %#v", key, row0)
+		}
+	}
+	if row0["content_hash"] != "hash_1" {
+		t.Fatalf("content_hash=%#v, want hash_1 in row %#v", row0["content_hash"], row0)
+	}
+}
+
 func TestFeedDeltaCarriesThreadFieldsInline(t *testing.T) {
 	srv := newTestServer(t)
 	now := time.Now().UnixMilli()

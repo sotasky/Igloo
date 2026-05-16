@@ -109,6 +109,7 @@ func (s *Server) handleFeedDelta(w http.ResponseWriter, r *http.Request) {
 	bookmarks, _ := s.db.GetBookmarksForVideoIDsRich(collectTweetIDs(items))
 	mutedHandles, _ := s.db.GetMutedAccounts()
 	mutedHandleSet := normalizeHandleSet(mutedHandles)
+	retweetSourceRowsByHash, _ := s.db.GetRetweetSourceRows(collectRetweetSourceHashes(items))
 	subscribeURLs := make(map[string]string, len(items))
 	for _, it := range items {
 		if it.ChannelID == "" {
@@ -124,9 +125,7 @@ func (s *Server) handleFeedDelta(w http.ResponseWriter, r *http.Request) {
 		primary := feedItemToBundlePrimary(it, bookmarks, subscribeURLs, mutedHandleSet)
 		attachments := map[string]any{}
 		attachments["feed_thread_context"] = feed.ThreadContextRows(s.db, it)
-		if len(it.Retweeters) > 0 {
-			attachments["retweet_sources"] = it.Retweeters
-		}
+		attachRetweetSourceRows(it, retweetSourceRowsByHash, attachments)
 		attachUserStateFromPrimary("feed_items", primary, attachments)
 		bundles = append(bundles, deltaBundle{
 			PrimaryKind: "feed_items",
@@ -323,6 +322,39 @@ func normalizeHandleSet(handles []string) map[string]struct{} {
 		out[normalized] = struct{}{}
 	}
 	return out
+}
+
+func collectRetweetSourceHashes(items []model.FeedItem) []string {
+	hashSet := make(map[string]struct{}, len(items))
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		if len(item.Retweeters) == 0 {
+			continue
+		}
+		hash := strings.TrimSpace(item.ContentHash)
+		if hash == "" {
+			continue
+		}
+		if _, ok := hashSet[hash]; ok {
+			continue
+		}
+		hashSet[hash] = struct{}{}
+		out = append(out, hash)
+	}
+	return out
+}
+
+func attachRetweetSourceRows(item model.FeedItem, rowsByHash map[string][]db.RetweetSourceRow, attachments map[string]any) {
+	if len(item.Retweeters) == 0 {
+		return
+	}
+	hash := strings.TrimSpace(item.ContentHash)
+	if hash == "" {
+		return
+	}
+	if rows := rowsByHash[hash]; len(rows) > 0 {
+		attachments["retweet_sources"] = rows
+	}
 }
 
 // formatMarker emits the cursor for the next request. When the batch
