@@ -501,7 +501,7 @@ internal fun VideoSurface(
         }
     }
 
-    val playerView = sharedPlayerView ?: remember { createMomentPlayerView(context) }
+    val playerView = sharedPlayerView ?: remember(mediaKey) { createMomentPlayerView(context) }
 
     AndroidView(
         factory = {

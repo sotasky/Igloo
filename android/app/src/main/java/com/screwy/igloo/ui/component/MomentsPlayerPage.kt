@@ -170,6 +170,7 @@ internal fun MomentPage(
     onAutoSwipeToggle: () -> Unit,
     showAutoSwipeControl: Boolean,
     isActive: Boolean,
+    pagerScrolling: Boolean,
     shouldPrepare: Boolean,
     startPositionMs: Long,
     onInitialSeekConsumed: () -> Unit,
@@ -293,6 +294,7 @@ internal fun MomentPage(
                     thumbnailUri = thumbnailUri,
                     muted = muted,
                     isActive = isActive,
+                    pagerScrolling = pagerScrolling,
                     shouldPrepare = shouldPrepare,
                     autoSwipe = autoSwipe,
                     onAutoAdvance = onAutoAdvance,
@@ -451,6 +453,7 @@ private fun BoxScope.MomentVideoLayer(
     thumbnailUri: MediaUri,
     muted: Boolean,
     isActive: Boolean,
+    pagerScrolling: Boolean,
     shouldPrepare: Boolean,
     autoSwipe: Boolean,
     onAutoAdvance: () -> Unit,
@@ -620,6 +623,14 @@ private fun BoxScope.MomentVideoLayer(
         remoteOffline = remoteOffline,
         surfaceState = surfaceState,
     )
+    val hasLoadedMedia = momentStreamLoadKeyVideoId(loadedKey) == item.videoId
+    val showFallbackLayer = shouldShowMomentVideoFallbackLayer(
+        fallback = showFallback,
+        sharedPlayer = playerIsShared,
+        isActive = isActive,
+        pagerScrolling = pagerScrolling,
+        hasLoadedMedia = hasLoadedMedia,
+    )
     val shouldMountVideoSurface = shouldMountMomentVideoSurface(
         isActive = isActive,
         shouldPrepare = shouldPrepare,
@@ -644,7 +655,7 @@ private fun BoxScope.MomentVideoLayer(
                     .zIndex(momentVideoSurfaceZIndex()),
             )
         }
-        if (showFallback) {
+        if (showFallbackLayer) {
             ThumbnailFallback(
                 thumbnailUri = thumbnailUri,
                 alphaOverride = if (remoteOffline) 0.55f else 1f,

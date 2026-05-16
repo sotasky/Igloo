@@ -306,15 +306,11 @@ fun MomentsPlayer(
             }
         }
     }
-    val momentsVideoPlayerView = remember(context, momentsVideoPlayer) {
-        momentsVideoPlayer?.let { createMomentPlayerView(context) }
-    }
-    DisposableEffect(momentsVideoPlayer, momentsVideoPlayerView) {
+    DisposableEffect(momentsVideoPlayer) {
         if (momentsVideoPlayer == null) {
             return@DisposableEffect onDispose { }
         }
         onDispose {
-            momentsVideoPlayerView?.player = null
             PerfProbe.incrementCounter("igloo_moments_player_release_count")
             PerfProbe.log(
                 event = "moments_player_release",
@@ -556,6 +552,7 @@ fun MomentsPlayer(
                 },
                 showAutoSwipeControl = !forceAutoSwipe,
                 isActive = lifecycleStarted && shouldPlayMomentPage(page == currentIndex, pagerState.isScrollInProgress),
+                pagerScrolling = pagerState.isScrollInProgress,
                 shouldPrepare = abs(page - currentIndex) <= MOMENTS_PREPARE_RADIUS,
                 startPositionMs = if (page == safeStart && !initialSeekConsumed) startPositionMs else 0L,
                 onInitialSeekConsumed = { if (page == safeStart) initialSeekConsumed = true },
@@ -574,7 +571,6 @@ fun MomentsPlayer(
                 onSwipeRightFromEdge = drawerController::open,
                 logger = logger,
                 sharedVideoPlayer = momentsVideoPlayer,
-                sharedPlayerView = momentsVideoPlayerView,
             )
         }
         if (storyMode) {

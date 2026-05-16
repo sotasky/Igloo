@@ -514,6 +514,55 @@ class MomentsPlayerTest {
     }
 
     @Test
+    fun loaded_inactive_shared_page_suppresses_fallback_while_pager_is_moving() {
+        assertFalse(
+            shouldShowMomentVideoFallbackLayer(
+                fallback = true,
+                sharedPlayer = true,
+                isActive = false,
+                pagerScrolling = true,
+                hasLoadedMedia = true,
+            ),
+        )
+        assertTrue(
+            shouldShowMomentVideoFallbackLayer(
+                fallback = true,
+                sharedPlayer = true,
+                isActive = true,
+                pagerScrolling = true,
+                hasLoadedMedia = true,
+            ),
+        )
+        assertTrue(
+            shouldShowMomentVideoFallbackLayer(
+                fallback = true,
+                sharedPlayer = false,
+                isActive = false,
+                pagerScrolling = true,
+                hasLoadedMedia = true,
+            ),
+        )
+        assertTrue(
+            shouldShowMomentVideoFallbackLayer(
+                fallback = true,
+                sharedPlayer = true,
+                isActive = false,
+                pagerScrolling = false,
+                hasLoadedMedia = true,
+            ),
+        )
+        assertTrue(
+            shouldShowMomentVideoFallbackLayer(
+                fallback = true,
+                sharedPlayer = true,
+                isActive = false,
+                pagerScrolling = true,
+                hasLoadedMedia = false,
+            ),
+        )
+    }
+
+    @Test
     fun ready_state_requires_a_rendered_frame_before_hiding_thumbnail() {
         val noFrame = momentVideoSurfaceStateFor(
             expectedMediaId = "demo",

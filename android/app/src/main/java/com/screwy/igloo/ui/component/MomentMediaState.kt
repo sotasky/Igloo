@@ -86,6 +86,15 @@ internal fun shouldShowMomentThumbnailFallback(
 ): Boolean =
     remoteOffline || !shouldShowMomentVideoSurface(surfaceState)
 
+internal fun shouldShowMomentVideoFallbackLayer(
+    fallback: Boolean,
+    sharedPlayer: Boolean,
+    isActive: Boolean,
+    pagerScrolling: Boolean,
+    hasLoadedMedia: Boolean,
+): Boolean =
+    fallback && (!sharedPlayer || isActive || !pagerScrolling || !hasLoadedMedia)
+
 internal fun shouldShowMomentVideoSurface(surfaceState: MomentVideoSurfaceState): Boolean =
     surfaceState.hasExpectedMedia && surfaceState.renderedFirstFrame
 
