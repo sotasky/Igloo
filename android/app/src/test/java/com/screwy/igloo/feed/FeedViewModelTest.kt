@@ -27,11 +27,11 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.TestDispatcher
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.setMain
-import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
-import kotlinx.coroutines.yield
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Before
@@ -55,10 +55,12 @@ class FeedViewModelTest {
     private lateinit var writer: OutboxWriter
     private lateinit var scheduler: Scheduler
     private lateinit var uiEffects: UiEffects
+    private lateinit var mainDispatcher: TestDispatcher
     private val viewModels = ViewModelTestTracker()
 
     @Before fun setUp() {
-        Dispatchers.setMain(Dispatchers.Default)
+        mainDispatcher = UnconfinedTestDispatcher()
+        Dispatchers.setMain(mainDispatcher)
         db = RoomTestSupport.freshDb()
         scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         prefs = PreferencesRepo(db.preferenceDao(), scope, nowMsProvider = { 0L })
@@ -77,9 +79,6 @@ class FeedViewModelTest {
         viewModels.clearAll()
         if (::scope.isInitialized) {
             scope.cancel()
-        }
-        withContext(Dispatchers.Default) {
-            yield()
         }
         if (::db.isInitialized) {
             db.close()
@@ -106,6 +105,11 @@ class FeedViewModelTest {
     private fun subscribe(vm: FeedViewModel): Job = scope.launch {
         launch { vm.uiState.collect {} }
         launch { vm.rows.collect {} }
+    }
+
+    private fun advanceMainBy(delayMs: Long) {
+        mainDispatcher.scheduler.advanceTimeBy(delayMs)
+        mainDispatcher.scheduler.runCurrent()
     }
 
     @Test fun uiState_flipsToData_whenRoomEmitsNonEmpty() = runBlocking {
@@ -184,6 +188,7 @@ class FeedViewModelTest {
         assertEquals(false, vm.newPostsAvailable.value)
 
         vm.refresh()
+        advanceMainBy(1_000L)
         val refreshed = withTimeoutOrNull(5_000L) {
             while (vm.rows.value.map { it.row.item.tweetId } != listOf("t1")) delay(10)
             true
@@ -357,6 +362,7 @@ class FeedViewModelTest {
         assertEquals(expectedPosters, vm.newPostPosters.value.map { it.channelId })
 
         vm.refresh()
+        advanceMainBy(1_000L)
         val refreshed = withTimeoutOrNull(5_000L) {
             while (vm.rows.value.map { it.row.item.tweetId } != listOf("t3", "t4", "t5", "t6", "t2", "t1")) delay(10)
             true
