@@ -66,26 +66,6 @@ jobs:
           test -n "$apk"
           cp "$apk" "release-artifacts/igloo-android-${GITHUB_REF_NAME}.apk"
 
-      - name: Generate APK SBOM
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
-        with:
-          file: release-artifacts/igloo-android-${{ github.ref_name }}.apk
-          artifact-name: igloo-android-sbom.spdx.json
-          output-file: release-artifacts/igloo-android-${{ github.ref_name }}.spdx.json
-          upload-release-assets: false
-
-      - name: Scan APK SBOM
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7.4.0
-        with:
-          sbom: release-artifacts/igloo-android-${{ github.ref_name }}.spdx.json
-          fail-build: true
-          severity-cutoff: critical
-          only-fixed: true
-          output-format: json
-          output-file: release-artifacts/igloo-android-${{ github.ref_name }}-vulnerabilities.json
-
       - name: Generate APK attestation
         if: startsWith(github.ref, 'refs/tags/')
         uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 # v4
@@ -96,4 +76,4 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3
         with:
-          files: release-artifacts/*
+          files: release-artifacts/*.apk

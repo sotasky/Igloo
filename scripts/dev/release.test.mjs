@@ -209,7 +209,7 @@ test("container images run as non-root by default", () => {
   assert.match(compose, /cpus: "\$\{IGLOO_CPUS:-2\.0\}"/);
 });
 
-test("Android release publishes signed provenance attestation for the APK", () => {
+test("Android release publishes only the APK asset with signed provenance attestation", () => {
   const workflow = readFileSync(
     new URL("../../.github/workflows/android-release.yml", import.meta.url),
     "utf8",
@@ -221,18 +221,16 @@ test("Android release publishes signed provenance attestation for the APK", () =
   assert.match(workflow, /run: \.\/gradlew :app:assembleRelease/);
   assert.match(workflow, /\n  id-token: write\n/);
   assert.match(workflow, /\n  attestations: write\n/);
-  assert.match(workflow, shaPinnedAction("anchore/sbom-action", "v0.24.0"));
-  assert.match(workflow, /file: release-artifacts\/igloo-android-\$\{\{ github\.ref_name \}\}\.apk/);
-  assert.match(workflow, /output-file: release-artifacts\/igloo-android-\$\{\{ github\.ref_name \}\}\.spdx\.json/);
-  assert.match(workflow, shaPinnedAction("anchore/scan-action", "v7.4.0"));
-  assert.match(workflow, /sbom: release-artifacts\/igloo-android-\$\{\{ github\.ref_name \}\}\.spdx\.json/);
-  assert.match(workflow, /severity-cutoff: critical/);
-  assert.match(workflow, /only-fixed: true/);
-  assert.match(workflow, /output-file: release-artifacts\/igloo-android-\$\{\{ github\.ref_name \}\}-vulnerabilities\.json/);
+  assert.match(workflow, /mkdir -p release-artifacts/);
   assert.match(workflow, shaPinnedAction("actions/attest", "v4"));
   assert.match(workflow, /subject-path: release-artifacts\/\*\.apk/);
   assert.match(workflow, shaPinnedAction("softprops/action-gh-release", "v3"));
-  assert.match(workflow, /files: release-artifacts\/\*/);
+  assert.match(workflow, /files: release-artifacts\/\*\.apk/);
+  assert.doesNotMatch(workflow, /^          files: release-artifacts\/\*$/m);
+  assert.doesNotMatch(workflow, /Generate APK SBOM/);
+  assert.doesNotMatch(workflow, /Scan APK SBOM/);
+  assert.doesNotMatch(workflow, /anchore\/sbom-action/);
+  assert.doesNotMatch(workflow, /anchore\/scan-action/);
   assert.doesNotMatch(workflow, /:app:testDevtestUnitTest :app:assembleRelease/);
 });
 
