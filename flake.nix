@@ -14,6 +14,17 @@
       ];
 
       forAllSystems = nixpkgs.lib.genAttrs systems;
+      goSourceVersion = "1.26.3";
+      goSourceHash = "sha256-HGRoddCqh5kTMYTtV895/yS97+jIggRwYCqdPW2Rkrg=";
+      goFor =
+        pkgs:
+        (pkgs.go_1_26 or pkgs.go).overrideAttrs (_: {
+          version = goSourceVersion;
+          src = pkgs.fetchurl {
+            url = "https://go.dev/dl/go${goSourceVersion}.src.tar.gz";
+            hash = goSourceHash;
+          };
+        });
     in
     {
       packages = forAllSystems (
@@ -23,7 +34,7 @@
           lib = pkgs.lib;
           revision = self.shortRev or (self.dirtyShortRev or "dev");
           containerImageName = "ghcr.io/screwys/igloo";
-          go = pkgs.go_1_26 or pkgs.go;
+          go = goFor pkgs;
           buildGoModule = pkgs.buildGoModule.override { inherit go; };
           pythonPackages = pkgs.python3Packages;
           runtimeRequirementLines = lib.splitString "\n" (builtins.readFile ./requirements-runtime.txt);
@@ -258,7 +269,7 @@
         system:
         let
           pkgs = import nixpkgs { inherit system; };
-          go = pkgs.go_1_26 or pkgs.go;
+          go = goFor pkgs;
         in
         {
           default = pkgs.mkShell {
