@@ -18,7 +18,7 @@ import (
 // AndroidSyncMaterializerVersion is part of the generation source hash. Bump
 // it when server-side asset materialization semantics change and Android needs
 // a fresh immutable generation even if the source rows did not change.
-const AndroidSyncMaterializerVersion = 33
+const AndroidSyncMaterializerVersion = 34
 
 const (
 	defaultAndroidSyncKeepReadyGenerations = 2
@@ -147,6 +147,27 @@ func (db *DB) ListAndroidSyncDesiredSets(username string, settings AndroidRetent
 		WHERE `+retweetFilterClause("fi"), args, out.Tweets); err != nil {
 		return out, fmt.Errorf("android sync desired tweets: %w", err)
 	}
+	if err := db.collectStrings(cte+`,
+		reply_chain(tweet_id, depth) AS (
+			SELECT tweet_id, 0 FROM eligible_tweet_ids
+
+			UNION
+
+			SELECT fi.reply_to_status, rc.depth + 1
+			FROM reply_chain rc
+			JOIN feed_items fi ON fi.tweet_id = rc.tweet_id
+			WHERE fi.reply_to_status IS NOT NULL
+			  AND fi.reply_to_status != ''
+			  AND rc.depth < 50
+		)
+		SELECT DISTINCT fi.tweet_id
+		FROM reply_chain rc
+		JOIN feed_items fi ON fi.tweet_id = rc.tweet_id
+		WHERE rc.tweet_id IS NOT NULL
+		  AND rc.tweet_id != ''
+	`, args, out.Tweets); err != nil {
+		return out, fmt.Errorf("android sync desired thread ancestors: %w", err)
+	}
 
 	if err := db.collectStrings(
 		androidSyncDesiredVideoRowsSQL("v.video_id", true),
@@ -205,7 +226,29 @@ func (db *DB) ListAndroidSyncDesiredSets(username string, settings AndroidRetent
 	channelArgs := append([]any{}, args...)
 	channelArgs = append(channelArgs, contentVideoArgs...)
 	if err := db.collectStrings(cte+`
-		, content_videos(video_id, channel_id) AS (`+contentVideoSQL+`),
+		, reply_chain(tweet_id, depth) AS (
+			SELECT tweet_id, 0 FROM eligible_tweet_ids
+
+			UNION
+
+			SELECT fi.reply_to_status, rc.depth + 1
+			FROM reply_chain rc
+			JOIN feed_items fi ON fi.tweet_id = rc.tweet_id
+			WHERE fi.reply_to_status IS NOT NULL
+			  AND fi.reply_to_status != ''
+			  AND rc.depth < 50
+		),
+		desired_tweet_ids(tweet_id) AS (
+			SELECT tweet_id FROM eligible_tweet_ids
+
+			UNION
+
+			SELECT tweet_id
+			FROM reply_chain
+			WHERE tweet_id IS NOT NULL
+			  AND tweet_id != ''
+		),
+		content_videos(video_id, channel_id) AS (`+contentVideoSQL+`),
 		avatar_channels(channel_id) AS (
 			SELECT cf.channel_id
 			FROM channel_follows cf
@@ -214,20 +257,20 @@ func (db *DB) ListAndroidSyncDesiredSets(username string, settings AndroidRetent
 			UNION
 			SELECT DISTINCT 'twitter_' || LOWER(fi.author_handle)
 			FROM feed_items fi
-			JOIN eligible_tweet_ids e ON e.tweet_id = fi.tweet_id
+			JOIN desired_tweet_ids e ON e.tweet_id = fi.tweet_id
 			WHERE fi.author_handle != ''
 
 			UNION
 			SELECT DISTINCT 'twitter_' || LOWER(fi.quote_author_handle)
 			FROM feed_items fi
-			JOIN eligible_tweet_ids e ON e.tweet_id = fi.tweet_id
+			JOIN desired_tweet_ids e ON e.tweet_id = fi.tweet_id
 			WHERE fi.quote_author_handle != ''
 
 			UNION
 			SELECT DISTINCT 'twitter_' || LOWER(rs.retweeter_handle)
 			FROM retweet_sources rs
 			JOIN feed_items fi ON fi.content_hash = rs.content_hash
-			JOIN eligible_tweet_ids e ON e.tweet_id = fi.tweet_id
+			JOIN desired_tweet_ids e ON e.tweet_id = fi.tweet_id
 			WHERE rs.retweeter_handle != ''
 
 			UNION

@@ -84,6 +84,23 @@ data class FeedItemEntity(
 
 @Serializable
 @Entity(
+    tableName = "feed_thread_context",
+    primaryKeys = ["leaf_tweet_id", "ancestor_order"],
+    indices = [
+        Index(value = ["leaf_tweet_id"], name = "idx_feed_thread_context_leaf"),
+        Index(value = ["root_tweet_id"], name = "idx_feed_thread_context_root"),
+        Index(value = ["ancestor_tweet_id"], name = "idx_feed_thread_context_ancestor"),
+    ],
+)
+data class FeedThreadContextEntity(
+    @ColumnInfo(name = "leaf_tweet_id") val leafTweetId: String,
+    @ColumnInfo(name = "root_tweet_id") val rootTweetId: String,
+    @ColumnInfo(name = "ancestor_tweet_id") val ancestorTweetId: String,
+    @ColumnInfo(name = "ancestor_order") val ancestorOrder: Int,
+)
+
+@Serializable
+@Entity(
     tableName = "videos",
     indices = [
         Index(

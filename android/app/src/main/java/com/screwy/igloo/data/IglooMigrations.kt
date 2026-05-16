@@ -16,7 +16,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
  */
 object IglooMigrations {
     const val SUPPORTED_SCHEMA_BASELINE_VERSION = 29
-    const val CURRENT_SCHEMA_VERSION = 34
+    const val CURRENT_SCHEMA_VERSION = 35
 
     /** Adds `media_inventory.audio_language` for the subtitle auto-on rule. */
     val MIGRATION_7_8 = object : Migration(7, 8) {
@@ -386,6 +386,25 @@ object IglooMigrations {
         }
     }
 
+    val MIGRATION_34_35 = object : Migration(34, 35) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS feed_thread_context (
+                    leaf_tweet_id TEXT NOT NULL,
+                    root_tweet_id TEXT NOT NULL,
+                    ancestor_tweet_id TEXT NOT NULL,
+                    ancestor_order INTEGER NOT NULL,
+                    PRIMARY KEY(leaf_tweet_id, ancestor_order)
+                )
+                """.trimIndent(),
+            )
+            db.execSQL("CREATE INDEX IF NOT EXISTS idx_feed_thread_context_leaf ON feed_thread_context(leaf_tweet_id)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS idx_feed_thread_context_root ON feed_thread_context(root_tweet_id)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS idx_feed_thread_context_ancestor ON feed_thread_context(ancestor_tweet_id)")
+        }
+    }
+
     val ALL: Array<Migration> = arrayOf(
         MIGRATION_7_8,
         MIGRATION_8_9,
@@ -414,5 +433,6 @@ object IglooMigrations {
         MIGRATION_31_32,
         MIGRATION_32_33,
         MIGRATION_33_34,
+        MIGRATION_34_35,
     )
 }

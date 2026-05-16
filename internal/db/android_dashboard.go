@@ -335,13 +335,13 @@ func androidEligibleFeedCountQuery(username string, cutoffMs int64) (string, []a
 func androidEligibleFeedCTE(username string, cutoffMs int64) (string, []any) {
 	if cutoffMs <= 0 {
 		return `
-			WITH eligible_tweet_ids(tweet_id) AS (
+			WITH RECURSIVE eligible_tweet_ids(tweet_id) AS (
 				SELECT fi.tweet_id FROM feed_items fi
 			)
 		`, nil
 	}
 	return `
-		WITH
+		WITH RECURSIVE
 		recent_hashes AS (
 			SELECT DISTINCT content_hash
 			FROM feed_items

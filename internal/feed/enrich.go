@@ -23,6 +23,38 @@ func EnrichFeedItemsPreserveRows(database *db.DB, items []model.FeedItem, userna
 	return enrichFeedItems(database, items, username, false)
 }
 
+// ThreadContextRow is the server-owned Android mirror row for one ancestor in a
+// feed item's inline thread preview.
+type ThreadContextRow struct {
+	LeafTweetID     string `json:"leaf_tweet_id"`
+	RootTweetID     string `json:"root_tweet_id"`
+	AncestorTweetID string `json:"ancestor_tweet_id"`
+	AncestorOrder   int    `json:"ancestor_order"`
+}
+
+// ThreadContextRows returns root-to-parent ancestor rows for a feed item.
+func ThreadContextRows(database *db.DB, item model.FeedItem) []ThreadContextRow {
+	if !item.IsReply || item.ReplyToStatus == "" {
+		return []ThreadContextRow{}
+	}
+	chain, err := database.GetThreadChain(item.TweetID)
+	if err != nil || len(chain) <= 1 {
+		return []ThreadContextRow{}
+	}
+	ancestors := chain[:len(chain)-1]
+	rootID := ancestors[0].TweetID
+	rows := make([]ThreadContextRow, 0, len(ancestors))
+	for i, ancestor := range ancestors {
+		rows = append(rows, ThreadContextRow{
+			LeafTweetID:     item.TweetID,
+			RootTweetID:     rootID,
+			AncestorTweetID: ancestor.TweetID,
+			AncestorOrder:   i,
+		})
+	}
+	return rows
+}
+
 // enrichFeedItems attaches media status, channel flags, and personalization.
 func enrichFeedItems(database *db.DB, items []model.FeedItem, username string, deduplicate bool) []model.FeedItem {
 	if len(items) == 0 {
@@ -320,6 +352,9 @@ func normalizeTranslationText(text string) string {
 // attachThreadChains populates ThreadChain on reply items by walking up via
 // reply_to_status, then drops items that appear as ancestors of another reply
 // in the same page (so the chain is rendered exactly once, owned by the leaf).
+// Sibling reply branches that share the same oldest ancestor collapse to the
+// first feed-ranked leaf, so the feed renders one thread capsule per
+// conversation root instead of one card per branch.
 //
 // Chain ancestors are themselves run through the basic enrichment helpers
 // (channel flags, media status, like/bookmark/seen state) so they render as
@@ -333,6 +368,7 @@ func attachThreadChains(database *db.DB, items []model.FeedItem, username string
 
 	// Phase 1: fetch chains for every reply with a known parent.
 	chainsByLeaf := make(map[string][]model.FeedItem, len(items))
+	rootIDsByLeaf := make(map[string]string, len(items))
 	ancestorIDs := make(map[string]bool)
 	var ancestorList []model.FeedItem
 	for i := range items {
@@ -346,6 +382,7 @@ func attachThreadChains(database *db.DB, items []model.FeedItem, username string
 		// chain is [root, ..., leaf]; strip the leaf (it's `items[i]` itself).
 		ancestors := chain[:len(chain)-1]
 		chainsByLeaf[items[i].TweetID] = ancestors
+		rootIDsByLeaf[items[i].TweetID] = ancestors[0].TweetID
 		for _, a := range ancestors {
 			if !ancestorIDs[a.TweetID] {
 				ancestorIDs[a.TweetID] = true
@@ -385,10 +422,17 @@ func attachThreadChains(database *db.DB, items []model.FeedItem, username string
 
 	// Phase 4: drop standalone items that are an ancestor of another reply in
 	// this same page. The leaf will render them as part of its chain.
+	emittedThreadRootIDs := make(map[string]bool)
 	out := make([]model.FeedItem, 0, len(items))
 	for _, item := range items {
 		if ancestorIDs[item.TweetID] {
 			continue
+		}
+		if rootID, ok := rootIDsByLeaf[item.TweetID]; ok {
+			if emittedThreadRootIDs[rootID] {
+				continue
+			}
+			emittedThreadRootIDs[rootID] = true
 		}
 		out = append(out, item)
 	}

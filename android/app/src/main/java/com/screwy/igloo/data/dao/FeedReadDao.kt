@@ -7,6 +7,7 @@ import androidx.room.RoomWarnings
 import com.screwy.igloo.data.entity.FeedHeadCandidate
 import com.screwy.igloo.data.entity.FeedRow
 import com.screwy.igloo.data.entity.FeedRowActionState
+import com.screwy.igloo.data.entity.FeedThreadContextEntity
 import kotlinx.coroutines.flow.Flow
 
 /**
@@ -141,6 +142,60 @@ interface FeedReadDao {
         """
     )
     fun mainFeedHeadCandidatesFlow(limit: Int): Flow<List<FeedHeadCandidate>>
+
+    @Query(
+        """
+        SELECT *
+        FROM feed_thread_context
+        WHERE leaf_tweet_id IN (:tweetIds)
+        ORDER BY leaf_tweet_id ASC, ancestor_order ASC
+        """
+    )
+    suspend fun getThreadContexts(tweetIds: List<String>): List<FeedThreadContextEntity>
+
+    @RewriteQueriesToDropUnusedColumns
+    @SuppressWarnings(RoomWarnings.QUERY_MISMATCH)
+    @Query(
+        """
+        SELECT
+            fi.*,
+            COALESCE(NULLIF(cp.display_name, ''), c.name) AS channel_name,
+            c.avatar_url       AS channel_avatar_url,
+            COALESCE(c.platform, cp.platform) AS channel_platform,
+
+            CASE WHEN fl.tweet_id IS NOT NULL THEN 1 ELSE 0 END AS is_liked,
+            fl.liked_at                                         AS liked_at,
+
+            CASE WHEN bm.video_id IS NOT NULL THEN 1 ELSE 0 END AS is_bookmarked,
+            bm.category_id                                      AS bookmark_category_id,
+            bm.custom_title                                     AS bookmark_custom_title,
+            bm.bookmarked_at                                    AS bookmarked_at,
+
+            CASE WHEN cf.channel_id IS NOT NULL THEN 1 ELSE 0 END AS channel_is_followed,
+            CASE WHEN cs.channel_id IS NOT NULL THEN 1 ELSE 0 END AS channel_is_starred,
+            CASE
+                WHEN NULLIF(TRIM(COALESCE(fi.quote_author_handle, '')), '') IS NOT NULL
+                    THEN 'twitter_' || LOWER(LTRIM(TRIM(fi.quote_author_handle), '@'))
+                ELSE NULL
+            END AS quote_channel_id,
+            CASE WHEN qcf.channel_id IS NOT NULL THEN 1 ELSE 0 END AS quote_channel_is_followed
+        FROM feed_items fi
+        LEFT JOIN channels        c  ON fi.channel_id = c.channel_id
+        LEFT JOIN channel_profiles cp ON fi.channel_id = cp.channel_id
+        LEFT JOIN feed_likes      fl ON fi.tweet_id   = fl.tweet_id
+        LEFT JOIN bookmarks       bm ON bm.video_id   = fi.tweet_id
+        LEFT JOIN channel_follows cf ON fi.channel_id = cf.channel_id
+        LEFT JOIN channel_stars   cs ON fi.channel_id = cs.channel_id
+        LEFT JOIN channel_follows qcf
+          ON qcf.channel_id = CASE
+              WHEN NULLIF(TRIM(COALESCE(fi.quote_author_handle, '')), '') IS NOT NULL
+                  THEN 'twitter_' || LOWER(LTRIM(TRIM(fi.quote_author_handle), '@'))
+              ELSE NULL
+          END
+        WHERE fi.tweet_id IN (:tweetIds)
+        """
+    )
+    suspend fun getFeedRowsByTweetIds(tweetIds: List<String>): List<FeedRow>
 
     @Query(
         """

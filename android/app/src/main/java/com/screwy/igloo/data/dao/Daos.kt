@@ -14,6 +14,7 @@ import com.screwy.igloo.data.entity.FeedItemEntity
 import com.screwy.igloo.data.entity.FeedLikeEntity
 import com.screwy.igloo.data.entity.FeedRankEntity
 import com.screwy.igloo.data.entity.FeedSeenEntity
+import com.screwy.igloo.data.entity.FeedThreadContextEntity
 import com.screwy.igloo.data.entity.MomentViewEntity
 import com.screwy.igloo.data.entity.MutedAccountEntity
 import com.screwy.igloo.data.entity.RetweetSourceEntity
@@ -77,6 +78,23 @@ interface FeedItemDao {
         """
     )
     suspend fun pruneExpired(cutoffMs: Long): Int
+}
+
+@Dao
+interface FeedThreadContextDao {
+    @Upsert suspend fun upsert(rows: List<FeedThreadContextEntity>)
+
+    @Query("DELETE FROM feed_thread_context WHERE leaf_tweet_id = :leafTweetId")
+    suspend fun deleteForLeaf(leafTweetId: String)
+
+    @Query("DELETE FROM feed_thread_context")
+    suspend fun deleteAll()
+
+    @Transaction
+    suspend fun replaceForLeaf(leafTweetId: String, rows: List<FeedThreadContextEntity>) {
+        deleteForLeaf(leafTweetId)
+        if (rows.isNotEmpty()) upsert(rows)
+    }
 }
 
 @Dao

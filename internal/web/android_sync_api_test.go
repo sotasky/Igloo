@@ -821,6 +821,67 @@ func TestAndroidSyncItemsAnnotatesVideoComments(t *testing.T) {
 	}
 }
 
+func TestAndroidSyncItemsCarryServerThreadContext(t *testing.T) {
+	srv := newAndroidSyncTestServer(t)
+	now := time.Now().UnixMilli()
+	old := now - 3*24*time.Hour.Milliseconds()
+	mid := now - 2*24*time.Hour.Milliseconds()
+	if err := srv.db.ExecRaw(`
+		INSERT INTO feed_items (
+			tweet_id, source_handle, author_handle, body_text,
+			reply_to_handle, reply_to_status, is_reply,
+			published_at, fetched_at, sync_seq
+		) VALUES
+			('thread_root', 'sample_root', 'sample_root', 'root', '', '', 0, ?, ?, 1),
+			('thread_parent', 'sample_parent', 'sample_parent', 'parent', 'sample_root', 'thread_root', 1, ?, ?, 2),
+			('thread_leaf', 'sample_leaf', 'sample_leaf', 'leaf', 'sample_parent', 'thread_parent', 1, ?, ?, 3)
+	`, old, old, mid, mid, now, now); err != nil {
+		t.Fatalf("insert thread rows: %v", err)
+	}
+
+	sets, err := srv.db.ListAndroidSyncDesiredSets("alice", db.AndroidRetentionSettings{FeedDays: 1}, now)
+	if err != nil {
+		t.Fatalf("ListAndroidSyncDesiredSets: %v", err)
+	}
+	for _, id := range []string{"thread_root", "thread_parent", "thread_leaf"} {
+		if _, ok := sets.Tweets[id]; !ok {
+			t.Fatalf("desired tweets missing %s: %#v", id, sets.Tweets)
+		}
+	}
+	for _, id := range []string{"twitter_sample_root", "twitter_sample_parent", "twitter_sample_leaf"} {
+		if _, ok := sets.Channels[id]; !ok {
+			t.Fatalf("desired channels missing %s: %#v", id, sets.Channels)
+		}
+	}
+
+	items, _, err := srv.buildAndroidSyncItems("alice", sets)
+	if err != nil {
+		t.Fatalf("buildAndroidSyncItems: %v", err)
+	}
+	var bundle deltaBundle
+	for _, item := range items {
+		if item.ItemID != "thread_leaf" {
+			continue
+		}
+		if err := json.Unmarshal(item.PayloadJSON, &bundle); err != nil {
+			t.Fatalf("decode leaf payload: %v", err)
+		}
+		break
+	}
+	rows, _ := bundle.Attachments["feed_thread_context"].([]any)
+	if len(rows) != 2 {
+		t.Fatalf("feed_thread_context = %#v, want two ancestor rows", bundle.Attachments["feed_thread_context"])
+	}
+	root := rows[0].(map[string]any)
+	parent := rows[1].(map[string]any)
+	if root["leaf_tweet_id"] != "thread_leaf" || root["root_tweet_id"] != "thread_root" || root["ancestor_tweet_id"] != "thread_root" || root["ancestor_order"] != float64(0) {
+		t.Fatalf("root context = %#v", root)
+	}
+	if parent["leaf_tweet_id"] != "thread_leaf" || parent["root_tweet_id"] != "thread_root" || parent["ancestor_tweet_id"] != "thread_parent" || parent["ancestor_order"] != float64(1) {
+		t.Fatalf("parent context = %#v", parent)
+	}
+}
+
 func TestAndroidSyncItemsCarryUserStateAttachments(t *testing.T) {
 	srv := newAndroidSyncTestServer(t)
 	now := time.Now().UnixMilli()

@@ -123,6 +123,7 @@ func (s *Server) handleFeedDelta(w http.ResponseWriter, r *http.Request) {
 	for _, it := range items {
 		primary := feedItemToBundlePrimary(it, bookmarks, subscribeURLs, mutedHandleSet)
 		attachments := map[string]any{}
+		attachments["feed_thread_context"] = feed.ThreadContextRows(s.db, it)
 		if len(it.Retweeters) > 0 {
 			attachments["retweet_sources"] = it.Retweeters
 		}

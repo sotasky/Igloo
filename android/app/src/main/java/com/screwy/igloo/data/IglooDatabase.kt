@@ -24,6 +24,7 @@ import com.screwy.igloo.data.dao.FeedLikeDao
 import com.screwy.igloo.data.dao.FeedRankDao
 import com.screwy.igloo.data.dao.FeedReadDao
 import com.screwy.igloo.data.dao.FeedSeenDao
+import com.screwy.igloo.data.dao.FeedThreadContextDao
 import com.screwy.igloo.data.dao.MediaInventoryDao
 import com.screwy.igloo.data.dao.MomentReadDao
 import com.screwy.igloo.data.dao.MomentViewDao
@@ -54,6 +55,7 @@ import com.screwy.igloo.data.entity.FeedItemEntity
 import com.screwy.igloo.data.entity.FeedLikeEntity
 import com.screwy.igloo.data.entity.FeedRankEntity
 import com.screwy.igloo.data.entity.FeedSeenEntity
+import com.screwy.igloo.data.entity.FeedThreadContextEntity
 import com.screwy.igloo.data.entity.FeedTimelineEntryEntity
 import com.screwy.igloo.data.entity.MediaInventoryEntity
 import com.screwy.igloo.data.entity.MomentViewEntity
@@ -94,6 +96,7 @@ import com.screwy.igloo.data.entity.WatchHistoryEntity
     entities = [
         // Server-mirrored core
         FeedItemEntity::class,
+        FeedThreadContextEntity::class,
         VideoEntity::class,
         ChannelEntity::class,
         ChannelProfileEntity::class,
@@ -142,6 +145,7 @@ abstract class IglooDatabase : RoomDatabase() {
     abstract fun sponsorBlockCheckedDao():  SponsorBlockCheckedDao
     abstract fun feedLikeDao():             FeedLikeDao
     abstract fun feedRankDao():             FeedRankDao
+    abstract fun feedThreadContextDao():    FeedThreadContextDao
     abstract fun bookmarkDao():             BookmarkDao
     abstract fun bookmarkCategoryDao():     BookmarkCategoryDao
     abstract fun bookmarkLabelDao():        BookmarkLabelDao

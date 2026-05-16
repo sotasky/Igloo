@@ -3,7 +3,9 @@ package feed
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
+	"time"
 
 	"github.com/screwys/igloo/internal/db"
 	"github.com/screwys/igloo/internal/model"
@@ -201,6 +203,61 @@ func TestEnrichFeedItemsBackfillsDisplayNamesFromChannelProfiles(t *testing.T) {
 	}
 	if got[0].QuoteAuthorDisplayName != "Display From Profile" {
 		t.Fatalf("quote author display name: got %q", got[0].QuoteAuthorDisplayName)
+	}
+}
+
+func TestEnrichFeedItemsCollapsesSiblingReplyBranchesToFirstRankedLeaf(t *testing.T) {
+	d := openWritableFeedTestDB(t)
+	rootAt := time.Unix(100, 0).UTC()
+	parentAAt := time.Unix(110, 0).UTC()
+	leafAAt := time.Unix(120, 0).UTC()
+	parentBAt := time.Unix(130, 0).UTC()
+	leafBAt := time.Unix(140, 0).UTC()
+
+	_, err := d.UpsertFeedItems([]model.FeedItem{
+		{TweetID: "thread_root", AuthorHandle: "sample_author_root", BodyText: "root", PublishedAt: &rootAt, FetchedAt: rootAt, ContentHash: "hash_thread_root", CanonicalTweetID: "thread_root"},
+		{TweetID: "thread_parent_a", AuthorHandle: "sample_author_parent", BodyText: "parent a", IsReply: true, ReplyToHandle: "sample_author_root", ReplyToStatus: "thread_root", PublishedAt: &parentAAt, FetchedAt: parentAAt, ContentHash: "hash_thread_parent_a", CanonicalTweetID: "thread_parent_a"},
+		{TweetID: "thread_leaf_a", AuthorHandle: "sample_author_leaf_a", BodyText: "leaf a", IsReply: true, ReplyToHandle: "sample_author_parent", ReplyToStatus: "thread_parent_a", PublishedAt: &leafAAt, FetchedAt: leafAAt, ContentHash: "hash_thread_leaf_a", CanonicalTweetID: "thread_leaf_a"},
+		{TweetID: "thread_parent_b", AuthorHandle: "sample_author_parent", BodyText: "parent b", IsReply: true, ReplyToHandle: "sample_author_root", ReplyToStatus: "thread_root", PublishedAt: &parentBAt, FetchedAt: parentBAt, ContentHash: "hash_thread_parent_b", CanonicalTweetID: "thread_parent_b"},
+		{TweetID: "thread_leaf_b", AuthorHandle: "sample_author_leaf_b", BodyText: "leaf b", IsReply: true, ReplyToHandle: "sample_author_parent", ReplyToStatus: "thread_parent_b", PublishedAt: &leafBAt, FetchedAt: leafBAt, ContentHash: "hash_thread_leaf_b", CanonicalTweetID: "thread_leaf_b"},
+	})
+	if err != nil {
+		t.Fatalf("UpsertFeedItems: %v", err)
+	}
+
+	stored, err := d.GetFeedItemsForTweetIDs([]string{
+		"thread_root",
+		"thread_parent_a",
+		"thread_leaf_a",
+		"thread_parent_b",
+		"thread_leaf_b",
+	})
+	if err != nil {
+		t.Fatalf("GetFeedItemsForTweetIDs: %v", err)
+	}
+	input := []model.FeedItem{
+		stored["thread_leaf_b"],
+		stored["thread_leaf_a"],
+		stored["thread_parent_b"],
+		stored["thread_parent_a"],
+		stored["thread_root"],
+	}
+
+	got := EnrichFeedItems(d, input, "")
+	gotIDs := make([]string, 0, len(got))
+	for _, item := range got {
+		gotIDs = append(gotIDs, item.TweetID)
+	}
+	if want := []string{"thread_leaf_b"}; !reflect.DeepEqual(gotIDs, want) {
+		t.Fatalf("enriched IDs = %v, want %v", gotIDs, want)
+	}
+
+	gotChainIDs := make([]string, 0, len(got[0].ThreadChain))
+	for _, item := range got[0].ThreadChain {
+		gotChainIDs = append(gotChainIDs, item.TweetID)
+	}
+	if want := []string{"thread_root", "thread_parent_b"}; !reflect.DeepEqual(gotChainIDs, want) {
+		t.Fatalf("thread chain IDs = %v, want %v", gotChainIDs, want)
 	}
 }
 

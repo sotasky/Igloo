@@ -82,6 +82,16 @@ class IglooDatabaseTest {
         assertTableHasIndexes("feed_items", "idx_feed_items_reply_parent")
     }
 
+    @Test fun feedThreadContextTableMirrorsServerContext() {
+        assertTableHasColumns("feed_thread_context", "leaf_tweet_id", "root_tweet_id", "ancestor_tweet_id", "ancestor_order")
+        assertTableHasIndexes(
+            "feed_thread_context",
+            "idx_feed_thread_context_leaf",
+            "idx_feed_thread_context_root",
+            "idx_feed_thread_context_ancestor",
+        )
+    }
+
     @Test fun videoCommentsTableHasPresentationColumns() {
         assertTableHasColumns("video_comments", "thread_order", "thread_depth", "parent_order", "reply_to_author", "is_creator", "like_count_label")
     }

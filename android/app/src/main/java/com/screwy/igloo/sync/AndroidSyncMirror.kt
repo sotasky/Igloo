@@ -39,7 +39,7 @@ private val androidSyncJson: Json = Json {
     encodeDefaults = true
 }
 
-const val ANDROID_SYNC_ITEM_IMPORTER_VERSION = 2
+const val ANDROID_SYNC_ITEM_IMPORTER_VERSION = 3
 
 private fun AndroidSyncContentPruneCounts.hasDeletes(): Boolean =
     videos > 0 || feedItems > 0 || channels > 0 || channelProfiles > 0 || legacyAssets > 0 || sideRows > 0

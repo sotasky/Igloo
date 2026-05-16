@@ -720,6 +720,7 @@ func (s *Server) buildAndroidSyncItems(username string, sets db.AndroidSyncDesir
 			}
 		}
 		attachments := map[string]any{}
+		attachments["feed_thread_context"] = feed.ThreadContextRows(s.db, item)
 		if len(item.Retweeters) > 0 {
 			attachments["retweet_sources"] = item.Retweeters
 		}

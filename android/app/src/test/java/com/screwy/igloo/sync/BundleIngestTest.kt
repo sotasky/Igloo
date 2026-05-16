@@ -16,6 +16,8 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.add
+import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import org.junit.After
@@ -76,6 +78,42 @@ class BundleIngestTest {
         assertEquals("Korean", row.bodySourceLang)
         assertEquals("Japanese", row.quoteSourceLang)
         assertEquals(10L, row.syncSeq)
+    }
+
+    @Test fun feedItem_threadContextAttachment_replacesLeafContext() = runBlocking {
+        val primary = buildJsonObject {
+            put("tweet_id", "leaf")
+            put("author_handle", "sample_leaf")
+        }
+        val withContext = bundle(
+            kind = "feed_items",
+            primary = primary,
+            attachments = buildJsonObject {
+                put("feed_thread_context", buildJsonArray {
+                    add(buildJsonObject {
+                        put("leaf_tweet_id", "leaf")
+                        put("root_tweet_id", "root")
+                        put("ancestor_tweet_id", "root")
+                        put("ancestor_order", 0)
+                    })
+                })
+            },
+        )
+
+        assertEquals(IngestResult.Ok, ingest.ingest(withContext, guard))
+        val rows = db.feedReadDao().getThreadContexts(listOf("leaf"))
+        assertEquals(1, rows.size)
+        assertEquals("root", rows.single().rootTweetId)
+
+        val cleared = bundle(
+            kind = "feed_items",
+            primary = primary,
+            attachments = buildJsonObject {
+                put("feed_thread_context", buildJsonArray {})
+            },
+        )
+        assertEquals(IngestResult.Ok, ingest.ingest(cleared, guard))
+        assertTrue(db.feedReadDao().getThreadContexts(listOf("leaf")).isEmpty())
     }
 
     @Test fun video_primary_upserts() = runBlocking {

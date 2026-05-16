@@ -14,6 +14,7 @@ import com.screwy.igloo.data.entity.FeedItemEntity
 import com.screwy.igloo.data.entity.FeedLikeEntity
 import com.screwy.igloo.data.entity.FeedRankEntity
 import com.screwy.igloo.data.entity.FeedSeenEntity
+import com.screwy.igloo.data.entity.FeedThreadContextEntity
 import com.screwy.igloo.data.entity.MomentViewEntity
 import com.screwy.igloo.data.entity.MutedAccountEntity
 import com.screwy.igloo.data.entity.RetweetSourceEntity
@@ -75,6 +76,7 @@ class BundleIngest(
         return try {
             db.withTransaction {
                 val primaryVideoId = bundle.primary["video_id"]?.jsonPrimitive?.contentOrNull
+                val primaryTweetId = bundle.primary["tweet_id"]?.jsonPrimitive?.contentOrNull
                 when (bundle.primary_kind) {
                     "feed_items" -> ingestFeedItem(bundle, guard)
                     "videos"     -> ingestVideo(bundle, guard)
@@ -84,7 +86,7 @@ class BundleIngest(
                     "bookmark_metadata" -> ingestBookmarkMetadata(bundle)
                     else         -> return@withTransaction IngestResult.UnknownKind(bundle.primary_kind)
                 }
-                ingestAttachments(bundle.attachments, primaryVideoId, guard)
+                ingestAttachments(bundle.attachments, primaryVideoId, primaryTweetId, guard)
                 IngestResult.Ok
             }
         } catch (e: Exception) {
@@ -233,7 +235,12 @@ class BundleIngest(
         ))
     }
 
-    private suspend fun ingestAttachments(attachments: JsonObject?, primaryVideoId: String?, guard: PreserveLocalGuard) {
+    private suspend fun ingestAttachments(
+        attachments: JsonObject?,
+        primaryVideoId: String?,
+        primaryTweetId: String?,
+        guard: PreserveLocalGuard,
+    ) {
         if (attachments == null) return
         for ((table, element) in attachments) {
             when (table) {
@@ -242,6 +249,12 @@ class BundleIngest(
                     .takeIf { it.isNotEmpty() }?.let { db.videoCommentDao().upsert(it) }
                 "retweet_sources"       -> decodeRows<RetweetSourceEntity>(element, RetweetSourceEntity.serializer())
                     .takeIf { it.isNotEmpty() }?.let { db.retweetSourceDao().upsert(it) }
+                "feed_thread_context"    -> primaryTweetId?.takeIf { it.isNotBlank() }?.let { tweetId ->
+                    db.feedThreadContextDao().replaceForLeaf(
+                        tweetId,
+                        decodeRows<FeedThreadContextEntity>(element, FeedThreadContextEntity.serializer()),
+                    )
+                }
                 "video_repost_sources"  -> primaryVideoId?.takeIf { it.isNotBlank() }?.let { videoId ->
                     db.videoRepostSourceDao().replaceForVideo(
                         videoId,

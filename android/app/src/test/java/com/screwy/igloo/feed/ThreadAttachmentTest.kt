@@ -5,6 +5,7 @@ import com.screwy.igloo.data.RoomTestSupport
 import com.screwy.igloo.data.entity.ChannelEntity
 import com.screwy.igloo.data.entity.FeedItemEntity
 import com.screwy.igloo.data.entity.FeedRankEntity
+import com.screwy.igloo.data.entity.FeedThreadContextEntity
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.After
@@ -34,11 +35,19 @@ class ThreadAttachmentTest {
                 authorHandle = "sample_alpha",
                 channelId = "twitter_sample_alpha",
                 syncSeq = 2,
-                isReply = true,
-                replyToHandle = "sample_alpha",
-                replyToStatus = "t1",
             ),
         ))
+        db.feedThreadContextDao().replaceForLeaf(
+            "t2",
+            listOf(
+                FeedThreadContextEntity(
+                    leafTweetId = "t2",
+                    rootTweetId = "t1",
+                    ancestorTweetId = "t1",
+                    ancestorOrder = 0,
+                ),
+            ),
+        )
 
         val rows = db.feedReadDao().feedFlow(limit = 10).first()
         val threaded = attachThreadChains(db.feedReadDao(), rows)
@@ -93,6 +102,28 @@ class ThreadAttachmentTest {
                 replyToStatus = "parent_b",
             ),
         ))
+        db.feedThreadContextDao().replaceForLeaf(
+            "leaf_a",
+            listOf(
+                FeedThreadContextEntity("leaf_a", "root", "root", 0),
+                FeedThreadContextEntity("leaf_a", "root", "parent_a", 1),
+            ),
+        )
+        db.feedThreadContextDao().replaceForLeaf(
+            "leaf_b",
+            listOf(
+                FeedThreadContextEntity("leaf_b", "root", "root", 0),
+                FeedThreadContextEntity("leaf_b", "root", "parent_b", 1),
+            ),
+        )
+        db.feedThreadContextDao().replaceForLeaf(
+            "parent_a",
+            listOf(FeedThreadContextEntity("parent_a", "root", "root", 0)),
+        )
+        db.feedThreadContextDao().replaceForLeaf(
+            "parent_b",
+            listOf(FeedThreadContextEntity("parent_b", "root", "root", 0)),
+        )
         db.feedRankDao().upsert(listOf(
             FeedRankEntity(tweetId = "leaf_b", rankPosition = 1, snapshotAt = 1),
             FeedRankEntity(tweetId = "leaf_a", rankPosition = 2, snapshotAt = 1),

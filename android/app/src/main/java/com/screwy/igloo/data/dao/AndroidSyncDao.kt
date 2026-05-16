@@ -321,6 +321,7 @@ interface AndroidSyncDao {
             deleteMomentViewsWithoutVideo() +
             deleteFeedSeenWithoutFeedItem() +
             deleteFeedRankWithoutFeedItem() +
+            deleteFeedThreadContextWithoutFeedItem() +
             deleteRetweetSourcesWithoutFeedItem() +
             deleteChannelFollowsOutsideGeneration(generationId) +
             deleteChannelStarsOutsideGeneration(generationId) +
@@ -433,6 +434,15 @@ interface AndroidSyncDao {
         """
     )
     suspend fun deleteFeedRankWithoutFeedItem(): Int
+
+    @Query(
+        """
+        DELETE FROM feed_thread_context
+        WHERE NOT EXISTS (SELECT 1 FROM feed_items WHERE feed_items.tweet_id = feed_thread_context.leaf_tweet_id)
+           OR NOT EXISTS (SELECT 1 FROM feed_items WHERE feed_items.tweet_id = feed_thread_context.ancestor_tweet_id)
+        """
+    )
+    suspend fun deleteFeedThreadContextWithoutFeedItem(): Int
 
     @Query(
         """

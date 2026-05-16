@@ -67,6 +67,7 @@ class IglooMigrationTest {
                 IglooMigrations.MIGRATION_31_32,
                 IglooMigrations.MIGRATION_32_33,
                 IglooMigrations.MIGRATION_33_34,
+                IglooMigrations.MIGRATION_34_35,
             )
             .allowMainThreadQueries()
             .build()
@@ -125,6 +126,7 @@ class IglooMigrationTest {
                 IglooMigrations.MIGRATION_31_32,
                 IglooMigrations.MIGRATION_32_33,
                 IglooMigrations.MIGRATION_33_34,
+                IglooMigrations.MIGRATION_34_35,
             )
             .allowMainThreadQueries()
             .build()
@@ -188,6 +190,7 @@ class IglooMigrationTest {
                 IglooMigrations.MIGRATION_31_32,
                 IglooMigrations.MIGRATION_32_33,
                 IglooMigrations.MIGRATION_33_34,
+                IglooMigrations.MIGRATION_34_35,
             )
             .allowMainThreadQueries()
             .build()
@@ -253,7 +256,11 @@ class IglooMigrationTest {
         }
 
         val roomDb = Room.databaseBuilder(context, IglooDatabase::class.java, dbName)
-            .addMigrations(IglooMigrations.MIGRATION_32_33, IglooMigrations.MIGRATION_33_34)
+            .addMigrations(
+                IglooMigrations.MIGRATION_32_33,
+                IglooMigrations.MIGRATION_33_34,
+                IglooMigrations.MIGRATION_34_35,
+            )
             .allowMainThreadQueries()
             .build()
 
@@ -288,7 +295,7 @@ class IglooMigrationTest {
         sqlite.close()
 
         val roomDb = Room.databaseBuilder(context, IglooDatabase::class.java, dbName)
-            .addMigrations(IglooMigrations.MIGRATION_33_34)
+            .addMigrations(IglooMigrations.MIGRATION_33_34, IglooMigrations.MIGRATION_34_35)
             .allowMainThreadQueries()
             .build()
 
@@ -303,6 +310,37 @@ class IglooMigrationTest {
                     }
                 }
                 assertTrue(found)
+            }
+        } finally {
+            roomDb.close()
+            context.deleteDatabase(dbName)
+        }
+    }
+
+    @Test fun migration34To35AddsFeedThreadContext() {
+        val dbName = "igloo-migration-34-35"
+        val context: Context = ApplicationProvider.getApplicationContext()
+        val sqlite = createDatabaseFromSchemaSnapshot(
+            context,
+            dbName,
+            34,
+        )
+        sqlite.close()
+
+        val roomDb = Room.databaseBuilder(context, IglooDatabase::class.java, dbName)
+            .addMigrations(IglooMigrations.MIGRATION_34_35)
+            .allowMainThreadQueries()
+            .build()
+
+        try {
+            val readable = roomDb.openHelper.readableDatabase
+            assertEquals(IglooMigrations.CURRENT_SCHEMA_VERSION, readable.version)
+            readable.query("PRAGMA table_info(feed_thread_context)").use { cursor ->
+                val columns = mutableSetOf<String>()
+                while (cursor.moveToNext()) {
+                    columns += cursor.getString(1)
+                }
+                assertTrue(columns.containsAll(listOf("leaf_tweet_id", "root_tweet_id", "ancestor_tweet_id", "ancestor_order")))
             }
         } finally {
             roomDb.close()
