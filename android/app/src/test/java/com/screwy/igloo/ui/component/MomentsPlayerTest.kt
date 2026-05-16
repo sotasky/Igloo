@@ -421,26 +421,6 @@ class MomentsPlayerTest {
     }
 
     @Test
-    fun playback_page_stays_settled_while_pager_is_moving() {
-        assertEquals(
-            4,
-            momentPlaybackPage(
-                currentPage = 5,
-                settledPage = 4,
-                isScrollInProgress = true,
-            ),
-        )
-        assertEquals(
-            5,
-            momentPlaybackPage(
-                currentPage = 5,
-                settledPage = 5,
-                isScrollInProgress = false,
-            ),
-        )
-    }
-
-    @Test
     fun auto_swipe_end_advance_wraps_to_start() {
         assertEquals(3, nextMomentPageForAutoSwipe(currentPage = 2, lastIndex = 5, autoSwipeEnabled = true))
         assertEquals(0, nextMomentPageForAutoSwipe(currentPage = 5, lastIndex = 5, autoSwipeEnabled = true))

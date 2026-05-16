@@ -52,12 +52,6 @@ internal fun shouldPlayMomentPage(
     @Suppress("UNUSED_PARAMETER") isScrollInProgress: Boolean,
 ): Boolean = isCurrentPage
 
-internal fun momentPlaybackPage(
-    currentPage: Int,
-    settledPage: Int,
-    isScrollInProgress: Boolean,
-): Int = if (isScrollInProgress) settledPage else currentPage
-
 internal fun nextMomentPageForAutoSwipe(
     currentPage: Int,
     lastIndex: Int,
