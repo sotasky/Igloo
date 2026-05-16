@@ -147,28 +147,34 @@ internal class AndroidSyncAssetDrainer(
     }
 
     fun deleteUnreferencedAssetFiles(retainedPaths: List<String>): AssetFileDeleteStats {
-        val root = syncRoot.canonicalFile
+        val root = syncRoot.absoluteFile
         if (!root.exists()) return AssetFileDeleteStats()
-        val rootPrefix = root.absolutePath + File.separator
+        val rootPath = normalizedAbsolutePath(root)
+        val rootPrefix = rootPath + File.separator
         val retained = retainedPaths.mapNotNull { path ->
-            runCatching { File(path).canonicalFile.absolutePath }.getOrNull()
-        }.filter { it.startsWith(rootPrefix) }.toHashSet()
+            runCatching { normalizedAbsolutePath(File(path)) }.getOrNull()
+        }.filter { it.isUnder(rootPath, rootPrefix) }.toHashSet()
 
         var files = 0
         var bytes = 0L
         root.walkTopDown().forEach { file ->
             if (!file.isFile) return@forEach
-            val canonical = runCatching { file.canonicalFile }.getOrNull() ?: return@forEach
-            val path = canonical.absolutePath
+            val path = runCatching { normalizedAbsolutePath(file) }.getOrNull() ?: return@forEach
             if (!path.startsWith(rootPrefix) || path in retained) return@forEach
-            val size = canonical.length()
-            if (canonical.delete()) {
+            val size = file.length()
+            if (file.delete()) {
                 files++
                 bytes += size
             }
         }
         return AssetFileDeleteStats(files, bytes)
     }
+
+    private fun normalizedAbsolutePath(file: File): String =
+        file.absoluteFile.toPath().normalize().toString()
+
+    private fun String.isUnder(rootPath: String, rootPrefix: String): Boolean =
+        this == rootPath || startsWith(rootPrefix)
 
     private suspend fun downloadOrVerify(asset: AndroidSyncAssetEntity): DrainResult {
         val maxDownloadBytes = maxDownloadBytesFor(asset)
