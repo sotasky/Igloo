@@ -716,6 +716,32 @@ class BundleIngestTest {
         assertTrue("got $result", result is IngestResult.ParseFailure)
     }
 
+    @Test fun batchIngest_keepsSuccessfulSiblingsAroundMalformedBundle() = runBlocking {
+        val results = ingest.ingestBatch(
+            listOf(
+                bundle("feed_items", buildJsonObject {
+                    put("tweet_id", "t1")
+                    put("author_handle", "@alice")
+                }),
+                // Missing required `author_handle` field (not nullable in FeedItemEntity).
+                bundle("feed_items", buildJsonObject { put("tweet_id", "bad") }),
+                bundle("feed_items", buildJsonObject {
+                    put("tweet_id", "t2")
+                    put("author_handle", "@bob")
+                }),
+            ),
+            guard,
+        )
+
+        assertEquals(3, results.size)
+        assertEquals(IngestResult.Ok, results[0])
+        assertTrue("got ${results[1]}", results[1] is IngestResult.ParseFailure)
+        assertEquals(IngestResult.Ok, results[2])
+        assertNotNull(db.feedItemDao().getById("t1"))
+        assertNull(db.feedItemDao().getById("bad"))
+        assertNotNull(db.feedItemDao().getById("t2"))
+    }
+
     // ─── Helpers ───────────────────────────────────────────────────────────────
 
     private fun bundle(kind: String, primary: JsonObject, attachments: JsonObject? = null): BundleEnvelope =

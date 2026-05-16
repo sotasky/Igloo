@@ -75,23 +75,53 @@ class BundleIngest(
     suspend fun ingest(bundle: BundleEnvelope, guard: PreserveLocalGuard): IngestResult {
         return try {
             db.withTransaction {
-                val primaryVideoId = bundle.primary["video_id"]?.jsonPrimitive?.contentOrNull
-                val primaryTweetId = bundle.primary["tweet_id"]?.jsonPrimitive?.contentOrNull
-                when (bundle.primary_kind) {
-                    "feed_items" -> ingestFeedItem(bundle, guard)
-                    "videos"     -> ingestVideo(bundle, guard)
-                    "channels"   -> ingestChannel(bundle, guard)
-                    "channel_profiles" -> ingestChannelProfile(bundle)
-                    "feed_rank"  -> ingestFeedRank(bundle)
-                    "bookmark_metadata" -> ingestBookmarkMetadata(bundle)
-                    else         -> return@withTransaction IngestResult.UnknownKind(bundle.primary_kind)
-                }
-                ingestAttachments(bundle.attachments, primaryVideoId, primaryTweetId, guard)
-                IngestResult.Ok
+                ingestInOpenTransaction(bundle, guard)
             }
         } catch (e: Exception) {
             IngestResult.ParseFailure(bundle.primary_kind, e)
         }
+    }
+
+    /**
+     * Ingest a sync page with one outer transaction while preserving per-bundle
+     * failure isolation. SQLite savepoints let a malformed bundle roll back its
+     * own writes without forcing every successful sibling through its own Room
+     * transaction.
+     */
+    suspend fun ingestBatch(bundles: List<BundleEnvelope>, guard: PreserveLocalGuard): List<IngestResult> {
+        if (bundles.isEmpty()) return emptyList()
+        return db.withTransaction {
+            val sqlite = db.openHelper.writableDatabase
+            bundles.mapIndexed { index, bundle ->
+                val savepoint = "bundle_ingest_$index"
+                sqlite.execSQL("SAVEPOINT $savepoint")
+                try {
+                    val result = ingestInOpenTransaction(bundle, guard)
+                    sqlite.execSQL("RELEASE SAVEPOINT $savepoint")
+                    result
+                } catch (e: Exception) {
+                    sqlite.execSQL("ROLLBACK TO SAVEPOINT $savepoint")
+                    sqlite.execSQL("RELEASE SAVEPOINT $savepoint")
+                    IngestResult.ParseFailure(bundle.primary_kind, e)
+                }
+            }
+        }
+    }
+
+    private suspend fun ingestInOpenTransaction(bundle: BundleEnvelope, guard: PreserveLocalGuard): IngestResult {
+        val primaryVideoId = bundle.primary["video_id"]?.jsonPrimitive?.contentOrNull
+        val primaryTweetId = bundle.primary["tweet_id"]?.jsonPrimitive?.contentOrNull
+        when (bundle.primary_kind) {
+            "feed_items" -> ingestFeedItem(bundle, guard)
+            "videos"     -> ingestVideo(bundle, guard)
+            "channels"   -> ingestChannel(bundle, guard)
+            "channel_profiles" -> ingestChannelProfile(bundle)
+            "feed_rank"  -> ingestFeedRank(bundle)
+            "bookmark_metadata" -> ingestBookmarkMetadata(bundle)
+            else         -> return IngestResult.UnknownKind(bundle.primary_kind)
+        }
+        ingestAttachments(bundle.attachments, primaryVideoId, primaryTweetId, guard)
+        return IngestResult.Ok
     }
 
     // ─── Per-primary-kind branches ─────────────────────────────────────────────

@@ -285,27 +285,29 @@ class AndroidSyncMirror(
                 changedItemQueryMs = elapsedMsSince(changedQueryStartedAt)
                 changedCount = changedSeqs.size
                 skippedUnchanged = page.items.size - changedSeqs.size
-                for (item in page.items) {
-                    if (item.seq !in changedSeqs) continue
+                val changedItems = page.items.filter { item -> item.seq in changedSeqs }
+                if (changedItems.isNotEmpty()) {
                     val ingestStartedAt = System.nanoTime()
-                    val result = ingest.ingest(item.payload, guard)
+                    val results = ingest.ingestBatch(changedItems.map { it.payload }, guard)
                     ingestTransactionMs += elapsedMsSince(ingestStartedAt)
-                    ingestTransactions++
-                    if (result is IngestResult.ParseFailure) {
-                        ingestParseFailures++
-                        logger.info(
-                            event = "android_sync_item_parse_failed",
-                            fields = mapOf(
-                                "generation_id" to generationId,
-                                "kind" to item.item_kind,
-                                "item_id" to item.item_id,
-                                "error" to (result.cause.message ?: result.cause::class.simpleName.orEmpty()),
-                            ),
-                        )
-                    } else if (result is IngestResult.UnknownKind) {
-                        ingestUnknown++
-                    } else {
-                        ingestOk++
+                    ingestTransactions = 1
+                    for ((item, result) in changedItems.zip(results)) {
+                        if (result is IngestResult.ParseFailure) {
+                            ingestParseFailures++
+                            logger.info(
+                                event = "android_sync_item_parse_failed",
+                                fields = mapOf(
+                                    "generation_id" to generationId,
+                                    "kind" to item.item_kind,
+                                    "item_id" to item.item_id,
+                                    "error" to (result.cause.message ?: result.cause::class.simpleName.orEmpty()),
+                                ),
+                            )
+                        } else if (result is IngestResult.UnknownKind) {
+                            ingestUnknown++
+                        } else {
+                            ingestOk++
+                        }
                     }
                 }
                 if (skippedUnchanged > 0) {

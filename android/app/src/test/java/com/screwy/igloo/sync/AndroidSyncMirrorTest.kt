@@ -1097,7 +1097,7 @@ class AndroidSyncMirrorTest {
     }
 
     @Test fun itemImportLogsPageDecodeAndIngestCounters() = runBlocking {
-        val item = AndroidSyncItemDto(
+        val firstItem = AndroidSyncItemDto(
             seq = 1,
             item_kind = "channels",
             item_id = "sample_channel",
@@ -1107,6 +1107,20 @@ class AndroidSyncMirrorTest {
                     put("channel_id", "sample_channel")
                     put("source_id", "sample")
                     put("name", "Sample Channel")
+                    put("platform", "youtube")
+                },
+            ),
+        )
+        val secondItem = AndroidSyncItemDto(
+            seq = 2,
+            item_kind = "channels",
+            item_id = "sample_channel_two",
+            payload = BundleEnvelope(
+                primary_kind = "channels",
+                primary = buildJsonObject {
+                    put("channel_id", "sample_channel_two")
+                    put("source_id", "sample_two")
+                    put("name", "Sample Channel Two")
                     put("platform", "youtube")
                 },
             ),
@@ -1121,7 +1135,7 @@ class AndroidSyncMirrorTest {
                             created_at_ms = nowMs,
                             status = "published",
                             source_version = "test",
-                            item_count = 1,
+                            item_count = 2,
                         ),
                     ),
                 )
@@ -1129,7 +1143,7 @@ class AndroidSyncMirrorTest {
                     rawItemsBody = iglooJson.encodeToString(
                         AndroidSyncItemsResponse(
                             generation_id = GENERATION_ID,
-                            items = listOf(item),
+                            items = listOf(firstItem, secondItem),
                             end_of_stream = true,
                         ),
                     )
@@ -1154,13 +1168,15 @@ class AndroidSyncMirrorTest {
         assertTrue((pageLog.fields["decode_ms"] as Long) >= 0L)
         assertTrue((pageLog.fields["ledger_write_ms"] as Long) >= 0L)
         assertTrue((pageLog.fields["changed_item_query_ms"] as Long) >= 0L)
-        assertEquals(1, pageLog.fields["changed"])
+        assertEquals(2, pageLog.fields["changed"])
         assertEquals(0, pageLog.fields["skipped"])
         assertEquals(1, pageLog.fields["ingest_transactions"])
-        assertEquals(1, pageLog.fields["ingest_ok"])
+        assertEquals(2, pageLog.fields["ingest_ok"])
         assertEquals(0, pageLog.fields["ingest_unknown"])
         assertEquals(0, pageLog.fields["ingest_parse_failed"])
         assertTrue((pageLog.fields["ingest_transaction_ms"] as Long) >= 0L)
+        assertNotNull(db.channelDao().getById("sample_channel"))
+        assertNotNull(db.channelDao().getById("sample_channel_two"))
     }
 
     @Test fun unchangedPayloadFromOlderProjectionVersionStillRefreshesLocalProjection() = runBlocking {
