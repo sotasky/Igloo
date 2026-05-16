@@ -3,7 +3,7 @@
 This instrumentation is scoped to the Android performance findings verified on
 2026-05-16. It avoids product behavior changes and is gated by the Android log
 tag `IglooPerf`: when that tag is not `DEBUG`, probe timers, counters, trace
-sections, collector tracking, and high-volume Room logging return early.
+sections, collector tracking, and Room query/invalidation summaries return early.
 
 ## Enable Log Probes
 
@@ -31,8 +31,8 @@ adb -s "$SERIAL" shell am start -n com.screwy.igloo/.MainActivity
 
 ## Probe Coverage
 
-- Finding 5: media resolver collector starts/ends/emits, Room query counts, and
-  Room invalidation logs for media and sync tables.
+- Finding 5: media resolver collector starts/ends/emits, summarized Room query
+  counts, and summarized Room invalidation logs for media and sync tables.
 - Finding 6: native feed model build, adapter submit/bind, viewport change,
   near-visible warming, seen enqueue, and action toggle timings.
 - Finding 8: Moments and MediaViewer player build/prepare/clear/release counts
@@ -43,7 +43,7 @@ adb -s "$SERIAL" shell am start -n com.screwy.igloo/.MainActivity
 - Finding 10: per-prune-statement timings with affected rows, generation prune
   timings, and orphan asset file walk counts/duration.
 - Finding 11: full-list Room emissions and downstream map timings for Videos,
-  Moments grid/player, and Bookmarks, with Room invalidation logs.
+  Moments grid/player, and Bookmarks, with summarized Room invalidation logs.
 - Finding 12: cold startup, post-login bootstrap, foreground trigger, mutation
   delta, scheduler trigger, and WorkManager catch-up timings.
 

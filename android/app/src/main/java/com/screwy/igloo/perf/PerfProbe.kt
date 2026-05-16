@@ -12,8 +12,14 @@ import java.util.concurrent.atomic.AtomicInteger
 internal object PerfProbe {
     private const val TAG = "IglooPerf"
     private const val MAX_SECTION_NAME = 120
+    private const val ROOM_QUERY_SUMMARY_INTERVAL = 250
+    private const val ROOM_INVALIDATION_SUMMARY_INTERVAL = 25
     private val collectorCounts = ConcurrentHashMap<String, AtomicInteger>()
     private val counters = ConcurrentHashMap<String, AtomicInteger>()
+    private val roomQueryBuckets = ConcurrentHashMap<String, AtomicInteger>()
+    private val roomInvalidationBuckets = ConcurrentHashMap<String, AtomicInteger>()
+    private val roomQueryCount = AtomicInteger(0)
+    private val roomInvalidationCount = AtomicInteger(0)
     private val asyncCookies = AtomicInteger(1)
     private val syncTraceDepth: ThreadLocal<Int> = ThreadLocal.withInitial { 0 }
 
@@ -180,28 +186,42 @@ internal object PerfProbe {
 
     fun roomQuery(sql: String, argCount: Int) {
         if (!enabled()) return
-        val count = incrementCounter("igloo_room_query_count")
-        log(
-            event = "room_query",
-            fields = mapOf(
-                "count" to count,
-                "op" to sql.trimStart().substringBefore(' ', missingDelimiterValue = "").uppercase(Locale.US),
-                "tables" to roomTables(sql),
-                "args" to argCount,
-            ),
-        )
+        val count = roomQueryCount.incrementAndGet()
+        val op = sql.trimStart().substringBefore(' ', missingDelimiterValue = "").uppercase(Locale.US)
+        val tables = roomTables(sql)
+        val bucket = "$op|$tables|$argCount"
+        val bucketCount = roomQueryBuckets.getOrPut(bucket) { AtomicInteger(0) }.incrementAndGet()
+        if (bucketCount == 1 || bucketCount % ROOM_QUERY_SUMMARY_INTERVAL == 0) {
+            setCounter("igloo_room_query_count", count)
+            log(
+                event = "room_query_summary",
+                fields = mapOf(
+                    "count" to count,
+                    "bucket_count" to bucketCount,
+                    "op" to op,
+                    "tables" to tables,
+                    "args" to argCount,
+                ),
+            )
+        }
     }
 
     fun roomInvalidated(tables: Set<String>) {
         if (!enabled()) return
-        val count = incrementCounter("igloo_room_invalidation_count")
-        log(
-            event = "room_invalidated",
-            fields = mapOf(
-                "count" to count,
-                "tables" to tables.sorted().joinToString(","),
-            ),
-        )
+        val count = roomInvalidationCount.incrementAndGet()
+        val tableList = tables.sorted().joinToString(",")
+        val bucketCount = roomInvalidationBuckets.getOrPut(tableList) { AtomicInteger(0) }.incrementAndGet()
+        if (bucketCount == 1 || bucketCount % ROOM_INVALIDATION_SUMMARY_INTERVAL == 0) {
+            setCounter("igloo_room_invalidation_count", count)
+            log(
+                event = "room_invalidated_summary",
+                fields = mapOf(
+                    "count" to count,
+                    "bucket_count" to bucketCount,
+                    "tables" to tableList,
+                ),
+            )
+        }
     }
 
     fun uriKind(value: Any?): String = when {
