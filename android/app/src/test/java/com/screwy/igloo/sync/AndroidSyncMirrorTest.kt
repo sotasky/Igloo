@@ -1504,6 +1504,50 @@ class AndroidSyncMirrorTest {
         assertTrue(claimable.isEmpty())
     }
 
+    @Test fun latestVerifiedAssetsForOwnerCollapsesRepeatedGenerationRowsByMediaIndex() = runBlocking {
+        val dao = db.androidSyncDao()
+        val oldGeneration = generationEntity("android-sync-old", createdAtMs = 1)
+        val currentGeneration = generationEntity("android-sync-current", createdAtMs = 2)
+        val oldFirst = tmpFolder.newFile("old-slide-0.jpg").also { it.writeText("old-0") }
+        val oldSecond = tmpFolder.newFile("old-slide-1.jpg").also { it.writeText("old-1") }
+        val currentFirst = tmpFolder.newFile("current-slide-0.jpg").also { it.writeText("current-0") }
+        val currentSecond = tmpFolder.newFile("current-slide-1.jpg").also { it.writeText("current-1") }
+
+        dao.upsertGeneration(oldGeneration)
+        dao.upsertGeneration(currentGeneration)
+        dao.importAssets(
+            listOf(
+                slideSyncAsset(oldGeneration.generationId, index = 0, sizeBytes = oldFirst.length()),
+                slideSyncAsset(oldGeneration.generationId, index = 1, sizeBytes = oldSecond.length()),
+                slideSyncAsset(currentGeneration.generationId, index = 0, sizeBytes = currentFirst.length()),
+                slideSyncAsset(currentGeneration.generationId, index = 1, sizeBytes = currentSecond.length()),
+            ),
+            nowMs,
+        )
+        listOf(
+            oldGeneration.generationId to oldFirst,
+            oldGeneration.generationId to oldSecond,
+            currentGeneration.generationId to currentFirst,
+            currentGeneration.generationId to currentSecond,
+        ).forEachIndexed { index, (generationId, file) ->
+            dao.markVerified(
+                generationId = generationId,
+                assetId = slideAssetId(index % 2),
+                assetKind = "post_media",
+                localPath = file.absolutePath,
+                fileSize = file.length(),
+                nowMs = nowMs + 1,
+            )
+        }
+
+        val rows = dao.latestVerifiedAssetsForOwner("slide-video", listOf("post_media"))
+            .sortedBy { it.mediaIndex }
+
+        assertEquals(listOf(0, 1), rows.map { it.mediaIndex })
+        assertEquals(listOf(currentGeneration.generationId, currentGeneration.generationId), rows.map { it.generationId })
+        assertEquals(listOf(currentFirst.absolutePath, currentSecond.absolutePath), rows.map { it.localPath })
+    }
+
     @Test fun itemMarkerStallFailsWithoutMarkingImportComplete() = runBlocking {
         val engine = MockEngine { request ->
             when (request.url.encodedPath) {
@@ -1882,6 +1926,30 @@ class AndroidSyncMirrorTest {
         itemsImportedAtMs = itemsImportedAtMs,
         assetsImportedAtMs = assetsImportedAtMs,
     )
+
+    private fun slideSyncAsset(
+        generationId: String,
+        index: Int,
+        sizeBytes: Long,
+    ) = AndroidSyncAssetEntity(
+        generationId = generationId,
+        seq = (index + 1).toLong(),
+        assetId = slideAssetId(index),
+        assetKind = "post_media",
+        mediaIndex = index,
+        ownerId = "slide-video",
+        ownerKind = "tiktok_video",
+        bucket = "shorts_videos",
+        serverUrl = "/api/media/slide/slide-video/$index",
+        contentType = "image/jpeg",
+        sizeBytes = sizeBytes,
+        sha256 = "slide-$index",
+        serverState = "ready",
+        effectiveRecencyMs = nowMs,
+    )
+
+    private fun slideAssetId(index: Int): String =
+        "tiktok_tiktok_video_slide-video_post_media_$index"
 
     private companion object {
         const val BASE_URL = "http://example.local"

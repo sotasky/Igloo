@@ -229,26 +229,80 @@ interface AndroidSyncDao {
 
     @Query(
         """
-        SELECT * FROM android_sync_assets
-        WHERE owner_id = :ownerId
-          AND asset_kind IN (:assetKinds)
-          AND server_state = 'ready'
-          AND state = 'verified'
-          AND COALESCE(local_path, '') != ''
-        ORDER BY COALESCE(verified_at_ms, 0) DESC, generation_id DESC, seq ASC
+        SELECT a.* FROM android_sync_assets AS a
+        LEFT JOIN android_sync_generations AS g ON g.generation_id = a.generation_id
+        WHERE a.owner_id = :ownerId
+          AND a.asset_kind IN (:assetKinds)
+          AND a.server_state = 'ready'
+          AND a.state = 'verified'
+          AND COALESCE(a.local_path, '') != ''
+          AND NOT EXISTS (
+              SELECT 1
+              FROM android_sync_assets AS newer
+              LEFT JOIN android_sync_generations AS newer_g ON newer_g.generation_id = newer.generation_id
+              WHERE newer.owner_id = a.owner_id
+                AND newer.asset_kind = a.asset_kind
+                AND newer.media_index = a.media_index
+                AND newer.server_state = 'ready'
+                AND newer.state = 'verified'
+                AND COALESCE(newer.local_path, '') != ''
+                AND (
+                    COALESCE(newer.verified_at_ms, 0) > COALESCE(a.verified_at_ms, 0)
+                    OR (
+                        COALESCE(newer.verified_at_ms, 0) = COALESCE(a.verified_at_ms, 0)
+                        AND COALESCE(newer_g.created_at_ms, 0) > COALESCE(g.created_at_ms, 0)
+                    )
+                    OR (
+                        COALESCE(newer.verified_at_ms, 0) = COALESCE(a.verified_at_ms, 0)
+                        AND COALESCE(newer_g.created_at_ms, 0) = COALESCE(g.created_at_ms, 0)
+                        AND newer.generation_id > a.generation_id
+                    )
+                )
+          )
+        ORDER BY COALESCE(a.verified_at_ms, 0) DESC,
+                 COALESCE(g.created_at_ms, 0) DESC,
+                 a.generation_id DESC,
+                 a.seq ASC
         """
     )
     fun latestVerifiedAssetsForOwnerFlow(ownerId: String, assetKinds: List<String>): Flow<List<AndroidSyncAssetEntity>>
 
     @Query(
         """
-        SELECT * FROM android_sync_assets
-        WHERE owner_id = :ownerId
-          AND asset_kind IN (:assetKinds)
-          AND server_state = 'ready'
-          AND state = 'verified'
-          AND COALESCE(local_path, '') != ''
-        ORDER BY COALESCE(verified_at_ms, 0) DESC, generation_id DESC, seq ASC
+        SELECT a.* FROM android_sync_assets AS a
+        LEFT JOIN android_sync_generations AS g ON g.generation_id = a.generation_id
+        WHERE a.owner_id = :ownerId
+          AND a.asset_kind IN (:assetKinds)
+          AND a.server_state = 'ready'
+          AND a.state = 'verified'
+          AND COALESCE(a.local_path, '') != ''
+          AND NOT EXISTS (
+              SELECT 1
+              FROM android_sync_assets AS newer
+              LEFT JOIN android_sync_generations AS newer_g ON newer_g.generation_id = newer.generation_id
+              WHERE newer.owner_id = a.owner_id
+                AND newer.asset_kind = a.asset_kind
+                AND newer.media_index = a.media_index
+                AND newer.server_state = 'ready'
+                AND newer.state = 'verified'
+                AND COALESCE(newer.local_path, '') != ''
+                AND (
+                    COALESCE(newer.verified_at_ms, 0) > COALESCE(a.verified_at_ms, 0)
+                    OR (
+                        COALESCE(newer.verified_at_ms, 0) = COALESCE(a.verified_at_ms, 0)
+                        AND COALESCE(newer_g.created_at_ms, 0) > COALESCE(g.created_at_ms, 0)
+                    )
+                    OR (
+                        COALESCE(newer.verified_at_ms, 0) = COALESCE(a.verified_at_ms, 0)
+                        AND COALESCE(newer_g.created_at_ms, 0) = COALESCE(g.created_at_ms, 0)
+                        AND newer.generation_id > a.generation_id
+                    )
+                )
+          )
+        ORDER BY COALESCE(a.verified_at_ms, 0) DESC,
+                 COALESCE(g.created_at_ms, 0) DESC,
+                 a.generation_id DESC,
+                 a.seq ASC
         """
     )
     suspend fun latestVerifiedAssetsForOwner(ownerId: String, assetKinds: List<String>): List<AndroidSyncAssetEntity>
