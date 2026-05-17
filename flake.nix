@@ -35,12 +35,16 @@
               sha256 = "sha256-sHKu1ocZmMzps253dAMxBcop4zYyvltjR/MgaJjgdWo=";
             };
           };
-          openssl362 = prev.openssl_3_6.overrideAttrs (_: {
+          openssl362 = prev.openssl_3_6.overrideAttrs (old: {
             version = "3.6.2";
             src = builtins.fetchurl {
               url = "https://github.com/openssl/openssl/releases/download/openssl-3.6.2/openssl-3.6.2.tar.gz";
               sha256 = "sha256-qvUaH+BkOE+BHa6utOxNznNA7IvYkwJ+7mdq8x6DoE8=";
             };
+            patches = builtins.filter (
+              patch:
+              !(prev.lib.hasInfix "openssl-aes-gcm-ppc-remove-localentry-directive" (toString patch))
+            ) (old.patches or [ ]);
           });
         in
         {
@@ -61,14 +65,14 @@
         let
           pkgs = import nixpkgs {
             inherit system;
-            overlays = [ patchedRuntimeOverlay ];
           };
+          runtimePkgs = pkgs.extend patchedRuntimeOverlay;
           lib = pkgs.lib;
           revision = self.shortRev or (self.dirtyShortRev or "dev");
           containerImageName = "ghcr.io/screwys/igloo";
           go = goFor pkgs;
           buildGoModule = pkgs.buildGoModule.override { inherit go; };
-          pythonPackages = pkgs.python3Packages;
+          pythonPackages = runtimePkgs.python3Packages;
           runtimeRequirementLines = lib.splitString "\n" (builtins.readFile ./requirements-runtime.txt);
           runtimeToolVersion =
             package:
@@ -86,7 +90,7 @@
             version = runtimeToolVersion "yt-dlp";
             pyproject = true;
 
-            src = pkgs.fetchPypi {
+            src = runtimePkgs.fetchPypi {
               pname = "yt_dlp";
               inherit version;
               hash = "sha256-unqjHVM/H/zP5w5CFZbXyo/wvxOY3Gu2WLfZ3sBX0sk=";
@@ -117,7 +121,7 @@
             version = runtimeToolVersion "gallery-dl";
             pyproject = true;
 
-            src = pkgs.fetchPypi {
+            src = runtimePkgs.fetchPypi {
               inherit pname version;
               hash = "sha256-tZ8cO1h4PJyQTTi6JMtk4gBDQchBAJA1ZJEzQPuXdn8=";
             };
@@ -205,12 +209,12 @@
             };
           };
 
-          runtimeEnv = pkgs.buildEnv {
+          runtimeEnv = runtimePkgs.buildEnv {
             name = "igloo-runtime";
             paths = [
               igloo
-              pkgs.cacert
-              (lib.getBin pkgs.ffmpeg-headless)
+              runtimePkgs.cacert
+              (lib.getBin runtimePkgs.ffmpeg-headless)
               galleryDl
               ytDlp
             ];
@@ -249,8 +253,8 @@
               Cmd = [ "/usr/local/bin/igloo" ];
               Env = [
                 "PATH=/usr/local/bin:${runtimeEnv}/bin:/bin"
-                "SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
-                "REQUESTS_CA_BUNDLE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
+                "SSL_CERT_FILE=${runtimePkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
+                "REQUESTS_CA_BUNDLE=${runtimePkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
                 "LANG=C.UTF-8"
                 "HOME=/tmp"
                 "IGLOO_DATA_DIR=/igloo/data"
