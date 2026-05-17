@@ -162,9 +162,11 @@ func (s *Server) handleUploadCookie(w http.ResponseWriter, r *http.Request) {
 		written = append(written, filepath.Base(dest))
 	}
 	if r.Header.Get("HX-Request") != "" {
+		s.resetDownloadAuthFailuresAfterCookieChange(platform)
 		s.renderCookieRowsHTML(w, r)
 		return
 	}
+	s.resetDownloadAuthFailuresAfterCookieChange(platform)
 	writeJSON(w, 200, map[string]any{"success": true, "platform": platform, "files": written})
 }
 
@@ -239,6 +241,7 @@ func (s *Server) handleToggleCookie(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 500, map[string]any{"error": "db error"})
 		return
 	}
+	s.resetDownloadAuthFailuresAfterCookieChange(platform)
 	if r.Header.Get("HX-Request") != "" {
 		s.renderCookieRowsHTML(w, r)
 		return
@@ -288,6 +291,7 @@ func (s *Server) handleSetCookieBrowser(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, 500, map[string]any{"error": "db error"})
 		return
 	}
+	s.resetDownloadAuthFailuresAfterCookieChange(platform)
 	if isHTMX {
 		s.renderCookieRowsHTML(w, r)
 		return
@@ -315,9 +319,33 @@ func (s *Server) handleDeleteCookie(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	s.resetDownloadAuthFailuresAfterCookieChange(platform)
 	if r.Header.Get("HX-Request") != "" {
 		s.renderCookieRowsHTML(w, r)
 		return
 	}
 	writeJSON(w, 200, map[string]any{"success": true})
+}
+
+func (s *Server) resetDownloadAuthFailuresAfterCookieChange(platform string) {
+	if s == nil || s.db == nil || !s.platformEnabled(platform) {
+		return
+	}
+	fileEnabled, _ := s.db.GetSetting("cookies_"+platform+"_enabled", "1")
+	browser, _ := s.db.GetSetting("cookies_"+platform+"_browser", "")
+	cookiesDir := ""
+	if s.cfg != nil {
+		cookiesDir = s.cfg.CookiesDir
+	}
+	if len(download.ResolveCookieSets(cookiesDir, platform, fileEnabled != "0", browser)) == 0 {
+		return
+	}
+	n, err := s.db.ResetDownloadAuthFailuresForPlatform(platform)
+	if err != nil {
+		slog.Error("reset auth-failed downloads after cookie change", "platform", platform, "err", err)
+		return
+	}
+	if n > 0 {
+		slog.Info("reset auth-failed downloads after cookie change", "platform", platform, "count", n)
+	}
 }

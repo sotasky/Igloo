@@ -356,6 +356,51 @@ func (db *DB) ClearFailedDownloadQueueItems() (int, error) {
 	return affected, err
 }
 
+// ResetDownloadAuthFailuresForPlatform resets terminal auth failures after a
+// platform's credential source changes, so rows failed by stale cookies can be
+// retried with the new source.
+func (db *DB) ResetDownloadAuthFailuresForPlatform(platform string) (int, error) {
+	platform = strings.TrimSpace(platform)
+	if platform == "" {
+		return 0, nil
+	}
+	var affected int
+	err := db.WithWrite(func(tx *sql.Tx) error {
+		res, err := tx.Exec(`
+			UPDATE download_queue
+			   SET status='pending',
+			       error='',
+			       retry_count=0,
+			       started_at=0,
+			       completed_at=0,
+			       lease_owner='',
+			       lease_until_ms=0,
+			       next_attempt_at_ms=0,
+			       last_error_kind='',
+			       last_error_strategy='',
+			       tool='',
+			       cookie_label=''
+			 WHERE status='failed'
+			   AND last_error_kind='auth'
+			   AND channel_id IN (
+			       SELECT channel_id
+			         FROM channels
+			        WHERE platform=?
+			   )
+		`, platform)
+		if err != nil {
+			return err
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return err
+		}
+		affected = int(n)
+		return nil
+	})
+	return affected, err
+}
+
 // PruneDownloadQueue deletes pending entries for a channel whose video_id is not in allowedIDs.
 // Returns the number of rows deleted.
 func (db *DB) PruneDownloadQueue(channelID string, allowedIDs []string) (int, error) {

@@ -61,7 +61,8 @@ func (d *Downloader) SetOperationSink(sink OperationSink) {
 // the paths of all files that were written.
 //
 // Routing:
-//  1. TikTok/Instagram URL → gallery-dl first for slideshows/reels
+//  1. TikTok URL or Instagram non-reel URL → gallery-dl first for slideshows
+//     and carousels; Instagram reel URL → yt-dlp first
 //  2. Direct CDN (pbs.twimg.com, video.twimg.com, photo/image) → HTTP
 //  3. Default → yt-dlp
 func (d *Downloader) Download(ctx context.Context, rawURL string, mediaType string, opts Opts) ([]string, error) {
@@ -113,7 +114,7 @@ func (d *Downloader) downloadOnce(ctx context.Context, rawURL string, mediaType 
 		return d.downloadTikTok(ctx, rawURL, opts)
 	}
 	if IsInstagramURL(rawURL) {
-		return d.downloadGalleryDLFirst(ctx, canonicalInstagramURL(rawURL), opts)
+		return d.downloadInstagram(ctx, canonicalInstagramURL(rawURL), opts)
 	}
 	if isDirectMedia(rawURL, mediaType) {
 		filename := opts.ID + mediaExtFromURL(rawURL)
@@ -141,6 +142,24 @@ func (d *Downloader) downloadOnce(ctx context.Context, rawURL string, mediaType 
 		return []string{p}, nil
 	}
 	return d.YtDlp.Download(ctx, rawURL, opts)
+}
+
+func (d *Downloader) downloadInstagram(ctx context.Context, rawURL string, opts Opts) ([]string, error) {
+	if !isInstagramReelURL(rawURL) {
+		return d.downloadGalleryDLFirst(ctx, rawURL, opts)
+	}
+	ytPaths, ytErr := d.YtDlp.Download(ctx, rawURL, opts)
+	if ytErr == nil && len(ytPaths) > 0 {
+		return ytPaths, nil
+	}
+	if ytErr == nil {
+		ytErr = errors.New("yt-dlp returned no files")
+	}
+	gdlPaths, gdlErr := d.GalleryDL.Download(ctx, rawURL, opts.OutputDir, opts.ID, opts.Cookies, opts.CookiesFromBrowser)
+	if gdlErr == nil && len(gdlPaths) > 0 {
+		return gdlPaths, nil
+	}
+	return ytPaths, fallbackDownloadError(gdlErr, ytErr)
 }
 
 func (opts Opts) cookieAttempts() []CookieSet {

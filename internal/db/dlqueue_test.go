@@ -492,6 +492,90 @@ func TestDownloadQueueStatusPersistsErrorKindAndStrategy(t *testing.T) {
 	}
 }
 
+func TestResetDownloadAuthFailuresForPlatform(t *testing.T) {
+	d := openWritableTestDB(t)
+	now := time.Now().UnixMilli()
+	if err := d.ExecRaw(`
+		INSERT INTO channels (channel_id, name, platform) VALUES
+			('instagram_sample', 'Instagram Sample', 'instagram'),
+			('youtube_sample', 'YouTube Sample', 'youtube')
+	`); err != nil {
+		t.Fatalf("insert channels: %v", err)
+	}
+	if err := d.ExecRaw(`
+		INSERT INTO download_queue
+			(video_id, channel_id, title, status, retry_count, error,
+			 last_error_kind, last_error_strategy, lease_owner, lease_until_ms,
+			 next_attempt_at_ms, added_at, started_at, completed_at, tool, cookie_label)
+		VALUES
+			('sample_instagram_auth', 'instagram_sample', 'Auth Failed', 'failed', 3,
+			 'login required', 'auth', 'permanent', '', 0, 0, ?, ?, ?, 'yt-dlp', 'stale.txt'),
+			('sample_instagram_rate', 'instagram_sample', 'Rate Failed', 'failed', 5,
+			 'rate limited', 'rate_limit', 'retry', '', 0, 0, ?, ?, ?, 'yt-dlp', 'browser:firefox'),
+			('sample_youtube_auth', 'youtube_sample', 'Other Platform', 'failed', 2,
+			 'login required', 'auth', 'permanent', '', 0, 0, ?, ?, ?, 'yt-dlp', 'stale.txt')
+	`, now, now, now, now, now, now, now, now, now); err != nil {
+		t.Fatalf("insert download queue: %v", err)
+	}
+
+	n, err := d.ResetDownloadAuthFailuresForPlatform("instagram")
+	if err != nil {
+		t.Fatalf("ResetDownloadAuthFailuresForPlatform: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("affected = %d, want 1", n)
+	}
+
+	var status, kind, strategy, msg, tool, label string
+	var retries int
+	var started, completed int64
+	if err := d.QueryRow(`
+		SELECT status, retry_count, COALESCE(error,''), COALESCE(last_error_kind,''),
+		       COALESCE(last_error_strategy,''), started_at, completed_at,
+		       COALESCE(tool,''), COALESCE(cookie_label,'')
+		  FROM download_queue
+		 WHERE video_id='sample_instagram_auth'
+	`).Scan(&status, &retries, &msg, &kind, &strategy, &started, &completed, &tool, &label); err != nil {
+		t.Fatalf("query reset row: %v", err)
+	}
+	if status != "pending" || retries != 0 || msg != "" || kind != "" || strategy != "" || started != 0 || completed != 0 || tool != "" || label != "" {
+		t.Fatalf("reset row = status=%q retries=%d msg=%q kind=%q strategy=%q started=%d completed=%d tool=%q label=%q",
+			status, retries, msg, kind, strategy, started, completed, tool, label)
+	}
+
+	rows, err := d.conn.Query(`
+		SELECT video_id, status, retry_count, COALESCE(last_error_kind,'')
+		  FROM download_queue
+		 WHERE video_id IN ('sample_instagram_rate', 'sample_youtube_auth')
+		 ORDER BY video_id
+	`)
+	if err != nil {
+		t.Fatalf("query untouched rows: %v", err)
+	}
+	defer func() {
+		_ = rows.Close()
+	}()
+	for rows.Next() {
+		var videoID, rowStatus, rowKind string
+		var rowRetries int
+		if err := rows.Scan(&videoID, &rowStatus, &rowRetries, &rowKind); err != nil {
+			t.Fatalf("scan untouched row: %v", err)
+		}
+		if rowStatus != "failed" {
+			t.Fatalf("%s status = %q, want failed", videoID, rowStatus)
+		}
+		if videoID == "sample_instagram_rate" && (rowRetries != 5 || rowKind != "rate_limit") {
+			t.Fatalf("%s row = retries=%d kind=%q, want rate failure untouched", videoID, rowRetries, rowKind)
+		}
+		if videoID == "sample_youtube_auth" && (rowRetries != 2 || rowKind != "auth") {
+			t.Fatalf("%s row = retries=%d kind=%q, want other platform untouched", videoID, rowRetries, rowKind)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("untouched rows: %v", err)
+	}
+}
+
 func TestResetStaleDownloadQueueItems(t *testing.T) {
 	d := openWritableTestDB(t)
 

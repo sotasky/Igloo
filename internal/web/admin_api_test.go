@@ -1007,6 +1007,55 @@ func TestHandleToggleCookieHTMXRerendersRowsAndKeepsFile(t *testing.T) {
 	}
 }
 
+func TestHandleSetCookieBrowserRequeuesAuthFailedDownloads(t *testing.T) {
+	srv := newTestServer(t)
+	srv.cfg.CookiesDir = t.TempDir()
+	now := int64(1700000000000)
+	if err := srv.db.ExecRaw(`
+		INSERT INTO channels (channel_id, name, platform) VALUES
+			('instagram_sample', 'Instagram Sample', 'instagram')
+	`); err != nil {
+		t.Fatalf("insert channel: %v", err)
+	}
+	if err := srv.db.ExecRaw(`
+		INSERT INTO download_queue
+			(video_id, channel_id, title, status, retry_count, error,
+			 last_error_kind, last_error_strategy, added_at, started_at, completed_at,
+			 tool, cookie_label)
+		VALUES
+			('sample_instagram_auth_failed', 'instagram_sample', 'Auth Failed', 'failed', 1,
+			 'login required', 'auth', 'permanent', ?, ?, ?, 'yt-dlp', 'instagram_cookies.txt')
+	`, now, now, now); err != nil {
+		t.Fatalf("insert download queue: %v", err)
+	}
+
+	req := httptest.NewRequest("POST", "/api/cookies/instagram/browser", strings.NewReader(`{"browser":"firefox"}`))
+	req.SetPathValue("platform", "instagram")
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(contextWithUser(req, "admin", "admin"))
+	rec := httptest.NewRecorder()
+
+	srv.handleSetCookieBrowser(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var status, kind, msg, label string
+	var retries int
+	if err := srv.db.QueryRow(`
+		SELECT status, retry_count, COALESCE(last_error_kind,''),
+		       COALESCE(error,''), COALESCE(cookie_label,'')
+		  FROM download_queue
+		 WHERE video_id='sample_instagram_auth_failed'
+	`).Scan(&status, &retries, &kind, &msg, &label); err != nil {
+		t.Fatalf("query queue row: %v", err)
+	}
+	if status != "pending" || retries != 0 || kind != "" || msg != "" || label != "" {
+		t.Fatalf("row = status=%q retries=%d kind=%q msg=%q label=%q, want reset pending row",
+			status, retries, kind, msg, label)
+	}
+}
+
 func TestHandleUploadCookieAcceptsMultipleFiles(t *testing.T) {
 	srv := newTestServer(t)
 	srv.cfg.CookiesDir = t.TempDir()
