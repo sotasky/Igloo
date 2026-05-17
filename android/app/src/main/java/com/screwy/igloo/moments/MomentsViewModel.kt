@@ -273,10 +273,24 @@ class MomentsViewModel(
             initialValue = emptyList(),
         )
 
+    /** Player route state. Keep this off the grid query so swipes do not wake the grid flow. */
+    val playerUiState: StateFlow<UiState<Unit>> = playerRowsRaw
+        .map { list ->
+            when {
+                list == null -> UiState.Loading
+                list.isEmpty() -> UiState.Empty
+                else -> UiState.Data(Unit)
+            }
+        }
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000L),
+            initialValue = UiState.Loading,
+        )
+
     /**
-     * Three-state primary UI hint. Loading until Room emits; Empty on first empty
-     * emission; Data once rows arrive. Mirrors FeedViewModel's nullable-sentinel
-     * pattern so `MomentsRoute` and `AllMomentsRoute` share one Loading branch.
+     * Grid route state. Loading until the grid Room flow emits; stories render
+     * their own list even though the thumbnail grid rows are intentionally empty.
      */
     val uiState: StateFlow<UiState<Unit>> = combine(activeTab, rowsRaw, storyChannels) { tab, list, _ ->
             when {
@@ -347,9 +361,9 @@ class MomentsViewModel(
     )
 
     /**
-     * Resume playhead (ms) for the video at [startIndex]. Mirrors [startIndex]:
-     * use the in-memory cursor for immediate UI jumps, fall back to prefs for a
-     * fresh process.
+     * Legacy persisted playhead for the video at [startIndex]. Moments playback
+     * starts from t=0; this is retained only so old preference rows do not break
+     * callers that still observe it.
      */
     val startPositionMs: StateFlow<Long> = combine(
         activeCursor,

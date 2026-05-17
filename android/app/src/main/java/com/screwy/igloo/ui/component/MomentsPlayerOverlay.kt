@@ -472,6 +472,7 @@ internal fun VideoSurface(
                     "first_frame" to next.renderedFirstFrame,
                     "frames" to next.renderedFrameCount,
                     "playing" to next.playerIsPlaying,
+                    "position_ms" to next.playerPositionMs,
                     "size" to "${next.videoWidth}x${next.videoHeight}",
                     "player" to Integer.toHexString(System.identityHashCode(player)),
                 )

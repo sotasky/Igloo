@@ -159,6 +159,18 @@ private fun replaceMomentPlayerMediaItem(
     player.prepare()
 }
 
+internal fun shouldRewindInactiveMomentPlayback(
+    currentMediaId: String?,
+    expectedVideoId: String,
+    loadedVideoId: String?,
+    mediaItemCount: Int,
+    currentPositionMs: Long,
+): Boolean =
+    mediaItemCount > 0 &&
+        currentMediaId == expectedVideoId &&
+        loadedVideoId == expectedVideoId &&
+        currentPositionMs > 0L
+
 @Composable
 internal fun MomentPage(
     pageIndex: Int,
@@ -524,6 +536,7 @@ private fun BoxScope.MomentVideoLayer(
     }
     var loadedKey by remember(item.videoId) { mutableStateOf<String?>(null) }
     var surfaceState by remember(item.videoId) { mutableStateOf(MomentVideoSurfaceState()) }
+    var hasBeenActive by remember(item.videoId) { mutableStateOf(false) }
     if (!playerIsShared || isActive) {
         MomentVideoDebugTelemetry(
             pageIndex = pageIndex,
@@ -576,6 +589,16 @@ private fun BoxScope.MomentVideoLayer(
     if (!playerIsShared || isActive) {
         LaunchedEffect(player, isActive, shouldPreparePlayer, loadedKey, pagerScrolling) {
             if (isActive && shouldPreparePlayer && loadedKey != null) {
+                hasBeenActive = true
+                PerfProbe.log(
+                    event = "moments_player_play",
+                ) {
+                    mapOf(
+                        "page" to pageIndex,
+                        "position_ms" to player.currentPosition,
+                        "scrolling" to pagerScrolling,
+                    )
+                }
                 player.playWhenReady = true
             } else {
                 if (pagerScrolling && shouldPreparePlayer) {
@@ -583,6 +606,27 @@ private fun BoxScope.MomentVideoLayer(
                 }
                 player.playWhenReady = false
                 player.pause()
+                if (
+                    hasBeenActive &&
+                    shouldRewindInactiveMomentPlayback(
+                        currentMediaId = player.currentMediaItem?.mediaId,
+                        expectedVideoId = item.videoId,
+                        loadedVideoId = momentStreamLoadKeyVideoId(loadedKey),
+                        mediaItemCount = player.mediaItemCount,
+                        currentPositionMs = player.currentPosition,
+                    )
+                ) {
+                    PerfProbe.log(
+                        event = "moments_player_rewind",
+                    ) {
+                        mapOf(
+                            "page" to pageIndex,
+                            "position_ms" to player.currentPosition,
+                            "reason" to "inactive",
+                        )
+                    }
+                    player.seekTo(0L)
+                }
                 if (!shouldPreparePlayer && player.mediaItemCount > 0) player.seekTo(0L)
             }
         }
@@ -682,6 +726,7 @@ private fun BoxScope.MomentVideoLayer(
                     "size" to "${surfaceState.videoWidth}x${surfaceState.videoHeight}",
                     "shared" to playerIsShared,
                     "player" to Integer.toHexString(System.identityHashCode(player)),
+                    "position_ms" to player.currentPosition,
                 )
             }
         }

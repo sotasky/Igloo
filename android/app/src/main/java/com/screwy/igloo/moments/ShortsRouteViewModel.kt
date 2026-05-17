@@ -174,7 +174,7 @@ class ShortsRouteViewModel(
         activeVideoId.value = videoId
         viewModelScope.launch {
             outboxWriter.enqueue(
-                OutboxKind.MomentsCursor(videoId = videoId, positionMs = positionMs, scope = momentsCursorScope),
+                OutboxKind.MomentsCursor(videoId = videoId, positionMs = 0L, scope = momentsCursorScope),
             )
         }
     }

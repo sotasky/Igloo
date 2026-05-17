@@ -51,7 +51,7 @@ fun MomentsRoute(
     val startIndex by vm.startIndex.collectAsStateWithLifecycle()
     val autoplayEnabled by vm.autoplayEnabled.collectAsStateWithLifecycle()
     val muted by vm.muted.collectAsStateWithLifecycle()
-    val uiState by vm.uiState.collectAsStateWithLifecycle()
+    val uiState by vm.playerUiState.collectAsStateWithLifecycle()
     val pendingBookmark by vm.pendingBookmark.collectAsStateWithLifecycle()
     val categories by vm.bookmarkCategories.collectAsStateWithLifecycle()
     val pendingTransition by vm.pendingFullscreenTransition.collectAsStateWithLifecycle()
@@ -111,8 +111,7 @@ fun MomentsRoute(
                     navigator.openDestination(IglooDestination.AllMoments, IglooNavigationSource.Moments)
                 },
                 onEndReached = vm::notifyUpToDate,
-                cursorTracking = true,
-                onCursorAdvance = vm::onCursorAdvance,
+                cursorTracking = false,
                 initialTransitionPosterVideoId = pendingTransition?.mediaId,
                 initialTransitionPosterUri = pendingTransition?.posterUri ?: MediaUri.Missing,
                 onTransitionPosterDismissed = vm::clearPendingFullscreenTransition,

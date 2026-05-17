@@ -113,8 +113,7 @@ fun ShortsRoute(
                         navController.popBackStack()
                     }
                 },
-                cursorTracking = spec.recordsMomentsCursor,
-                onCursorAdvance = vm::onCursorAdvance,
+                cursorTracking = false,
                 forceAutoSwipe = storyPlaybackMode,
                 exitOnEnd = storyPlaybackMode,
                 storyCrossProfileAdvance = spec.type == ShortsPlaylistType.StoryTray,

@@ -794,6 +794,46 @@ class MomentsPlayerTest {
     }
 
     @Test
+    fun inactive_prepared_moment_rewinds_only_matching_loaded_media() {
+        assertTrue(
+            shouldRewindInactiveMomentPlayback(
+                currentMediaId = "demo",
+                expectedVideoId = "demo",
+                loadedVideoId = "demo",
+                mediaItemCount = 1,
+                currentPositionMs = 1_250L,
+            ),
+        )
+        assertFalse(
+            shouldRewindInactiveMomentPlayback(
+                currentMediaId = "demo",
+                expectedVideoId = "demo",
+                loadedVideoId = "demo",
+                mediaItemCount = 1,
+                currentPositionMs = 0L,
+            ),
+        )
+        assertFalse(
+            shouldRewindInactiveMomentPlayback(
+                currentMediaId = "other",
+                expectedVideoId = "demo",
+                loadedVideoId = "demo",
+                mediaItemCount = 1,
+                currentPositionMs = 1_250L,
+            ),
+        )
+        assertFalse(
+            shouldRewindInactiveMomentPlayback(
+                currentMediaId = "demo",
+                expectedVideoId = "demo",
+                loadedVideoId = "other",
+                mediaItemCount = 1,
+                currentPositionMs = 1_250L,
+            ),
+        )
+    }
+
+    @Test
     fun ended_loop_keeps_rendered_frame_until_restart() {
         assertFalse(shouldClearMomentRenderedFrame(Player.STATE_ENDED))
         assertTrue(shouldClearMomentRenderedFrame(Player.STATE_IDLE))

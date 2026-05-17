@@ -8,6 +8,7 @@ import com.screwy.igloo.data.entity.ChannelFollowEntity
 import com.screwy.igloo.data.entity.MomentViewEntity
 import com.screwy.igloo.data.entity.VideoEntity
 import com.screwy.igloo.net.ServerBaseUrlProvider
+import com.screwy.igloo.outbox.OutboxKind
 import com.screwy.igloo.outbox.OutboxWriter
 import com.screwy.igloo.testutil.ViewModelTestTracker
 import com.screwy.igloo.ui.UiEffects
@@ -178,5 +179,29 @@ class ShortsRouteViewModelTest {
         sub.cancel()
 
         assertEquals(listOf("v_sample_two", "v_sample_old", "v_sample_one"), vm.items.value.map { it.videoId })
+    }
+
+    @Test fun onCursorAdvance_persistsZeroPositionForMomentsRoute() = runBlocking {
+        val vm = viewModels.track(ShortsRouteViewModel(
+            playlistSpec = ShortsPlaylistSpec.allMoments(),
+            startVideoId = "v_sample",
+            db = db,
+            outboxWriter = writer,
+            prefs = prefs,
+            uiEffects = uiEffects,
+            baseUrlProvider = ServerBaseUrlProvider { "https://example.test" },
+        ))
+
+        vm.onCursorAdvance("v_sample", 12_345L)
+
+        val ok = withTimeoutOrNull(1_500L) {
+            while (!db.outboxDao().hasPending(OutboxKind.CODE_MOMENTS_CURSOR, "all", null)) delay(10)
+            true
+        }
+        assertEquals(true, ok)
+
+        val row = db.outboxDao().claimKind(OutboxKind.CODE_MOMENTS_CURSOR, nowMs = Long.MAX_VALUE, limit = 1)
+            .firstOrNull()
+        assertEquals(true, row?.payloadJson?.contains("\"position_ms\":0") == true)
     }
 }
