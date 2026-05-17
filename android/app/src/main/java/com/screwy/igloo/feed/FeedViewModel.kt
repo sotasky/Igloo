@@ -12,7 +12,7 @@ import com.screwy.igloo.net.ServerBaseUrlProvider
 import com.screwy.igloo.outbox.OutboxKind
 import com.screwy.igloo.outbox.OutboxWriter
 import com.screwy.igloo.perf.PerfProbe
-import com.screwy.igloo.sync.Scheduler
+import com.screwy.igloo.sync.SchedulerActions
 import com.screwy.igloo.sync.SyncStream
 import com.screwy.igloo.ui.UiEffect
 import com.screwy.igloo.ui.UiEffects
@@ -44,7 +44,7 @@ import kotlinx.coroutines.launch
 class FeedViewModel(
     private val db: IglooDatabase,
     private val outboxWriter: OutboxWriter,
-    private val scheduler: Scheduler,
+    private val scheduler: SchedulerActions,
     private val uiEffects: UiEffects,
     private val baseUrlProvider: ServerBaseUrlProvider,
 ) : ViewModel() {

@@ -16,7 +16,7 @@ import com.screwy.igloo.media.MediaUri
 import com.screwy.igloo.media.OwnerKind
 import com.screwy.igloo.outbox.OutboxKind
 import com.screwy.igloo.outbox.OutboxWriter
-import com.screwy.igloo.sync.Scheduler
+import com.screwy.igloo.sync.SchedulerActions
 import com.screwy.igloo.sync.SyncStream
 import com.screwy.igloo.ui.UiEffect
 import com.screwy.igloo.ui.UiEffects
@@ -57,7 +57,7 @@ class PlayerViewModel(
     private val db: IglooDatabase,
     private val outboxWriter: OutboxWriter,
     private val prefs: PreferencesRepo,
-    private val scheduler: Scheduler,
+    private val scheduler: SchedulerActions,
     private val uiEffects: UiEffects,
     private val resolvers: MediaResolvers,
 ) : ViewModel() {

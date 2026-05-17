@@ -12,11 +12,10 @@ import com.screwy.igloo.media.MediaUri
 import com.screwy.igloo.media.OwnerKind
 import com.screwy.igloo.outbox.OutboxKind
 import com.screwy.igloo.outbox.OutboxWriter
-import com.screwy.igloo.sync.Scheduler
+import com.screwy.igloo.testutil.FakeSchedulerActions
 import com.screwy.igloo.testutil.ViewModelTestTracker
 import com.screwy.igloo.ui.UiEffects
 import com.screwy.igloo.ui.nav.FullscreenMediaTransition
-import io.mockk.mockk
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -55,7 +54,7 @@ class MomentsViewModelTest {
     private lateinit var scope: CoroutineScope
     private lateinit var prefs: PreferencesRepo
     private lateinit var writer: OutboxWriter
-    private lateinit var scheduler: Scheduler
+    private lateinit var scheduler: FakeSchedulerActions
     private lateinit var uiEffects: UiEffects
     private lateinit var resolvers: MediaResolvers
     private val viewModels = ViewModelTestTracker()
@@ -72,7 +71,7 @@ class MomentsViewModelTest {
             nowMsProvider = { 0L },
             writeDebounceMs = 50L,
         )
-        scheduler = mockk(relaxed = true)
+        scheduler = FakeSchedulerActions()
         uiEffects = UiEffects()
         // Canned resolver: fixed Remote URI per videoId for deterministic assertions.
         resolvers = object : MediaResolvers {

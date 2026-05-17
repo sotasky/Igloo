@@ -100,15 +100,8 @@ android {
         // Robolectric (room-testing JVM runner) needs Android resources on the test
         // classpath to resolve `ApplicationProvider.getApplicationContext()`.
         unitTests.isIncludeAndroidResources = true
-        // TODO(jdk-hardening): ByteBuddy still emits Java 26 Unsafe warnings
-        // during JVM tests; keep MockK/ByteBuddy/Robolectric current and
-        // revisit before future JDK hardening.
         unitTests.all {
-            it.jvmArgs(
-                "-XX:+EnableDynamicAgentLoading",
-                "-Djdk.attach.allowAttachSelf=true",
-                "--enable-native-access=ALL-UNNAMED"
-            )
+            it.jvmArgs("--enable-native-access=ALL-UNNAMED")
         }
         managedDevices {
             localDevices {
@@ -200,7 +193,6 @@ dependencies {
     // Tests
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0")
-    testImplementation("io.mockk:mockk:1.14.9")
     testImplementation("com.squareup.okhttp3:mockwebserver:5.3.2")
     testImplementation("io.ktor:ktor-client-mock:$ktorVersion")
     // Room tests run on JVM via Robolectric — spins up enough Android framework for
@@ -214,7 +206,6 @@ dependencies {
     testImplementation("androidx.test:core-ktx:1.7.0")
     testImplementation("androidx.test.ext:junit:1.3.0")
     testImplementation("androidx.compose.ui:ui-test-junit4")
-    androidTestImplementation("io.mockk:mockk-android:1.14.9")
     androidTestImplementation("androidx.room:room-testing:$roomVersion")
     androidTestImplementation("androidx.work:work-testing:2.11.2")
     androidTestImplementation("io.insert-koin:koin-test:$koinVersion")

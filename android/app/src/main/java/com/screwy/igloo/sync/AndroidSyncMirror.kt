@@ -86,7 +86,7 @@ class AndroidSyncMirror(
     },
     private val nowMsProvider: () -> Long = { System.currentTimeMillis() },
     private val refreshRetryDelayMs: Long = SYNC_REFRESH_RETRY_MS,
-) {
+) : AndroidSyncRunner {
 
     private val triggerChannel = Channel<Unit>(capacity = Channel.CONFLATED)
     private val healthReporter = AndroidSyncHealthReporter(
@@ -113,7 +113,7 @@ class AndroidSyncMirror(
     private val refreshRetryScheduled = AtomicBoolean(false)
     private var lastOrphanAssetWalkGenerationId: String? = null
 
-    fun trigger() {
+    override fun trigger() {
         triggerSeq.incrementAndGet()
         triggerChannel.trySend(Unit)
     }
@@ -121,7 +121,7 @@ class AndroidSyncMirror(
     fun hasPendingOrActiveWork(): Boolean =
         syncActive.get() || completedTriggerSeq.get() < triggerSeq.get()
 
-    suspend fun run() {
+    override suspend fun run() {
         while (true) {
             triggerChannel.receive()
             val observedTriggerSeq = triggerSeq.get()

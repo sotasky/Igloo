@@ -21,7 +21,7 @@ import com.screwy.igloo.net.Reachability
 import com.screwy.igloo.net.ServerBaseUrlProvider
 import com.screwy.igloo.outbox.OutboxKind
 import com.screwy.igloo.outbox.OutboxWriter
-import com.screwy.igloo.sync.Scheduler
+import com.screwy.igloo.sync.SchedulerActions
 import com.screwy.igloo.sync.SyncStream
 import com.screwy.igloo.ui.UiEffect
 import com.screwy.igloo.ui.UiEffects
@@ -68,7 +68,7 @@ class ChannelViewModel(
     private val db: IglooDatabase,
     private val outboxWriter: OutboxWriter,
     private val prefs: PreferencesRepo,
-    private val scheduler: Scheduler,
+    private val scheduler: SchedulerActions,
     private val uiEffects: UiEffects,
     private val reachability: Reachability,
     baseUrlProvider: ServerBaseUrlProvider,

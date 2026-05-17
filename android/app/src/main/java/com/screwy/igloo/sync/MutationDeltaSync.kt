@@ -44,10 +44,10 @@ class MutationDeltaSync(
     private val reachability: Reachability,
     private val logger: Logger,
     private val nowMsProvider: () -> Long = { System.currentTimeMillis() },
-) {
+) : MutationDeltaRunner {
     private val mutex = Mutex()
 
-    suspend fun sync(): MutationDeltaResult = mutex.withLock {
+    override suspend fun sync(): MutationDeltaResult = mutex.withLock {
         if (reachability.state.value !is Reachability.State.Online) {
             logger.debug("mutation_delta_skipped_offline")
             return@withLock MutationDeltaResult()

@@ -8,21 +8,20 @@ import com.screwy.igloo.data.entity.FeedItemEntity
 import com.screwy.igloo.outbox.OutboxWriter
 import com.screwy.igloo.testutil.ViewModelTestTracker
 import com.screwy.igloo.ui.UiEffects
+import android.os.Looper
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.test.UnconfinedTestDispatcher
-import kotlinx.coroutines.test.resetMain
-import kotlinx.coroutines.test.setMain
 import kotlinx.coroutines.withTimeoutOrNull
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.robolectric.Shadows
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
@@ -39,7 +38,6 @@ class ThreadViewModelTest {
     private val viewModels = ViewModelTestTracker()
 
     @Before fun setUp() {
-        Dispatchers.setMain(UnconfinedTestDispatcher())
         db = RoomTestSupport.freshDb()
         scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         prefs = PreferencesRepo(db.preferenceDao(), scope, nowMsProvider = { 0L })
@@ -57,7 +55,6 @@ class ThreadViewModelTest {
         viewModels.clearAll()
         scope.cancel()
         db.close()
-        Dispatchers.resetMain()
     }
 
     private fun newViewModel(): ThreadViewModel =
@@ -69,6 +66,10 @@ class ThreadViewModelTest {
                 baseUrlProvider = com.screwy.igloo.net.ServerBaseUrlProvider { "https://igloo.test" },
             )
         )
+
+    private fun idleMain() {
+        Shadows.shadowOf(Looper.getMainLooper()).idle()
+    }
 
     @Test fun load_returnsRootAndSelectedReplyBranch() = runBlocking {
         db.channelDao().upsert(ChannelEntity(channelId = "twitter_sample_alpha", name = "Alpha", platform = "twitter"))
@@ -161,7 +162,10 @@ class ThreadViewModelTest {
         vm.toggleLike(tweetId = "t1", newValue = true)
 
         val updated = withTimeoutOrNull(1_500L) {
-            while (vm.chain.value.singleOrNull()?.isLiked != 1) delay(10)
+            while (vm.chain.value.singleOrNull()?.isLiked != 1) {
+                idleMain()
+                delay(10)
+            }
             true
         }
         assertEquals(true, updated)

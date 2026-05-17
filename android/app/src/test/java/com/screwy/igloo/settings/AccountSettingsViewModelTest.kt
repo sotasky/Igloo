@@ -1,13 +1,11 @@
 package com.screwy.igloo.settings
 
-import com.screwy.igloo.auth.AuthRepo
+import com.screwy.igloo.auth.AccountSessionActions
+import com.screwy.igloo.auth.LogoutReason
 import com.screwy.igloo.data.IglooDatabase
 import com.screwy.igloo.data.PreferencesRepo
 import com.screwy.igloo.data.RoomTestSupport
 import com.screwy.igloo.testutil.ViewModelTestTracker
-import io.mockk.coVerify
-import io.mockk.mockk
-import io.mockk.verify
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -34,7 +32,7 @@ class AccountSettingsViewModelTest {
     private lateinit var db: IglooDatabase
     private lateinit var scope: CoroutineScope
     private lateinit var prefs: PreferencesRepo
-    private lateinit var authRepo: AuthRepo
+    private lateinit var authRepo: FakeAccountSessionActions
     private val viewModels = ViewModelTestTracker()
 
     @Before fun setUp() {
@@ -42,7 +40,7 @@ class AccountSettingsViewModelTest {
         db = RoomTestSupport.freshDb()
         scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         prefs = PreferencesRepo(db.preferenceDao(), scope, nowMsProvider = { 0L })
-        authRepo = mockk(relaxed = true)
+        authRepo = FakeAccountSessionActions()
     }
 
     @After fun tearDown() {
@@ -78,7 +76,7 @@ class AccountSettingsViewModelTest {
         assertEquals(true, prefsOk)
 
         val authOk = eventuallyVerify {
-            verify { authRepo.updateServerUrl("https://new.example.com") }
+            assertEquals(listOf("https://new.example.com"), authRepo.updatedServerUrls)
         }
         assertEquals(true, authOk)
     }
@@ -88,8 +86,21 @@ class AccountSettingsViewModelTest {
         vm.logout()
 
         val ok = eventuallyVerify {
-            coVerify { authRepo.logout() }
+            assertEquals(listOf(LogoutReason.UserInitiated), authRepo.logoutReasons)
         }
         assertEquals(true, ok)
+    }
+
+    private class FakeAccountSessionActions : AccountSessionActions {
+        val updatedServerUrls = mutableListOf<String>()
+        val logoutReasons = mutableListOf<LogoutReason>()
+
+        override fun updateServerUrl(value: String) {
+            updatedServerUrls += value
+        }
+
+        override suspend fun logout(reason: LogoutReason) {
+            logoutReasons += reason
+        }
     }
 }

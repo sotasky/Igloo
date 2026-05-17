@@ -3,12 +3,10 @@ package com.screwy.igloo.videos
 import com.screwy.igloo.data.IglooDatabase
 import com.screwy.igloo.data.RoomTestSupport
 import com.screwy.igloo.data.entity.VideoEntity
-import com.screwy.igloo.sync.Scheduler
 import com.screwy.igloo.sync.SyncStream
+import com.screwy.igloo.testutil.FakeSchedulerActions
 import com.screwy.igloo.testutil.ViewModelTestTracker
 import com.screwy.igloo.ui.UiState
-import io.mockk.mockk
-import io.mockk.verify
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -40,14 +38,14 @@ class VideosViewModelTest {
 
     private lateinit var db: IglooDatabase
     private lateinit var scope: CoroutineScope
-    private lateinit var scheduler: Scheduler
+    private lateinit var scheduler: FakeSchedulerActions
     private val viewModels = ViewModelTestTracker()
 
     @Before fun setUp() {
         Dispatchers.setMain(UnconfinedTestDispatcher())
         db = RoomTestSupport.freshDb()
         scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-        scheduler = mockk(relaxed = true)
+        scheduler = FakeSchedulerActions()
     }
 
     @After fun tearDown() {
@@ -113,6 +111,6 @@ class VideosViewModelTest {
             true
         }
         assertEquals(true, ok)
-        verify { scheduler.triggerStream(SyncStream.Youtube) }
+        assertEquals(listOf(SyncStream.Youtube), scheduler.triggeredStreams)
     }
 }

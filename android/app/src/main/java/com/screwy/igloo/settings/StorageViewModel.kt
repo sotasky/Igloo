@@ -3,9 +3,9 @@ package com.screwy.igloo.settings
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.screwy.igloo.data.PreferencesRepo
-import com.screwy.igloo.media.CacheOps
+import com.screwy.igloo.media.CacheActions
 import com.screwy.igloo.media.CacheStats
-import com.screwy.igloo.sync.Scheduler
+import com.screwy.igloo.sync.SchedulerActions
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -23,9 +23,9 @@ import kotlinx.coroutines.launch
  * the flow holds.
  */
 class StorageViewModel(
-    private val cacheOps: CacheOps,
+    private val cacheOps: CacheActions,
     private val prefs: PreferencesRepo,
-    private val scheduler: Scheduler? = null,
+    private val scheduler: SchedulerActions? = null,
 ) : ViewModel() {
 
     val syncEnabled: StateFlow<Boolean> =

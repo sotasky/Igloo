@@ -10,13 +10,11 @@ import com.screwy.igloo.media.OwnerKind
 import com.screwy.igloo.net.Reachability
 import com.screwy.igloo.outbox.OutboxKind
 import com.screwy.igloo.outbox.OutboxWriter
-import com.screwy.igloo.sync.Scheduler
 import com.screwy.igloo.sync.SyncStream
+import com.screwy.igloo.testutil.FakeSchedulerActions
 import com.screwy.igloo.testutil.ViewModelTestTracker
 import com.screwy.igloo.ui.UiEffect
 import com.screwy.igloo.ui.UiEffects
-import io.mockk.mockk
-import io.mockk.verify
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -55,7 +53,7 @@ class ChannelViewModelTest {
     private lateinit var scope: CoroutineScope
     private lateinit var prefs: PreferencesRepo
     private lateinit var writer: OutboxWriter
-    private lateinit var scheduler: Scheduler
+    private lateinit var scheduler: FakeSchedulerActions
     private lateinit var uiEffects: UiEffects
     private lateinit var reachability: Reachability
     private val viewModels = ViewModelTestTracker()
@@ -72,7 +70,7 @@ class ChannelViewModelTest {
             nowMsProvider = { 0L },
             writeDebounceMs = 50L,
         )
-        scheduler = mockk(relaxed = true)
+        scheduler = FakeSchedulerActions()
         uiEffects = UiEffects()
         reachability = Reachability(
             scope = scope,
@@ -152,7 +150,10 @@ class ChannelViewModelTest {
         val ok = withTimeoutOrNull(2_000L) {
             while (true) {
                 try {
-                    verify(exactly = 1) { scheduler.triggerStream(SyncStream.Channels) }
+                    if (scheduler.triggeredStreams.count { it == SyncStream.Channels } == 1) {
+                        return@withTimeoutOrNull true
+                    }
+                    throw AssertionError("Channels sync was not triggered exactly once")
                     return@withTimeoutOrNull true
                 } catch (_: AssertionError) {
                     delay(10)
@@ -178,7 +179,7 @@ class ChannelViewModelTest {
         // launch without a TestDispatcher rig (the VM uses Dispatchers.Main which
         // is set to Default here, not a test scheduler).
         delay(200L)
-        verify(exactly = 0) { scheduler.triggerStream(SyncStream.Channels) }
+        assertEquals(0, scheduler.triggeredStreams.count { it == SyncStream.Channels })
         // Reference vm past the verify window — same reason as the sibling test.
         assertEquals(channelId, channelId.also { vm.hashCode() })
     }

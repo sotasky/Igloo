@@ -3,7 +3,7 @@ package com.screwy.igloo.sync
 import com.screwy.igloo.log.Logger
 import com.screwy.igloo.net.Reachability
 import com.screwy.igloo.outbox.OutboxDrainRunner
-import com.screwy.igloo.outbox.OutboxWriter
+import com.screwy.igloo.outbox.OutboxDrainSignal
 import com.screwy.igloo.perf.PerfProbe
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -13,6 +13,35 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+
+interface SchedulerActions {
+    fun triggerAll()
+    fun triggerStream(stream: SyncStream)
+}
+
+interface InboundSyncRunner {
+    fun trigger()
+    fun triggerStreams(streams: Set<SyncStream>)
+    suspend fun run()
+}
+
+interface AndroidSyncRunner {
+    fun trigger()
+    suspend fun run()
+}
+
+interface RetentionReplayRunner {
+    fun start()
+    fun stop()
+}
+
+interface MutationDeltaRunner {
+    suspend fun sync(): MutationDeltaResult
+}
+
+interface SchedulerLogger {
+    fun info(event: String, fields: Map<String, Any?>)
+}
 
 /**
  * Sync fan-out orchestrator.
@@ -29,16 +58,16 @@ import kotlinx.coroutines.launch
  */
 class Scheduler(
     private val scope: CoroutineScope,
-    private val inbound: InboundReconciler,
+    private val inbound: InboundSyncRunner,
     private val outbox: OutboxDrainRunner,
-    private val androidSync: AndroidSyncMirror,
-    private val retentionReplay: RetentionReplayCoordinator,
+    private val androidSync: AndroidSyncRunner,
+    private val retentionReplay: RetentionReplayRunner,
     private val reachability: Reachability,
     private val foregroundFlow: Flow<Boolean>,
-    private val writer: OutboxWriter,
-    private val mutationDelta: MutationDeltaSync,
-    private val logger: Logger,
-) {
+    private val writer: OutboxDrainSignal,
+    private val mutationDelta: MutationDeltaRunner,
+    private val logger: SchedulerLogger,
+) : SchedulerActions {
 
     private val running = mutableListOf<Job>()
     private val pendingLock = Any()
@@ -75,7 +104,7 @@ class Scheduler(
     }
 
     /** Queue a full ordered sync cycle: outbox first, then inbound, then media. */
-    fun triggerAll() {
+    override fun triggerAll() {
         PerfProbe.log(event = "scheduler_trigger_all")
         requestAfterOutbox(
             TriggerEvent.Inbound(SyncStream.ALL),
@@ -86,7 +115,7 @@ class Scheduler(
     }
 
     /** Queue a scoped ordered sync cycle: outbox first, then the requested stream(s). */
-    fun triggerStream(stream: SyncStream) {
+    override fun triggerStream(stream: SyncStream) {
         PerfProbe.log(event = "scheduler_trigger_stream") { mapOf("stream" to stream.name.lowercase()) }
         requestAfterOutbox(
             TriggerEvent.Inbound(setOf(stream)),

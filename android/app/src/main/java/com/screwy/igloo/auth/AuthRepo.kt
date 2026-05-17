@@ -17,6 +17,11 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
+interface AccountSessionActions {
+    fun updateServerUrl(value: String)
+    suspend fun logout(reason: LogoutReason = LogoutReason.UserInitiated)
+}
+
 /**
  * Source of truth for auth state: tokens, username, server URL. Implements
  * [AuthTokenProvider] so the HTTP stack reads the current bearer token sync via
@@ -50,7 +55,7 @@ class AuthRepo(
     private val prefsUpdater: suspend (serverUrl: String) -> Unit = {},
     private val onPostLoginBootstrap: () -> Unit = {},
     private val nowMsProvider: () -> Long = { System.currentTimeMillis() },
-) : AuthTokenProvider {
+) : AuthTokenProvider, AccountSessionActions {
 
     private val authApi: AuthApi by lazy(authApiProvider)
 
@@ -148,7 +153,7 @@ class AuthRepo(
      * dir → clear auth keys while retaining the server URL. Safe to call from any
      * thread; DB mutation happens on IO.
      */
-    suspend fun logout(reason: LogoutReason = LogoutReason.UserInitiated) {
+    override suspend fun logout(reason: LogoutReason) {
         val refresh = refreshTokenCache.value
         val username = usernameCache.value
         val retainedServerUrl = serverUrlCache.value
@@ -258,7 +263,7 @@ class AuthRepo(
      * [serverUrlCache] so new requests use the new base URL on the next call — no
      * app restart required.
      */
-    fun updateServerUrl(value: String) {
+    override fun updateServerUrl(value: String) {
         persistServerUrl(normalizeServerUrl(value))
     }
 

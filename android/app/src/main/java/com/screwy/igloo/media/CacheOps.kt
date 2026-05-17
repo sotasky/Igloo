@@ -20,6 +20,12 @@ data class CacheStats(
     val failed: Int,
 )
 
+interface CacheActions {
+    suspend fun stats(): List<CacheStats>
+    suspend fun clearCache(bucket: String? = null)
+    suspend fun clearCaches(buckets: Collection<String>)
+}
+
 class CacheOps(
     private val dao: MediaInventoryDao,
     private val syncDao: AndroidSyncDao,
@@ -27,7 +33,7 @@ class CacheOps(
     private val logger: Logger,
     private val syncTrigger: () -> Unit = {},
     private val nowMsProvider: () -> Long = { System.currentTimeMillis() },
-) {
+) : CacheActions {
 
     /**
      * Returns per-bucket stats with bytes measured from disk.
@@ -37,7 +43,7 @@ class CacheOps(
      * Android sync, and sync rows repeat across generations, so disk is the only honest byte
      * source for the Settings screen.
      */
-    suspend fun stats(): List<CacheStats> {
+    override suspend fun stats(): List<CacheStats> {
         val legacyRows = dao.statsByBucket().associateBy { it.bucket }
         val diskBytes = diskBytesByBucket()
         val buckets = (legacyRows.keys + diskBytes.keys).sorted()
@@ -60,7 +66,7 @@ class CacheOps(
      * @param bucket If null, clears all buckets. Otherwise clears only the named bucket
      *               (e.g., "shorts_videos", "youtube_videos", "avatars").
      */
-    suspend fun clearCache(bucket: String? = null) {
+    override suspend fun clearCache(bucket: String?) {
         if (bucket == null) {
             clearAllBuckets()
             logger.info(
@@ -77,7 +83,7 @@ class CacheOps(
         syncTrigger()
     }
 
-    suspend fun clearCaches(buckets: Collection<String>) {
+    override suspend fun clearCaches(buckets: Collection<String>) {
         val normalized = buckets.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
         if (normalized.isEmpty()) return
         normalized.forEach { bucket -> clearBucket(bucket) }

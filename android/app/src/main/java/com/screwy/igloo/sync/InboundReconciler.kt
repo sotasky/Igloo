@@ -46,7 +46,7 @@ class InboundReconciler(
     private val reachability: Reachability,
     private val logger: Logger,
     private val nowMsProvider: () -> Long = { System.currentTimeMillis() },
-) {
+) : InboundSyncRunner {
     private companion object {
         val RETRY_DELAYS_MS = longArrayOf(750L, 1_500L)
     }
@@ -54,7 +54,7 @@ class InboundReconciler(
     private val triggerChannel = Channel<Set<SyncStream>>(capacity = Channel.CONFLATED)
 
     /** Fire a full pass (all streams). Conflated — rapid triggers coalesce. */
-    fun trigger() {
+    override fun trigger() {
         triggerChannel.trySend(SyncStream.ALL)
     }
 
@@ -64,11 +64,11 @@ class InboundReconciler(
     }
 
     /** Fire an explicit multi-stream pass (scheduler unions scoped requests). */
-    fun triggerStreams(streams: Set<SyncStream>) {
+    override fun triggerStreams(streams: Set<SyncStream>) {
         triggerChannel.trySend(streams)
     }
 
-    suspend fun run() {
+    override suspend fun run() {
         while (true) {
             try {
                 val streams = triggerChannel.receive()

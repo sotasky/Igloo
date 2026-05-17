@@ -3,15 +3,10 @@ package com.screwy.igloo.settings
 import com.screwy.igloo.data.IglooDatabase
 import com.screwy.igloo.data.PreferencesRepo
 import com.screwy.igloo.data.RoomTestSupport
-import com.screwy.igloo.media.CacheOps
-import com.screwy.igloo.sync.Scheduler
+import com.screwy.igloo.media.CacheActions
+import com.screwy.igloo.media.CacheStats
+import com.screwy.igloo.testutil.FakeSchedulerActions
 import com.screwy.igloo.testutil.ViewModelTestTracker
-import io.mockk.Runs
-import io.mockk.coEvery
-import io.mockk.coVerify
-import io.mockk.just
-import io.mockk.mockk
-import io.mockk.verify
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -38,8 +33,8 @@ class StorageViewModelTest {
     private lateinit var db: IglooDatabase
     private lateinit var scope: CoroutineScope
     private lateinit var prefs: PreferencesRepo
-    private lateinit var cacheOps: CacheOps
-    private lateinit var scheduler: Scheduler
+    private lateinit var cacheOps: FakeCacheActions
+    private lateinit var scheduler: FakeSchedulerActions
     private val viewModels = ViewModelTestTracker()
 
     @Before fun setUp() {
@@ -47,12 +42,8 @@ class StorageViewModelTest {
         db = RoomTestSupport.freshDb()
         scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         prefs = PreferencesRepo(db.preferenceDao(), scope, nowMsProvider = { 0L })
-        cacheOps = mockk()
-        scheduler = mockk(relaxed = true)
-        coEvery { cacheOps.stats() } returns emptyList()
-        coEvery { cacheOps.clearCache(any()) } just Runs
-        coEvery { cacheOps.clearCache(null) } just Runs
-        coEvery { cacheOps.clearCaches(any()) } just Runs
+        cacheOps = FakeCacheActions()
+        scheduler = FakeSchedulerActions()
     }
 
     @After fun tearDown() {
@@ -122,7 +113,7 @@ class StorageViewModelTest {
         vm.clearCache("youtube_videos")
 
         val ok = eventuallyVerify {
-            coVerify { cacheOps.clearCache("youtube_videos") }
+            assertEquals(listOf("youtube_videos"), cacheOps.clearCacheCalls)
         }
         assertEquals(true, ok)
     }
@@ -132,7 +123,7 @@ class StorageViewModelTest {
         vm.clearCache(null)
 
         val ok = eventuallyVerify {
-            coVerify { cacheOps.clearCache(null) }
+            assertEquals(listOf<String?>(null), cacheOps.clearCacheCalls)
         }
         assertEquals(true, ok)
     }
@@ -142,7 +133,7 @@ class StorageViewModelTest {
         vm.clearCacheBuckets(listOf("youtube_videos", "videos"))
 
         val ok = eventuallyVerify {
-            coVerify { cacheOps.clearCaches(listOf("youtube_videos", "videos")) }
+            assertEquals(listOf(listOf("youtube_videos", "videos")), cacheOps.clearCachesCalls)
         }
         assertEquals(true, ok)
     }
@@ -151,6 +142,21 @@ class StorageViewModelTest {
         val vm = newViewModel()
         vm.triggerSyncNow()
 
-        verify { scheduler.triggerAll() }
+        assertEquals(1, scheduler.triggerAllCount)
+    }
+
+    private class FakeCacheActions : CacheActions {
+        val clearCacheCalls = mutableListOf<String?>()
+        val clearCachesCalls = mutableListOf<List<String>>()
+
+        override suspend fun stats(): List<CacheStats> = emptyList()
+
+        override suspend fun clearCache(bucket: String?) {
+            clearCacheCalls += bucket
+        }
+
+        override suspend fun clearCaches(buckets: Collection<String>) {
+            clearCachesCalls += buckets.toList()
+        }
     }
 }

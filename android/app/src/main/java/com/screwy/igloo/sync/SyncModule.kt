@@ -5,9 +5,12 @@ import com.screwy.igloo.data.PreferencesRepo
 import com.screwy.igloo.net.AndroidSyncRetentionRequest
 import com.screwy.igloo.outbox.OutboxDispatcher
 import com.screwy.igloo.outbox.OutboxDrain
+import com.screwy.igloo.outbox.OutboxDrainRunner
+import com.screwy.igloo.outbox.OutboxDrainSignal
 import com.screwy.igloo.outbox.OutboxWriter
 import kotlinx.coroutines.flow.first
 import org.koin.core.qualifier.named
+import org.koin.dsl.bind
 import org.koin.dsl.module
 
 /**
@@ -28,7 +31,7 @@ val iglooSyncModule = module {
             prefs = get(),
             scope = get(named("applicationScope")),
         )
-    }
+    } bind OutboxDrainSignal::class
 
     single {
         OutboxDispatcher(
@@ -49,7 +52,7 @@ val iglooSyncModule = module {
             reachability = get(),
             logger = get(),
         )
-    }
+    } bind OutboxDrainRunner::class
 
     single {
         MutationDeltaSync(
@@ -61,7 +64,7 @@ val iglooSyncModule = module {
             reachability = get(),
             logger = get(),
         )
-    }
+    } bind MutationDeltaRunner::class
 
     single {
         InboundReconciler(
@@ -77,7 +80,7 @@ val iglooSyncModule = module {
             reachability = get(),
             logger = get(),
         )
-    }
+    } bind InboundSyncRunner::class
 
     single {
         val prefs = get<PreferencesRepo>()
@@ -102,7 +105,7 @@ val iglooSyncModule = module {
                 )
             },
         )
-    }
+    } bind AndroidSyncRunner::class
 
     single {
         SyncReplayTrigger {
@@ -120,20 +123,20 @@ val iglooSyncModule = module {
             syncTrigger = { androidSync.trigger() },
             logger = get(),
         )
-    }
+    } bind RetentionReplayRunner::class
 
     single {
         Scheduler(
             scope = get(named("applicationScope")),
-            inbound = get(),
-            outbox = get<OutboxDrain>(),
-            androidSync = get(),
-            retentionReplay = get(),
+            inbound = get<InboundSyncRunner>(),
+            outbox = get<OutboxDrainRunner>(),
+            androidSync = get<AndroidSyncRunner>(),
+            retentionReplay = get<RetentionReplayRunner>(),
             reachability = get(),
             foregroundFlow = get<com.screwy.igloo.net.ForegroundLifecycleFlow>().flow,
-            writer = get(),
-            mutationDelta = get(),
-            logger = get(),
+            writer = get<OutboxDrainSignal>(),
+            mutationDelta = get<MutationDeltaRunner>(),
+            logger = get<SchedulerLogger>(),
         )
-    }
+    } bind SchedulerActions::class
 }

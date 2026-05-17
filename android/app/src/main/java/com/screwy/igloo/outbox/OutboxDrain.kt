@@ -12,10 +12,14 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.merge
 
+interface OutboxDrainSignal {
+    val drainSignal: SharedFlow<Unit>
+}
+
 interface OutboxDrainRunner {
     val passCompleted: SharedFlow<Unit>
 
-    fun wireWriter(writer: OutboxWriter)
+    fun wireWriter(writer: OutboxDrainSignal)
 
     fun trigger()
 
@@ -71,7 +75,7 @@ class OutboxDrain(
     )
     override val passCompleted: SharedFlow<Unit> = _passCompleted
 
-    override fun wireWriter(writer: OutboxWriter) {
+    override fun wireWriter(writer: OutboxDrainSignal) {
         writerSignal = writer.drainSignal
     }
 

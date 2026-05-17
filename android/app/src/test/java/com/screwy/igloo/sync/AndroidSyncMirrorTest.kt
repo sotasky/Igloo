@@ -35,6 +35,7 @@ import com.screwy.igloo.net.Reachability
 import com.screwy.igloo.net.ServerBaseUrlProvider
 import com.screwy.igloo.net.iglooJson
 import com.screwy.igloo.outbox.OutboxKind
+import androidx.test.core.app.ApplicationProvider
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.MockRequestHandleScope
@@ -71,7 +72,6 @@ import org.junit.rules.TemporaryFolder
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
-import io.mockk.mockk
 import java.io.File
 import java.security.MessageDigest
 import java.util.Collections
@@ -2260,7 +2260,7 @@ class AndroidSyncMirrorTest {
                 json(iglooJson)
             }
         }
-        val foregroundPromoter = mockk<ForegroundPromoter>(relaxed = true)
+        val foregroundPromoter = NoopForegroundPromoter()
         val reachability = Reachability(
             scope = scope,
             probe = { true },
@@ -2293,6 +2293,16 @@ class AndroidSyncMirrorTest {
             payloadJson = "{}",
             state = "pending",
         )
+
+    private inner class NoopForegroundPromoter : ForegroundPromoter(
+        context = ApplicationProvider.getApplicationContext(),
+        logger = logger,
+    ) {
+        override fun startActiveDrain() = Unit
+        override fun finishActiveDrain() = Unit
+        override fun startDownloading(assetIds: Collection<String>) = Unit
+        override fun finishedBatch(assetIds: Collection<String>) = Unit
+    }
 
     private inline fun <reified T> MockRequestHandleScope.respondJson(body: T) =
         respond(iglooJson.encodeToString(body), HttpStatusCode.OK, jsonHeaders())

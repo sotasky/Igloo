@@ -7,11 +7,10 @@ import com.screwy.igloo.data.entity.ChannelEntity
 import com.screwy.igloo.data.entity.FeedItemEntity
 import com.screwy.igloo.data.entity.FeedLikeEntity
 import com.screwy.igloo.outbox.OutboxWriter
-import com.screwy.igloo.sync.Scheduler
+import com.screwy.igloo.testutil.FakeSchedulerActions
 import com.screwy.igloo.testutil.ViewModelTestTracker
 import com.screwy.igloo.ui.UiState
 import com.screwy.igloo.ui.UiEffects
-import io.mockk.mockk
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -45,7 +44,7 @@ class LikedViewModelTest {
     private lateinit var scope: CoroutineScope
     private lateinit var prefs: PreferencesRepo
     private lateinit var writer: OutboxWriter
-    private lateinit var scheduler: Scheduler
+    private lateinit var scheduler: FakeSchedulerActions
     private lateinit var uiEffects: UiEffects
     private val viewModels = ViewModelTestTracker()
 
@@ -61,7 +60,7 @@ class LikedViewModelTest {
             nowMsProvider = { 0L },
             writeDebounceMs = 50L,
         )
-        scheduler = mockk(relaxed = true)
+        scheduler = FakeSchedulerActions()
         uiEffects = UiEffects()
     }
 

@@ -5,7 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.screwy.igloo.data.IglooDatabase
 import com.screwy.igloo.data.entity.VideoGridItem
 import com.screwy.igloo.perf.PerfProbe
-import com.screwy.igloo.sync.Scheduler
+import com.screwy.igloo.sync.SchedulerActions
 import com.screwy.igloo.sync.SyncStream
 import com.screwy.igloo.ui.UiState
 import kotlinx.coroutines.delay
@@ -22,7 +22,7 @@ import kotlinx.coroutines.launch
  */
 class VideosViewModel(
     db: IglooDatabase,
-    private val scheduler: Scheduler,
+    private val scheduler: SchedulerActions,
 ) : ViewModel() {
 
     private val itemsRaw: StateFlow<List<VideoGridItem>?> = db.videoReadDao()

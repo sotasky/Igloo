@@ -12,12 +12,11 @@ import com.screwy.igloo.data.entity.FeedSeenEntity
 import com.screwy.igloo.outbox.OutboxKind
 import com.screwy.igloo.outbox.OutboxWriter
 import com.screwy.igloo.net.ServerBaseUrlProvider
-import com.screwy.igloo.sync.Scheduler
+import com.screwy.igloo.sync.SyncStream
+import com.screwy.igloo.testutil.FakeSchedulerActions
 import com.screwy.igloo.testutil.ViewModelTestTracker
 import com.screwy.igloo.ui.UiEffects
 import com.screwy.igloo.ui.UiState
-import io.mockk.mockk
-import io.mockk.verify
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -53,7 +52,7 @@ class FeedViewModelTest {
     private lateinit var scope: CoroutineScope
     private lateinit var prefs: PreferencesRepo
     private lateinit var writer: OutboxWriter
-    private lateinit var scheduler: Scheduler
+    private lateinit var scheduler: FakeSchedulerActions
     private lateinit var uiEffects: UiEffects
     private lateinit var mainDispatcher: TestDispatcher
     private val viewModels = ViewModelTestTracker()
@@ -71,7 +70,7 @@ class FeedViewModelTest {
             nowMsProvider = { 0L },
             writeDebounceMs = 50L,
         )
-        scheduler = mockk(relaxed = true)
+        scheduler = FakeSchedulerActions()
         uiEffects = UiEffects()
     }
 
@@ -162,7 +161,7 @@ class FeedViewModelTest {
             true
         }
         assertEquals(true, ok)
-        verify { scheduler.triggerStream(com.screwy.igloo.sync.SyncStream.Feed) }
+        assertEquals(listOf(SyncStream.Feed), scheduler.triggeredStreams)
     }
 
     @Test fun seenWrite_doesNotRemoveVisibleRowUntilExplicitRefresh() = runBlocking {

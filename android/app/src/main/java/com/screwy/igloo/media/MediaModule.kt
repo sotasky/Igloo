@@ -51,5 +51,5 @@ val iglooMediaModule = module {
             logger = get(),
             syncTrigger = get<AndroidSyncMirror>()::trigger,
         )
-    }
+    } bind CacheActions::class
 }

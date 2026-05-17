@@ -2,7 +2,8 @@ package com.screwy.igloo.settings
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.screwy.igloo.auth.AuthRepo
+import com.screwy.igloo.auth.AccountSessionActions
+import com.screwy.igloo.auth.LogoutReason
 import com.screwy.igloo.data.PreferencesRepo
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.SharingStarted
@@ -12,7 +13,7 @@ import kotlinx.coroutines.launch
 
 class AccountSettingsViewModel(
     private val prefs: PreferencesRepo,
-    private val authRepo: AuthRepo,
+    private val authRepo: AccountSessionActions,
 ) : ViewModel() {
 
     val serverUrl: StateFlow<String> =
@@ -26,7 +27,7 @@ class AccountSettingsViewModel(
     }
 
     fun logout() {
-        viewModelScope.launch { authRepo.logout() }
+        viewModelScope.launch { authRepo.logout(LogoutReason.UserInitiated) }
     }
 
     private fun <T> Flow<T>.stateDefault(initial: T): StateFlow<T> =

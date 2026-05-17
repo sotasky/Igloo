@@ -57,7 +57,7 @@ class OutboxWriter(
     private val scope: CoroutineScope,
     private val nowMsProvider: () -> Long = { System.currentTimeMillis() },
     private val writeDebounceMs: Long = WRITE_DEBOUNCE_MS,
-) {
+) : OutboxDrainSignal {
 
     private val _debounceSignal = MutableSharedFlow<Unit>(
         replay = 0,
@@ -77,7 +77,7 @@ class OutboxWriter(
      * rapid-fire writes, and also as a direct signal from `signalDrainNow()` for
      * reachability/periodic triggers.
      */
-    val drainSignal: SharedFlow<Unit> = _drainSignal.asSharedFlow()
+    override val drainSignal: SharedFlow<Unit> = _drainSignal.asSharedFlow()
 
     init {
         scope.launch {

@@ -27,11 +27,11 @@ class RetentionReplayCoordinator(
     private val replayTrigger: SyncReplayTrigger,
     private val syncTrigger: () -> Unit,
     private val logger: Logger,
-) {
+) : RetentionReplayRunner {
 
     private var observerJob: Job? = null
 
-    fun start() {
+    override fun start() {
         if (observerJob?.isActive == true) return
         observerJob = scope.launch(start = CoroutineStart.UNDISPATCHED) {
             var previous = RetentionSnapshot(
@@ -57,7 +57,7 @@ class RetentionReplayCoordinator(
         }
     }
 
-    fun stop() {
+    override fun stop() {
         observerJob?.cancel()
         observerJob = null
     }

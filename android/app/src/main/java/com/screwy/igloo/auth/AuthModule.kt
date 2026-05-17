@@ -9,6 +9,7 @@ import com.screwy.igloo.net.auth.AuthTokenProvider
 import com.screwy.igloo.sync.Scheduler
 import org.koin.core.module.dsl.viewModel
 import org.koin.core.qualifier.named
+import org.koin.dsl.bind
 import org.koin.dsl.module
 
 /**
@@ -48,7 +49,7 @@ val iglooAuthModule = module {
             prefsUpdater = { url -> get<PreferencesRepo>().setServerUrl(url) },
             onPostLoginBootstrap = { AppRuntime.bootstrapPostLogin() },
         )
-    }
+    } bind AccountSessionActions::class
 
     single<AuthTokenProvider> { get<AuthRepo>() }
 
