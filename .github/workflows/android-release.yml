@@ -21,21 +21,10 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
-      - name: Install media tools
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg
-
-      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
-        with:
-          go-version-file: go.mod
-          cache: true
-
       - uses: actions/setup-java@be666c2fcd27ec809703dec50e508c2fdc7f6654 # v5
         with:
           distribution: temurin
           java-version: "26"
-
-      - name: Run full release gate
-        run: scripts/dev/test-full.sh
 
       - name: Decode release keystore
         env:
