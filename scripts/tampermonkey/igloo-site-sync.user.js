@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Igloo Site Sync
 // @namespace    local.igloo.site.sync
-// @version      8.0.30
+// @version      8.0.31
 // @author       screwys
 // @description  Follow X, TikTok, Instagram, and YouTube channels in Igloo; includes the full X media workflow.
 // @homepageURL  https://github.com/screwys/Igloo
@@ -37,7 +37,7 @@
 
 (function () {
   "use strict";
-  const SCRIPT_VERSION = "8.0.30";
+  const SCRIPT_VERSION = "8.0.31";
 
   const SETTINGS = {
     apiBase: "xsync_api_base",
@@ -52,9 +52,6 @@
     xDownloads: "igloo_sync_x_downloads",
     xKeyboardShortcuts: "igloo_sync_x_keyboard_shortcuts",
     xCleanup: "igloo_sync_x_cleanup",
-    xThemeSource: "igloo_sync_x_theme_source",
-    xThemeFlavor: "igloo_sync_x_theme_flavor",
-    xThemeAccent: "igloo_sync_x_theme_accent",
   };
   const LEGACY_AUTH_PASSWORD_KEY = "xsync_auth_pass";
 
@@ -98,200 +95,6 @@
     'button[role="button"][data-testid="geoButton"]',
     'button[role="button"][data-testid="contentDisclosureButton"]',
   ].join(",");
-
-  const X_THEME_FLAVOR_DEFAULT = "auto";
-  const X_THEME_ACCENT_DEFAULT = "red";
-  const X_THEME_SOURCE_SITE = "site";
-  const X_THEME_SOURCE_CATPPUCCIN = "catppuccin";
-  const X_THEME_FLAVOR_ORDER = ["auto", "latte", "frappe", "macchiato", "mocha"];
-  const X_THEME_SOURCE_ORDER = [
-    X_THEME_SOURCE_SITE,
-    X_THEME_SOURCE_CATPPUCCIN,
-  ];
-  const X_THEME_ACCENT_ORDER = [
-    "rosewater",
-    "flamingo",
-    "pink",
-    "mauve",
-    "red",
-    "maroon",
-    "peach",
-    "yellow",
-    "green",
-    "teal",
-    "blue",
-    "sapphire",
-    "sky",
-    "lavender",
-    "subtext0",
-  ];
-  const X_THEME_PALETTES = {
-    latte: {
-      rosewater: "#dc8a78",
-      flamingo: "#dd7878",
-      pink: "#ea76cb",
-      mauve: "#8839ef",
-      red: "#d20f39",
-      maroon: "#e64553",
-      peach: "#fe640b",
-      yellow: "#df8e1d",
-      green: "#40a02b",
-      teal: "#179299",
-      sky: "#04a5e5",
-      sapphire: "#209fb5",
-      blue: "#1e66f5",
-      lavender: "#7287fd",
-      text: "#4c4f69",
-      subtext1: "#5c5f77",
-      subtext0: "#6c6f85",
-      overlay2: "#7c7f93",
-      overlay1: "#8c8fa1",
-      overlay0: "#9ca0b0",
-      surface2: "#acb0be",
-      surface1: "#bcc0cc",
-      surface0: "#ccd0da",
-      base: "#eff1f5",
-      mantle: "#e6e9ef",
-      crust: "#dce0e8",
-    },
-    frappe: {
-      rosewater: "#f2d5cf",
-      flamingo: "#eebebe",
-      pink: "#f4b8e4",
-      mauve: "#ca9ee6",
-      red: "#e78284",
-      maroon: "#ea999c",
-      peach: "#ef9f76",
-      yellow: "#e5c890",
-      green: "#a6d189",
-      teal: "#81c8be",
-      sky: "#99d1db",
-      sapphire: "#85c1dc",
-      blue: "#8caaee",
-      lavender: "#babbf1",
-      text: "#c6d0f5",
-      subtext1: "#b5bfe2",
-      subtext0: "#a5adce",
-      overlay2: "#949cbb",
-      overlay1: "#838ba7",
-      overlay0: "#737994",
-      surface2: "#626880",
-      surface1: "#51576d",
-      surface0: "#414559",
-      base: "#303446",
-      mantle: "#292c3c",
-      crust: "#232634",
-    },
-    macchiato: {
-      rosewater: "#f4dbd6",
-      flamingo: "#f0c6c6",
-      pink: "#f5bde6",
-      mauve: "#c6a0f6",
-      red: "#ed8796",
-      maroon: "#ee99a0",
-      peach: "#f5a97f",
-      yellow: "#eed49f",
-      green: "#a6da95",
-      teal: "#8bd5ca",
-      sky: "#91d7e3",
-      sapphire: "#7dc4e4",
-      blue: "#8aadf4",
-      lavender: "#b7bdf8",
-      text: "#cad3f5",
-      subtext1: "#b8c0e0",
-      subtext0: "#a5adcb",
-      overlay2: "#939ab7",
-      overlay1: "#8087a2",
-      overlay0: "#6e738d",
-      surface2: "#5b6078",
-      surface1: "#494d64",
-      surface0: "#363a4f",
-      base: "#24273a",
-      mantle: "#1e2030",
-      crust: "#181926",
-    },
-    mocha: {
-      rosewater: "#f5e0dc",
-      flamingo: "#f2cdcd",
-      pink: "#f5c2e7",
-      mauve: "#cba6f7",
-      red: "#f38ba8",
-      maroon: "#eba0ac",
-      peach: "#fab387",
-      yellow: "#f9e2af",
-      green: "#a6e3a1",
-      teal: "#94e2d5",
-      sky: "#89dceb",
-      sapphire: "#74c7ec",
-      blue: "#89b4fa",
-      lavender: "#b4befe",
-      text: "#cdd6f4",
-      subtext1: "#bac2de",
-      subtext0: "#a6adc8",
-      overlay2: "#9399b2",
-      overlay1: "#7f849c",
-      overlay0: "#6c7086",
-      surface2: "#585b70",
-      surface1: "#45475a",
-      surface0: "#313244",
-      base: "#1e1e2e",
-      mantle: "#181825",
-      crust: "#11111b",
-    },
-  };
-
-  function normalizeXThemeFlavor(value) {
-    const flavor = String(value || "").trim().toLowerCase();
-    return X_THEME_FLAVOR_ORDER.includes(flavor) ? flavor : "";
-  }
-
-  function normalizeXThemeAccent(value) {
-    const accent = String(value || "").trim().toLowerCase();
-    return X_THEME_ACCENT_ORDER.includes(accent) ? accent : "";
-  }
-
-  function normalizeXThemeSource(value) {
-    const source = String(value || "").trim().toLowerCase();
-    return X_THEME_SOURCE_ORDER.includes(source) ? source : "";
-  }
-
-  function xThemeSourceSetting() {
-    return (
-      normalizeXThemeSource(GM_getValue(SETTINGS.xThemeSource, "")) ||
-      X_THEME_SOURCE_SITE
-    );
-  }
-
-  function xThemeFlavorSetting() {
-    return (
-      normalizeXThemeFlavor(GM_getValue(SETTINGS.xThemeFlavor, "")) ||
-      X_THEME_FLAVOR_DEFAULT
-    );
-  }
-
-  function xThemeAccentSetting() {
-    return (
-      normalizeXThemeAccent(GM_getValue(SETTINGS.xThemeAccent, "")) ||
-      X_THEME_ACCENT_DEFAULT
-    );
-  }
-
-  function prefersLightColorScheme() {
-    try {
-      return (
-        typeof window.matchMedia === "function" &&
-        window.matchMedia("(prefers-color-scheme: light)").matches
-      );
-    } catch (_) {
-      return false;
-    }
-  }
-
-  function resolvedXThemeFlavor() {
-    const configured = xThemeFlavorSetting();
-    if (configured !== "auto") return configured;
-    return prefersLightColorScheme() ? "latte" : "mocha";
-  }
 
   function hexToRgb(value) {
     const hex = String(value || "").trim().replace(/^#/, "");
@@ -447,20 +250,6 @@
     }
   }
 
-  function currentXThemePalette() {
-    const flavor = resolvedXThemeFlavor();
-    const palette = X_THEME_PALETTES[flavor] || X_THEME_PALETTES.mocha;
-    const accentName = xThemeAccentSetting();
-    const accent = palette[accentName] || palette.red;
-    return {
-      ...palette,
-      source: "catppuccin",
-      flavor,
-      accent,
-      onAccent: flavor === "latte" ? "#ffffff" : palette.crust,
-    };
-  }
-
   function xThemeVarsForPalette(palette) {
     return {
       accent: palette.accent,
@@ -503,12 +292,7 @@
     const root = document.documentElement;
     if (!root || !root.style) return;
     const themeEnabled = themeOverridesEnabled();
-    const source = xThemeSourceSetting();
-    const sitePalette = detectedXSitePaletteWithoutOwnOverrides();
-    const palette =
-      themeEnabled && source === X_THEME_SOURCE_CATPPUCCIN
-        ? currentXThemePalette()
-        : sitePalette;
+    const palette = detectedXSitePaletteWithoutOwnOverrides();
     const controlPalette = palette;
     setXThemeVars(root, "", palette);
     setXThemeVars(root, "control-", controlPalette);
@@ -3609,49 +3393,6 @@
       GM_setValue(SETTINGS.xCleanup, next);
       refreshXThemeStyles();
       notify(`Theme ${next ? "enabled" : "disabled"}`);
-    });
-
-    GM_registerMenuCommand("Use current X site theme colors", () => {
-      GM_setValue(SETTINGS.xThemeSource, X_THEME_SOURCE_SITE);
-      GM_setValue(SETTINGS.xCleanup, true);
-      refreshXThemeStyles();
-      notify("X theme colors set to current site theme");
-    });
-
-    GM_registerMenuCommand("Set X theme flavor", () => {
-      const value = prompt(
-        "X theme flavor: " + X_THEME_FLAVOR_ORDER.join(", "),
-        xThemeFlavorSetting(),
-      );
-      if (value === null) return;
-      const next = normalizeXThemeFlavor(value);
-      if (!next) {
-        notify("Unknown X theme flavor");
-        return;
-      }
-      GM_setValue(SETTINGS.xThemeSource, X_THEME_SOURCE_CATPPUCCIN);
-      GM_setValue(SETTINGS.xThemeFlavor, next);
-      GM_setValue(SETTINGS.xCleanup, true);
-      refreshXThemeStyles();
-      notify(`Catppuccin X theme flavor set to ${next}`);
-    });
-
-    GM_registerMenuCommand("Set X theme accent", () => {
-      const value = prompt(
-        "X theme accent: " + X_THEME_ACCENT_ORDER.join(", "),
-        xThemeAccentSetting(),
-      );
-      if (value === null) return;
-      const next = normalizeXThemeAccent(value);
-      if (!next) {
-        notify("Unknown X theme accent");
-        return;
-      }
-      GM_setValue(SETTINGS.xThemeSource, X_THEME_SOURCE_CATPPUCCIN);
-      GM_setValue(SETTINGS.xThemeAccent, next);
-      GM_setValue(SETTINGS.xCleanup, true);
-      refreshXThemeStyles();
-      notify(`Catppuccin X theme accent set to ${next}`);
     });
   }
 

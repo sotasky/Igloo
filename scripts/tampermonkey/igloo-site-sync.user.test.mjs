@@ -647,9 +647,6 @@ test("menu is limited and login does not persist the password", async () => {
     "Test connection",
     "Toggle button overrides",
     "Toggle theme",
-    "Use current X site theme colors",
-    "Set X theme flavor",
-    "Set X theme accent",
   ]);
   assert.equal(harness.menu.has("Set Dashboard Bearer Token"), false);
   assert.equal(harness.values.has("xsync_auth_pass"), false);
@@ -800,7 +797,6 @@ test("themes current X composer toolbar buttons", () => {
   assert.match(script, /border-bottom-color:\s*var\(--igloo-x-accent\)\s*!important/);
   assert.match(script, /setImportantStyle\(svgEl, "color", color\)/);
   assert.match(script, /var\(--igloo-x-accent\)/);
-  assert.match(script, /X_THEME_PALETTES/);
   assert.match(
     script,
     /data-testid="unretweet"[\s\S]+color: var\(--igloo-x-accent\) !important; fill: var\(--igloo-x-accent\) !important;/,
@@ -923,25 +919,42 @@ test("covers current Catppuccin Twitter class selectors", () => {
   }
 });
 
-test("X theme menu stores palette controls and refreshes CSS variables", () => {
+test("single X theme toggle enables all theme CSS with current site colors", () => {
   const harness = buildHarness({
-    prompts: ["macchiato", "lavender"],
+    computedStyles: {
+      '[data-testid="primaryColumn"]': {
+        "background-color": "rgb(12, 18, 24)",
+      },
+      body: {
+        color: "rgb(220, 230, 240)",
+      },
+      '[data-testid="tweetButtonInline"]': {
+        "background-color": "rgb(10, 200, 180)",
+      },
+    },
     initialValues: {
       igloo_sync_x_cleanup: false,
+      igloo_sync_x_theme_source: "catppuccin",
+      igloo_sync_x_theme_flavor: "macchiato",
+      igloo_sync_x_theme_accent: "lavender",
     },
   });
   runScript(harness);
 
-  harness.menu.get("Set X theme flavor")();
-  harness.menu.get("Set X theme accent")();
+  harness.menu.get("Toggle theme")();
 
-  assert.equal(harness.values.get("igloo_sync_x_theme_flavor"), "macchiato");
-  assert.equal(harness.values.get("igloo_sync_x_theme_accent"), "lavender");
-  assert.equal(harness.values.get("igloo_sync_x_theme_source"), "catppuccin");
   assert.equal(harness.values.get("igloo_sync_x_cleanup"), true);
   assert.equal(
+    harness.context.document.body.classList.contains("igloo-theme-overrides"),
+    true,
+  );
+  assert.equal(
     harness.context.document.documentElement.style["--igloo-x-accent"],
-    "#b7bdf8",
+    "rgb(10, 200, 180)",
+  );
+  assert.equal(
+    harness.context.document.documentElement.style["--igloo-x-base"],
+    "rgb(12, 18, 24)",
   );
 });
 
@@ -1016,57 +1029,6 @@ test("X control colors follow the site palette when theme overrides are disabled
   assert.equal(
     harness.context.document.documentElement.style["--igloo-x-control-accent"],
     "rgb(29, 155, 240)",
-  );
-});
-
-test("X control colors use the Catppuccin accent while theme overrides are enabled", () => {
-  const harness = buildHarness({
-    initialValues: {
-      igloo_sync_x_cleanup: true,
-      igloo_sync_x_theme_source: "catppuccin",
-      igloo_sync_x_theme_flavor: "macchiato",
-      igloo_sync_x_theme_accent: "lavender",
-    },
-  });
-  runScript(harness);
-
-  assert.equal(
-    harness.context.document.documentElement.style["--igloo-x-accent"],
-    "#b7bdf8",
-  );
-  assert.equal(
-    harness.context.document.documentElement.style["--igloo-x-control-accent"],
-    "#b7bdf8",
-  );
-});
-
-test("X theme source menu switches Catppuccin theming back to site colors", () => {
-  const harness = buildHarness({
-    computedStyles: {
-      '[data-testid="tweetButtonInline"]': {
-        "background-color": "rgb(10, 200, 180)",
-      },
-    },
-    initialValues: {
-      igloo_sync_x_cleanup: true,
-      igloo_sync_x_theme_source: "catppuccin",
-      igloo_sync_x_theme_flavor: "macchiato",
-      igloo_sync_x_theme_accent: "lavender",
-    },
-  });
-  runScript(harness);
-
-  assert.equal(
-    harness.context.document.documentElement.style["--igloo-x-accent"],
-    "#b7bdf8",
-  );
-
-  harness.menu.get("Use current X site theme colors")();
-
-  assert.equal(harness.values.get("igloo_sync_x_theme_source"), "site");
-  assert.equal(
-    harness.context.document.documentElement.style["--igloo-x-accent"],
-    "rgb(10, 200, 180)",
   );
 });
 
