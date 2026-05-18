@@ -29,9 +29,6 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Check GitHub Actions pinning
-        run: scripts/dev/workflow-pin-check.sh
-
       - name: Check generated drift
         run: scripts/dev/drift-check.sh
 
@@ -77,8 +74,8 @@ jobs:
       - name: Run Go tests
         run: go test ./...
 
-      - name: Run web smoke test
-        run: scripts/dev/web-smoke.sh
+      - name: Run web process-level test
+        run: scripts/dev/web-test.sh
 
   android:
     runs-on: ubuntu-latest

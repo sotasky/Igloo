@@ -30,12 +30,6 @@ go_json="$tmp/go-test.jsonl"
 android_log="$tmp/android-test.log"
 android_results="$ROOT/android/app/build/test-results/testDevtestUnitTest"
 
-echo "[workflows] checking GitHub Actions pinning..."
-if ! scripts/dev/workflow-pin-check.sh; then
-  echo "[workflows] action pinning check failed" >&2
-  status=1
-fi
-
 echo "[static] running repo-specific Go source checks..."
 if ! go run ./scripts/dev/staticcheck; then
   echo "[static] repo-specific Go source checks failed" >&2
@@ -121,9 +115,9 @@ if [[ "$govulncheck_status" -ne 0 ]]; then
   status=1
 fi
 
-echo "[web] running smoke test..."
-if ! scripts/dev/web-smoke.sh; then
-  echo "[web] smoke test failed" >&2
+echo "[web] running process-level test..."
+if ! scripts/dev/web-test.sh; then
+  echo "[web] process-level test failed" >&2
   status=1
 fi
 

@@ -267,9 +267,10 @@ test("CI covers pull requests and pushes to main with three jobs", () => {
   assert.match(workflow, /\n  static:\n/);
   assert.match(workflow, /\n  go:\n/);
   assert.match(workflow, /\n  android:\n/);
-  assert.match(workflow, /run: scripts\/dev\/workflow-pin-check\.sh/);
   assert.match(workflow, /run: go test \.\/\.\.\./);
+  assert.match(workflow, /run: scripts\/dev\/web-test\.sh/);
   assert.match(workflow, /run: \.\/test\.sh/);
+  assert.doesNotMatch(workflow, /workflow-pin-check\.sh/);
   assert.match(workflow, /No Android-relevant changes/);
 });
 

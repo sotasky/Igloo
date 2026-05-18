@@ -102,4 +102,4 @@ home_html="$tmp/home.html"
 curl -fsSL -b "$cookie_jar" -c "$cookie_jar" "$base_url/" -o "$home_html"
 grep -qi '<html' "$home_html"
 
-echo "web smoke passed at $base_url"
+echo "web test passed at $base_url"

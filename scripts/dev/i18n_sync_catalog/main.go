@@ -29,33 +29,59 @@ type localeMeta struct {
 }
 
 func main() {
+	outputs, err := generateCatalogOutputs()
+	if err != nil {
+		fail("%v", err)
+	}
+	for _, output := range outputs {
+		if err := os.MkdirAll(filepath.Dir(output.Path), 0o755); err != nil {
+			fail("%v", err)
+		}
+		if err := os.WriteFile(output.Path, output.Data, 0o644); err != nil {
+			fail("%v", err)
+		}
+	}
+}
+
+type generatedOutput struct {
+	Path string
+	Data []byte
+}
+
+func generateCatalogOutputs() ([]generatedOutput, error) {
 	baseMessages := readOptionalTOML(baseCatalogPath)
 	webMessages := mustCollectWebMessages()
 	for key, value := range webMessages {
 		baseMessages[key] = value
 	}
 	if len(baseMessages) == 0 {
-		fail("no i18n strings found")
-	}
-	if err := os.MkdirAll(catalogDir, 0o755); err != nil {
-		fail("%v", err)
-	}
-	if err := writeTOML(baseCatalogPath, baseMessages, "en", "English"); err != nil {
-		fail("%v", err)
+		return nil, fmt.Errorf("no i18n strings found")
 	}
 	catalogs, err := readCatalogs(catalogDir)
 	if err != nil {
-		fail("%v", err)
+		return nil, err
 	}
-	if _, ok := catalogs["en"]; !ok {
-		catalogs["en"] = baseMessages
+	catalogs["en"] = baseMessages
+
+	outputs := []generatedOutput{{
+		Path: baseCatalogPath,
+		Data: renderTOML(baseMessages, "en", "English"),
+	}}
+	for _, lang := range sortedCatalogKeys(catalogs) {
+		outputs = append(outputs, generatedOutput{
+			Path: androidStringsPath(lang),
+			Data: renderAndroidStrings(lang, catalogs[lang]),
+		})
 	}
-	if err := writeAndroidResources(catalogs); err != nil {
-		fail("%v", err)
+	metadata, err := renderAndroidLocaleMetadata(catalogDir)
+	if err != nil {
+		return nil, err
 	}
-	if err := writeAndroidLocaleMetadata(catalogDir); err != nil {
-		fail("%v", err)
-	}
+	outputs = append(outputs, metadata...)
+	sort.Slice(outputs, func(i, j int) bool {
+		return outputs[i].Path < outputs[j].Path
+	})
+	return outputs, nil
 }
 
 func mustCollectWebMessages() map[string]string {
@@ -334,6 +360,10 @@ func parseTOMLString(raw string) (string, error) {
 }
 
 func writeTOML(path string, messages map[string]string, lang, name string) error {
+	return os.WriteFile(path, renderTOML(messages, lang, name), 0o644)
+}
+
+func renderTOML(messages map[string]string, lang, name string) []byte {
 	keys := sortedKeys(messages)
 	var buf bytes.Buffer
 	buf.WriteString("# Igloo shared source strings.\n")
@@ -344,7 +374,7 @@ func writeTOML(path string, messages map[string]string, lang, name string) error
 	for _, key := range keys {
 		fmt.Fprintf(&buf, "%s = %s\n", key, strconv.Quote(messages[key]))
 	}
-	return os.WriteFile(path, buf.Bytes(), 0o644)
+	return buf.Bytes()
 }
 
 func writeAndroidResources(catalogs map[string]map[string]string) error {
@@ -361,23 +391,43 @@ func writeAndroidResources(catalogs map[string]map[string]string) error {
 }
 
 func writeAndroidLocaleMetadata(catalogDir string) error {
-	metas, err := readLocaleMetas(catalogDir)
+	outputs, err := renderAndroidLocaleMetadata(catalogDir)
 	if err != nil {
 		return err
+	}
+	for _, output := range outputs {
+		if err := os.MkdirAll(filepath.Dir(output.Path), 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(output.Path, output.Data, 0o644); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func renderAndroidLocaleMetadata(catalogDir string) ([]generatedOutput, error) {
+	metas, err := readLocaleMetas(catalogDir)
+	if err != nil {
+		return nil, err
 	}
 	if len(metas) == 0 {
 		metas = []localeMeta{{Tag: "en", Name: "English"}}
 	}
-	if err := writeAndroidLocaleOptions(metas); err != nil {
-		return err
-	}
-	return writeAndroidLocaleConfig(metas)
+	return []generatedOutput{
+		{Path: androidLocaleOptions, Data: renderAndroidLocaleOptions(metas)},
+		{Path: androidLocaleConfig, Data: renderAndroidLocaleConfig(metas)},
+	}, nil
 }
 
 func writeAndroidLocaleOptions(metas []localeMeta) error {
 	if err := os.MkdirAll(filepath.Dir(androidLocaleOptions), 0o755); err != nil {
 		return err
 	}
+	return os.WriteFile(androidLocaleOptions, renderAndroidLocaleOptions(metas), 0o644)
+}
+
+func renderAndroidLocaleOptions(metas []localeMeta) []byte {
 	var buf bytes.Buffer
 	buf.WriteString("<resources>\n")
 	buf.WriteString("    <string-array name=\"supported_locale_tags\" translatable=\"false\">\n")
@@ -391,13 +441,17 @@ func writeAndroidLocaleOptions(metas []localeMeta) error {
 	}
 	buf.WriteString("    </string-array>\n")
 	buf.WriteString("</resources>\n")
-	return os.WriteFile(androidLocaleOptions, buf.Bytes(), 0o644)
+	return buf.Bytes()
 }
 
 func writeAndroidLocaleConfig(metas []localeMeta) error {
 	if err := os.MkdirAll(filepath.Dir(androidLocaleConfig), 0o755); err != nil {
 		return err
 	}
+	return os.WriteFile(androidLocaleConfig, renderAndroidLocaleConfig(metas), 0o644)
+}
+
+func renderAndroidLocaleConfig(metas []localeMeta) []byte {
 	var buf bytes.Buffer
 	buf.WriteString("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n")
 	buf.WriteString("<locale-config xmlns:android=\"http://schemas.android.com/apk/res/android\">\n")
@@ -405,7 +459,7 @@ func writeAndroidLocaleConfig(metas []localeMeta) error {
 		fmt.Fprintf(&buf, "    <locale android:name=%q />\n", meta.Tag)
 	}
 	buf.WriteString("</locale-config>\n")
-	return os.WriteFile(androidLocaleConfig, buf.Bytes(), 0o644)
+	return buf.Bytes()
 }
 
 func androidStringsPath(lang string) string {
@@ -435,6 +489,10 @@ func languageTag(lang string) string {
 }
 
 func writeAndroidStrings(path, lang string, messages map[string]string) error {
+	return os.WriteFile(path, renderAndroidStrings(lang, messages), 0o644)
+}
+
+func renderAndroidStrings(lang string, messages map[string]string) []byte {
 	keys := sortedKeys(messages)
 	var buf bytes.Buffer
 	buf.WriteString("<resources>\n")
@@ -450,12 +508,21 @@ func writeAndroidStrings(path, lang string, messages map[string]string) error {
 		fmt.Fprintf(&buf, "    <string name=%q>%s</string>\n", key, value)
 	}
 	buf.WriteString("</resources>\n")
-	return os.WriteFile(path, buf.Bytes(), 0o644)
+	return buf.Bytes()
 }
 
 func sortedKeys(messages map[string]string) []string {
 	keys := make([]string, 0, len(messages))
 	for key := range messages {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func sortedCatalogKeys(catalogs map[string]map[string]string) []string {
+	keys := make([]string, 0, len(catalogs))
+	for key := range catalogs {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)

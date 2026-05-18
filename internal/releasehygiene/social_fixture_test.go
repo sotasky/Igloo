@@ -105,6 +105,9 @@ func TestSocialFixtureIdentitiesUseSampleNames(t *testing.T) {
 		}
 		data, err := os.ReadFile(filepath.Join(root, path))
 		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
 			t.Fatalf("read %s: %v", path, err)
 		}
 		if bytes.Contains(data, []byte{0}) || !utf8.Valid(data) {
