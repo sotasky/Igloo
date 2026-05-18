@@ -894,6 +894,65 @@ test("X theme menu stores palette controls and refreshes CSS variables", () => {
   );
 });
 
+test("X control colors follow the site palette when theme overrides are disabled", () => {
+  const harness = buildHarness({
+    initialValues: {
+      igloo_sync_x_cleanup: false,
+      igloo_sync_x_theme_flavor: "macchiato",
+      igloo_sync_x_theme_accent: "lavender",
+    },
+  });
+  runScript(harness);
+
+  assert.equal(
+    harness.context.document.documentElement.style["--igloo-x-accent"],
+    "rgb(29, 155, 240)",
+  );
+  assert.equal(
+    harness.context.document.documentElement.style["--igloo-x-control-accent"],
+    "rgb(29, 155, 240)",
+  );
+});
+
+test("X control colors use the Catppuccin accent while theme overrides are enabled", () => {
+  const harness = buildHarness({
+    initialValues: {
+      igloo_sync_x_cleanup: true,
+      igloo_sync_x_theme_flavor: "macchiato",
+      igloo_sync_x_theme_accent: "lavender",
+    },
+  });
+  runScript(harness);
+
+  assert.equal(
+    harness.context.document.documentElement.style["--igloo-x-accent"],
+    "#b7bdf8",
+  );
+  assert.equal(
+    harness.context.document.documentElement.style["--igloo-x-control-accent"],
+    "#b7bdf8",
+  );
+});
+
+test("custom X controls use control theme variables instead of page theme variables", () => {
+  assert.match(
+    script,
+    /\.x-action-wrap button \{[\s\S]*color: var\(--igloo-x-control-accent\)/,
+  );
+  assert.match(
+    script,
+    /#x-dl-popover \{[\s\S]*background: var\(--igloo-x-control-base\)/,
+  );
+  assert.match(
+    script,
+    /\[data-testid\$="-follow"\] \* \{[\s\S]*color: var\(--igloo-x-control-text\) !important;/,
+  );
+  assert.match(
+    script,
+    /labelInput\.style\.borderColor = "var\(--igloo-x-control-accent\)";/,
+  );
+});
+
 test("ghost-resubscribed X handles can be unfollowed immediately", async () => {
   const harness = buildHarness({
     localList: [{ handle: "bob", url: "https://x.com/bob" }],

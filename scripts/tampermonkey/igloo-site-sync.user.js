@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Igloo Site Sync
 // @namespace    local.igloo.site.sync
-// @version      8.0.28
+// @version      8.0.29
 // @author       screwys
 // @description  Follow X, TikTok, Instagram, and YouTube channels in Igloo; includes the full X media workflow.
 // @homepageURL  https://github.com/screwys/Igloo
@@ -37,7 +37,7 @@
 
 (function () {
   "use strict";
-  const SCRIPT_VERSION = "8.0.28";
+  const SCRIPT_VERSION = "8.0.29";
 
   const SETTINGS = {
     apiBase: "xsync_api_base",
@@ -423,14 +423,8 @@
     };
   }
 
-  function applyXThemeSettings() {
-    if (!isXSite()) return;
-    const root = document.documentElement;
-    if (!root || !root.style) return;
-    const palette = themeOverridesEnabled()
-      ? currentXThemePalette()
-      : detectedXSitePalette();
-    const vars = {
+  function xThemeVarsForPalette(palette) {
+    return {
       accent: palette.accent,
       "on-accent": palette.onAccent,
       base: palette.base,
@@ -458,12 +452,27 @@
       lavender: palette.lavender,
       border: palette.surface1,
     };
-    for (const [key, value] of Object.entries(vars)) {
-      root.style.setProperty(`--igloo-x-${key}`, value);
+  }
+
+  function setXThemeVars(root, prefix, palette) {
+    for (const [key, value] of Object.entries(xThemeVarsForPalette(palette))) {
+      root.style.setProperty(`--igloo-x-${prefix}${key}`, value);
     }
+  }
+
+  function applyXThemeSettings() {
+    if (!isXSite()) return;
+    const root = document.documentElement;
+    if (!root || !root.style) return;
+    const themeEnabled = themeOverridesEnabled();
+    const sitePalette = themeEnabled ? null : detectedXSitePalette();
+    const palette = themeEnabled ? currentXThemePalette() : sitePalette;
+    const controlPalette = themeEnabled ? palette : sitePalette;
+    setXThemeVars(root, "", palette);
+    setXThemeVars(root, "control-", controlPalette);
     root.style.setProperty(
       "color-scheme",
-      themeOverridesEnabled()
+      themeEnabled
         ? palette.flavor === "latte"
           ? "light"
           : "dark"
@@ -471,6 +480,14 @@
     );
     root.setAttribute("data-igloo-x-theme-source", palette.source || "site");
     root.setAttribute("data-igloo-x-theme-flavor", palette.flavor || "site");
+    root.setAttribute(
+      "data-igloo-x-control-source",
+      controlPalette.source || "site",
+    );
+    root.setAttribute(
+      "data-igloo-x-control-flavor",
+      controlPalette.flavor || "site",
+    );
   }
 
   function normalizeApiBase(value) {
@@ -1566,31 +1583,57 @@
       --igloo-x-sky: var(--igloo-x-accent);
       --igloo-x-lavender: var(--igloo-x-accent);
       --igloo-x-border: rgb(83, 100, 113);
+      --igloo-x-control-accent: var(--igloo-x-accent);
+      --igloo-x-control-on-accent: var(--igloo-x-on-accent);
+      --igloo-x-control-base: var(--igloo-x-base);
+      --igloo-x-control-mantle: var(--igloo-x-mantle);
+      --igloo-x-control-crust: var(--igloo-x-crust);
+      --igloo-x-control-surface0: var(--igloo-x-surface0);
+      --igloo-x-control-surface1: var(--igloo-x-surface1);
+      --igloo-x-control-surface2: var(--igloo-x-surface2);
+      --igloo-x-control-overlay0: var(--igloo-x-overlay0);
+      --igloo-x-control-overlay1: var(--igloo-x-overlay1);
+      --igloo-x-control-overlay2: var(--igloo-x-overlay2);
+      --igloo-x-control-subtext0: var(--igloo-x-subtext0);
+      --igloo-x-control-subtext1: var(--igloo-x-subtext1);
+      --igloo-x-control-text: var(--igloo-x-text);
+      --igloo-x-control-red: var(--igloo-x-red);
+      --igloo-x-control-maroon: var(--igloo-x-maroon);
+      --igloo-x-control-green: var(--igloo-x-green);
+      --igloo-x-control-yellow: var(--igloo-x-yellow);
+      --igloo-x-control-pink: var(--igloo-x-pink);
+      --igloo-x-control-mauve: var(--igloo-x-mauve);
+      --igloo-x-control-peach: var(--igloo-x-peach);
+      --igloo-x-control-blue: var(--igloo-x-blue);
+      --igloo-x-control-sapphire: var(--igloo-x-sapphire);
+      --igloo-x-control-sky: var(--igloo-x-sky);
+      --igloo-x-control-lavender: var(--igloo-x-lavender);
+      --igloo-x-control-border: var(--igloo-x-border);
     }
     html[data-igloo-x-theme-source="catppuccin"] {
       background: var(--igloo-x-mantle) !important;
     }
     .x-sync-btn {
-      border: 1px solid var(--igloo-x-border); background: transparent;
-      color: var(--igloo-x-text); border-radius: 9999px; font-size: 12px;
+      border: 1px solid var(--igloo-x-control-border); background: transparent;
+      color: var(--igloo-x-control-text); border-radius: 9999px; font-size: 12px;
       line-height: 16px; font-weight: 700; padding: 4px 10px;
       margin-right: 8px; cursor: pointer; transition: all 0.15s;
     }
-    .x-sync-btn:hover { background: color-mix(in srgb, var(--igloo-x-text) 10%, transparent); }
-    .x-sync-btn[data-saved="1"] { border-color: color-mix(in srgb, var(--igloo-x-border) 55%, transparent); opacity: 0.55; color: var(--igloo-x-subtext1); }
+    .x-sync-btn:hover { background: color-mix(in srgb, var(--igloo-x-control-text) 10%, transparent); }
+    .x-sync-btn[data-saved="1"] { border-color: color-mix(in srgb, var(--igloo-x-control-border) 55%, transparent); opacity: 0.55; color: var(--igloo-x-control-subtext1); }
     .x-sync-btn[data-saved="1"]:hover { opacity: 0.85; }
     .x-sync-btn:disabled { opacity: 0.65; cursor: wait; }
     .x-source-save-btn {
       position: fixed; right: 24px; bottom: 24px; z-index: 2147483647;
-      border: 1px solid var(--igloo-x-border); background: var(--igloo-x-mantle);
-      color: var(--igloo-x-text); border-radius: 9999px; font-size: 13px;
+      border: 1px solid var(--igloo-x-control-border); background: var(--igloo-x-control-mantle);
+      color: var(--igloo-x-control-text); border-radius: 9999px; font-size: 13px;
       line-height: 16px; font-weight: 800; padding: 9px 15px;
       cursor: pointer; transition: all 0.15s;
       box-shadow: 0 4px 20px rgba(0,0,0,0.6);
       font-family: -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
     }
-    .x-source-save-btn:hover { background: color-mix(in srgb, var(--igloo-x-mantle) 92%, var(--igloo-x-text)); border-color: color-mix(in srgb, var(--igloo-x-text) 60%, transparent); }
-    .x-source-save-btn[data-saved="1"] { opacity: 0.72; color: var(--igloo-x-subtext1); }
+    .x-source-save-btn:hover { background: color-mix(in srgb, var(--igloo-x-control-mantle) 92%, var(--igloo-x-control-text)); border-color: color-mix(in srgb, var(--igloo-x-control-text) 60%, transparent); }
+    .x-source-save-btn[data-saved="1"] { opacity: 0.72; color: var(--igloo-x-control-subtext1); }
     .x-source-save-btn:disabled { opacity: 0.65; cursor: wait; }
 
     /* Hide native bookmark button */
@@ -2226,84 +2269,84 @@
     }
     .x-action-wrap button {
       display: flex; align-items: center; justify-content: center;
-      background: transparent; border: none; color: var(--igloo-x-accent);
+      background: transparent; border: none; color: var(--igloo-x-control-accent);
       cursor: pointer; border-radius: 9999px; padding: 8px;
       transition: color 0.15s, background-color 0.15s;
     }
     .x-action-wrap button svg { width: 18.75px; height: 18.75px; }
-    .x-action-wrap button:hover { background-color: color-mix(in srgb, var(--igloo-x-accent) 10%, transparent); }
+    .x-action-wrap button:hover { background-color: color-mix(in srgb, var(--igloo-x-control-accent) 10%, transparent); }
     .x-action-wrap button:disabled { opacity: 0.5; cursor: wait; }
-    .x-action-wrap button.done { color: var(--igloo-x-accent); }
-    .x-action-wrap button.error { color: var(--igloo-x-red); }
-    .x-action-wrap button.downloaded { color: var(--igloo-x-green); }
+    .x-action-wrap button.done { color: var(--igloo-x-control-accent); }
+    .x-action-wrap button.error { color: var(--igloo-x-control-red); }
+    .x-action-wrap button.downloaded { color: var(--igloo-x-control-green); }
     .x-action-wrap button.downloaded svg { display: none; }
     .x-action-wrap button.downloaded::after { content: '\u2713'; font-size: 16px; font-weight: 700; }
-    .x-action-wrap button.copied { color: var(--igloo-x-accent); }
+    .x-action-wrap button.copied { color: var(--igloo-x-control-accent); }
     #x-dl-popover {
-    position: absolute; background: var(--igloo-x-base);
-    border: 1px solid color-mix(in srgb, var(--igloo-x-accent) 25%, transparent); border-radius: 16px;
+    position: absolute; background: var(--igloo-x-control-base);
+    border: 1px solid color-mix(in srgb, var(--igloo-x-control-accent) 25%, transparent); border-radius: 16px;
     padding: 20px 22px; z-index: 999998; min-width: 300px; max-width: 340px;
     box-shadow: 0 4px 24px rgba(0,0,0,0.6);
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-    font-size: 14px; color: var(--igloo-x-text);
+    font-size: 14px; color: var(--igloo-x-control-text);
     }
-    #x-dl-popover .xdl-label-text { display:block;margin-bottom:6px;font-size:13px;color:var(--igloo-x-subtext1);font-weight:500; }
-    #x-dl-popover .xdl-preview { font-size:12px;color:var(--igloo-x-subtext0);margin-bottom:14px;min-height:18px; }
+    #x-dl-popover .xdl-label-text { display:block;margin-bottom:6px;font-size:13px;color:var(--igloo-x-control-subtext1);font-weight:500; }
+    #x-dl-popover .xdl-preview { font-size:12px;color:var(--igloo-x-control-subtext0);margin-bottom:14px;min-height:18px; }
     #x-dl-popover button.xdl-confirm {
-    width:100%;padding:10px;border-radius:9999px;background:var(--igloo-x-accent);
-    color:var(--igloo-x-on-accent);border:none;font-weight:700;cursor:pointer;font-size:14px;transition:background 0.15s;
+    width:100%;padding:10px;border-radius:9999px;background:var(--igloo-x-control-accent);
+    color:var(--igloo-x-control-on-accent);border:none;font-weight:700;cursor:pointer;font-size:14px;transition:background 0.15s;
     }
-    #x-dl-popover button.xdl-confirm:hover { background:color-mix(in srgb, var(--igloo-x-accent) 88%, #000); }
+    #x-dl-popover button.xdl-confirm:hover { background:color-mix(in srgb, var(--igloo-x-control-accent) 88%, #000); }
     .xdl-cat-pill {
-      background:transparent;border:1px solid color-mix(in srgb, var(--igloo-x-accent) 35%, transparent);
-      color:var(--igloo-x-subtext1);border-radius:9999px;padding:6px 14px;
+      background:transparent;border:1px solid color-mix(in srgb, var(--igloo-x-control-accent) 35%, transparent);
+      color:var(--igloo-x-control-subtext1);border-radius:9999px;padding:6px 14px;
       font-size:13px;font-weight:600;cursor:pointer;transition:all 0.12s;
     }
-    .xdl-cat-pill:hover,.xdl-cat-pill.selected { background:var(--igloo-x-accent);border-color:var(--igloo-x-accent);color:var(--igloo-x-on-accent); }
+    .xdl-cat-pill:hover,.xdl-cat-pill.selected { background:var(--igloo-x-control-accent);border-color:var(--igloo-x-control-accent);color:var(--igloo-x-control-on-accent); }
     .xdl-media-idx-row { display:flex;flex-wrap:wrap;gap:5px;margin:4px 0 12px; }
-    .xdl-media-idx-btn { width:28px;height:28px;border-radius:6px;border:1px solid color-mix(in srgb, var(--igloo-x-accent) 35%, transparent);background:transparent;color:var(--igloo-x-subtext1);font-size:12px;font-weight:600;cursor:pointer;padding:0;line-height:28px;text-align:center;transition:all 0.12s; }
-    .xdl-media-idx-btn:hover { background:color-mix(in srgb, var(--igloo-x-accent) 18%, transparent);border-color:var(--igloo-x-accent); }
-    .xdl-media-idx-btn.selected { background:var(--igloo-x-accent);border-color:var(--igloo-x-accent);color:var(--igloo-x-on-accent); }
+    .xdl-media-idx-btn { width:28px;height:28px;border-radius:6px;border:1px solid color-mix(in srgb, var(--igloo-x-control-accent) 35%, transparent);background:transparent;color:var(--igloo-x-control-subtext1);font-size:12px;font-weight:600;cursor:pointer;padding:0;line-height:28px;text-align:center;transition:all 0.12s; }
+    .xdl-media-idx-btn:hover { background:color-mix(in srgb, var(--igloo-x-control-accent) 18%, transparent);border-color:var(--igloo-x-control-accent); }
+    .xdl-media-idx-btn.selected { background:var(--igloo-x-control-accent);border-color:var(--igloo-x-control-accent);color:var(--igloo-x-control-on-accent); }
 
     /* === Native Follow Button Override (HIGH SPECIFICITY) === */
     /* Force transparent background and native grey border */
     body.igloo-button-overrides #react-root button[role="button"][data-testid$="-follow"] {
       background: transparent !important;
       background-color: transparent !important;
-      border: 1px solid var(--igloo-x-border) !important;
+      border: 1px solid var(--igloo-x-control-border) !important;
       transition: all 0.15s !important;
     }
 
     /* Default text color */
     body.igloo-button-overrides #react-root button[role="button"][data-testid$="-follow"] * {
-      color: var(--igloo-x-text) !important;
+      color: var(--igloo-x-control-text) !important;
     }
 
     /* Hover state (subtle grey/white highlight instead of pink) */
     body.igloo-button-overrides #react-root button[role="button"][data-testid$="-follow"]:hover {
-      background: color-mix(in srgb, var(--igloo-x-text) 10%, transparent) !important;
-      background-color: color-mix(in srgb, var(--igloo-x-text) 10%, transparent) !important;
+      background: color-mix(in srgb, var(--igloo-x-control-text) 10%, transparent) !important;
+      background-color: color-mix(in srgb, var(--igloo-x-control-text) 10%, transparent) !important;
     }
 
     /* Unfollow / Following state */
     body.igloo-button-overrides #react-root button[role="button"][data-testid$="-unfollow"] {
       background: transparent !important;
       background-color: transparent !important;
-      border: 1px solid var(--igloo-x-border) !important;
+      border: 1px solid var(--igloo-x-control-border) !important;
     }
 
     body.igloo-button-overrides #react-root button[role="button"][data-testid$="-unfollow"] * {
-      color: var(--igloo-x-subtext1) !important;
+      color: var(--igloo-x-control-subtext1) !important;
     }
 
     body.igloo-button-overrides #react-root button[role="button"][data-testid$="-unfollow"]:hover {
-      background: color-mix(in srgb, var(--igloo-x-text) 10%, transparent) !important;
-      background-color: color-mix(in srgb, var(--igloo-x-text) 10%, transparent) !important;
-      border-color: color-mix(in srgb, var(--igloo-x-text) 30%, transparent) !important;
+      background: color-mix(in srgb, var(--igloo-x-control-text) 10%, transparent) !important;
+      background-color: color-mix(in srgb, var(--igloo-x-control-text) 10%, transparent) !important;
+      border-color: color-mix(in srgb, var(--igloo-x-control-text) 30%, transparent) !important;
     }
 
     body.igloo-button-overrides #react-root button[role="button"][data-testid$="-unfollow"]:hover * {
-      color: var(--igloo-x-text) !important;
+      color: var(--igloo-x-control-text) !important;
     }
     `;
     document.head.appendChild(style);
@@ -2336,7 +2379,7 @@
 
     const hdr = document.createElement("div");
     hdr.style.cssText =
-      "font-size:15px;font-weight:700;color:var(--igloo-x-text);margin-bottom:14px;";
+      "font-size:15px;font-weight:700;color:var(--igloo-x-control-text);margin-bottom:14px;";
     hdr.textContent =
       mediaCount > 0
         ? "Download " + mediaCount + " file" + (mediaCount > 1 ? "s" : "")
@@ -2471,7 +2514,7 @@
         inp.type = "text";
         inp.value = pill.textContent;
         inp.style.cssText =
-          "background:var(--igloo-x-surface0);border:1px solid var(--igloo-x-accent);color:var(--igloo-x-text);border-radius:9999px;padding:6px 14px;font-size:13px;font-weight:600;outline:none;width:" +
+          "background:var(--igloo-x-control-surface0);border:1px solid var(--igloo-x-control-accent);color:var(--igloo-x-control-text);border-radius:9999px;padding:6px 14px;font-size:13px;font-weight:600;outline:none;width:" +
           Math.max(80, pill.offsetWidth + 10) +
           "px;";
         pill.replaceWith(inp);
@@ -2512,12 +2555,12 @@
     labelInput.setAttribute("autocomplete", "off");
     labelInput.placeholder = "label (empty = tweet ID)";
     labelInput.style.cssText =
-      "width:100%;box-sizing:border-box;background:var(--igloo-x-surface0);border:1px solid var(--igloo-x-surface1);color:var(--igloo-x-text);border-radius:8px;padding:10px 12px;font-size:14px;margin-bottom:12px;outline:none;";
+      "width:100%;box-sizing:border-box;background:var(--igloo-x-control-surface0);border:1px solid var(--igloo-x-control-surface1);color:var(--igloo-x-control-text);border-radius:8px;padding:10px 12px;font-size:14px;margin-bottom:12px;outline:none;";
     labelInput.addEventListener("focus", () => {
-      labelInput.style.borderColor = "var(--igloo-x-accent)";
+      labelInput.style.borderColor = "var(--igloo-x-control-accent)";
     });
     labelInput.addEventListener("blur", () => {
-      labelInput.style.borderColor = "var(--igloo-x-surface1)";
+      labelInput.style.borderColor = "var(--igloo-x-control-surface1)";
     });
     const dlListId = "xdl-labels-" + tweetId;
     labelInput.setAttribute("list", dlListId);
@@ -2962,7 +3005,7 @@
     const toast = document.createElement("div");
     toast.id = "x-sync-toast";
     toast.style.cssText =
-      "position:fixed;bottom:28px;left:50%;transform:translateX(-50%);background:var(--igloo-x-base);color:var(--igloo-x-text);border:1px solid color-mix(in srgb, var(--igloo-x-overlay0) 55%, transparent);border-radius:8px;padding:11px 18px;font-size:14px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;z-index:999999;display:flex;align-items:center;gap:6px;box-shadow:0 4px 20px rgba(0,0,0,0.5);opacity:1;transition:opacity 0.3s ease;white-space:nowrap;";
+      "position:fixed;bottom:28px;left:50%;transform:translateX(-50%);background:var(--igloo-x-control-base);color:var(--igloo-x-control-text);border:1px solid color-mix(in srgb, var(--igloo-x-control-overlay0) 55%, transparent);border-radius:8px;padding:11px 18px;font-size:14px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;z-index:999999;display:flex;align-items:center;gap:6px;box-shadow:0 4px 20px rgba(0,0,0,0.5);opacity:1;transition:opacity 0.3s ease;white-space:nowrap;";
 
     const text = document.createElement("span");
     text.textContent = message;
@@ -2981,7 +3024,7 @@
       const action = document.createElement("span");
       action.textContent = actionLabel;
       action.style.cssText =
-        "text-decoration:underline;cursor:pointer;color:var(--igloo-x-accent);margin-left:2px;";
+        "text-decoration:underline;cursor:pointer;color:var(--igloo-x-control-accent);margin-left:2px;";
       action.addEventListener("click", () => dismiss(true));
       toast.appendChild(action);
     }
