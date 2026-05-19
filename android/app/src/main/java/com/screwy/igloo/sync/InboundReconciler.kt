@@ -139,11 +139,14 @@ class InboundReconciler(
                     )
                 }
             }
-            if (parseFailures > 0 && parseFailures == response.bundles.size && response.bundles.isNotEmpty()) {
-                // Every bundle in the page failed — don't advance cursor (server will resend).
+            if (parseFailures > 0) {
                 logger.error(
-                    event = "stream_all_parses_failed",
-                    fields = mapOf("stream" to stream.cursorKey, "count" to response.bundles.size.toString()),
+                    event = "stream_parse_failed",
+                    fields = mapOf(
+                        "stream" to stream.cursorKey,
+                        "failed" to parseFailures.toString(),
+                        "count" to response.bundles.size.toString(),
+                    ),
                 )
                 return
             }

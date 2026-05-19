@@ -1384,6 +1384,148 @@ class AndroidSyncMirrorTest {
         )
     }
 
+    @Test fun itemImportParseFailureDoesNotCompleteOrAdvanceFailedPage() = runBlocking {
+        val dao = db.androidSyncDao()
+        val firstItem = AndroidSyncItemDto(
+            seq = 1,
+            item_kind = "channels",
+            item_id = "sample_channel_one",
+            payload = BundleEnvelope(
+                primary_kind = "channels",
+                primary = buildJsonObject {
+                    put("channel_id", "sample_channel_one")
+                    put("source_id", "sample_one")
+                    put("name", "Sample Channel One")
+                    put("platform", "youtube")
+                },
+            ),
+        )
+        val malformedItem = AndroidSyncItemDto(
+            seq = 2,
+            item_kind = "feed_items",
+            item_id = "bad_tweet",
+            payload = BundleEnvelope(
+                primary_kind = "feed_items",
+                primary = buildJsonObject {
+                    put("tweet_id", "bad_tweet")
+                    put("published_at", 2L)
+                },
+            ),
+        )
+        val correctedItem = AndroidSyncItemDto(
+            seq = 2,
+            item_kind = "feed_items",
+            item_id = "bad_tweet",
+            payload = BundleEnvelope(
+                primary_kind = "feed_items",
+                primary = buildJsonObject {
+                    put("tweet_id", "bad_tweet")
+                    put("author_handle", "alice")
+                    put("published_at", 2L)
+                },
+            ),
+        )
+        val firstEngine = MockEngine { request ->
+            when (request.url.encodedPath) {
+                "/api/android/sync/generation/latest" -> respondJson(
+                    AndroidSyncLatestResponse(
+                        generation = AndroidSyncGenerationDto(
+                            generation_id = GENERATION_ID,
+                            created_at_ms = nowMs,
+                            status = "published",
+                            source_version = "test",
+                            item_count = 2,
+                        ),
+                    ),
+                )
+                "/api/android/sync/generation/$GENERATION_ID/items" -> {
+                    if (request.url.parameters["after"] == "1") {
+                        respondJson(
+                            AndroidSyncItemsResponse(
+                                generation_id = GENERATION_ID,
+                                items = listOf(malformedItem),
+                                end_of_stream = true,
+                            ),
+                        )
+                    } else {
+                        respondJson(
+                            AndroidSyncItemsResponse(
+                                generation_id = GENERATION_ID,
+                                items = listOf(firstItem),
+                                next = "1",
+                                end_of_stream = false,
+                            ),
+                        )
+                    }
+                }
+                "/api/android/sync/generation/$GENERATION_ID/assets" -> respondJson(
+                    AndroidSyncAssetsResponse(
+                        generation_id = GENERATION_ID,
+                        assets = emptyList(),
+                        end_of_stream = true,
+                    ),
+                )
+                "/api/android/sync/health" -> respond("""{"ok":true}""", HttpStatusCode.OK, jsonHeaders())
+                else -> error("Unexpected request ${request.url}")
+            }
+        }
+
+        val firstResult = runCatching { buildMirror(firstEngine).syncOnce() }
+
+        assertTrue(firstResult.isFailure)
+        assertNotNull(db.channelDao().getById("sample_channel_one"))
+        assertNull(db.feedItemDao().getById("bad_tweet"))
+        assertEquals(1L, dao.importedItemSeq(GENERATION_ID))
+        assertEquals(0, dao.countItemsImportCompleteForImporter(GENERATION_ID, ANDROID_SYNC_ITEM_IMPORTER_VERSION))
+        waitForLog("android_sync_item_parse_failed")
+        client.close()
+
+        val requestedAfterMarkers = Collections.synchronizedList(mutableListOf<String?>())
+        val secondEngine = MockEngine { request ->
+            when (request.url.encodedPath) {
+                "/api/android/sync/generation/latest" -> respondJson(
+                    AndroidSyncLatestResponse(
+                        generation = AndroidSyncGenerationDto(
+                            generation_id = GENERATION_ID,
+                            created_at_ms = nowMs,
+                            status = "published",
+                            source_version = "test",
+                            item_count = 2,
+                        ),
+                    ),
+                )
+                "/api/android/sync/generation/$GENERATION_ID/items" -> {
+                    val after = request.url.parameters["after"]
+                    requestedAfterMarkers += after
+                    assertEquals("1", after)
+                    respondJson(
+                        AndroidSyncItemsResponse(
+                            generation_id = GENERATION_ID,
+                            items = listOf(correctedItem),
+                            end_of_stream = true,
+                        ),
+                    )
+                }
+                "/api/android/sync/generation/$GENERATION_ID/assets" -> respondJson(
+                    AndroidSyncAssetsResponse(
+                        generation_id = GENERATION_ID,
+                        assets = emptyList(),
+                        end_of_stream = true,
+                    ),
+                )
+                "/api/android/sync/health" -> respond("""{"ok":true}""", HttpStatusCode.OK, jsonHeaders())
+                else -> error("Unexpected request ${request.url}")
+            }
+        }
+
+        buildMirror(secondEngine).syncOnce()
+
+        assertEquals(listOf("1"), requestedAfterMarkers.toList())
+        assertNotNull(db.feedItemDao().getById("bad_tweet"))
+        assertEquals(2L, dao.importedItemSeq(GENERATION_ID))
+        assertEquals(1, dao.countItemsImportCompleteForImporter(GENERATION_ID, ANDROID_SYNC_ITEM_IMPORTER_VERSION))
+    }
+
     @Test fun itemImportLogsPageDecodeAndIngestCounters() = runBlocking {
         val firstItem = AndroidSyncItemDto(
             seq = 1,

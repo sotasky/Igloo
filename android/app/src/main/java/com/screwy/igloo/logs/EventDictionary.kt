@@ -47,6 +47,7 @@ object EventDictionary {
         ),
         "stream_fetch_retry"            to EventTemplate("Stream fetch retry scheduled"),
         "stream_marker_stalled"         to EventTemplate("Stream marker stalled — bailed out"),
+        "stream_parse_failed"           to EventTemplate("Stream entry failed to parse"),
         "stream_all_parses_failed"      to EventTemplate("Every stream entry failed to parse"),
         "bundle_parse_failure"          to EventTemplate("Bundle payload parse failed"),
         "bundle_unknown_kind"           to EventTemplate("Bundle had unknown kind — ignored"),

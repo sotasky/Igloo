@@ -33,6 +33,33 @@ func TestAndroidDashboardExpectationsCountInstagramMoments(t *testing.T) {
 	}
 }
 
+func TestAndroidDashboardExpectationsDoNotProtectViewedOldMoments(t *testing.T) {
+	d := openWritableTestDB(t)
+	settings := AndroidRetentionSettings{FeedDays: 3, YoutubeDays: 2, MomentsDays: 1, StoryHours: 48}
+	nowMs := int64(3 * 24 * 60 * 60 * 1000)
+
+	if err := d.ExecRaw(`
+		INSERT INTO videos (video_id, channel_id, title, file_path, file_size, published_at, sync_seq)
+		VALUES ('old_short', 'tiktok_channel', 'Old short', 'media/tiktok/channel/old_short.mp4', 10, 1, 1)
+	`); err != nil {
+		t.Fatalf("insert old short: %v", err)
+	}
+	if err := d.ExecRaw(`
+		INSERT INTO moment_views (username, video_id, viewed_at)
+		VALUES ('alice', 'old_short', ?)
+	`, nowMs); err != nil {
+		t.Fatalf("insert moment view: %v", err)
+	}
+
+	got, err := d.GetAndroidDashboardExpectations("alice", settings, nowMs)
+	if err != nil {
+		t.Fatalf("expectations: %v", err)
+	}
+	if got.Moments != 0 {
+		t.Fatalf("Moments = %d, want 0", got.Moments)
+	}
+}
+
 func TestLatestAndroidSyncHealthReportUsesPersistedNewestReport(t *testing.T) {
 	d := openWritableTestDB(t)
 	if err := d.ExecRaw(`

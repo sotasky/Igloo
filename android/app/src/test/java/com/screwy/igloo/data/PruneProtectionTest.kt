@@ -21,7 +21,7 @@ import org.robolectric.annotation.Config
  *
  * 1. YouTube `videos` rows never prune (retention clause excludes them by channel_id).
  * 2. Shorts `videos` rows prune when past retention AND no side-table saves them.
- * 3. Shorts `videos` rows survive if protected by bookmarks OR moment_views.
+ * 3. Shorts `videos` rows survive if protected by bookmarks.
  * 4. Twitter `feed_items` rows respect feed_likes + bookmarks protection.
  */
 @RunWith(RobolectricTestRunner::class)
@@ -62,12 +62,12 @@ class PruneProtectionTest {
         assertNotNull(db.videoDao().getById("v_tt"))
     }
 
-    @Test fun videos_shortsSurvive_whenMomentViewed() = runBlocking {
+    @Test fun videos_shortsPrune_whenOnlyMomentViewed() = runBlocking {
         db.videoDao().upsert(VideoEntity("v_tt", "tiktok_alice", publishedAt = 10))
         db.momentViewDao().upsert(MomentViewEntity("v_tt", viewedAt = 50))
         val deleted = db.videoDao().pruneShorts(cutoffMs = 100)
-        assertEquals(0, deleted)
-        assertNotNull(db.videoDao().getById("v_tt"))
+        assertEquals(1, deleted)
+        assertNull(db.videoDao().getById("v_tt"))
     }
 
     // ─── Feed items: side-table protection ────────────────────────────────────

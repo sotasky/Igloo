@@ -236,11 +236,10 @@ func (db *DB) countAndroidVideos(username string, cutoffMs int64, kind string) (
 		    OR COALESCE(v.published_at, 0) >= ?
 		    OR EXISTS (SELECT 1 FROM bookmarks b WHERE (b.user_id = '' OR b.user_id = ?) AND b.video_id = v.video_id)
 		    OR EXISTS (SELECT 1 FROM feed_likes fl WHERE fl.username = ? AND fl.tweet_id = v.video_id)
-		    OR EXISTS (SELECT 1 FROM moment_views mv WHERE mv.username = ? AND mv.video_id = v.video_id)
 		  )
 	`
 	var n int
-	if err := db.conn.QueryRow(query, cutoffMs, cutoffMs, username, username, username).Scan(&n); err != nil {
+	if err := db.conn.QueryRow(query, cutoffMs, cutoffMs, username, username).Scan(&n); err != nil {
 		return 0, fmt.Errorf("count android %s videos: %w", kind, err)
 	}
 	return n, nil
@@ -251,16 +250,15 @@ func (db *DB) countAndroidAvatars(username string, feedCutoffMs, youtubeCutoffMs
 	query := cte + `
 		, retained_videos(channel_id) AS (
 			SELECT DISTINCT v.channel_id
-			FROM videos v
-			WHERE COALESCE(v.channel_id, '') != ''
-			  AND (
-			    (v.channel_id LIKE 'youtube_%' AND (? = 0 OR COALESCE(v.published_at, 0) >= ?))
-			    OR ((v.channel_id LIKE 'tiktok_%' OR v.channel_id LIKE 'instagram_%') AND (? = 0 OR COALESCE(v.published_at, 0) >= ?))
-			    OR EXISTS (SELECT 1 FROM bookmarks b WHERE (b.user_id = '' OR b.user_id = ?) AND b.video_id = v.video_id)
-			    OR EXISTS (SELECT 1 FROM feed_likes fl WHERE fl.username = ? AND fl.tweet_id = v.video_id)
-			    OR EXISTS (SELECT 1 FROM moment_views mv WHERE mv.username = ? AND mv.video_id = v.video_id)
-			  )
-		),
+				FROM videos v
+				WHERE COALESCE(v.channel_id, '') != ''
+				  AND (
+				    (v.channel_id LIKE 'youtube_%' AND (? = 0 OR COALESCE(v.published_at, 0) >= ?))
+				    OR ((v.channel_id LIKE 'tiktok_%' OR v.channel_id LIKE 'instagram_%') AND (? = 0 OR COALESCE(v.published_at, 0) >= ?))
+				    OR EXISTS (SELECT 1 FROM bookmarks b WHERE (b.user_id = '' OR b.user_id = ?) AND b.video_id = v.video_id)
+				    OR EXISTS (SELECT 1 FROM feed_likes fl WHERE fl.username = ? AND fl.tweet_id = v.video_id)
+				  )
+			),
 		avatar_channels(channel_id) AS (
 			SELECT cf.channel_id
 			FROM channel_follows cf
@@ -300,7 +298,7 @@ func (db *DB) countAndroidAvatars(username string, feedCutoffMs, youtubeCutoffMs
 	args = append(args,
 		youtubeCutoffMs, youtubeCutoffMs,
 		momentsCutoffMs, momentsCutoffMs,
-		username, username, username,
+		username, username,
 	)
 	rows, err := db.conn.Query(query, args...)
 	if err != nil {

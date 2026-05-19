@@ -158,7 +158,7 @@ interface VideoDao {
     suspend fun getPreviousVideoId(videoId: String): String?
 
     /**
-     * Prune shorts rows (TikTok / Instagram) past retention, respecting side-table
+     * Prune shorts rows (TikTok / Instagram) past retention, respecting saved-item
      * protection. YouTube rows are excluded so the Videos tab can render faded
      * placeholders.
      */
@@ -168,7 +168,6 @@ interface VideoDao {
         WHERE channel_id NOT LIKE 'youtube_%'
           AND published_at < :cutoffMs
           AND NOT EXISTS (SELECT 1 FROM bookmarks    WHERE video_id = videos.video_id)
-          AND NOT EXISTS (SELECT 1 FROM moment_views WHERE video_id = videos.video_id)
         """
     )
     suspend fun pruneShorts(cutoffMs: Long): Int

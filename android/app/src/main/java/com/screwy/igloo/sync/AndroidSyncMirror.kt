@@ -353,6 +353,11 @@ class AndroidSyncMirror(
                         ),
                     )
                 }
+                if (ingestParseFailures > 0) {
+                    throw IllegalStateException(
+                        "Android sync item import failed for generation $generationId; preserving item marker",
+                    )
+                }
                 dao.markItemsImportPageComplete(
                     generationId = generationId,
                     importedSeq = page.items.maxOf { it.seq },
