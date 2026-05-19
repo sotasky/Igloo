@@ -119,6 +119,54 @@ func TestResolveReplyChainExternalParent(t *testing.T) {
 	}
 }
 
+func TestResolveReplyChainKnownParentIDFetchesMissingParent(t *testing.T) {
+	d := newTestWorkerDB(t)
+	now := time.Now().UTC()
+	_, _ = d.UpsertFeedItems([]model.FeedItem{
+		{
+			TweetID:       "sample_known_leaf",
+			AuthorHandle:  "sample_author_alpha",
+			BodyText:      "external reply",
+			IsReply:       true,
+			ReplyToHandle: "sample_author_beta",
+			ReplyToStatus: "sample_known_parent",
+			PublishedAt:   &now,
+			FetchedAt:     now,
+			ContentHash:   "x3",
+		},
+	})
+
+	fixtures := map[string]string{
+		"/sample_author_beta/status/sample_known_parent": tweetFixture("sample_known_parent", "sample_author_beta", "parent body", "", ""),
+	}
+	srv := httptest.NewServer(fxtMockHandler(t, fixtures))
+	defer srv.Close()
+	fx := &fxtwitter.Client{BaseURL: srv.URL, HTTP: srv.Client(), Timeout: 2 * time.Second}
+
+	r := NewReplyResolver(d, fx)
+	leaf := model.FeedItem{
+		TweetID:       "sample_known_leaf",
+		AuthorHandle:  "sample_author_alpha",
+		IsReply:       true,
+		ReplyToHandle: "sample_author_beta",
+		ReplyToStatus: "sample_known_parent",
+	}
+	if err := r.ResolveCycle(context.Background(), []model.FeedItem{leaf}); err != nil {
+		t.Fatal(err)
+	}
+
+	parent, _ := d.GetFeedItemByTweetID("sample_known_parent")
+	if parent == nil {
+		t.Fatal("parent not stored")
+	}
+	if !parent.IsGhost {
+		t.Error("parent should be is_ghost=1")
+	}
+	if parent.BodyText != "parent body" {
+		t.Errorf("parent BodyText: got %q", parent.BodyText)
+	}
+}
+
 func TestResolveReplyChainQueuesMediaForGhostParent(t *testing.T) {
 	d := newTestWorkerDB(t)
 	now := time.Now().UTC()

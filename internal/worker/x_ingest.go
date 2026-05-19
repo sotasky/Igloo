@@ -154,6 +154,11 @@ func (m *Manager) runIngestCycle(ctx context.Context) {
 	log.Printf("[x_ingest] ingest cycle start (delay %s, cycle ~%s): %d ready, %d not_due, %d cooling, %d total",
 		fetchDelay, cycleInterval.Round(time.Minute), len(fetchList), notDue, cooling, len(twitterChannels))
 
+	// Repair stale orphan reply chains before the paced fetch loop. A full
+	// cycle can take a long time, and these rows already have enough local
+	// metadata for the resolver to fetch the missing parents directly.
+	m.resolveReplyChainsSweep(ctx)
+
 	if len(fetchList) == 0 && len(feedSources) == 0 {
 		return
 	}
@@ -308,9 +313,6 @@ func (m *Manager) runIngestCycle(ctx context.Context) {
 	// Reply chain resolution runs per-batch inside the fetch loop above so
 	// threads are joinable before items become visible to readers, instead
 	// of deferring to end-of-cycle (which can be ~3 hours).
-
-	// Periodic sweep that retries any reply rows still missing reply_to_status.
-	m.resolveReplyChainsSweep(ctx)
 
 	// Kick scoring so new items get algo_interest + show up in the snapshot
 	// without waiting for the next 5-minute worker tick.

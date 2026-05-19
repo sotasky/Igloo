@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -66,7 +67,7 @@ func (r *ReplyResolver) ResolveCycle(ctx context.Context, items []model.FeedItem
 	}
 
 	for _, item := range items {
-		if !item.IsReply || item.ReplyToStatus != "" {
+		if !item.IsReply {
 			continue
 		}
 		select {
@@ -84,28 +85,37 @@ func (r *ReplyResolver) ResolveCycle(ctx context.Context, items []model.FeedItem
 
 // resolveOne resolves a single leaf reply and walks up the chain.
 func (r *ReplyResolver) resolveOne(ctx context.Context, leaf model.FeedItem, cache *resolveCache) error {
-	leafTweet, err := r.fx.FetchTweet(ctx, leaf.AuthorHandle, leaf.TweetID)
-	if err != nil {
-		return err
-	}
-	if leafTweet.ReplyToStatus == "" {
-		// fxtwitter doesn't think this is a reply — leave reply_to_status empty.
-		return nil
+	currentID := strings.TrimSpace(leaf.ReplyToStatus)
+	currentHandle := firstNonEmptyHandle(leaf.ReplyToHandle, leaf.AuthorHandle)
+	if currentID == "" {
+		leafTweet, err := r.fx.FetchTweet(ctx, leaf.AuthorHandle, leaf.TweetID)
+		if err != nil {
+			return err
+		}
+		if leafTweet.ReplyToStatus == "" {
+			// fxtwitter doesn't think this is a reply — leave reply_to_status empty.
+			return nil
+		}
+
+		if err := r.d.UpdateReplyToStatus(leaf.TweetID, leafTweet.ReplyToStatus); err != nil {
+			return err
+		}
+		currentID = leafTweet.ReplyToStatus
+		currentHandle = firstNonEmptyHandle(leafTweet.ReplyToHandle, leafTweet.AuthorHandle)
 	}
 
-	if err := r.d.UpdateReplyToStatus(leaf.TweetID, leafTweet.ReplyToStatus); err != nil {
-		return err
-	}
-
-	currentID := leafTweet.ReplyToStatus
-	currentHandle := leafTweet.ReplyToHandle
 	for depth := 0; depth < replyChainDepthCap && currentID != ""; depth++ {
 		existing, err := r.d.GetFeedItemByTweetID(currentID)
 		if err != nil {
 			return err
 		}
 		if existing != nil {
-			return nil
+			if existing.ReplyToStatus == "" {
+				return nil
+			}
+			currentID = existing.ReplyToStatus
+			currentHandle = firstNonEmptyHandle(existing.ReplyToHandle, existing.AuthorHandle)
+			continue
 		}
 
 		// In-cycle dedupe: if another worker already claimed this parent, stop.
@@ -130,9 +140,18 @@ func (r *ReplyResolver) resolveOne(ctx context.Context, leaf model.FeedItem, cac
 		}
 
 		currentID = parent.ReplyToStatus
-		currentHandle = parent.ReplyToHandle
+		currentHandle = firstNonEmptyHandle(parent.ReplyToHandle, parent.AuthorHandle)
 	}
 	return nil
+}
+
+func firstNonEmptyHandle(handles ...string) string {
+	for _, handle := range handles {
+		if trimmed := strings.TrimSpace(handle); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }
 
 func (r *ReplyResolver) enqueueGhostMediaJob(item model.FeedItem) error {

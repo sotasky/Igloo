@@ -3,11 +3,13 @@ package worker
 import (
 	"context"
 	"errors"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/screwys/igloo/internal/db"
+	"github.com/screwys/igloo/internal/fxtwitter"
 	"github.com/screwys/igloo/internal/model"
 	"github.com/screwys/igloo/internal/xfeed"
 )
@@ -275,6 +277,117 @@ func TestFetchOneChannelRecordsFailureBackoff(t *testing.T) {
 	if state.NextRetryAt <= float64(time.Now().Unix()) {
 		t.Fatalf("next_retry_at = %f, want future", state.NextRetryAt)
 	}
+}
+
+func TestRunIngestCycleSweepsRepliesWhenNoChannelsDue(t *testing.T) {
+	d := newTestWorkerDB(t)
+	if err := d.AddChannel(model.Channel{
+		ChannelID:    "twitter_sample_source",
+		SourceID:     "sample_source",
+		Name:         "sample_source",
+		Platform:     "twitter",
+		IsSubscribed: true,
+	}); err != nil {
+		t.Fatalf("AddChannel: %v", err)
+	}
+	now := time.Now().UTC()
+	if err := d.RecordIngestSuccess("twitter_sample_source", float64(now.Unix()), 0); err != nil {
+		t.Fatalf("RecordIngestSuccess: %v", err)
+	}
+	if _, err := d.UpsertFeedItems([]model.FeedItem{{
+		TweetID:       "sample_known_leaf",
+		AuthorHandle:  "sample_author_alpha",
+		IsReply:       true,
+		ReplyToHandle: "sample_author_beta",
+		ReplyToStatus: "sample_missing_parent",
+		PublishedAt:   &now,
+		FetchedAt:     now,
+		ContentHash:   "sample-known-leaf",
+	}}); err != nil {
+		t.Fatalf("UpsertFeedItems: %v", err)
+	}
+
+	fixtures := map[string]string{
+		"/sample_author_beta/status/sample_missing_parent": tweetFixture("sample_missing_parent", "sample_author_beta", "parent body", "", ""),
+	}
+	srv := httptest.NewServer(fxtMockHandler(t, fixtures))
+	defer srv.Close()
+
+	m := NewManager(d, testCfg(t.TempDir()))
+	m.replyResolver = NewReplyResolver(d, &fxtwitter.Client{BaseURL: srv.URL, HTTP: srv.Client(), Timeout: 2 * time.Second})
+	m.xFeedFetcher = fakeXFeedFetcher{
+		timeline: func(context.Context, string, int) ([]model.FeedItem, error) {
+			t.Fatal("timeline fetch should not be called when channel is not due")
+			return nil, nil
+		},
+		source: func(context.Context, string, int) ([]model.FeedItem, error) {
+			t.Fatal("source fetch should not be called")
+			return nil, nil
+		},
+	}
+
+	m.runIngestCycle(context.Background())
+
+	parent, err := d.GetFeedItemByTweetID("sample_missing_parent")
+	if err != nil {
+		t.Fatalf("GetFeedItemByTweetID: %v", err)
+	}
+	if parent == nil || !parent.IsGhost || parent.BodyText != "parent body" {
+		t.Fatalf("parent ghost = %+v", parent)
+	}
+}
+
+func TestRunIngestCycleSweepsRepliesBeforeFetchingReadyChannels(t *testing.T) {
+	d := newTestWorkerDB(t)
+	if err := d.AddChannel(model.Channel{
+		ChannelID:    "twitter_sample_source",
+		SourceID:     "sample_source",
+		Name:         "sample_source",
+		Platform:     "twitter",
+		IsSubscribed: true,
+	}); err != nil {
+		t.Fatalf("AddChannel: %v", err)
+	}
+	now := time.Now().UTC()
+	if _, err := d.UpsertFeedItems([]model.FeedItem{{
+		TweetID:       "sample_ready_leaf",
+		AuthorHandle:  "sample_author_alpha",
+		IsReply:       true,
+		ReplyToHandle: "sample_author_beta",
+		ReplyToStatus: "sample_ready_parent",
+		PublishedAt:   &now,
+		FetchedAt:     now,
+		ContentHash:   "sample-ready-leaf",
+	}}); err != nil {
+		t.Fatalf("UpsertFeedItems: %v", err)
+	}
+
+	fixtures := map[string]string{
+		"/sample_author_beta/status/sample_ready_parent": tweetFixture("sample_ready_parent", "sample_author_beta", "parent body", "", ""),
+	}
+	srv := httptest.NewServer(fxtMockHandler(t, fixtures))
+	defer srv.Close()
+
+	m := NewManager(d, testCfg(t.TempDir()))
+	m.replyResolver = NewReplyResolver(d, &fxtwitter.Client{BaseURL: srv.URL, HTTP: srv.Client(), Timeout: 2 * time.Second})
+	m.xFeedFetcher = fakeXFeedFetcher{
+		timeline: func(context.Context, string, int) ([]model.FeedItem, error) {
+			parent, err := d.GetFeedItemByTweetID("sample_ready_parent")
+			if err != nil {
+				t.Fatalf("GetFeedItemByTweetID: %v", err)
+			}
+			if parent == nil {
+				t.Fatal("reply sweep did not run before ready channel fetch")
+			}
+			return nil, nil
+		},
+		source: func(context.Context, string, int) ([]model.FeedItem, error) {
+			t.Fatal("source fetch should not be called")
+			return nil, nil
+		},
+	}
+
+	m.runIngestCycle(context.Background())
 }
 
 func TestXStatusEnrichmentUpsertsMissingQuoteParent(t *testing.T) {

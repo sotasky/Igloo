@@ -282,18 +282,30 @@ func (db *DB) GetThreadTree(tweetID string) ([]model.FeedItem, error) {
 	return out, nil
 }
 
-// FindUnresolvedReplies returns leaf reply rows that still have empty
-// reply_to_status — typically those whose per-cycle resolve failed (transient
-// fxtwitter errors, deadline exceeded). Limit caps the sweep size so a
-// long-running outage doesn't produce a huge batch.
+// FindUnresolvedReplies returns leaf reply rows that either still have empty
+// reply_to_status or point at a parent row missing from feed_items. Limit caps
+// the sweep size so a long-running outage doesn't produce a huge batch.
 func (db *DB) FindUnresolvedReplies(limit int) ([]model.FeedItem, error) {
 	const q = `
-		SELECT tweet_id, COALESCE(author_handle, ''), COALESCE(reply_to_handle, '')
-		FROM feed_items
-		WHERE COALESCE(is_reply, 0) = 1
-		  AND COALESCE(reply_to_status, '') = ''
-		  AND COALESCE(is_ghost, 0) = 0
-		ORDER BY published_at DESC
+		SELECT f.tweet_id, COALESCE(f.author_handle, ''), COALESCE(f.reply_to_handle, ''),
+		       COALESCE(f.reply_to_status, '')
+		FROM feed_items f
+		LEFT JOIN feed_items parent
+		  ON parent.tweet_id = f.reply_to_status
+		 AND COALESCE(f.reply_to_status, '') != ''
+		LEFT JOIN feed_rank_snapshot fr
+		  ON fr.tweet_id = f.tweet_id
+		WHERE COALESCE(f.is_reply, 0) = 1
+		  AND COALESCE(f.is_ghost, 0) = 0
+		  AND (
+		    COALESCE(f.reply_to_status, '') = ''
+		    OR parent.tweet_id IS NULL
+		  )
+		GROUP BY f.tweet_id
+		ORDER BY
+		  CASE WHEN MIN(fr.rank_position) IS NULL THEN 1 ELSE 0 END,
+		  MIN(fr.rank_position),
+		  f.published_at DESC
 		LIMIT ?`
 
 	rows, err := db.conn.Query(q, limit)
@@ -307,7 +319,7 @@ func (db *DB) FindUnresolvedReplies(limit int) ([]model.FeedItem, error) {
 	var out []model.FeedItem
 	for rows.Next() {
 		var f model.FeedItem
-		if err := rows.Scan(&f.TweetID, &f.AuthorHandle, &f.ReplyToHandle); err != nil {
+		if err := rows.Scan(&f.TweetID, &f.AuthorHandle, &f.ReplyToHandle, &f.ReplyToStatus); err != nil {
 			return nil, err
 		}
 		f.IsReply = true
