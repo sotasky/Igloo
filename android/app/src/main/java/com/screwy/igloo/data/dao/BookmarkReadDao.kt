@@ -135,6 +135,30 @@ interface BookmarkReadDao {
             v.dearrow_checked_at_ms        AS vd_dearrow_checked_at_ms,
             v.sync_seq                     AS vd_sync_seq,
 
+            COALESCE((
+                SELECT COUNT(DISTINCT asa.media_index)
+                FROM android_sync_assets asa
+                WHERE asa.owner_id = b.video_id
+                  AND asa.asset_kind = 'post_media'
+                  AND asa.server_state = 'ready'
+            ), 0) AS asset_media_count,
+            COALESCE((
+                SELECT COUNT(DISTINCT asa.media_index)
+                FROM android_sync_assets asa
+                WHERE asa.owner_id = b.video_id
+                  AND asa.asset_kind = 'post_media'
+                  AND asa.server_state = 'ready'
+                  AND LOWER(COALESCE(asa.content_type, '')) LIKE 'video/%'
+            ), 0) AS asset_video_count,
+            COALESCE((
+                SELECT COUNT(DISTINCT asa.media_index)
+                FROM android_sync_assets asa
+                WHERE asa.owner_id = b.video_id
+                  AND asa.asset_kind = 'post_media'
+                  AND asa.server_state = 'ready'
+                  AND LOWER(COALESCE(asa.content_type, '')) LIKE 'image/%'
+            ), 0) AS asset_image_count,
+
             COALESCE(fi.channel_id, v.channel_id) AS resolved_channel_id,
             COALESCE(fc.name, vc.name)            AS resolved_channel_name,
             COALESCE(fc.source_id, vc.source_id)  AS resolved_channel_source_id,

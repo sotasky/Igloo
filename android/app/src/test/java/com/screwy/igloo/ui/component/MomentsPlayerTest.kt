@@ -407,6 +407,58 @@ class MomentsPlayerTest {
     }
 
     @Test
+    fun resolve_moment_slide_media_uses_ready_sync_rows_as_remote_slides() {
+        val slides = resolveMomentSlideMedia(
+            rows = emptyList(),
+            baseUrl = "https://igloo.example",
+            videoId = "demo",
+            fallbackSlideCount = 1,
+            syncRows = listOf(
+                syncAsset(
+                    assetId = "tweet_demo_post_media_2",
+                    assetKind = "post_media",
+                    mediaIndex = 2,
+                    serverUrl = "/api/media/slide/demo/2",
+                    localPath = null,
+                    contentType = "video/mp4",
+                    state = "desired",
+                ),
+                syncAsset(
+                    assetId = "tweet_demo_post_media",
+                    assetKind = "post_media",
+                    mediaIndex = 0,
+                    serverUrl = "/api/media/slide/demo/0",
+                    localPath = null,
+                    contentType = "image/jpeg",
+                    state = "desired",
+                ),
+                syncAsset(
+                    assetId = "tweet_demo_post_media_1",
+                    assetKind = "post_media",
+                    mediaIndex = 1,
+                    serverUrl = "/api/media/slide/demo/1",
+                    localPath = null,
+                    contentType = "video/mp4",
+                    state = "desired",
+                ),
+            ),
+        )
+
+        assertEquals(
+            listOf(
+                MediaUri.Remote("https://igloo.example/api/media/slide/demo/0"),
+                MediaUri.Remote("https://igloo.example/api/media/slide/demo/1"),
+                MediaUri.Remote("https://igloo.example/api/media/slide/demo/2"),
+            ),
+            slides.map { it.uri },
+        )
+        assertEquals(
+            listOf(MomentSlideKind.Image, MomentSlideKind.Video, MomentSlideKind.Video),
+            slides.map { it.kind },
+        )
+    }
+
+    @Test
     fun resolve_moment_audio_uri_prefers_inventory_audio_rows_when_present() {
         val uri = resolveMomentAudioUri(
             rows = listOf(audioRow()),
@@ -893,6 +945,7 @@ class MomentsPlayerTest {
         mediaIndex: Int = 0,
         localPath: String? = null,
         contentType: String = if (assetKind == "post_audio") "audio/mpeg" else "image/jpeg",
+        state: String = "verified",
     ): AndroidSyncAssetEntity = AndroidSyncAssetEntity(
         generationId = "android-sync-test",
         seq = 1L,
@@ -909,7 +962,7 @@ class MomentsPlayerTest {
         serverState = "ready",
         requiredReason = "retention",
         effectiveRecencyMs = 1_000L,
-        state = "verified",
+        state = state,
         localPath = localPath,
         fileSize = localPath?.let { File(it).length() },
         verifiedAtMs = localPath?.let { 1_000L },

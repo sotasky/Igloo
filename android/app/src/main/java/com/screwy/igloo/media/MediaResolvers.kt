@@ -130,10 +130,8 @@ class MediaResolversImpl(
                 dearrowRemoteThumb(ownerId, ownerKind, allowRemoteFallback)
             }
         }
-        val resolved = resolvePreferredAsset(
+        val resolved = resolvePostThumbnailAsset(
             ownerId = ownerId,
-            primaryKind = "post_thumbnail",
-            fallbackKind = "post_media",
             allowRemoteFallback = allowRemoteFallback,
             route = "thumbnail_for_post",
             ownerKind = ownerKind.telemetryName(),
@@ -163,7 +161,7 @@ class MediaResolversImpl(
 
     override fun thumbnailForPostFlow(ownerId: String, ownerKind: OwnerKind): Flow<MediaUri> =
         combine(
-            preferredAssetFlow(ownerId, "post_thumbnail", "post_media", "thumbnail_for_post", ownerKind.telemetryName()),
+            postThumbnailAssetFlow(ownerId, "thumbnail_for_post", ownerKind.telemetryName()),
             assetFlow(ownerId, "dearrow_thumbnail", "thumbnail_for_post", ownerKind.telemetryName()),
             videoDao.getByIdFlow(ownerId),
             prefs.dearrowMode(),
@@ -279,18 +277,6 @@ class MediaResolversImpl(
             dao.resolveForOwner(ownerId, kind).toMediaUri(allowRemoteFallback, route, ownerKind, kind)
         }
 
-    private suspend fun resolvePreferredAsset(
-        ownerId: String,
-        primaryKind: String,
-        fallbackKind: String,
-        allowRemoteFallback: Boolean,
-        route: String,
-        ownerKind: String,
-    ): MediaUri =
-        resolveSyncPreferredAsset(ownerId, primaryKind, fallbackKind).orIfMissing {
-            resolveInventoryPreferredAsset(ownerId, primaryKind, fallbackKind, allowRemoteFallback, route, ownerKind)
-        }
-
     private suspend fun resolveVideoAsset(videoId: String, allowRemoteFallback: Boolean): MediaUri =
         syncDao.latestVerifiedVideoLocalPath(videoId).toExistingLocalUriOrMissing().orIfMissing {
             resolveInventoryPreferredAsset(
@@ -317,15 +303,17 @@ class MediaResolversImpl(
     private suspend fun resolveSyncAsset(ownerId: String, kind: String): MediaUri =
         syncDao.latestVerifiedLocalPath(ownerId, kind).toExistingLocalUriOrMissing()
 
-    private suspend fun resolveSyncPreferredAsset(
+    private suspend fun resolvePostThumbnailAsset(
         ownerId: String,
-        primaryKind: String,
-        fallbackKind: String,
-    ): MediaUri {
-        return resolveSyncAsset(ownerId, primaryKind).orIfMissing {
-            resolveSyncAsset(ownerId, fallbackKind)
+        allowRemoteFallback: Boolean,
+        route: String,
+        ownerKind: String,
+    ): MediaUri =
+        resolveSyncAsset(ownerId, "post_thumbnail").orIfMissing {
+            syncDao.latestVerifiedPostMediaImageLocalPath(ownerId).toExistingLocalUriOrMissing()
+        }.orIfMissing {
+            resolveInventoryPreferredAsset(ownerId, "post_thumbnail", "post_media", allowRemoteFallback, route, ownerKind)
         }
-    }
 
     private fun assetFlow(ownerId: String, kind: String, route: String, ownerKind: String): Flow<MediaUri> =
         combine(
@@ -338,18 +326,17 @@ class MediaResolversImpl(
             }
         }.distinctUntilChanged()
 
-    private fun preferredAssetFlow(
-        ownerId: String,
-        primaryKind: String,
-        fallbackKind: String,
-        route: String,
-        ownerKind: String,
-    ): Flow<MediaUri> =
+    private fun postThumbnailAssetFlow(ownerId: String, route: String, ownerKind: String): Flow<MediaUri> =
         combine(
-            syncPreferredAssetFlow(ownerId, primaryKind, fallbackKind),
-            inventoryPreferredAssetFlow(ownerId, primaryKind, fallbackKind, route, ownerKind),
-        ) { syncResolved, inventoryResolved ->
-            syncResolved.orIfMissing { inventoryResolved }
+            assetFlow(ownerId, "post_thumbnail", route, ownerKind),
+            syncDao.latestVerifiedPostMediaImageLocalPathFlow(ownerId),
+            inventoryPreferredAssetFlow(ownerId, "post_thumbnail", "post_media", route, ownerKind),
+        ) { thumbnail, syncPostMediaImagePath, inventoryResolved ->
+            thumbnail.orIfMissing {
+                syncPostMediaImagePath.toExistingLocalUriOrMissing()
+            }.orIfMissing {
+                inventoryResolved
+            }
         }.distinctUntilChanged()
 
     private fun videoAssetFlow(videoId: String): Flow<MediaUri> =
@@ -373,20 +360,6 @@ class MediaResolversImpl(
             remoteFallbackAllowed,
         ) { primary, fallback, allowRemoteFallback ->
             (primary ?: fallback).toMediaUri(allowRemoteFallback, route, ownerKind, primaryKind)
-        }.distinctUntilChanged()
-
-    private fun syncPreferredAssetFlow(
-        ownerId: String,
-        primaryKind: String,
-        fallbackKind: String,
-    ): Flow<MediaUri> =
-        combine(
-            syncDao.latestVerifiedLocalPathFlow(ownerId, primaryKind),
-            syncDao.latestVerifiedLocalPathFlow(ownerId, fallbackKind),
-        ) { primary, fallback ->
-            primary.toExistingLocalUriOrMissing().orIfMissing {
-                fallback.toExistingLocalUriOrMissing()
-            }
         }.distinctUntilChanged()
 
     // ─── DeArrow helpers ──────────────────────────────────────────────────────

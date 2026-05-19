@@ -213,6 +213,34 @@ class MediaResolversTest {
         assertEquals(file, (result as MediaUri.Local).file)
     }
 
+    @Test fun thumbnailForPost_syncPostMediaFallbackUsesImageSlideNotVideo() = runBlocking {
+        val image = tmpFolder.newFile("sync-mixed-first.jpg")
+        val video = tmpFolder.newFile("sync-mixed-second.mp4")
+        insertVerifiedSyncAsset(
+            generationId = "android-sync-image",
+            assetId = "sample_media_image",
+            assetKind = "post_media",
+            ownerId = "sample_media",
+            localPath = image.absolutePath,
+            contentType = "image/jpeg",
+            mediaIndex = 0,
+        )
+        insertVerifiedSyncAsset(
+            generationId = "android-sync-video",
+            assetId = "sample_media_video",
+            assetKind = "post_media",
+            ownerId = "sample_media",
+            localPath = video.absolutePath,
+            contentType = "video/mp4",
+            mediaIndex = 1,
+        )
+
+        val result = buildResolvers().thumbnailForPost("sample_media", OwnerKind.Tweet)
+
+        assertTrue("expected image Local from Sync ledger", result is MediaUri.Local)
+        assertEquals(image, (result as MediaUri.Local).file)
+    }
+
     @Test fun thumbnailForPostFlow_verifiedSyncThumbnailWinsOverLegacyRemote() = runBlocking {
         db.mediaInventoryDao().upsert(inventoryRow(
             assetId = "legacy-thumb",
@@ -700,6 +728,7 @@ class MediaResolversTest {
         ownerId: String,
         localPath: String,
         contentType: String = "image/jpeg",
+        mediaIndex: Int = 0,
     ) {
         db.androidSyncDao().importAssets(
             listOf(
@@ -708,6 +737,7 @@ class MediaResolversTest {
                     seq = 1L,
                     assetId = assetId,
                     assetKind = assetKind,
+                    mediaIndex = mediaIndex,
                     ownerId = ownerId,
                     ownerKind = "tweet",
                     bucket = "twitter_media",

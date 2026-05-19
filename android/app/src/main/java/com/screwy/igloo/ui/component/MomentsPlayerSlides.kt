@@ -378,7 +378,7 @@ private fun momentSlideMediaFlow(
     fallbackSlideCount: Int,
 ) = combine(
     mediaInventoryDao.forOwnerFlow(videoId),
-    syncDao.latestVerifiedAssetsForOwnerFlow(videoId, listOf("post_media")),
+    syncDao.latestReadyAssetsForOwnerFlow(videoId, listOf("post_media")),
 ) { rows, syncRows ->
     resolveMomentSlideMedia(
         rows = rows,
@@ -549,14 +549,20 @@ internal fun momentInventoryRowToMediaUri(
 
 private fun momentSyncAssetToMediaUri(
     row: AndroidSyncAssetEntity,
-    @Suppress("UNUSED_PARAMETER") baseUrl: String,
+    baseUrl: String,
 ): MediaUri {
     if (row.state == "verified" && !row.localPath.isNullOrBlank()) {
         val file = File(row.localPath)
         if (file.exists()) return MediaUri.Local(file)
     }
 
-    return MediaUri.Missing
+    val trimmedServerUrl = row.serverUrl.trim()
+    if (trimmedServerUrl.startsWith("https://") || trimmedServerUrl.startsWith("http://")) {
+        return MediaUri.Remote(trimmedServerUrl)
+    }
+    val root = baseUrl.trim().trimEnd('/')
+    if (root.isBlank() || trimmedServerUrl.isBlank()) return MediaUri.Missing
+    return MediaUri.Remote(root + trimmedServerUrl)
 }
 
 internal fun prepareMomentAudio(

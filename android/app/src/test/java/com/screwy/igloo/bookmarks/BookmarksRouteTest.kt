@@ -181,10 +181,10 @@ class BookmarksRouteTest {
     }
 
     @Test
-    fun mixed_tweet_bookmark_uses_feed_media_shape_when_video_stub_is_empty() {
+    fun mixed_tweet_bookmark_uses_sync_asset_shape_when_feed_json_only_has_first_photo() {
         val item = tweetBookmark(
             tweetId = "sample_tweet_mixed",
-            mediaJson = """[{"type":"photo"},{"type":"video"},{"type":"video"}]""",
+            mediaJson = """[{"type":"photo"}]""",
         ).copy(
             video = VideoEntity(
                 videoId = "sample_tweet_mixed",
@@ -192,6 +192,9 @@ class BookmarksRouteTest {
                 mediaKind = "",
                 slideCount = 0,
             ),
+            assetMediaCount = 3,
+            assetImageCount = 1,
+            assetVideoCount = 2,
         )
 
         val playerItem = toBookmarkMomentItem(item, baseUrl = "https://igloo.example")

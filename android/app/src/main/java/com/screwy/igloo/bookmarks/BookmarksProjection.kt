@@ -29,7 +29,7 @@ internal fun bookmarkPublishedAt(item: BookmarkItem): Long =
         ?: 0L
 
 internal fun opensBookmarkInMomentsOverlay(item: BookmarkItem): Boolean =
-    item.video != null || item.feedItem?.hasMomentStyleMedia() == true
+    item.video != null || item.assetMediaCount > 0 || item.feedItem?.hasMomentStyleMedia() == true
 
 internal fun toBookmarkMomentItem(item: BookmarkItem, baseUrl: String = ""): MomentItem {
     val feedMediaKind = bookmarkFeedMediaKind(item)
@@ -128,6 +128,9 @@ internal fun bookmarkAuthorHandle(item: BookmarkItem, channelId: String): String
 
 private fun bookmarkFeedMediaKind(item: BookmarkItem): String? {
     val descriptors = bookmarkFeedMediaDescriptors(item)
+    if (bookmarkShouldUseAssetShape(item, descriptors.size)) {
+        return bookmarkAssetMediaKind(item)
+    }
     if (descriptors.isEmpty()) return null
     if (descriptors.size > 1) return "slideshow"
 
@@ -139,9 +142,34 @@ private fun bookmarkFeedMediaKind(item: BookmarkItem): String? {
 
 private fun bookmarkFeedSlideCount(item: BookmarkItem): Int {
     val descriptors = bookmarkFeedMediaDescriptors(item)
+    if (bookmarkShouldUseAssetShape(item, descriptors.size)) {
+        return bookmarkAssetSlideCount(item)
+    }
     return when {
         descriptors.size > 1 -> descriptors.size
         bookmarkFeedMediaKind(item) == "image" -> 1
+        else -> 0
+    }
+}
+
+private fun bookmarkShouldUseAssetShape(item: BookmarkItem, descriptorCount: Int): Boolean =
+    item.assetMediaCount > 0 && (descriptorCount == 0 || item.assetMediaCount >= descriptorCount)
+
+private fun bookmarkAssetMediaKind(item: BookmarkItem): String? {
+    val assetCount = item.assetMediaCount.coerceAtLeast(0)
+    return when {
+        assetCount > 1 -> "slideshow"
+        assetCount == 1 && item.assetVideoCount > 0 -> "video"
+        assetCount == 1 -> "image"
+        else -> null
+    }
+}
+
+private fun bookmarkAssetSlideCount(item: BookmarkItem): Int {
+    val assetCount = item.assetMediaCount.coerceAtLeast(0)
+    return when {
+        assetCount > 1 -> assetCount
+        assetCount == 1 && item.assetVideoCount <= 0 -> 1
         else -> 0
     }
 }

@@ -128,6 +128,9 @@ data class BookmarkItem(
     @ColumnInfo(name = "resolved_channel_name") val resolvedChannelName: String?,
     @ColumnInfo(name = "resolved_channel_source_id") val resolvedChannelSourceId: String?,
     @ColumnInfo(name = "resolved_channel_is_followed") val resolvedChannelIsFollowed: Int = 0,
+    @ColumnInfo(name = "asset_media_count") val assetMediaCount: Int = 0,
+    @ColumnInfo(name = "asset_video_count") val assetVideoCount: Int = 0,
+    @ColumnInfo(name = "asset_image_count") val assetImageCount: Int = 0,
 )
 
 /** Channel drawer row — starred-first ordering. */

@@ -311,6 +311,76 @@ interface AndroidSyncDao {
 
     @Query(
         """
+        SELECT local_path FROM android_sync_assets
+        WHERE owner_id = :ownerId
+          AND asset_kind = 'post_media'
+          AND server_state = 'ready'
+          AND state = 'verified'
+          AND COALESCE(local_path, '') != ''
+          AND LOWER(COALESCE(content_type, '')) LIKE 'image/%'
+        ORDER BY media_index ASC,
+                 COALESCE(verified_at_ms, 0) DESC,
+                 generation_id DESC
+        LIMIT 1
+        """
+    )
+    suspend fun latestVerifiedPostMediaImageLocalPath(ownerId: String): String?
+
+    @Query(
+        """
+        SELECT local_path FROM android_sync_assets
+        WHERE owner_id = :ownerId
+          AND asset_kind = 'post_media'
+          AND server_state = 'ready'
+          AND state = 'verified'
+          AND COALESCE(local_path, '') != ''
+          AND LOWER(COALESCE(content_type, '')) LIKE 'image/%'
+        ORDER BY media_index ASC,
+                 COALESCE(verified_at_ms, 0) DESC,
+                 generation_id DESC
+        LIMIT 1
+        """
+    )
+    fun latestVerifiedPostMediaImageLocalPathFlow(ownerId: String): Flow<String?>
+
+    @Query(
+        """
+        SELECT a.* FROM android_sync_assets AS a
+        LEFT JOIN android_sync_generations AS g ON g.generation_id = a.generation_id
+        WHERE a.owner_id = :ownerId
+          AND a.asset_kind IN (:assetKinds)
+          AND a.server_state = 'ready'
+          AND NOT EXISTS (
+              SELECT 1
+              FROM android_sync_assets AS newer
+              LEFT JOIN android_sync_generations AS newer_g ON newer_g.generation_id = newer.generation_id
+              WHERE newer.owner_id = a.owner_id
+                AND newer.asset_kind = a.asset_kind
+                AND newer.media_index = a.media_index
+                AND newer.server_state = 'ready'
+                AND (
+                    COALESCE(newer_g.created_at_ms, 0) > COALESCE(g.created_at_ms, 0)
+                    OR (
+                        COALESCE(newer_g.created_at_ms, 0) = COALESCE(g.created_at_ms, 0)
+                        AND newer.generation_id > a.generation_id
+                    )
+                    OR (
+                        COALESCE(newer_g.created_at_ms, 0) = COALESCE(g.created_at_ms, 0)
+                        AND newer.generation_id = a.generation_id
+                        AND newer.seq > a.seq
+                    )
+                )
+          )
+        ORDER BY a.media_index ASC,
+                 COALESCE(g.created_at_ms, 0) DESC,
+                 a.generation_id DESC,
+                 a.seq ASC
+        """
+    )
+    fun latestReadyAssetsForOwnerFlow(ownerId: String, assetKinds: List<String>): Flow<List<AndroidSyncAssetEntity>>
+
+    @Query(
+        """
         SELECT a.* FROM android_sync_assets AS a
         LEFT JOIN android_sync_generations AS g ON g.generation_id = a.generation_id
         WHERE a.owner_id = :ownerId

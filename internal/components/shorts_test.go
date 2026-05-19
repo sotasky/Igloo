@@ -329,6 +329,9 @@ func TestShortsMediaEdgesDoNotExposeWrapperBackgroundDuringScrollSnap(t *testing
 			t.Errorf(".slide-image should fill without inline baseline gaps; missing %q in %s", check, slideImageBody)
 		}
 	}
+	if !strings.Contains(slideImageBody, "inset: 0") {
+		t.Errorf(".slide-image should pin every absolute slide to the wrapper; missing %q in %s", "inset: 0", slideImageBody)
+	}
 }
 
 func TestShortsActivationDoesNotWaitForSnapBeforePlayback(t *testing.T) {
