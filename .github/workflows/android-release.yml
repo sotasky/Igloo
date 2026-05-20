@@ -22,7 +22,7 @@ jobs:
           fetch-depth: 0
 
       - name: Verify release tag
-        run: scripts/dev/verify-release-tag.sh
+        run: .github/scripts/verify-signed-release-tag.sh
 
       - uses: actions/setup-java@be666c2fcd27ec809703dec50e508c2fdc7f6654 # v5
         with:

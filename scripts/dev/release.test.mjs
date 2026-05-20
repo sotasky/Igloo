@@ -78,7 +78,10 @@ test("release workflow allows manual major releases", () => {
   );
 
   assert.match(workflow, /\n          - major\n/);
-  assert.match(workflow, /--description-file \.github\/release-description\.md/);
+  assert.match(workflow, /description: Release summary/);
+  assert.match(workflow, /INPUT_SUMMARY: \$\{\{ inputs\.summary \}\}/);
+  assert.match(workflow, /\.github\/scripts\/prepare-release\.sh "\$\{INPUT_BUMP:-patch\}" release-notes\.md "\$INPUT_SUMMARY"/);
+  assert.doesNotMatch(workflow, /release-description\.md/);
 });
 
 test("release workflow signs release commits and tags", () => {
@@ -95,7 +98,8 @@ test("release workflow signs release commits and tags", () => {
   assert.match(workflow, /vars\.RELEASE_GIT_USER_EMAIL/);
   assert.match(workflow, /git commit -S -m "release \$\{\{ steps\.release\.outputs\.version \}\}"/);
   assert.match(workflow, /git tag -s "\$\{\{ steps\.release\.outputs\.tag \}\}"/);
-  assert.match(workflow, /git add android\/app\/build\.gradle\.kts \.github\/release-description\.md/);
+  assert.match(workflow, /git add android\/app\/build\.gradle\.kts/);
+  assert.doesNotMatch(workflow, /git add android\/app\/build\.gradle\.kts \.github\/release-description\.md/);
   assert.doesNotMatch(workflow, /\.github\/release-bump/);
   assert.doesNotMatch(workflow, /package\.json/);
   assert.doesNotMatch(workflow, /package-lock\.json/);
@@ -135,7 +139,7 @@ test("container release publishes signed provenance attestation", () => {
   assert.doesNotMatch(workflow, /\n    environment: container-release\n/);
   assert.match(workflow, /fetch-depth: 0/);
   assert.match(workflow, /name: Verify release tag/);
-  assert.match(workflow, /run: scripts\/dev\/verify-release-tag\.sh/);
+  assert.match(workflow, /run: \.github\/scripts\/verify-signed-release-tag\.sh/);
   assert.doesNotMatch(workflow, /BEGIN PGP SIGNATURE/);
   assert.match(workflow, /\n        id: build\n/);
   assert.match(workflow, shaPinnedAction("DeterminateSystems/determinate-nix-action", "v3"));
@@ -256,7 +260,10 @@ test("release tag verifier pins the release public key", () => {
     new URL("../../.github/release-gpg.pub", import.meta.url),
     "utf8",
   );
-  const verifier = readFileSync(new URL("./verify-release-tag.sh", import.meta.url), "utf8");
+  const verifier = readFileSync(
+    new URL("../../.github/scripts/verify-signed-release-tag.sh", import.meta.url),
+    "utf8",
+  );
 
   assert.match(publicKey, /^-----BEGIN PGP PUBLIC KEY BLOCK-----/);
   assert.match(publicKey, /-----END PGP PUBLIC KEY BLOCK-----\n$/);
@@ -306,7 +313,7 @@ test("Android release publishes only the APK asset with signed provenance attest
   assert.doesNotMatch(workflow, /\n    environment: android-release\n/);
   assert.match(workflow, /fetch-depth: 0/);
   assert.match(workflow, /name: Verify release tag/);
-  assert.match(workflow, /run: scripts\/dev\/verify-release-tag\.sh/);
+  assert.match(workflow, /run: \.github\/scripts\/verify-signed-release-tag\.sh/);
   assert.doesNotMatch(workflow, /BEGIN PGP SIGNATURE/);
   assert.match(workflow, shaPinnedAction("actions/setup-java", "v5"));
   assert.match(workflow, /run: \.\/gradlew :app:assembleRelease/);
@@ -437,17 +444,18 @@ test("renders exact commit release notes", () => {
     ],
   });
 
-  assert.match(notes, /^## Release v1\.0\.1/m);
-  assert.match(notes, /^changes:$/m);
+  assert.match(notes, /^Release v1\.0\.1/m);
+  assert.match(notes, /^Changelog$/m);
   assert.match(
     notes,
     /- fixed hover not being triggered in feed \(\[1111111\]\(https:\/\/github\.com\/screwys\/Igloo\/commit\/1111111111111111111111111111111111111111\)\)/,
   );
   assert.doesNotMatch(notes, /^## commits/m);
+  assert.doesNotMatch(notes, /^changes:$/m);
   assert.doesNotMatch(notes, /since `v1\.0\.0`/);
 });
 
-test("renders release description before commit list", () => {
+test("renders release summary before commit list", () => {
   const notes = renderReleaseNotes({
     newTag: "v2.0.0",
     repository: "screwys/Igloo",
@@ -460,5 +468,5 @@ test("renders release description before commit list", () => {
     ],
   });
 
-  assert.match(notes, /^## Release v2\.0\.0\n\nIgloo no longer depends on RSSHub\.\n\nchanges:/m);
+  assert.match(notes, /^Igloo no longer depends on RSSHub\.\n\nChangelog/m);
 });

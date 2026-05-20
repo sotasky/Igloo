@@ -12,6 +12,10 @@ on:
           - patch
           - minor
           - major
+      summary:
+        description: Release summary
+        required: true
+        type: string
 
 concurrency:
   group: release
@@ -52,7 +56,8 @@ jobs:
         id: release
         env:
           INPUT_BUMP: ${{ inputs.bump }}
-        run: node scripts/dev/release.mjs prepare "${INPUT_BUMP:-patch}" --notes release-notes.md --description-file .github/release-description.md
+          INPUT_SUMMARY: ${{ inputs.summary }}
+        run: .github/scripts/prepare-release.sh "${INPUT_BUMP:-patch}" release-notes.md "$INPUT_SUMMARY"
 
       - name: Run full release gate
         run: scripts/dev/test-full.sh
@@ -82,7 +87,7 @@ jobs:
           git config user.email "${RELEASE_GIT_USER_EMAIL:-41898282+github-actions[bot]@users.noreply.github.com}"
           git config user.signingkey "$fingerprint"
           git config gpg.program "$RUNNER_TEMP/gpg-wrapper"
-          git add android/app/build.gradle.kts .github/release-description.md
+          git add android/app/build.gradle.kts
           git diff --cached --quiet && exit 1
           git commit -S -m "release ${{ steps.release.outputs.version }}"
           git tag -s "${{ steps.release.outputs.tag }}" -m "release ${{ steps.release.outputs.version }}"

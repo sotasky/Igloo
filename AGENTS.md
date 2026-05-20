@@ -61,6 +61,8 @@ For Go code, protect the success path. Do not allocate rollback journals, diagno
 ## Releases
 
 - Releases are manually dispatched from the release workflow with an explicit patch, minor, or major bump.
+- Use `.github/scripts/prepare-release.sh` for release preparation and `.github/scripts/create-release-tag.sh` for local signed release commits/tags.
+- Release scripts take the user-written summary as input and put it first in the generated notes, then a `Changelog` section with commits since the previous tag.
 - Release commits and tags are GPG-signed with `RELEASE_GPG_PRIVATE_KEY` and `RELEASE_GPG_PASSPHRASE`; optional `RELEASE_GIT_USER_NAME` and `RELEASE_GIT_USER_EMAIL` repository variables set the non-secret commit identity.
 - Release artifact workflows verify tags against `.github/release-gpg.pub` before accessing release secrets or publishing assets.
 - Release APKs and container images publish GitHub artifact attestations; container images are also signed keylessly with cosign.

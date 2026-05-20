@@ -62,16 +62,13 @@ function commitRef(sha, repository) {
 }
 
 export function renderReleaseNotes({ newTag, repository, commits, description = "" }) {
+  const summary = String(description || "").trim() || `Release ${newTag}`;
   const lines = [
-    `## Release ${newTag}`,
+    summary,
+    "",
+    "Changelog",
     "",
   ];
-
-  description = String(description || "").trim();
-  if (description !== "") {
-    lines.push(description, "");
-  }
-  lines.push("changes:", "");
 
   for (const commit of commits) {
     lines.push(`- ${commit.subject} (${commitRef(commit.sha, repository)})`);
@@ -129,7 +126,7 @@ function parseArgs(argv) {
     command: argv[0],
     bump: argv[1],
     notesPath: "release-notes.md",
-    descriptionFile: ".github/release-description.md",
+    description: "",
   };
 
   const optionStart = out.command === "prepare" ? 2 : 1;
@@ -139,8 +136,8 @@ function parseArgs(argv) {
       out.notesPath = argv[++i];
       continue;
     }
-    if (arg === "--description-file") {
-      out.descriptionFile = argv[++i];
+    if (arg === "--description") {
+      out.description = argv[++i];
       continue;
     }
     throw new Error(`unknown argument: ${arg}`);
@@ -161,15 +158,14 @@ function prepareRelease(argv) {
   const args = parseArgs(argv);
   if (args.command !== "prepare") {
     throw new Error(
-      "usage: release.mjs prepare <patch|minor|major> [--notes path] [--description-file path]",
+      "usage: release.mjs prepare <patch|minor|major> [--notes path] [--description text]",
     );
   }
 
   const androidPath = resolve("android/app/build.gradle.kts");
-  const descriptionPath = resolve(args.descriptionFile);
 
   const androidText = readFileSync(androidPath, "utf8");
-  const description = readFileSync(descriptionPath, "utf8");
+  const description = String(args.description || "").trim();
 
   const androidVersion = parseAndroidVersion(androidText);
   const currentVersion = androidVersion.versionName;
@@ -202,9 +198,6 @@ function prepareRelease(argv) {
       androidVersion.versionCode + 1,
     ),
   );
-  if (description.trim() !== "") {
-    writeFileSync(descriptionPath, "");
-  }
   writeFileSync(
     resolve(args.notesPath),
     renderReleaseNotes({

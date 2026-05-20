@@ -23,7 +23,7 @@ jobs:
           fetch-depth: 0
 
       - name: Verify release tag
-        run: scripts/dev/verify-release-tag.sh
+        run: .github/scripts/verify-signed-release-tag.sh
 
       - uses: DeterminateSystems/determinate-nix-action@bafaa638b9d5ec0e7e3ac1a7fc80453ef1fd265f # v3
 
