@@ -3,8 +3,10 @@ package com.screwy.igloo.player
 import android.app.Activity
 import android.content.Context
 import android.media.AudioManager
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectDragGestures
-import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
@@ -19,6 +21,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.media3.exoplayer.ExoPlayer
 import kotlin.math.roundToInt
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Gesture layer for the player surface.
@@ -127,29 +130,43 @@ fun PlayerGestures(
                 surfaceHeightPx.value = it.height.toFloat()
             }
             .pointerInput(player) {
-                detectTapGestures(
-                    onTap = { currentOnTap() },
-                    onDoubleTap = { offset ->
+                awaitEachGesture {
+                    awaitFirstDown(requireUnconsumed = false)
+                    var completedBeforeLongPress = false
+                    val firstUp = withTimeoutOrNull(viewConfiguration.longPressTimeoutMillis) {
+                        waitForUpOrCancellation().also {
+                            completedBeforeLongPress = true
+                        }
+                    }
+                    if (!completedBeforeLongPress) {
+                        player.setPlaybackSpeed(BOOST_SPEED)
+                        waitForUpOrCancellation()
+                        if (player.playbackParameters.speed != NORMAL_SPEED) {
+                            player.setPlaybackSpeed(NORMAL_SPEED)
+                        }
+                        return@awaitEachGesture
+                    }
+                    if (firstUp == null) return@awaitEachGesture
+
+                    val secondDown = withTimeoutOrNull(viewConfiguration.doubleTapTimeoutMillis) {
+                        awaitFirstDown(requireUnconsumed = false)
+                    }
+                    if (secondDown == null) {
+                        currentOnTap()
+                        return@awaitEachGesture
+                    }
+
+                    val secondUp = waitForUpOrCancellation()
+                    if (secondUp != null) {
                         val widthPx = surfaceWidthPx.value
-                        val isLeft = widthPx > 0f && offset.x < widthPx / 2f
+                        val isLeft = widthPx > 0f && secondDown.position.x < widthPx / 2f
                         val current = player.currentPosition
                         val duration = player.duration.coerceAtLeast(0L)
                         val target = if (isLeft) skipBackwardMs(current)
                                      else skipForwardMs(current, duration)
                         player.seekTo(target)
-                    },
-                    onLongPress = {
-                        player.setPlaybackSpeed(BOOST_SPEED)
-                    },
-                    onPress = {
-                        // Wait for release — if it was a long-press the speed is
-                        // already boosted; restore on release (success or cancel).
-                        tryAwaitRelease()
-                        if (player.playbackParameters.speed != NORMAL_SPEED) {
-                            player.setPlaybackSpeed(NORMAL_SPEED)
-                        }
-                    },
-                )
+                    }
+                }
             }
             .pointerInput(player) {
                 detectDragGestures(
