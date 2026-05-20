@@ -817,7 +817,7 @@ if (root && video) {
             return subtitleOverlay
           }
           function parseVttTimestamp(raw) {
-            var value = String(raw || '').trim()
+            var value = String(raw || '').trim().split(/\s+/)[0]
             if (!value) return Number.NaN
             var parts = value.split(':')
             if (parts.length < 2 || parts.length > 3) return Number.NaN
@@ -853,7 +853,24 @@ if (root && video) {
             return cues
           }
           function subtitleTextHtml(text) {
-            return escapeHtml(String(text || '').replace(/<[^>]+>/g, '')).replace(/\r?\n/g, '<br>')
+            return escapeHtml(sanitizeVttCueText(text)).replace(/\r?\n/g, '<br>')
+          }
+          function sanitizeVttCueText(text) {
+            return decodeVttEntities(
+              String(text || '')
+                .replace(/<(?:\d{1,2}:)?\d{2}:\d{2}[.,]\d{3}>/g, '')
+                .replace(/<\/?(?:c(?:\.[^>\s]+)*|v(?:\s+[^>]*)?|lang(?:\s+[^>]*)?|b|i|u|ruby|rt)>/g, '')
+                .replace(/<[^>]+>/g, '')
+            ).trim()
+          }
+          function decodeVttEntities(text) {
+            return String(text || '')
+              .replace(/&nbsp;|&#160;|&#x0*a0;/gi, ' ')
+              .replace(/&amp;/gi, '&')
+              .replace(/&lt;/gi, '<')
+              .replace(/&gt;/gi, '>')
+              .replace(/&quot;/gi, '"')
+              .replace(/&apos;|&#39;/gi, "'")
           }
           function updateSubtitleOverlayPosition() {
             var overlay = ensureSubtitleOverlay()

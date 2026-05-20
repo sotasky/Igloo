@@ -52,6 +52,43 @@ func TestManualLangsAndIsAuto(t *testing.T) {
 	}
 }
 
+func TestManualLangsTreatsYouTubeASRSubtitleEntriesAsAuto(t *testing.T) {
+	dir := t.TempDir()
+	infoPath := filepath.Join(dir, "video.info.json")
+	body := `{
+		"subtitles": {
+			"en": [
+				{"ext":"vtt","url":"https://www.youtube.com/api/timedtext?v=sample&caps=asr&lang=en&fmt=vtt","name":"English"}
+			],
+			"tr": [
+				{"ext":"vtt","url":"https://www.youtube.com/api/timedtext?v=sample&lang=tr&fmt=vtt","name":"Turkish"}
+			]
+		},
+		"automatic_captions": {
+			"en": [
+				{"ext":"vtt","url":"https://www.youtube.com/api/timedtext?v=sample&kind=asr&lang=en&fmt=vtt","name":"English"}
+			]
+		}
+	}`
+	if err := os.WriteFile(infoPath, []byte(body), 0o644); err != nil {
+		t.Fatalf("write info: %v", err)
+	}
+
+	langs := ManualLangs(infoPath)
+	if langs["en"] {
+		t.Fatal("ASR-marked subtitles.en should not be treated as manual")
+	}
+	if !langs["tr"] {
+		t.Fatal("non-ASR subtitles.tr should be treated as manual")
+	}
+	if !IsAuto(infoPath, "en") {
+		t.Fatal("ASR-marked subtitles.en should be auto")
+	}
+	if IsAuto(infoPath, "tr") {
+		t.Fatal("non-ASR subtitles.tr should be manual")
+	}
+}
+
 func TestLanguage(t *testing.T) {
 	dir := t.TempDir()
 	infoPath := filepath.Join(dir, "video.info.json")

@@ -1981,7 +1981,7 @@ func TestAndroidSyncSubtitleAssetPrefersManualTrack(t *testing.T) {
 	mustWriteFile(t, filepath.Join(dataDir, "videos", "youtube", "manual.mp4"), []byte("video"))
 	mustWriteFile(t, filepath.Join(dataDir, "videos", "youtube", "manual.en.vtt"), autoSubtitle)
 	mustWriteFile(t, filepath.Join(dataDir, "videos", "youtube", "manual.tr.vtt"), manualSubtitle)
-	mustWriteFile(t, filepath.Join(dataDir, "videos", "youtube", "manual.info.json"), []byte(`{"language":"tr","subtitles":{"tr":[{"url":"https://example.test/manual.vtt"}]},"automatic_captions":{"en":[{"url":"https://example.test/auto.vtt"}]}}`))
+	mustWriteFile(t, filepath.Join(dataDir, "videos", "youtube", "manual.info.json"), []byte(`{"language":"tr","subtitles":{"en":[{"url":"https://www.youtube.com/api/timedtext?v=sample&caps=asr&lang=en&fmt=vtt"}],"tr":[{"url":"https://example.test/manual.vtt"}]},"automatic_captions":{"en":[{"url":"https://example.test/auto.vtt"}]}}`))
 	if err := srv.db.ExecRaw(`
 		INSERT INTO videos (
 			video_id, channel_id, title, duration, thumbnail_path, file_path,

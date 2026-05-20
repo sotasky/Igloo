@@ -76,6 +76,10 @@ test("player JavaScript renders subtitles in app-owned overlay", () => {
   assert.match(playerJs, /function ensureSubtitleOverlay\(\)/);
   assert.match(playerJs, /function renderSubtitleOverlay\(\)/);
   assert.match(playerJs, /function parseVtt\(/);
+  assert.match(playerJs, /function sanitizeVttCueText\(/);
+  assert.match(playerJs, /function decodeVttEntities\(/);
+  assert.match(playerJs, /String\(raw \|\| ''\)\.trim\(\)\.split\(\/\\s\+\/\)\[0\]/);
+  assert.match(playerJs, /&nbsp;\|\&#160;\|\&#x0\*a0;/);
   assert.match(playerJs, /fetch\(subtitleTrackUrl,\s*\{ credentials: 'same-origin' \}\)/);
   assert.match(playerJs, /video\.addEventListener\('timeupdate', renderSubtitleOverlay/);
   assert.match(playerJs, /player-subtitle-cue/);

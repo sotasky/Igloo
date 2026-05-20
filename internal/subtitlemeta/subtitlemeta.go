@@ -2,6 +2,7 @@ package subtitlemeta
 
 import (
 	"encoding/json"
+	"net/url"
 	"os"
 	"strings"
 )
@@ -34,7 +35,7 @@ func ManualLangs(infoPath string) map[string]bool {
 	}
 	langs := make(map[string]bool)
 	for lang, raw := range info.Subtitles {
-		if subtitleListHasEntries(raw) {
+		if subtitleListHasManualEntries(raw) {
 			langs[lang] = true
 		}
 	}
@@ -62,14 +63,57 @@ func Language(infoPath string) string {
 	return info.Language
 }
 
-func subtitleListHasEntries(raw json.RawMessage) bool {
-	var entries []json.RawMessage
+type subtitleFormat struct {
+	URL  string `json:"url"`
+	Name string `json:"name"`
+	Kind string `json:"kind"`
+}
+
+func subtitleListHasManualEntries(raw json.RawMessage) bool {
+	var entries []subtitleFormat
 	if err := json.Unmarshal(raw, &entries); err == nil {
-		return len(entries) > 0
+		for _, entry := range entries {
+			if !subtitleFormatLooksAuto(entry) {
+				return true
+			}
+		}
+		return false
+	}
+	var entry subtitleFormat
+	if err := json.Unmarshal(raw, &entry); err == nil && (entry.URL != "" || entry.Name != "" || entry.Kind != "") {
+		return !subtitleFormatLooksAuto(entry)
 	}
 	var v any
 	if err := json.Unmarshal(raw, &v); err != nil {
 		return false
 	}
 	return v != nil
+}
+
+func subtitleFormatLooksAuto(entry subtitleFormat) bool {
+	if strings.EqualFold(strings.TrimSpace(entry.Kind), "asr") {
+		return true
+	}
+	name := strings.ToLower(entry.Name)
+	if strings.Contains(name, "auto-generated") || strings.Contains(name, "automatic") {
+		return true
+	}
+	return subtitleURLHasASRSignal(entry.URL)
+}
+
+func subtitleURLHasASRSignal(rawURL string) bool {
+	if rawURL == "" {
+		return false
+	}
+	if parsed, err := url.Parse(rawURL); err == nil {
+		query := parsed.Query()
+		if strings.EqualFold(query.Get("kind"), "asr") || strings.EqualFold(query.Get("caps"), "asr") {
+			return true
+		}
+	}
+	lower := strings.ToLower(rawURL)
+	return strings.Contains(lower, "kind=asr") ||
+		strings.Contains(lower, "caps=asr") ||
+		strings.Contains(lower, "kind%3dasr") ||
+		strings.Contains(lower, "caps%3dasr")
 }
