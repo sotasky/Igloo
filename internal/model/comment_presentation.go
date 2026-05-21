@@ -2,6 +2,22 @@ package model
 
 import "strings"
 
+// YouTubeCommentAuthorChannelID converts a YouTube comment author_id into the
+// conventional Igloo channel-id shape used by avatar resolvers.
+func YouTubeCommentAuthorChannelID(authorID string) string {
+	raw := strings.TrimSpace(authorID)
+	if raw == "" {
+		return ""
+	}
+	if strings.HasPrefix(raw, "youtube_") {
+		raw = strings.TrimSpace(strings.TrimPrefix(raw, "youtube_"))
+	}
+	if !strings.HasPrefix(raw, "UC") {
+		return ""
+	}
+	return "youtube_" + raw
+}
+
 // PresentedComment is the Android-facing comment shape. It keeps the stored
 // comment fields intact while adding server-owned presentation metadata.
 type PresentedComment struct {

@@ -53,6 +53,7 @@ fun Avatar(
     fadeWhenRemoteOffline: Boolean = true,
     showPendingBadge: Boolean = true,
     initialUri: MediaUri? = null,
+    remoteFallbackUrl: String? = null,
 ) {
     val resolvers: MediaResolvers = koinInject()
     val baseUrlProvider: ServerBaseUrlProvider = koinInject()
@@ -62,11 +63,18 @@ fun Avatar(
         else MediaUri.Remote(baseUrlProvider.baseUrl() + "/api/media/avatar/" + channelId)
     val uri by (if (channelId.isEmpty()) flowOf(MediaUri.Missing) else resolvers.avatarForChannelFlow(channelId))
         .collectAsState(initial = fallbackInitialUri)
+    val explicitRemoteFallback = remoteFallbackUrl
+        ?.trim()
+        ?.takeIf { it.startsWith("https://") || it.startsWith("http://") }
+    val displayUri = when {
+        explicitRemoteFallback != null && uri.prefersExplicitAvatarFallback() -> MediaUri.Remote(explicitRemoteFallback)
+        else -> uri
+    }
 
     val colors = MaterialTheme.iglooColors
-    val showBadge = showPendingBadge && isIglooRemoteOffline(uri)
-    val backgroundColor = if (uri is MediaUri.Missing) colors.surfaceVariant else null
-    val alphaValue = if (fadeWhenRemoteOffline) mediaAlpha(uri) else 1f
+    val showBadge = showPendingBadge && isIglooRemoteOffline(displayUri)
+    val backgroundColor = if (displayUri is MediaUri.Missing) colors.surfaceVariant else null
+    val alphaValue = if (fadeWhenRemoteOffline) mediaAlpha(displayUri) else 1f
     val channelAvatarDescription = stringResource(R.string.content_description_channel_avatar)
 
     Box(
@@ -79,7 +87,7 @@ fun Avatar(
         contentAlignment = Alignment.Center,
     ) {
         AvatarPlaceholder(size = size)
-        when (val u = uri) {
+        when (val u = displayUri) {
             is MediaUri.Local -> AsyncImage(
                 model = u.file,
                 contentDescription = channelAvatarDescription,
@@ -99,6 +107,9 @@ fun Avatar(
         if (showBadge) DownloadPendingBadge()
     }
 }
+
+private fun MediaUri.prefersExplicitAvatarFallback(): Boolean =
+    this is MediaUri.Missing || (this is MediaUri.Remote && url.contains("/api/media/avatar/"))
 
 @Composable
 private fun AvatarPlaceholder(size: Dp) {

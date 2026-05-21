@@ -2,6 +2,24 @@ package model
 
 import "testing"
 
+func TestYouTubeCommentAuthorChannelID(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{name: "raw channel", raw: "UCcommenter", want: "youtube_UCcommenter"},
+		{name: "already prefixed", raw: "youtube_UCcommenter", want: "youtube_UCcommenter"},
+		{name: "not channel", raw: "handle", want: ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := YouTubeCommentAuthorChannelID(tc.raw); got != tc.want {
+				t.Fatalf("YouTubeCommentAuthorChannelID(%q) = %q, want %q", tc.raw, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestPresentCommentsBuildsStableThreadMetadata(t *testing.T) {
 	comments := []Comment{
 		{CommentID: "root-a", AuthorName: "@Author A", AuthorID: "creator", LikeCount: 10},

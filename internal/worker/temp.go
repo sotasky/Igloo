@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/screwys/igloo/internal/db"
 	"github.com/screwys/igloo/internal/download"
 	"github.com/screwys/igloo/internal/fetchprofile"
 	"github.com/screwys/igloo/internal/model"
@@ -207,8 +208,14 @@ func (m *Manager) DownloadTemp(ctx context.Context, rawURL string, saveChannel b
 		log.Printf("[temp] comments fetch failed for %s: %v", videoID, commentsErr)
 	} else if len(comments) > 0 {
 		inserted, _ := m.db.AddComments(videoID, comments, platform)
-		// yt-dlp already returns commenter thumbnails with comments; do not promote
-		// commenters into channel_profiles or avatar recovery.
+		// yt-dlp already returns commenter thumbnails with comments; cache those
+		// public image URLs without promoting commenters into channel_profiles.
+		go func(comments []db.CommentInput) {
+			bgCtx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+			defer cancel()
+			cachedAvatars := m.CacheYouTubeCommentAvatars(bgCtx, comments)
+			log.Printf("[temp] cached %d commenter avatars for %s", cachedAvatars, videoID)
+		}(comments)
 		log.Printf("[temp] fetched %d comments for %s", inserted, videoID)
 	}
 

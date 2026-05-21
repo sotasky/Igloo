@@ -821,6 +821,46 @@ func TestAndroidSyncItemsAnnotatesVideoComments(t *testing.T) {
 	}
 }
 
+func TestAndroidSyncAssetsIncludeCachedYouTubeCommentAvatars(t *testing.T) {
+	srv := newAndroidSyncTestServer(t)
+	now := time.Now().UnixMilli()
+	mustWriteFile(t, filepath.Join(srv.cfg.DataDir, "thumbnails", "avatars", "youtube_UCcommenterAvatar.jpg"), []byte("avatar-bytes"))
+	insertVideo(t, srv, "vid_comment_avatar_asset", "youtube_UCcreator")
+	if err := srv.db.ExecRaw(`UPDATE videos SET duration = 60 WHERE video_id = 'vid_comment_avatar_asset'`); err != nil {
+		t.Fatalf("update video: %v", err)
+	}
+	if err := srv.db.ExecRaw(
+		`INSERT INTO video_comments (
+			video_id, comment_id, author_name, author_id,
+			author_thumbnail, text, like_count, published_at, platform, fetched_at
+		) VALUES (?, 'comment_avatar', 'Commenter', 'UCcommenterAvatar', 'https://youtube.example/avatar.jpg', 'text', 25, ?, 'youtube', ?)`,
+		"vid_comment_avatar_asset", now, now,
+	); err != nil {
+		t.Fatalf("insert comment: %v", err)
+	}
+
+	assets, _, err := srv.buildAndroidSyncAssets("alice", db.AndroidSyncDesiredSets{
+		Tweets: map[string]struct{}{},
+		Videos: map[string]struct{}{
+			"vid_comment_avatar_asset": {},
+		},
+		MediaVideos: map[string]struct{}{},
+		Channels:    map[string]struct{}{},
+	})
+	if err != nil {
+		t.Fatalf("buildAndroidSyncAssets: %v", err)
+	}
+	for _, asset := range assets {
+		if asset.AssetKind == "avatar" && asset.OwnerID == "youtube_UCcommenterAvatar" {
+			if asset.State != "ready" || asset.RequiredReason != "youtube_comment" || asset.SizeBytes != int64(len("avatar-bytes")) {
+				t.Fatalf("comment avatar asset = %+v", asset)
+			}
+			return
+		}
+	}
+	t.Fatalf("comment avatar asset missing: %+v", assets)
+}
+
 func TestAndroidSyncItemsCarryServerThreadContext(t *testing.T) {
 	srv := newAndroidSyncTestServer(t)
 	now := time.Now().UnixMilli()

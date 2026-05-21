@@ -1100,6 +1100,20 @@ func (s *Server) buildAndroidSyncAssets(username string, sets db.AndroidSyncDesi
 	)
 
 	phaseStart = time.Now()
+	commentAvatarRows, err := s.db.ListAndroidSyncYouTubeCommentAvatarRows(videoIDs, youtubeCommentsCap)
+	if err != nil {
+		return nil, counts, err
+	}
+	s.addAndroidSyncYouTubeCommentAvatarAssets(byKey, commentAvatarRows)
+	slog.Info(
+		"android_sync_asset_phase",
+		"phase", "youtube_comment_avatar_assets",
+		"rows", len(commentAvatarRows),
+		"assets", len(byKey),
+		"duration_ms", time.Since(phaseStart).Milliseconds(),
+	)
+
+	phaseStart = time.Now()
 	thumbnailVideoIDs, err := s.db.ListAndroidSyncAlwaysThumbnailVideoIDs()
 	if err != nil {
 		return nil, counts, err
@@ -1298,6 +1312,27 @@ func (s *Server) addAndroidSyncMediaAssets(byKey map[string]model.AndroidSyncAss
 		for _, asset := range s.androidSyncAssetsFromMediaRow(row) {
 			addAndroidSyncAsset(byKey, asset)
 		}
+	}
+}
+
+func (s *Server) addAndroidSyncYouTubeCommentAvatarAssets(byKey map[string]model.AndroidSyncAsset, rows []db.AndroidSyncCommentAvatarRow) {
+	for _, row := range rows {
+		channelID := strings.TrimSpace(row.ChannelID)
+		if channelID == "" || s.resolveAvatarPath(channelID) == "" {
+			continue
+		}
+		addAndroidSyncAsset(byKey, model.AndroidSyncAsset{
+			AssetID:            db.BuildManifestAssetID("youtube", "channel", channelID, "avatar", 0),
+			AssetKind:          "avatar",
+			OwnerID:            channelID,
+			OwnerKind:          "channel",
+			Bucket:             "avatars",
+			ServerURL:          "/api/media/avatar/" + channelID,
+			ContentType:        "image/jpeg",
+			State:              "ready",
+			RequiredReason:     "youtube_comment",
+			EffectiveRecencyMs: row.RecencyMs,
+		})
 	}
 }
 

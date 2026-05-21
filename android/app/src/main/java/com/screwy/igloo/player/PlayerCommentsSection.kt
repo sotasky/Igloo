@@ -116,6 +116,7 @@ internal fun CommentRow(
                 channelId = authorChannelId,
                 size = avatarSize,
                 showPendingBadge = false,
+                remoteFallbackUrl = comment.authorThumbnail,
             )
         } else {
             CommentAvatarFallback(

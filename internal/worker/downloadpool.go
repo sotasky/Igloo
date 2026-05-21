@@ -359,8 +359,9 @@ func (m *Manager) downloadVideo(ctx context.Context, job db.DownloadQueueRow, pl
 			}
 			inserted, _ := m.db.AddComments(capturedID, comments, "youtube")
 			// yt-dlp includes commenter thumbnails in the comment payload; commenters
-			// are not clickable Igloo profiles, so avoid profile/avatar recovery here.
-			log.Printf("[downloadpool] fetched %d comments for %s", inserted, capturedID)
+			// are not clickable Igloo profiles, so cache their public thumbnails directly.
+			cachedAvatars := m.CacheYouTubeCommentAvatars(bgCtx, comments)
+			log.Printf("[downloadpool] fetched %d comments for %s, cached %d commenter avatars", inserted, capturedID, cachedAvatars)
 		}()
 	}
 

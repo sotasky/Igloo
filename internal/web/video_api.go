@@ -716,7 +716,14 @@ func (s *Server) handleVideoCommentsRefresh(w http.ResponseWriter, r *http.Reque
 		slog.Error("AddComments", "video", videoID, "err", err)
 	}
 	// yt-dlp already returns commenter thumbnails with comments. Commenters are
-	// not navigable Igloo profiles, so keep them out of channel_profiles.
+	// not navigable Igloo profiles, so cache those public thumbnails directly.
+	if s.workers != nil && len(parsed) > 0 {
+		go func(comments []db.CommentInput) {
+			bgCtx, bgCancel := context.WithTimeout(context.Background(), 45*time.Second)
+			defer bgCancel()
+			s.workers.CacheYouTubeCommentAvatars(bgCtx, comments)
+		}(parsed)
+	}
 
 	// If fetch returned nothing but had comments before, log warning
 	if saved == 0 && len(oldComments) > 0 {

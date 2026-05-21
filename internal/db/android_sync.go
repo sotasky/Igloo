@@ -19,7 +19,7 @@ import (
 // AndroidSyncMaterializerVersion is part of the generation source hash. Bump
 // it when server-side asset materialization semantics change and Android needs
 // a fresh immutable generation even if the source rows did not change.
-const AndroidSyncMaterializerVersion = 34
+const AndroidSyncMaterializerVersion = 35
 
 const (
 	defaultAndroidSyncKeepReadyGenerations = 2
@@ -469,6 +469,94 @@ type AndroidSyncMediaAssetRow struct {
 	FilePath   string
 	SourceURL  string
 	RecencyMs  int64
+}
+
+type AndroidSyncCommentAvatarRow struct {
+	ChannelID string
+	SourceURL string
+	RecencyMs int64
+}
+
+func (db *DB) ListAndroidSyncYouTubeCommentAvatarRows(videoIDs []string, limitPerVideo int) ([]AndroidSyncCommentAvatarRow, error) {
+	if limitPerVideo <= 0 || len(videoIDs) == 0 {
+		return nil, nil
+	}
+	byChannelID := map[string]AndroidSyncCommentAvatarRow{}
+	for _, chunk := range stringChunks(videoIDs, 400) {
+		if len(chunk) == 0 {
+			continue
+		}
+		args := make([]any, 0, len(chunk)+1)
+		for _, id := range chunk {
+			args = append(args, id)
+		}
+		args = append(args, limitPerVideo)
+		rows, err := db.conn.Query(`
+			WITH ranked AS (
+				SELECT
+					COALESCE(vc.author_id, '') AS author_id,
+					COALESCE(vc.author_thumbnail, '') AS author_thumbnail,
+					COALESCE(NULLIF(vc.published_at, 0), NULLIF(v.published_at, 0), vc.fetched_at, 0) AS recency_ms,
+					ROW_NUMBER() OVER (
+						PARTITION BY vc.video_id
+						ORDER BY COALESCE(vc.like_count, 0) DESC, vc.id ASC
+					) AS video_rank
+				FROM video_comments vc
+				JOIN videos v ON v.video_id = vc.video_id
+				WHERE vc.video_id IN (`+placeholders(len(chunk))+`)
+				  AND v.channel_id LIKE 'youtube_%'
+				  AND COALESCE(vc.author_id, '') != ''
+				  AND COALESCE(vc.author_thumbnail, '') != ''
+			)
+			SELECT author_id, author_thumbnail, recency_ms
+			FROM ranked
+			WHERE video_rank <= ?
+		`, args...)
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var authorID, sourceURL string
+			var recencyMs int64
+			if err := rows.Scan(&authorID, &sourceURL, &recencyMs); err != nil {
+				_ = rows.Close()
+				return nil, err
+			}
+			channelID := model.YouTubeCommentAuthorChannelID(authorID)
+			if channelID == "" || !androidSyncCommentAvatarURL(sourceURL) {
+				continue
+			}
+			row := AndroidSyncCommentAvatarRow{
+				ChannelID: channelID,
+				SourceURL: strings.TrimSpace(sourceURL),
+				RecencyMs: recencyMs,
+			}
+			if existing, ok := byChannelID[channelID]; !ok || row.RecencyMs > existing.RecencyMs {
+				byChannelID[channelID] = row
+			}
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		_ = rows.Close()
+	}
+	out := make([]AndroidSyncCommentAvatarRow, 0, len(byChannelID))
+	for _, row := range byChannelID {
+		out = append(out, row)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].RecencyMs != out[j].RecencyMs {
+			return out[i].RecencyMs > out[j].RecencyMs
+		}
+		return out[i].ChannelID < out[j].ChannelID
+	})
+	return out, nil
+}
+
+func androidSyncCommentAvatarURL(raw string) bool {
+	raw = strings.ToLower(strings.TrimSpace(raw))
+	return strings.HasPrefix(raw, "https://") || strings.HasPrefix(raw, "http://")
 }
 
 func (db *DB) ListAndroidSyncQuoteTweetIDs(tweetIDs []string) ([]string, error) {

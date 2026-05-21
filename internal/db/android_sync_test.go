@@ -998,3 +998,50 @@ func TestAndroidSyncDesiredSetsExcludeYouTubeCommentAuthors(t *testing.T) {
 		t.Fatalf("comment author should not be a desired channel: %+v", sets.Channels)
 	}
 }
+
+func TestAndroidSyncYouTubeCommentAvatarRowsUseTopSyncedComments(t *testing.T) {
+	d := openWritableTestDB(t)
+	nowMs := int64(10 * 24 * 60 * 60 * 1000)
+	published := nowMs - int64(24*60*60*1000)
+
+	if err := d.ExecRaw(`
+		INSERT INTO videos (video_id, channel_id, title, published_at, sync_seq)
+		VALUES
+			('sample_video_1', 'youtube_sample_channel', 'Video', ?, 1),
+			('sample_video_other', 'tiktok_sample_channel', 'Other', ?, 1)
+	`, published, published); err != nil {
+		t.Fatalf("insert videos: %v", err)
+	}
+	if err := d.ExecRaw(`
+		INSERT INTO video_comments (
+			video_id, comment_id, author_name, author_id, author_thumbnail, text, like_count, published_at, platform, fetched_at
+		) VALUES
+			('sample_video_1', 'sample_comment_1', 'Commenter One', 'UCcommenterOne', 'https://youtube.example/avatar-one.jpg', 'hello', 50, ?, 'youtube', ?),
+			('sample_video_1', 'sample_comment_2', 'Commenter Two', 'youtube_UCcommenterTwo', 'https://youtube.example/avatar-two.jpg', 'hello', 40, ?, 'youtube', ?),
+			('sample_video_1', 'sample_comment_3', 'Commenter Three', 'UCcommenterThree', 'https://youtube.example/avatar-three.jpg', 'hello', 1, ?, 'youtube', ?),
+			('sample_video_other', 'sample_comment_4', 'Other', 'UCother', 'https://youtube.example/other.jpg', 'hello', 100, ?, 'youtube', ?)
+	`, published, nowMs, published, nowMs, published, nowMs, published, nowMs); err != nil {
+		t.Fatalf("insert comments: %v", err)
+	}
+
+	rows, err := d.ListAndroidSyncYouTubeCommentAvatarRows([]string{"sample_video_1", "sample_video_other"}, 2)
+	if err != nil {
+		t.Fatalf("ListAndroidSyncYouTubeCommentAvatarRows: %v", err)
+	}
+	got := map[string]string{}
+	for _, row := range rows {
+		got[row.ChannelID] = row.SourceURL
+	}
+	if got["youtube_UCcommenterOne"] != "https://youtube.example/avatar-one.jpg" {
+		t.Fatalf("missing top commenter one: %+v", got)
+	}
+	if got["youtube_UCcommenterTwo"] != "https://youtube.example/avatar-two.jpg" {
+		t.Fatalf("missing top commenter two: %+v", got)
+	}
+	if _, ok := got["youtube_UCcommenterThree"]; ok {
+		t.Fatalf("low-ranked comment avatar should not be listed: %+v", got)
+	}
+	if _, ok := got["youtube_UCother"]; ok {
+		t.Fatalf("non-YouTube video comment avatar should not be listed: %+v", got)
+	}
+}
