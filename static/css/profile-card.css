@@ -224,7 +224,7 @@
 .profile-card--hover {
 	width: 320px;
 	position: absolute;
-	z-index: 1000;
+	z-index: 45000;
 	animation: pc-fade-in 120ms ease-out;
 }
 @keyframes pc-fade-in {

@@ -261,6 +261,14 @@ func TestThemeableHandleAssetsUseSemanticTokens(t *testing.T) {
 	}
 }
 
+func TestProfileHoverStacksAboveFeedMediaOverlay(t *testing.T) {
+	styleCSS := readRepoFile(t, "static", "style.css")
+	profileCSS := readRepoFile(t, "static", "css", "profile-card.css")
+
+	assertRuleContains(t, styleCSS, ".feed-media-overlay", "z-index: 40000")
+	assertRuleContains(t, profileCSS, ".profile-card--hover", "z-index: 45000")
+}
+
 func readRepoFile(t *testing.T, parts ...string) string {
 	t.Helper()
 	path := filepath.Join(append([]string{"..", ".."}, parts...)...)

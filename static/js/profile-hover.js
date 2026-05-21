@@ -1,6 +1,7 @@
 // Twitter/YouTube/TikTok/Instagram hover card for profile links.
 // Triggers:
 //   - a.feed-author-wrap            (parent author — data-author-handle on ancestor, twitter-only)
+//   - a.feed-overlay-headline       (media overlay poster header — data-feed-channel-id)
 //   - a.feed-quote-author-link, .feed-quote-avatar  (quote author, twitter-only)
 //   - a.feed-inline-link            (@mentions — href = /channels/<platform>_<id>)
 //   - a.feed-repost-link            (retweeter — twitter-only)
@@ -11,7 +12,7 @@
 (() => {
 	const OPEN_DELAY = 0;
 	const CLOSE_DELAY = 300;
-	const TRIGGER_SEL = 'a.feed-author-trigger, a.feed-quote-author-link, .feed-quote-avatar, a.feed-inline-link, a.feed-repost-link, a.shorts-channel, a.shorts-rail-avatar-link, a.shorts-repost-link';
+	const TRIGGER_SEL = 'a.feed-author-trigger, a.feed-overlay-headline, a.feed-quote-author-link, .feed-quote-avatar, a.feed-inline-link, a.feed-repost-link, a.shorts-channel, a.shorts-rail-avatar-link, a.shorts-repost-link';
 	const CHANNELS_HREF_RE = /^\/channels\/(twitter|x|youtube|tiktok|instagram)_([A-Za-z0-9_@.\-]+)$/;
 	const retweetMuteStorageKey = 'feedMutedRetweetChannels';
 	const legacyRetweetMuteStorageKey = 'mpa-feed-retweet-muted:v1';
@@ -44,6 +45,13 @@
 			const h = art?.getAttribute('data-author-handle')?.toLowerCase();
 			return h ? 'twitter_' + h : null;
 		}
+		if (el.matches('a.feed-overlay-headline')) {
+			const cid = el.getAttribute('data-feed-channel-id') || el.closest('[data-channel-id]')?.getAttribute('data-channel-id');
+			if (cid) return cid;
+			const href = el.getAttribute('href') || '';
+			const m = href.match(CHANNELS_HREF_RE);
+			return m ? (m[1] + '_' + m[2]) : null;
+		}
 		if (el.matches('a.feed-quote-author-link, .feed-quote-avatar')) {
 			const quote = el.closest('[data-quote-author-channel-id], [data-quote-author-handle]');
 			const cid = quote?.getAttribute('data-quote-author-channel-id');
@@ -72,6 +80,14 @@
 			return m ? (m[1] + '_' + m[2]) : null;
 		}
 		return null;
+	}
+
+	function triggerFromTarget(target) {
+		if (!target || !target.closest) return null;
+		const anchor = target.closest(TRIGGER_SEL);
+		if (!anchor) return null;
+		if (anchor.matches('a.feed-overlay-headline') && target.closest('.feed-overlay-header-actions')) return null;
+		return anchor;
 	}
 
 	function clearTimers() {
@@ -467,7 +483,7 @@
 
 	document.addEventListener('mouseover', (e) => {
 		if (eventIsOnCurrentCard(e)) { clearTimers(); return; }
-		const anchor = e.target.closest(TRIGGER_SEL);
+		const anchor = triggerFromTarget(e.target);
 		if (!anchor) return;
 		const cid = channelIDFor(anchor);
 		if (!cid) return;
@@ -477,7 +493,7 @@
 
 	document.addEventListener('mouseout', (e) => {
 		if (eventIsOnCurrentCard(e)) { clearTimers(); return; }
-		const anchor = e.target.closest(TRIGGER_SEL);
+		const anchor = triggerFromTarget(e.target);
 		if (!anchor) return;
 		const related = e.relatedTarget;
 		if (currentCard && related && currentCard.contains(related)) return;
@@ -487,7 +503,7 @@
 
 	document.addEventListener('click', (e) => {
 		if (e.target.closest && e.target.closest('[data-profile-card-menu]')) return;
-		const anchor = e.target.closest(TRIGGER_SEL);
+		const anchor = triggerFromTarget(e.target);
 		if (anchor) {
 			const cid = channelIDFor(anchor);
 			if (!cid) return;

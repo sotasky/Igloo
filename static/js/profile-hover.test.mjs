@@ -266,6 +266,39 @@ function addFeedTargets(document) {
 	return { repost, author };
 }
 
+function addOverlayHeadline(document) {
+	const top = new FakeElement('div', {
+		classes: ['feed-media-overlay-top'],
+		attrs: { 'data-channel-id': 'twitter_poster' },
+	});
+	const headline = new FakeElement('a', {
+		classes: ['feed-overlay-headline'],
+		attrs: {
+			'data-feed-channel-id': 'twitter_poster',
+			href: '/channels/twitter_poster',
+		},
+		rect: { left: 16, top: 20, right: 220, bottom: 64 },
+	});
+	const author = new FakeElement('div', {
+		classes: ['feed-overlay-author'],
+		rect: { left: 64, top: 26, right: 180, bottom: 44 },
+	});
+	const actions = new FakeElement('div', {
+		classes: ['feed-header-actions', 'feed-overlay-header-actions'],
+		rect: { left: 180, top: 20, right: 220, bottom: 48 },
+	});
+	const actionButton = new FakeElement('button', {
+		classes: ['feed-star-btn'],
+		rect: { left: 184, top: 22, right: 212, bottom: 46 },
+	});
+	actions.appendChild(actionButton);
+	headline.appendChild(author);
+	headline.appendChild(actions);
+	top.appendChild(headline);
+	document.body.appendChild(top);
+	return { headline, author, actionButton };
+}
+
 test('profile hover ignores underlying triggers when the pointer is inside the open card', async () => {
 	const { document, requests } = await loadProfileHover();
 	const { repost, author } = addFeedTargets(document);
@@ -295,4 +328,24 @@ test('profile hover can still switch targets after the pointer leaves the open c
 		'/api/profile-card/twitter_reposter',
 		'/api/profile-card/twitter_op',
 	]);
+});
+
+test('profile hover opens from feed media overlay poster headline', async () => {
+	const { document, requests } = await loadProfileHover();
+	const { author } = addOverlayHeadline(document);
+
+	document.dispatch('mouseover', mouseEvent(author, 70, 32));
+	await flush();
+
+	assert.deepEqual(requests, ['/api/profile-card/twitter_poster']);
+});
+
+test('profile hover ignores feed media overlay poster action buttons', async () => {
+	const { document, requests } = await loadProfileHover();
+	const { actionButton } = addOverlayHeadline(document);
+
+	document.dispatch('mouseover', mouseEvent(actionButton, 190, 30));
+	await flush();
+
+	assert.deepEqual(requests, []);
 });
