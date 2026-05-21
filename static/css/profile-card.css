@@ -197,6 +197,9 @@
 	font-size: 14px;
 	line-height: 1.4;
 	margin-bottom: 10px;
+	min-width: 0;
+	overflow-wrap: anywhere;
+	word-break: break-word;
 }
 .profile-card--hover .profile-card-bio {
 	display: -webkit-box;
@@ -380,10 +383,16 @@
 .profile-card-website {
 	margin-top: 4px;
 	font-size: 13px;
+	min-width: 0;
+	overflow-wrap: anywhere;
+	word-break: break-word;
 }
+.profile-card-bio .feed-inline-link,
 .profile-card-website a {
 	color: var(--warning);
 	text-decoration: none;
+	overflow-wrap: anywhere;
+	word-break: break-word;
 }
 .profile-card-website a:hover {
 	text-decoration: underline;

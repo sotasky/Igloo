@@ -251,6 +251,8 @@ func TestThemeableHandleAssetsUseSemanticTokens(t *testing.T) {
 	assertRuleContains(t, profileCSS, ".profile-card", "background: var(--profile-card-surface)")
 	assertRuleContains(t, profileCSS, ".profile-card-avatar", "var(--profile-card-surface)")
 	assertRuleContains(t, profileCSS, ".profile-card-handle", "var(--text-handle")
+	assertRuleContains(t, profileCSS, ".profile-card-website a", "overflow-wrap: anywhere")
+	assertRuleContains(t, profileCSS, ".profile-card-bio .feed-inline-link", "overflow-wrap: anywhere")
 
 	for _, forbidden := range []string{"--surface-1", "--text-1", "--text-2"} {
 		if strings.Contains(profileCSS, forbidden) {
