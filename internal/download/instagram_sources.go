@@ -154,7 +154,7 @@ func (g *GalleryDLWrapper) InstagramProfile(ctx context.Context, handle string, 
 					copy := *profile
 					best = &copy
 				}
-				if profile.AvatarURL != "" {
+				if instagramAvatarURLUsable(profile.AvatarURL) {
 					return profile, nil
 				}
 			}
@@ -177,7 +177,7 @@ func instagramProfileScore(profile InstagramProfile, fallbackHandle string) int 
 	if profile.DisplayName != "" && profile.DisplayName != fallbackHandle {
 		score += 2
 	}
-	if profile.AvatarURL != "" {
+	if instagramAvatarURLUsable(profile.AvatarURL) {
 		score += 8
 	}
 	if profile.Bio != "" || profile.Website != "" {
@@ -341,6 +341,8 @@ func ParseInstagramTaggedDumpForHandle(output []byte, taggedHandle string) []Vid
 func ParseInstagramProfileDump(output []byte, fallbackHandle string) *InstagramProfile {
 	fallbackHandle = strings.ToLower(strings.TrimPrefix(strings.TrimSpace(fallbackHandle), "@"))
 	sawObject := false
+	var best *InstagramProfile
+	bestScore := -1
 	for _, payload := range galleryDLJSONPayloads(output) {
 		for _, obj := range instagramSourceObjects(payload) {
 			sawObject = true
@@ -352,9 +354,17 @@ func ParseInstagramProfileDump(output []byte, fallbackHandle string) *InstagramP
 				if profile.DisplayName == "" {
 					profile.DisplayName = profile.Handle
 				}
-				return &profile
+				score := instagramProfileScore(profile, fallbackHandle)
+				if best == nil || score > bestScore {
+					copy := profile
+					best = &copy
+					bestScore = score
+				}
 			}
 		}
+	}
+	if best != nil {
+		return best
 	}
 	if fallbackHandle == "" || !sawObject {
 		return nil
@@ -506,12 +516,14 @@ func instagramVideoRefFromGalleryDLObject(obj map[string]any, sourceHandle strin
 	handle := normalizeInstagramHandle(firstString(obj, "username", "owner_username", "uploader_id"))
 	displayName := firstString(obj, "fullname", "full_name", "name")
 	avatarURL := firstExactString(obj, "profile_pic_url_hd", "profile_pic_url", "avatar_url", "profile_image_url")
-	if avatarURL == "" && handle != "" {
+	if handle != "" {
 		nested := instagramNestedProfileForHandle(obj, handle)
 		if nested.DisplayName != "" && displayName == "" {
 			displayName = nested.DisplayName
 		}
-		avatarURL = nested.AvatarURL
+		if preferInstagramAvatarURL(nested.AvatarURL, avatarURL) {
+			avatarURL = nested.AvatarURL
+		}
 	}
 	if sourceHandle != "" {
 		if coauthorDisplayName, ok := instagramCoauthorDisplayName(obj, sourceHandle); ok || handle == "" {
@@ -564,6 +576,8 @@ func instagramNestedProfileForHandle(obj map[string]any, handle string) Instagra
 	if handle == "" {
 		return InstagramProfile{}
 	}
+	bestScore := -1
+	var best InstagramProfile
 	for _, nestedKey := range []string{"user", "owner", "author", "audio_user"} {
 		nested, ok := obj[nestedKey].(map[string]any)
 		if !ok {
@@ -573,7 +587,7 @@ func instagramNestedProfileForHandle(obj map[string]any, handle string) Instagra
 		if username != handle {
 			continue
 		}
-		return InstagramProfile{
+		profile := InstagramProfile{
 			Handle:      username,
 			DisplayName: firstExactString(nested, "full_name", "fullname", "name"),
 			Bio:         firstExactString(nested, "biography", "bio"),
@@ -583,8 +597,47 @@ func instagramNestedProfileForHandle(obj map[string]any, handle string) Instagra
 			Following:   firstInt(nested, "edge_follow", "following", "following_count", "count_follow"),
 			Verified:    firstBool(nested, "is_verified", "verified"),
 		}
+		if !instagramProfileHasData(profile) {
+			continue
+		}
+		score := instagramProfileScore(profile, handle)
+		if score > bestScore {
+			best = profile
+			bestScore = score
+		}
 	}
-	return InstagramProfile{}
+	return best
+}
+
+func preferInstagramAvatarURL(candidate, current string) bool {
+	if strings.TrimSpace(candidate) == "" {
+		return false
+	}
+	if strings.TrimSpace(current) == "" {
+		return true
+	}
+	return instagramAvatarURLUsable(candidate) && !instagramAvatarURLUsable(current)
+}
+
+func instagramAvatarURLUsable(raw string) bool {
+	raw = strings.TrimSpace(raw)
+	return raw != "" && !instagramAvatarURLExpiredAt(raw, time.Now())
+}
+
+func instagramAvatarURLExpiredAt(raw string, now time.Time) bool {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return false
+	}
+	oe := parsed.Query().Get("oe")
+	if oe == "" {
+		return false
+	}
+	expiry, err := strconv.ParseInt(oe, 16, 64)
+	if err != nil || expiry <= 0 {
+		return false
+	}
+	return !time.Unix(expiry, 0).After(now)
 }
 
 func instagramCoauthorDisplayName(obj map[string]any, handle string) (string, bool) {

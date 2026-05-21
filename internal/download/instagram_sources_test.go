@@ -2,9 +2,11 @@ package download
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestParseInstagramChannelDump(t *testing.T) {
@@ -64,6 +66,21 @@ func TestParseInstagramChannelDumpUsesMatchingAudioUserAvatar(t *testing.T) {
 	}
 	if refs[0].AuthorAvatarURL != "https://cdn.example/audio-avatar.jpg" {
 		t.Fatalf("avatar = %q", refs[0].AuthorAvatarURL)
+	}
+}
+
+func TestParseInstagramChannelDumpPrefersFreshNestedAvatar(t *testing.T) {
+	expired := instagramAvatarURLForTest("expired", -time.Hour)
+	fresh := instagramAvatarURLForTest("fresh", time.Hour)
+	dump := []byte(fmt.Sprintf(`
+[2, {"subcategory":"posts","type":"post","username":"sample.creator","fullname":"Sample Creator","profile_pic_url":%q,"user":{"username":"sample.creator","full_name":"Sample Creator","profile_pic_url":%q},"owner":{"username":"sample.creator","full_name":"Sample Creator","profile_pic_url":%q},"post_shortcode":"sample_post","post_url":"https://www.instagram.com/p/sample_post/","description":"A post","date":"2026-04-30 16:26:41"}]
+`, expired, expired, fresh))
+	refs := ParseInstagramChannelDump(dump)
+	if len(refs) != 1 {
+		t.Fatalf("len(refs) = %d, want 1: %#v", len(refs), refs)
+	}
+	if refs[0].AuthorAvatarURL != fresh {
+		t.Fatalf("avatar = %q, want %q", refs[0].AuthorAvatarURL, fresh)
 	}
 }
 
@@ -229,6 +246,21 @@ func TestParseInstagramProfileDumpUsesMatchingAudioUserAvatar(t *testing.T) {
 	}
 }
 
+func TestParseInstagramProfileDumpPrefersFreshNestedAvatar(t *testing.T) {
+	expired := instagramAvatarURLForTest("expired", -time.Hour)
+	fresh := instagramAvatarURLForTest("fresh", time.Hour)
+	dump := []byte(fmt.Sprintf(`
+[2, {"subcategory":"reels","type":"reel","username":"sample.creator","fullname":"Sample Creator","user":{"username":"sample.creator","full_name":"Sample Creator","profile_pic_url":%q},"owner":{"username":"sample.creator","full_name":"Sample Creator","profile_pic_url":%q},"post_shortcode":"sample_post"}]
+`, expired, fresh))
+	profile := ParseInstagramProfileDump(dump, "sample.creator")
+	if profile == nil {
+		t.Fatal("profile missing")
+	}
+	if profile.AvatarURL != fresh {
+		t.Fatalf("avatar = %q, want %q", profile.AvatarURL, fresh)
+	}
+}
+
 func TestInstagramProfileContinuesPastFallbackDumpForAvatar(t *testing.T) {
 	bin := t.TempDir()
 	writeExecutable(t, filepath.Join(bin, "gallery-dl"), `#!/bin/sh
@@ -256,6 +288,38 @@ esac
 	}
 	if profile.AvatarURL != "https://cdn.example/audio-avatar.jpg" {
 		t.Fatalf("avatar = %q", profile.AvatarURL)
+	}
+}
+
+func TestInstagramProfileContinuesPastExpiredAvatar(t *testing.T) {
+	expired := instagramAvatarURLForTest("expired", -time.Hour)
+	fresh := instagramAvatarURLForTest("fresh", time.Hour)
+	bin := t.TempDir()
+	writeExecutable(t, filepath.Join(bin, "gallery-dl"), fmt.Sprintf(`#!/bin/sh
+last=""
+for arg in "$@"; do
+  last="$arg"
+done
+case "$last" in
+  */reels/)
+    printf '[2, {"subcategory":"reels","type":"reel","username":"sample.creator","fullname":"Sample Creator","profile_pic_url":%q,"post_shortcode":"sample_reel"}]\n'
+    ;;
+  */posts/)
+    printf '[2, {"subcategory":"posts","type":"post","username":"sample.creator","fullname":"Sample Creator","profile_pic_url":%q,"post_shortcode":"sample_post"}]\n'
+    ;;
+esac
+`, expired, fresh))
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	profile, err := (&GalleryDLWrapper{Runner: CommandRunner{}}).InstagramProfile(context.Background(), "sample.creator", "")
+	if err != nil {
+		t.Fatalf("InstagramProfile: %v", err)
+	}
+	if profile == nil {
+		t.Fatal("profile missing")
+	}
+	if profile.AvatarURL != fresh {
+		t.Fatalf("avatar = %q, want %q", profile.AvatarURL, fresh)
 	}
 }
 
@@ -356,4 +420,8 @@ func containsString(values []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func instagramAvatarURLForTest(name string, delta time.Duration) string {
+	return fmt.Sprintf("https://cdn.example/%s.jpg?oe=%X", name, time.Now().Add(delta).Unix())
 }
