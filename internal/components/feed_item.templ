@@ -459,7 +459,7 @@ templ feedBodyText(p PageProps, item model.FeedItem) {
 		data-feed-text-container
 		data-translate-field="body"
 		data-lang={ item.Lang }
-		data-target-lang="en"
+		data-target-lang={ translateTargetOrDefault(p.TranslateTargetLang) }
 		if item.BodyTranslation != "" {
 			data-translated="1"
 		}
@@ -674,7 +674,7 @@ templ feedQuoteCard(p PageProps, item model.FeedItem) {
 					data-feed-text-container
 					data-translate-field="quote"
 					data-lang={ item.QuoteLang }
-					data-target-lang="en"
+					data-target-lang={ translateTargetOrDefault(p.TranslateTargetLang) }
 					if item.QuoteTranslation != "" {
 						data-translated="1"
 					}

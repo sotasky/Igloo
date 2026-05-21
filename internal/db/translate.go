@@ -70,6 +70,118 @@ func (db *DB) GetTranslationsForTweetIDs(tweetIDs []string, targetLang string) (
 	return result, rows.Err()
 }
 
+// GetReusableTranslation returns a cached translation from an equivalent stored
+// feed text field. It is intentionally conservative: body reuse is limited to
+// rows sharing canonical/content identity and matching body text, while quote
+// reuse requires the wrapper quote text to match the locally stored quoted tweet.
+func (db *DB) GetReusableTranslation(tweetID, field, targetLang string) (TranslationEntry, error) {
+	targetLang = strings.ToLower(strings.TrimSpace(targetLang))
+	if targetLang == "" {
+		targetLang = "en"
+	}
+	switch strings.TrimSpace(field) {
+	case "body":
+		return db.getReusableBodyTranslation(tweetID, targetLang)
+	case "quote":
+		return db.getReusableQuoteTranslation(tweetID, targetLang)
+	default:
+		return TranslationEntry{}, sql.ErrNoRows
+	}
+}
+
+func (db *DB) getReusableBodyTranslation(tweetID, targetLang string) (TranslationEntry, error) {
+	var entry TranslationEntry
+	err := db.conn.QueryRow(`
+		WITH target AS (
+			SELECT tweet_id,
+			       TRIM(COALESCE(body_text, '')) AS body_text,
+			       TRIM(COALESCE(content_hash, '')) AS content_hash,
+			       TRIM(COALESCE(canonical_tweet_id, '')) AS canonical_tweet_id
+			FROM feed_items
+			WHERE tweet_id = ?
+		)
+		SELECT tr.translated_text, tr.source_lang
+		FROM target t
+		JOIN feed_items f
+		  ON f.tweet_id != t.tweet_id
+		 AND TRIM(COALESCE(f.body_text, '')) = t.body_text
+		 AND t.body_text != ''
+		 AND (
+			(t.canonical_tweet_id != '' AND (
+				f.tweet_id = t.canonical_tweet_id
+				OR TRIM(COALESCE(f.canonical_tweet_id, '')) = t.canonical_tweet_id
+			))
+			OR (t.content_hash != '' AND TRIM(COALESCE(f.content_hash, '')) = t.content_hash)
+		 )
+		JOIN translations tr
+		  ON tr.tweet_id = f.tweet_id
+		 AND tr.field = 'body'
+		 AND tr.target_lang = ?
+		WHERE TRIM(COALESCE(tr.translated_text, '')) != ''
+		ORDER BY
+			CASE
+				WHEN t.canonical_tweet_id != '' AND f.tweet_id = t.canonical_tweet_id THEN 0
+				WHEN TRIM(COALESCE(f.canonical_tweet_id, '')) = f.tweet_id THEN 1
+				ELSE 2
+			END,
+			tr.translated_at DESC
+		LIMIT 1
+	`, tweetID, targetLang).Scan(&entry.TranslatedText, &entry.SourceLang)
+	if err == sql.ErrNoRows {
+		return TranslationEntry{}, sql.ErrNoRows
+	}
+	return entry, err
+}
+
+func (db *DB) getReusableQuoteTranslation(tweetID, targetLang string) (TranslationEntry, error) {
+	var entry TranslationEntry
+	err := db.conn.QueryRow(`
+		WITH wrapper AS (
+			SELECT tweet_id,
+			       TRIM(COALESCE(quote_tweet_id, '')) AS quote_tweet_id,
+			       TRIM(COALESCE(quote_body_text, '')) AS quote_body_text
+			FROM feed_items
+			WHERE tweet_id = ?
+		),
+		candidates AS (
+			SELECT tr.translated_text, tr.source_lang, tr.translated_at, 0 AS priority
+			FROM wrapper w
+			JOIN feed_items quoted
+			  ON quoted.tweet_id = w.quote_tweet_id
+			 AND TRIM(COALESCE(quoted.body_text, '')) = w.quote_body_text
+			 AND w.quote_body_text != ''
+			JOIN translations tr
+			  ON tr.tweet_id = quoted.tweet_id
+			 AND tr.field = 'body'
+			 AND tr.target_lang = ?
+
+			UNION ALL
+
+			SELECT tr.translated_text, tr.source_lang, tr.translated_at, 1 AS priority
+			FROM wrapper w
+			JOIN feed_items sibling
+			  ON sibling.tweet_id != w.tweet_id
+			 AND TRIM(COALESCE(sibling.quote_tweet_id, '')) = w.quote_tweet_id
+			 AND TRIM(COALESCE(sibling.quote_body_text, '')) = w.quote_body_text
+			 AND w.quote_tweet_id != ''
+			 AND w.quote_body_text != ''
+			JOIN translations tr
+			  ON tr.tweet_id = sibling.tweet_id
+			 AND tr.field = 'quote'
+			 AND tr.target_lang = ?
+		)
+		SELECT translated_text, source_lang
+		FROM candidates
+		WHERE TRIM(COALESCE(translated_text, '')) != ''
+		ORDER BY priority ASC, translated_at DESC
+		LIMIT 1
+	`, tweetID, targetLang, targetLang).Scan(&entry.TranslatedText, &entry.SourceLang)
+	if err == sql.ErrNoRows {
+		return TranslationEntry{}, sql.ErrNoRows
+	}
+	return entry, err
+}
+
 // ListTranslationCandidates returns recent body and quote text fields missing a
 // cached translation. Known target/skip languages are filtered in SQL; unknown
 // language rows are returned after known foreign-language rows so callers can

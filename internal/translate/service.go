@@ -33,9 +33,10 @@ const (
 var (
 	// Combined token regex: URL first (most specific), then mention, then hashtag.
 	// One pass preserves positional order so indexes match reading order.
-	reToken    = regexp.MustCompile(`https?://\S+|@\S+|#\S+`)
-	reWS       = regexp.MustCompile(`[ \t]+`)
-	reSentinel = regexp.MustCompile(`\{\{\s*(\d+)\s*\}\}`)
+	reToken           = regexp.MustCompile(`https?://\S+|@\S+|#\S+`)
+	reWS              = regexp.MustCompile(`[ \t]+`)
+	reSentinel        = regexp.MustCompile(`\{\{\s*(\d+)\s*\}\}`)
+	reKagiBatchMarker = regexp.MustCompile(`(?m)^IGLOO_ITEM_([0-9]+):[ \t]*(.*)$`)
 
 	ErrNotConfigured         = errors.New("translation provider not configured")
 	ErrFeedItemNotFound      = errors.New("feed item not found")
@@ -57,6 +58,12 @@ type Result struct {
 	SourceLang     string
 	TargetLang     string
 	Provider       string
+}
+
+type translationTextRequest struct {
+	Text           string
+	ContextHint    string
+	SourceLangHint string
 }
 
 type AlreadyTargetLanguageError struct {
@@ -146,6 +153,17 @@ func FeedText(ctx context.Context, database *db.DB, tweetID, field, targetLang s
 	}
 	if !language.IsUnknown(detectedLang) && sourceLanguageMatchesTarget(detectedLang, targetLang) {
 		return nil, AlreadyTargetLanguageError{SourceLang: language.DisplayName(detectedLang)}
+	}
+
+	if reused, ok, err := reusableTranslation(database, tweetID, field, sourceText, targetLang, nil); err != nil {
+		slog.Warn("reusable translation lookup", "tweet_id", tweetID, "field", field, "err", err)
+	} else if ok {
+		return &Result{
+			TranslatedText: reused.TranslatedText,
+			SourceLang:     language.DisplayName(reused.SourceLang),
+			TargetLang:     targetLang,
+			Provider:       "cache",
+		}, nil
 	}
 
 	contextHint := stripForTranslateContext(buildContext(fi.BodyText, fi.QuoteBodyText, field))
@@ -300,6 +318,56 @@ func buildContext(bodyText, quoteBodyText, field string) string {
 }
 
 func translateTextWithDB(ctx context.Context, database *db.DB, text, targetLang, contextHint, sourceLangHint string) (*Result, string, error) {
+	results, provider, err := translateTextBatchWithDB(ctx, database, []translationTextRequest{{
+		Text:           text,
+		ContextHint:    contextHint,
+		SourceLangHint: sourceLangHint,
+	}}, targetLang)
+	if err != nil || len(results) == 0 {
+		return nil, provider, err
+	}
+	return results[0], provider, nil
+}
+
+func reusableTranslation(database *db.DB, tweetID, field, sourceText, targetLang string, skipSet map[string]bool) (db.TranslationEntry, bool, error) {
+	entry, err := database.GetReusableTranslation(tweetID, field, targetLang)
+	if err == sql.ErrNoRows {
+		return db.TranslationEntry{}, false, nil
+	}
+	if err != nil {
+		return db.TranslationEntry{}, false, err
+	}
+
+	translatedText := strings.TrimSpace(entry.TranslatedText)
+	if translatedText == "" {
+		return db.TranslationEntry{}, false, nil
+	}
+	sourceLang := language.DisplayName(entry.SourceLang)
+	if sourceLang == "" {
+		sourceLang = "und"
+	}
+	if sourceLanguageMatchesTarget(sourceLang, targetLang) || language.InSet(sourceLang, skipSet) {
+		return db.TranslationEntry{}, false, nil
+	}
+	if equivalentTranslationText(sourceText, translatedText) {
+		return db.TranslationEntry{}, false, nil
+	}
+	if err := database.SetTranslation(tweetID, field, sourceLang, targetLang, translatedText); err != nil {
+		return db.TranslationEntry{}, false, err
+	}
+	return db.TranslationEntry{TranslatedText: translatedText, SourceLang: sourceLang}, true, nil
+}
+
+func equivalentTranslationText(sourceText, translatedText string) bool {
+	sourceText = strings.Join(strings.Fields(sourceText), " ")
+	translatedText = strings.Join(strings.Fields(translatedText), " ")
+	return sourceText != "" && strings.EqualFold(sourceText, translatedText)
+}
+
+func translateTextBatchWithDB(ctx context.Context, database *db.DB, requests []translationTextRequest, targetLang string) ([]*Result, string, error) {
+	if len(requests) == 0 {
+		return nil, "", nil
+	}
 	backendRaw, _ := database.GetSetting("translate_backend", settings.TranslateBackendNone)
 	backend := settings.NormalizeTranslateBackend(backendRaw)
 
@@ -311,27 +379,34 @@ func translateTextWithDB(ctx context.Context, database *db.DB, text, targetLang,
 				Err:      fmt.Errorf("provider cooldown active for %s", remaining.Round(time.Second)),
 			}
 		}
-		result, err := kagiTranslate(ctx, text, targetLang, contextHint, sourceLangHint)
+		results, err := kagiTranslateBatch(ctx, requests, targetLang)
 		if errors.Is(err, ErrProviderRateLimited) {
 			kagiProviderStartCooldown(time.Now())
 		}
-		return result, backend, err
+		return results, backend, err
 	case settings.TranslateBackendGoogle:
 		apiKey, _ := database.GetSetting("translate_api_key", "")
 		apiSite, _ := database.GetSetting("translate_api_site", "")
 		if strings.TrimSpace(apiKey) == "" {
 			return nil, backend, ErrNotConfigured
 		}
-		result, err := googleTranslate(ctx, apiSite, apiKey, text, targetLang)
-		return result, backend, err
+		results, err := googleTranslateBatch(ctx, apiSite, apiKey, requests, targetLang)
+		return results, backend, err
 	case settings.TranslateBackendDeepL:
 		apiKey, _ := database.GetSetting("translate_api_key", "")
 		apiSite, _ := database.GetSetting("translate_api_site", "")
 		if strings.TrimSpace(apiKey) == "" {
 			return nil, backend, ErrNotConfigured
 		}
-		result, err := deeplTranslate(ctx, apiSite, apiKey, text, targetLang)
-		return result, backend, err
+		results := make([]*Result, 0, len(requests))
+		for _, request := range requests {
+			result, err := deeplTranslate(ctx, apiSite, apiKey, request.Text, targetLang)
+			if err != nil {
+				return nil, backend, err
+			}
+			results = append(results, result)
+		}
+		return results, backend, nil
 	case settings.TranslateBackendOpenAICompat:
 		apiKey, _ := database.GetSetting("translate_api_key", "")
 		apiSite, _ := database.GetSetting("translate_api_site", "")
@@ -339,10 +414,26 @@ func translateTextWithDB(ctx context.Context, database *db.DB, text, targetLang,
 		if strings.TrimSpace(model) == "" {
 			return nil, backend, ErrNotConfigured
 		}
-		result, err := openAICompatTranslate(ctx, apiSite, apiKey, model, text, targetLang, contextHint)
-		return result, backend, err
+		results := make([]*Result, 0, len(requests))
+		for _, request := range requests {
+			result, err := openAICompatTranslate(ctx, apiSite, apiKey, model, request.Text, targetLang, request.ContextHint)
+			if err != nil {
+				return nil, backend, err
+			}
+			results = append(results, result)
+		}
+		return results, backend, nil
 	default:
 		return nil, backend, ErrNotConfigured
+	}
+}
+
+func providerSupportsBatch(backend string) bool {
+	switch settings.NormalizeTranslateBackend(backend) {
+	case settings.TranslateBackendKagiCLI, settings.TranslateBackendGoogle:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -403,8 +494,110 @@ func kagiTranslate(ctx context.Context, text, targetLang, contextHint, sourceLan
 	}, nil
 }
 
+func kagiTranslateBatch(ctx context.Context, requests []translationTextRequest, targetLang string) ([]*Result, error) {
+	if len(requests) == 0 {
+		return nil, nil
+	}
+	if len(requests) == 1 {
+		result, err := kagiTranslate(ctx, requests[0].Text, targetLang, requests[0].ContextHint, requests[0].SourceLangHint)
+		if err != nil || result == nil {
+			return []*Result{result}, err
+		}
+		result.TargetLang = targetLang
+		return []*Result{result}, nil
+	}
+
+	result, err := kagiTranslate(ctx, kagiBatchText(requests), targetLang, kagiBatchContext(requests), requests[0].SourceLangHint)
+	if err != nil || result == nil {
+		return nil, err
+	}
+	parts, err := parseKagiBatchTranslation(result.TranslatedText, len(requests))
+	if err != nil {
+		return nil, err
+	}
+	results := make([]*Result, 0, len(parts))
+	for i, part := range parts {
+		srcLang := result.SourceLang
+		if srcLang == "" {
+			srcLang = language.DisplayName(requests[i].SourceLangHint)
+		}
+		results = append(results, &Result{
+			TranslatedText: part,
+			SourceLang:     srcLang,
+			TargetLang:     targetLang,
+		})
+	}
+	return results, nil
+}
+
+func kagiBatchText(requests []translationTextRequest) string {
+	var b strings.Builder
+	for i, request := range requests {
+		if i > 0 {
+			b.WriteString("\n")
+		}
+		fmt.Fprintf(&b, "IGLOO_ITEM_%d:\n%s", i, strings.TrimSpace(request.Text))
+	}
+	return b.String()
+}
+
+func kagiBatchContext(requests []translationTextRequest) string {
+	contextHint := "Translate each IGLOO_ITEM block independently and preserve each IGLOO_ITEM label exactly."
+	if len(requests) > 0 && strings.TrimSpace(requests[0].ContextHint) != "" {
+		contextHint += "\n" + strings.TrimSpace(requests[0].ContextHint)
+	}
+	return contextHint
+}
+
+func parseKagiBatchTranslation(text string, count int) ([]string, error) {
+	matches := reKagiBatchMarker.FindAllStringSubmatchIndex(text, -1)
+	if len(matches) != count {
+		return nil, fmt.Errorf("%w: kagi batch returned %d markers for %d items", ErrTranslationFailed, len(matches), count)
+	}
+	out := make([]string, count)
+	seen := make(map[int]bool, count)
+	for i, match := range matches {
+		idx, err := strconv.Atoi(text[match[2]:match[3]])
+		if err != nil || idx < 0 || idx >= count || seen[idx] {
+			return nil, fmt.Errorf("%w: invalid kagi batch marker", ErrTranslationFailed)
+		}
+		seen[idx] = true
+		start := match[1]
+		end := len(text)
+		if i+1 < len(matches) {
+			end = matches[i+1][0]
+		}
+		var sameLine string
+		if len(match) >= 6 && match[4] >= 0 && match[5] >= match[4] {
+			sameLine = strings.TrimSpace(text[match[4]:match[5]])
+		}
+		body := strings.TrimSpace(text[start:end])
+		if sameLine != "" {
+			body = strings.TrimSpace(sameLine + "\n" + body)
+		}
+		out[idx] = body
+		if out[idx] == "" {
+			return nil, fmt.Errorf("%w: empty kagi batch item", ErrTranslationFailed)
+		}
+	}
+	for i := 0; i < count; i++ {
+		if !seen[i] {
+			return nil, fmt.Errorf("%w: missing kagi batch marker", ErrTranslationFailed)
+		}
+	}
+	return out, nil
+}
+
 func kagiTranslateArgs(text, targetLang, contextHint, sourceLangHint string) []string {
-	args := []string{"translate", "--to", targetLang, "--no-alternatives", "--no-word-insights"}
+	args := []string{
+		"translate",
+		"--to", targetLang,
+		"--no-alternatives",
+		"--no-word-insights",
+		"--no-suggestions",
+		"--no-alignments",
+		"--preserve-formatting", "true",
+	}
 	if sourceLang := kagiSourceLanguage(sourceLangHint); sourceLang != "" {
 		args = append(args, "--from", sourceLang, "--predicted-language", sourceLang)
 	}
@@ -483,6 +676,17 @@ func kagiProviderClearCooldownForTest() {
 }
 
 func googleTranslate(ctx context.Context, endpoint, apiKey, text, targetLang string) (*Result, error) {
+	results, err := googleTranslateBatch(ctx, endpoint, apiKey, []translationTextRequest{{Text: text}}, targetLang)
+	if err != nil || len(results) == 0 {
+		return nil, err
+	}
+	return results[0], nil
+}
+
+func googleTranslateBatch(ctx context.Context, endpoint, apiKey string, requests []translationTextRequest, targetLang string) ([]*Result, error) {
+	if len(requests) == 0 {
+		return nil, nil
+	}
 	endpoint = strings.TrimSpace(endpoint)
 	if endpoint == "" {
 		endpoint = "https://translation.googleapis.com/language/translate/v2"
@@ -495,8 +699,12 @@ func googleTranslate(ctx context.Context, endpoint, apiKey, text, targetLang str
 	q.Set("key", strings.TrimSpace(apiKey))
 	u.RawQuery = q.Encode()
 
+	texts := make([]string, 0, len(requests))
+	for _, request := range requests {
+		texts = append(texts, request.Text)
+	}
 	body, err := json.Marshal(map[string]any{
-		"q":      text,
+		"q":      texts,
 		"target": strings.ToLower(strings.TrimSpace(targetLang)),
 		"format": "text",
 	})
@@ -535,11 +743,22 @@ func googleTranslate(ctx context.Context, endpoint, apiKey, text, targetLang str
 	if len(data.Data.Translations) == 0 {
 		return nil, nil
 	}
-	tr := data.Data.Translations[0]
-	return &Result{
-		TranslatedText: html.UnescapeString(tr.TranslatedText),
-		SourceLang:     language.DisplayName(tr.DetectedSourceLanguage),
-	}, nil
+	if len(data.Data.Translations) != len(requests) {
+		return nil, fmt.Errorf("%w: google returned %d translations for %d items", ErrTranslationFailed, len(data.Data.Translations), len(requests))
+	}
+	results := make([]*Result, 0, len(data.Data.Translations))
+	for i, tr := range data.Data.Translations {
+		srcLang := language.DisplayName(tr.DetectedSourceLanguage)
+		if srcLang == "" {
+			srcLang = language.DisplayName(requests[i].SourceLangHint)
+		}
+		results = append(results, &Result{
+			TranslatedText: html.UnescapeString(tr.TranslatedText),
+			SourceLang:     srcLang,
+			TargetLang:     targetLang,
+		})
+	}
+	return results, nil
 }
 
 func deeplTranslate(ctx context.Context, endpoint, apiKey, text, targetLang string) (*Result, error) {

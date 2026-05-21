@@ -16,6 +16,23 @@ import (
 	"github.com/screwys/igloo/internal/settings"
 )
 
+func googleBatchTexts(t *testing.T, body map[string]any) []string {
+	t.Helper()
+	raw, ok := body["q"].([]any)
+	if !ok {
+		t.Fatalf("q = %#v, want array", body["q"])
+	}
+	out := make([]string, 0, len(raw))
+	for _, item := range raw {
+		text, ok := item.(string)
+		if !ok {
+			t.Fatalf("q item = %#v, want string", item)
+		}
+		out = append(out, text)
+	}
+	return out
+}
+
 func TestShouldAutoTranslateCandidate(t *testing.T) {
 	skipSet := map[string]bool{"ja": true}
 	cases := []struct {
@@ -169,6 +186,459 @@ func TestTranslateBackgroundSkipsProviderDetectedSkipLanguage(t *testing.T) {
 	}
 }
 
+func TestTranslateBackgroundBatchesSameLanguageThreadBodies(t *testing.T) {
+	requests := 0
+	var gotTexts []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		var gotBody map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		gotTexts = googleBatchTexts(t, gotBody)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":{"translations":[{"translatedText":"root translated","detectedSourceLanguage":"ko"},{"translatedText":"reply translated","detectedSourceLanguage":"ko"}]}}`))
+	}))
+	defer srv.Close()
+
+	d := openTranslateTestDB(t)
+	base := time.Unix(1_700_000_000, 0)
+	if _, err := d.UpsertFeedItems([]model.FeedItem{
+		{
+			TweetID:      "thread_root_translate",
+			AuthorHandle: "sample_author_root",
+			BodyText:     "루트 본문",
+			Lang:         "ko",
+			PublishedAt:  &base,
+		},
+		{
+			TweetID:       "thread_reply_translate",
+			AuthorHandle:  "sample_author_reply",
+			BodyText:      "답글 본문",
+			Lang:          "ko",
+			IsReply:       true,
+			ReplyToStatus: "thread_root_translate",
+			PublishedAt:   ptrTime(base.Add(time.Minute)),
+		},
+	}); err != nil {
+		t.Fatalf("UpsertFeedItems: %v", err)
+	}
+	if err := d.SetSetting("", "translate_backend", settings.TranslateBackendGoogle); err != nil {
+		t.Fatalf("SetSetting translate_backend: %v", err)
+	}
+	if err := d.SetSetting("", "translate_api_site", srv.URL); err != nil {
+		t.Fatalf("SetSetting translate_api_site: %v", err)
+	}
+	if err := d.SetSetting("", "translate_api_key", "test-key"); err != nil {
+		t.Fatalf("SetSetting translate_api_key: %v", err)
+	}
+
+	cfg := translateBackgroundConfig{
+		mode:    settings.TranslateAutoBackground,
+		backend: settings.TranslateBackendGoogle,
+		target:  "en",
+	}
+	translated, err := runTranslateBackgroundBatch(context.Background(), d, cfg, map[string]translateBackgroundSkip{})
+	if err != nil {
+		t.Fatalf("runTranslateBackgroundBatch: %v", err)
+	}
+	if translated != 2 {
+		t.Fatalf("translated = %d, want 2", translated)
+	}
+	if requests != 1 {
+		t.Fatalf("provider requests = %d, want 1", requests)
+	}
+	if len(gotTexts) != 2 || gotTexts[0] != "루트 본문" || gotTexts[1] != "답글 본문" {
+		t.Fatalf("q texts = %#v", gotTexts)
+	}
+	for tweetID, want := range map[string]string{
+		"thread_root_translate":  "root translated",
+		"thread_reply_translate": "reply translated",
+	} {
+		got, _, err := d.GetTranslation(tweetID, "body", "en")
+		if err != nil {
+			t.Fatalf("GetTranslation %s: %v", tweetID, err)
+		}
+		if got != want {
+			t.Fatalf("%s translation = %q, want %q", tweetID, got, want)
+		}
+	}
+}
+
+func TestTranslateBackgroundRetriesOnlyRejectedBatchItem(t *testing.T) {
+	requests := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		var gotBody map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		texts := googleBatchTexts(t, gotBody)
+		if len(texts) != 2 {
+			t.Fatalf("q texts = %#v, want two-item thread batch", texts)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":{"translations":[{"translatedText":"root translated","detectedSourceLanguage":"ko"},{"translatedText":"reply translated","detectedSourceLanguage":"ko"}]}}`))
+	}))
+	defer srv.Close()
+
+	d := openTranslateTestDB(t)
+	base := time.Unix(1_700_000_000, 0)
+	if _, err := d.UpsertFeedItems([]model.FeedItem{
+		{
+			TweetID:      "sample_root",
+			AuthorHandle: "sample_author_root",
+			BodyText:     "루트 본문",
+			Lang:         "ko",
+			PublishedAt:  &base,
+		},
+		{
+			TweetID:       "sample_reply",
+			AuthorHandle:  "sample_author_reply",
+			BodyText:      "답글 #태그",
+			Lang:          "ko",
+			IsReply:       true,
+			ReplyToStatus: "sample_root",
+			PublishedAt:   ptrTime(base.Add(time.Minute)),
+		},
+	}); err != nil {
+		t.Fatalf("UpsertFeedItems: %v", err)
+	}
+	if err := d.SetSetting("", "translate_backend", settings.TranslateBackendGoogle); err != nil {
+		t.Fatalf("SetSetting translate_backend: %v", err)
+	}
+	if err := d.SetSetting("", "translate_api_site", srv.URL); err != nil {
+		t.Fatalf("SetSetting translate_api_site: %v", err)
+	}
+	if err := d.SetSetting("", "translate_api_key", "test-key"); err != nil {
+		t.Fatalf("SetSetting translate_api_key: %v", err)
+	}
+
+	cfg := translateBackgroundConfig{
+		mode:    settings.TranslateAutoBackground,
+		backend: settings.TranslateBackendGoogle,
+		target:  "en",
+	}
+	translated, err := runTranslateBackgroundBatch(context.Background(), d, cfg, map[string]translateBackgroundSkip{})
+	if err != nil {
+		t.Fatalf("runTranslateBackgroundBatch: %v", err)
+	}
+	if translated != 1 {
+		t.Fatalf("translated = %d, want only valid item", translated)
+	}
+	if requests != 1 {
+		t.Fatalf("provider requests = %d, want 1", requests)
+	}
+	if got, _, err := d.GetTranslation("sample_root", "body", "en"); err != nil || got != "root translated" {
+		t.Fatalf("root translation = (%q, %v), want root translated", got, err)
+	}
+	if _, _, err := d.GetTranslation("sample_reply", "body", "en"); err != sql.ErrNoRows {
+		t.Fatalf("reply translation err = %v, want sql.ErrNoRows", err)
+	}
+	var status, kind string
+	var attempts int
+	if err := d.QueryRow(`SELECT status, attempts, last_error_kind FROM translation_jobs WHERE tweet_id = ? AND field = 'body' AND target_lang = 'en'`, "sample_reply").Scan(&status, &attempts, &kind); err != nil {
+		t.Fatalf("read retry job: %v", err)
+	}
+	if status != "queued" || attempts != 1 || kind != "provider_error" {
+		t.Fatalf("reply job = status %q attempts %d kind %q, want queued/1/provider_error", status, attempts, kind)
+	}
+}
+
+func TestTranslateBackgroundSplitsMixedLanguageThreadBodies(t *testing.T) {
+	requests := 0
+	var gotBatches [][]string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		var gotBody map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		texts := googleBatchTexts(t, gotBody)
+		gotBatches = append(gotBatches, texts)
+		w.Header().Set("Content-Type", "application/json")
+		switch texts[0] {
+		case "루트 본문":
+			_, _ = w.Write([]byte(`{"data":{"translations":[{"translatedText":"root translated","detectedSourceLanguage":"ko"}]}}`))
+		case "回复正文":
+			_, _ = w.Write([]byte(`{"data":{"translations":[{"translatedText":"reply translated","detectedSourceLanguage":"zh"}]}}`))
+		default:
+			t.Fatalf("unexpected q texts: %#v", texts)
+		}
+	}))
+	defer srv.Close()
+
+	d := openTranslateTestDB(t)
+	base := time.Unix(1_700_000_000, 0)
+	if _, err := d.UpsertFeedItems([]model.FeedItem{
+		{
+			TweetID:      "mixed_thread_root",
+			AuthorHandle: "sample_author_root",
+			BodyText:     "루트 본문",
+			Lang:         "ko",
+			PublishedAt:  &base,
+		},
+		{
+			TweetID:       "mixed_thread_reply",
+			AuthorHandle:  "sample_author_reply",
+			BodyText:      "回复正文",
+			Lang:          "zh",
+			IsReply:       true,
+			ReplyToStatus: "mixed_thread_root",
+			PublishedAt:   ptrTime(base.Add(time.Minute)),
+		},
+	}); err != nil {
+		t.Fatalf("UpsertFeedItems: %v", err)
+	}
+	if err := d.SetSetting("", "translate_backend", settings.TranslateBackendGoogle); err != nil {
+		t.Fatalf("SetSetting translate_backend: %v", err)
+	}
+	if err := d.SetSetting("", "translate_api_site", srv.URL); err != nil {
+		t.Fatalf("SetSetting translate_api_site: %v", err)
+	}
+	if err := d.SetSetting("", "translate_api_key", "test-key"); err != nil {
+		t.Fatalf("SetSetting translate_api_key: %v", err)
+	}
+
+	cfg := translateBackgroundConfig{
+		mode:    settings.TranslateAutoBackground,
+		backend: settings.TranslateBackendGoogle,
+		target:  "en",
+	}
+	translated, err := runTranslateBackgroundBatch(context.Background(), d, cfg, map[string]translateBackgroundSkip{})
+	if err != nil {
+		t.Fatalf("runTranslateBackgroundBatch: %v", err)
+	}
+	if translated != 2 {
+		t.Fatalf("translated = %d, want 2", translated)
+	}
+	if requests != 2 {
+		t.Fatalf("provider requests = %d, want 2; batches=%#v", requests, gotBatches)
+	}
+	for _, batch := range gotBatches {
+		if len(batch) != 1 {
+			t.Fatalf("mixed-language batch should contain one item, got %#v", batch)
+		}
+	}
+}
+
+func TestTranslateBackgroundReusesRetweetBodyTranslation(t *testing.T) {
+	requests := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		http.Error(w, "provider should not be called", http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	d := openTranslateTestDB(t)
+	now := time.Unix(1_700_000_000, 0)
+	if _, err := d.UpsertFeedItems([]model.FeedItem{
+		{
+			TweetID:          "sample_repost_source",
+			AuthorHandle:     "sample_author_original",
+			BodyText:         "안녕하세요",
+			Lang:             "ko",
+			ContentHash:      "sample_same_repost_hash",
+			CanonicalTweetID: "sample_repost_source",
+			PublishedAt:      &now,
+		},
+		{
+			TweetID:          "sample_repost_dup",
+			AuthorHandle:     "sample_author_repost",
+			BodyText:         "안녕하세요",
+			Lang:             "ko",
+			IsRetweet:        true,
+			ContentHash:      "sample_same_repost_hash",
+			CanonicalTweetID: "sample_repost_source",
+			PublishedAt:      ptrTime(now.Add(time.Minute)),
+		},
+	}); err != nil {
+		t.Fatalf("UpsertFeedItems: %v", err)
+	}
+	if err := d.SetTranslation("sample_repost_source", "body", "Korean", "en", "Hello"); err != nil {
+		t.Fatalf("SetTranslation: %v", err)
+	}
+	if err := d.SetSetting("", "translate_backend", settings.TranslateBackendGoogle); err != nil {
+		t.Fatalf("SetSetting translate_backend: %v", err)
+	}
+	if err := d.SetSetting("", "translate_api_site", srv.URL); err != nil {
+		t.Fatalf("SetSetting translate_api_site: %v", err)
+	}
+	if err := d.SetSetting("", "translate_api_key", "test-key"); err != nil {
+		t.Fatalf("SetSetting translate_api_key: %v", err)
+	}
+
+	cfg := translateBackgroundConfig{
+		mode:    settings.TranslateAutoBackground,
+		backend: settings.TranslateBackendGoogle,
+		target:  "en",
+	}
+	translated, err := runTranslateBackgroundBatch(context.Background(), d, cfg, map[string]translateBackgroundSkip{})
+	if err != nil {
+		t.Fatalf("runTranslateBackgroundBatch: %v", err)
+	}
+	if translated != 1 {
+		t.Fatalf("translated = %d, want 1 reused translation", translated)
+	}
+	if requests != 0 {
+		t.Fatalf("provider requests = %d, want 0", requests)
+	}
+	got, src, err := d.GetTranslation("sample_repost_dup", "body", "en")
+	if err != nil {
+		t.Fatalf("GetTranslation repost: %v", err)
+	}
+	if got != "Hello" || src != "Korean" {
+		t.Fatalf("repost translation = (%q, %q), want (Hello, Korean)", got, src)
+	}
+}
+
+func TestTranslateBackgroundReusesMergedRetweetSiblingAfterFirstProviderCall(t *testing.T) {
+	requests := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		var gotBody map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		texts := googleBatchTexts(t, gotBody)
+		if len(texts) != 1 || texts[0] != "안녕하세요" {
+			t.Fatalf("q texts = %#v", texts)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":{"translations":[{"translatedText":"Hello","detectedSourceLanguage":"ko"}]}}`))
+	}))
+	defer srv.Close()
+
+	d := openTranslateTestDB(t)
+	now := time.Unix(1_700_000_000, 0)
+	if _, err := d.UpsertFeedItems([]model.FeedItem{
+		{
+			TweetID:          "sample_duplicate_repost_a",
+			AuthorHandle:     "sample_author_a",
+			BodyText:         "안녕하세요",
+			Lang:             "ko",
+			IsRetweet:        true,
+			ContentHash:      "sample_same_merged_hash",
+			CanonicalTweetID: "sample_source",
+			PublishedAt:      &now,
+		},
+		{
+			TweetID:          "sample_duplicate_repost_b",
+			AuthorHandle:     "sample_author_b",
+			BodyText:         "안녕하세요",
+			Lang:             "ko",
+			IsRetweet:        true,
+			ContentHash:      "sample_same_merged_hash",
+			CanonicalTweetID: "sample_source",
+			PublishedAt:      ptrTime(now.Add(time.Minute)),
+		},
+	}); err != nil {
+		t.Fatalf("UpsertFeedItems: %v", err)
+	}
+	if err := d.SetSetting("", "translate_backend", settings.TranslateBackendGoogle); err != nil {
+		t.Fatalf("SetSetting translate_backend: %v", err)
+	}
+	if err := d.SetSetting("", "translate_api_site", srv.URL); err != nil {
+		t.Fatalf("SetSetting translate_api_site: %v", err)
+	}
+	if err := d.SetSetting("", "translate_api_key", "test-key"); err != nil {
+		t.Fatalf("SetSetting translate_api_key: %v", err)
+	}
+
+	cfg := translateBackgroundConfig{
+		mode:    settings.TranslateAutoBackground,
+		backend: settings.TranslateBackendGoogle,
+		target:  "en",
+	}
+	translated, err := runTranslateBackgroundBatch(context.Background(), d, cfg, map[string]translateBackgroundSkip{})
+	if err != nil {
+		t.Fatalf("runTranslateBackgroundBatch: %v", err)
+	}
+	if translated != 2 {
+		t.Fatalf("translated = %d, want 2", translated)
+	}
+	if requests != 1 {
+		t.Fatalf("provider requests = %d, want 1", requests)
+	}
+	for _, tweetID := range []string{"sample_duplicate_repost_a", "sample_duplicate_repost_b"} {
+		got, _, err := d.GetTranslation(tweetID, "body", "en")
+		if err != nil {
+			t.Fatalf("GetTranslation %s: %v", tweetID, err)
+		}
+		if got != "Hello" {
+			t.Fatalf("%s translation = %q, want Hello", tweetID, got)
+		}
+	}
+}
+
+func TestTranslateBackgroundReusesQuoteWrapperTranslation(t *testing.T) {
+	requests := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		http.Error(w, "provider should not be called", http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	d := openTranslateTestDB(t)
+	now := time.Unix(1_700_000_000, 0)
+	if _, err := d.UpsertFeedItems([]model.FeedItem{
+		{
+			TweetID:      "quoted_translation_source",
+			AuthorHandle: "sample_author_quoted",
+			BodyText:     "고마워요",
+			Lang:         "ko",
+			PublishedAt:  &now,
+		},
+		{
+			TweetID:       "quote_translation_wrapper",
+			AuthorHandle:  "sample_author_wrapper",
+			BodyText:      "wrapper",
+			Lang:          "en",
+			QuoteTweetID:  "quoted_translation_source",
+			QuoteBodyText: "고마워요",
+			QuoteLang:     "ko",
+			PublishedAt:   ptrTime(now.Add(time.Minute)),
+		},
+	}); err != nil {
+		t.Fatalf("UpsertFeedItems: %v", err)
+	}
+	if err := d.SetTranslation("quoted_translation_source", "body", "Korean", "en", "Thank you"); err != nil {
+		t.Fatalf("SetTranslation: %v", err)
+	}
+	if err := d.SetSetting("", "translate_backend", settings.TranslateBackendGoogle); err != nil {
+		t.Fatalf("SetSetting translate_backend: %v", err)
+	}
+	if err := d.SetSetting("", "translate_api_site", srv.URL); err != nil {
+		t.Fatalf("SetSetting translate_api_site: %v", err)
+	}
+	if err := d.SetSetting("", "translate_api_key", "test-key"); err != nil {
+		t.Fatalf("SetSetting translate_api_key: %v", err)
+	}
+
+	cfg := translateBackgroundConfig{
+		mode:    settings.TranslateAutoBackground,
+		backend: settings.TranslateBackendGoogle,
+		target:  "en",
+	}
+	translated, err := runTranslateBackgroundBatch(context.Background(), d, cfg, map[string]translateBackgroundSkip{})
+	if err != nil {
+		t.Fatalf("runTranslateBackgroundBatch: %v", err)
+	}
+	if translated != 1 {
+		t.Fatalf("translated = %d, want 1 reused translation", translated)
+	}
+	if requests != 0 {
+		t.Fatalf("provider requests = %d, want 0", requests)
+	}
+	got, src, err := d.GetTranslation("quote_translation_wrapper", "quote", "en")
+	if err != nil {
+		t.Fatalf("GetTranslation quote wrapper: %v", err)
+	}
+	if got != "Thank you" || src != "Korean" {
+		t.Fatalf("quote translation = (%q, %q), want (Thank you, Korean)", got, src)
+	}
+}
+
 func TestTranslateBackgroundContinuesAfterCandidateProviderError(t *testing.T) {
 	requests := 0
 	errorCandidateRequests := 0
@@ -178,7 +648,8 @@ func TestTranslateBackgroundContinuesAfterCandidateProviderError(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
 			t.Fatalf("decode request: %v", err)
 		}
-		if gotBody["q"] == "坏的文本" {
+		texts := googleBatchTexts(t, gotBody)
+		if len(texts) == 1 && texts[0] == "坏的文本" {
 			errorCandidateRequests++
 			if errorCandidateRequests == 1 {
 				http.Error(w, "provider rejected candidate", http.StatusBadGateway)

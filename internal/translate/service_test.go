@@ -186,6 +186,17 @@ func TestKagiTranslateArgsUseKnownSourceLanguage(t *testing.T) {
 	if !strings.Contains(got, "\x00--predicted-language\x00ko\x00") {
 		t.Fatalf("kagi args missing predicted source language: %q", got)
 	}
+	for _, want := range []string{
+		"\x00--no-alternatives\x00",
+		"\x00--no-word-insights\x00",
+		"\x00--no-suggestions\x00",
+		"\x00--no-alignments\x00",
+		"\x00--preserve-formatting\x00true\x00",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("kagi args missing %q: %q", want, got)
+		}
+	}
 
 	got = strings.Join(kagiTranslateArgs("Mimpi basah WNI", "en", "", "in"), "\x00")
 	if !strings.Contains(got, "\x00--from\x00id\x00") {
@@ -209,6 +220,42 @@ func TestKagiTranslateArgsUseKnownSourceLanguage(t *testing.T) {
 		return
 	}
 	t.Fatalf("missing --context in kagi args: %#v", gotArgs)
+}
+
+func TestKagiBatchTextAndParser(t *testing.T) {
+	requests := []translationTextRequest{
+		{Text: "안녕하세요 {{0}}", SourceLangHint: "ko"},
+		{Text: "고마워요", SourceLangHint: "ko"},
+	}
+	batched := kagiBatchText(requests)
+	for _, want := range []string{"IGLOO_ITEM_0:\n안녕하세요 {{0}}", "IGLOO_ITEM_1:\n고마워요"} {
+		if !strings.Contains(batched, want) {
+			t.Fatalf("batch text missing %q: %q", want, batched)
+		}
+	}
+
+	parts, err := parseKagiBatchTranslation("IGLOO_ITEM_0:\nHello {{0}}\nIGLOO_ITEM_1:\nThank you", 2)
+	if err != nil {
+		t.Fatalf("parseKagiBatchTranslation: %v", err)
+	}
+	if parts[0] != "Hello {{0}}" || parts[1] != "Thank you" {
+		t.Fatalf("parts = %#v", parts)
+	}
+
+	parts, err = parseKagiBatchTranslation("IGLOO_ITEM_0: Hello\nIGLOO_ITEM_1: Thank you", 2)
+	if err != nil {
+		t.Fatalf("parse same-line kagi batch: %v", err)
+	}
+	if parts[0] != "Hello" || parts[1] != "Thank you" {
+		t.Fatalf("same-line parts = %#v", parts)
+	}
+}
+
+func TestKagiBatchParserRejectsMissingDelimiter(t *testing.T) {
+	_, err := parseKagiBatchTranslation("IGLOO_ITEM_0:\nHello\nmissing label", 2)
+	if !errors.Is(err, ErrTranslationFailed) {
+		t.Fatalf("parseKagiBatchTranslation err = %v, want ErrTranslationFailed", err)
+	}
 }
 
 func TestKagiMessageNeedsCooldown(t *testing.T) {
@@ -293,8 +340,39 @@ func TestGoogleTranslateUsesConfiguredEndpointAndKey(t *testing.T) {
 	if gotBody["target"] != "en" || gotBody["format"] != "text" {
 		t.Fatalf("request body = %#v", gotBody)
 	}
+	q, ok := gotBody["q"].([]any)
+	if !ok || len(q) != 1 || q[0] != "サンプル本文" {
+		t.Fatalf("q = %#v, want one-item array", gotBody["q"])
+	}
 	if result.TranslatedText != "Hello & welcome" || result.SourceLang != "Japanese" {
 		t.Fatalf("result = %#v", result)
+	}
+}
+
+func TestGoogleTranslateBatchUsesArrayAndMapsResults(t *testing.T) {
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":{"translations":[{"translatedText":"Hello","detectedSourceLanguage":"ko"},{"translatedText":"Thanks","detectedSourceLanguage":"ko"}]}}`))
+	}))
+	defer srv.Close()
+
+	results, err := googleTranslateBatch(context.Background(), srv.URL, "test-key", []translationTextRequest{
+		{Text: "안녕하세요", SourceLangHint: "ko"},
+		{Text: "고마워요", SourceLangHint: "ko"},
+	}, "en")
+	if err != nil {
+		t.Fatalf("googleTranslateBatch: %v", err)
+	}
+	q, ok := gotBody["q"].([]any)
+	if !ok || len(q) != 2 || q[0] != "안녕하세요" || q[1] != "고마워요" {
+		t.Fatalf("q = %#v, want ordered array", gotBody["q"])
+	}
+	if len(results) != 2 || results[0].TranslatedText != "Hello" || results[1].TranslatedText != "Thanks" {
+		t.Fatalf("results = %#v", results)
 	}
 }
 

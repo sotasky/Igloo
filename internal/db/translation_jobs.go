@@ -87,47 +87,78 @@ func (db *DB) EnqueueTranslationCandidates(targetLang string, skipLangs []string
 }
 
 func (db *DB) ClaimTranslationJob(targetLang string, nowMs int64) (*TranslationJob, error) {
+	jobs, err := db.ClaimTranslationJobs(targetLang, nowMs, 1)
+	if err != nil || len(jobs) == 0 {
+		return nil, err
+	}
+	return jobs[0], nil
+}
+
+func (db *DB) ClaimTranslationJobs(targetLang string, nowMs int64, limit int) ([]*TranslationJob, error) {
 	targetLang = strings.ToLower(strings.TrimSpace(targetLang))
 	if targetLang == "" {
 		targetLang = "en"
 	}
-	var job *TranslationJob
+	if limit < 1 {
+		limit = 1
+	}
+	var jobs []*TranslationJob
 	err := db.WithWrite(func(tx *sql.Tx) error {
-		var tweetID, field string
-		err := tx.QueryRow(`
+		rows, err := tx.Query(`
 			SELECT tweet_id, field
 			FROM translation_jobs
 			WHERE target_lang = ?
 			  AND status = 'queued'
 			  AND next_attempt_at <= ?
 			ORDER BY priority DESC, updated_at ASC, tweet_id ASC, field ASC
-			LIMIT 1
-		`, targetLang, nowMs).Scan(&tweetID, &field)
-		if err == sql.ErrNoRows {
-			return nil
-		}
+			LIMIT ?
+		`, targetLang, nowMs, limit)
 		if err != nil {
 			return err
 		}
-		res, err := tx.Exec(`
-			UPDATE translation_jobs
-			SET status = 'running', updated_at = ?
-			WHERE tweet_id = ? AND field = ? AND target_lang = ? AND status = 'queued'
-		`, nowMs, tweetID, field, targetLang)
-		if err != nil {
+		var selected []struct {
+			tweetID string
+			field   string
+		}
+		for rows.Next() {
+			var row struct {
+				tweetID string
+				field   string
+			}
+			if err := rows.Scan(&row.tweetID, &row.field); err != nil {
+				_ = rows.Close()
+				return err
+			}
+			selected = append(selected, row)
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
 			return err
 		}
-		if n, _ := res.RowsAffected(); n == 0 {
-			return nil
-		}
-		claimed, err := readTranslationJobTx(tx, tweetID, field, targetLang)
-		if err != nil {
+		if err := rows.Close(); err != nil {
 			return err
 		}
-		job = claimed
+		for _, row := range selected {
+			res, err := tx.Exec(`
+				UPDATE translation_jobs
+				SET status = 'running', updated_at = ?
+				WHERE tweet_id = ? AND field = ? AND target_lang = ? AND status = 'queued'
+			`, nowMs, row.tweetID, row.field, targetLang)
+			if err != nil {
+				return err
+			}
+			if n, _ := res.RowsAffected(); n == 0 {
+				continue
+			}
+			claimed, err := readTranslationJobTx(tx, row.tweetID, row.field, targetLang)
+			if err != nil {
+				return err
+			}
+			jobs = append(jobs, claimed)
+		}
 		return nil
 	})
-	return job, err
+	return jobs, err
 }
 
 func readTranslationJobTx(tx *sql.Tx, tweetID, field, targetLang string) (*TranslationJob, error) {

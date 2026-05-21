@@ -85,6 +85,82 @@ func TestSetTranslationQuoteField(t *testing.T) {
 	}
 }
 
+func TestGetReusableTranslationUsesCanonicalBody(t *testing.T) {
+	d := openWritableTestDB(t)
+	now := time.Now()
+	if _, err := d.UpsertFeedItems([]model.FeedItem{
+		{
+			TweetID:          "original_body",
+			AuthorHandle:     "sample_author_original",
+			BodyText:         "안녕하세요",
+			Lang:             "ko",
+			ContentHash:      "same_body_hash",
+			CanonicalTweetID: "original_body",
+			PublishedAt:      &now,
+		},
+		{
+			TweetID:          "sample_repost_body",
+			AuthorHandle:     "sample_author_repost",
+			BodyText:         "안녕하세요",
+			Lang:             "ko",
+			IsRetweet:        true,
+			ContentHash:      "same_body_hash",
+			CanonicalTweetID: "original_body",
+			PublishedAt:      timePtr(now.Add(time.Minute)),
+		},
+	}); err != nil {
+		t.Fatalf("UpsertFeedItems: %v", err)
+	}
+	if err := d.SetTranslation("original_body", "body", "Korean", "en", "Hello"); err != nil {
+		t.Fatalf("SetTranslation: %v", err)
+	}
+
+	got, err := d.GetReusableTranslation("sample_repost_body", "body", "en")
+	if err != nil {
+		t.Fatalf("GetReusableTranslation: %v", err)
+	}
+	if got.TranslatedText != "Hello" || got.SourceLang != "Korean" {
+		t.Fatalf("reusable translation = %#v", got)
+	}
+}
+
+func TestGetReusableTranslationUsesQuotedTweetBody(t *testing.T) {
+	d := openWritableTestDB(t)
+	now := time.Now()
+	if _, err := d.UpsertFeedItems([]model.FeedItem{
+		{
+			TweetID:      "quoted_body",
+			AuthorHandle: "sample_author_quoted",
+			BodyText:     "고마워요",
+			Lang:         "ko",
+			PublishedAt:  &now,
+		},
+		{
+			TweetID:       "quote_wrapper",
+			AuthorHandle:  "sample_author_wrapper",
+			BodyText:      "wrapper text",
+			Lang:          "en",
+			QuoteTweetID:  "quoted_body",
+			QuoteBodyText: "고마워요",
+			QuoteLang:     "ko",
+			PublishedAt:   timePtr(now.Add(time.Minute)),
+		},
+	}); err != nil {
+		t.Fatalf("UpsertFeedItems: %v", err)
+	}
+	if err := d.SetTranslation("quoted_body", "body", "Korean", "en", "Thank you"); err != nil {
+		t.Fatalf("SetTranslation: %v", err)
+	}
+
+	got, err := d.GetReusableTranslation("quote_wrapper", "quote", "en")
+	if err != nil {
+		t.Fatalf("GetReusableTranslation: %v", err)
+	}
+	if got.TranslatedText != "Thank you" || got.SourceLang != "Korean" {
+		t.Fatalf("reusable translation = %#v", got)
+	}
+}
+
 func TestListTranslationCandidates(t *testing.T) {
 	d := openWritableTestDB(t)
 

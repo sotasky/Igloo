@@ -413,7 +413,7 @@ func TestFeedItemRendersIndependentBodyAndQuoteTranslatePills(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	if err := FeedItem(PageProps{}, item).Render(context.Background(), &buf); err != nil {
+	if err := FeedItem(PageProps{TranslateTargetLang: "tr"}, item).Render(context.Background(), &buf); err != nil {
 		t.Fatalf("render feed item: %v", err)
 	}
 	html := buf.String()
@@ -428,6 +428,12 @@ func TestFeedItemRendersIndependentBodyAndQuoteTranslatePills(t *testing.T) {
 		if !strings.Contains(html, `data-translate-field="`+field+`"`) {
 			t.Fatalf("missing %s translate container; html=%s", field, html)
 		}
+	}
+	if got := strings.Count(html, `data-target-lang="tr"`); got != 2 {
+		t.Fatalf("target language container count = %d, want 2; html=%s", got, html)
+	}
+	if strings.Contains(html, `data-target-lang="en"`) {
+		t.Fatalf("feed text containers should not hardcode English target; html=%s", html)
 	}
 }
 

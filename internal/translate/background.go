@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -42,6 +43,19 @@ type translateBackgroundConfig struct {
 type translateBackgroundSkip struct {
 	sourceText string
 	retryable  bool
+}
+
+type translateBackgroundWorkItem struct {
+	candidate    db.TranslationCandidate
+	cleanSource  string
+	placeholders []string
+	contextHint  string
+	threadOrder  int
+}
+
+type translateBackgroundWorkGroup struct {
+	key   string
+	items []translateBackgroundWorkItem
 }
 
 // RunBackground continuously fills the translation cache when the
@@ -177,75 +191,155 @@ func runTranslateBackgroundBatch(ctx context.Context, database *db.DB, cfg trans
 	attempted := 0
 	var lastErr error
 	for translated < translateBackgroundBatchSize {
-		if translated >= translateBackgroundBatchSize {
-			break
-		}
 		if err := ctx.Err(); err != nil {
 			return translated, err
 		}
 
-		job, err := database.ClaimTranslationJob(cfg.target, time.Now().UnixMilli())
+		jobs, err := database.ClaimTranslationJobs(cfg.target, time.Now().UnixMilli(), translateBackgroundBatchSize-translated)
 		if err != nil {
 			return translated, err
 		}
-		if job == nil {
+		if len(jobs) == 0 {
 			break
 		}
 
-		if attempted > 0 && cfg.delay > 0 {
-			timer := time.NewTimer(cfg.delay)
-			select {
-			case <-ctx.Done():
-				timer.Stop()
-				return translated, ctx.Err()
-			case <-timer.C:
-			}
-		}
-		attempted++
-		candidate := db.TranslationCandidate{
-			TweetID:       job.TweetID,
-			Field:         job.Field,
-			SourceText:    job.SourceText,
-			SourceLang:    job.SourceLang,
-			BodyText:      job.BodyText,
-			QuoteBodyText: job.QuoteBodyText,
-		}
-		key := translateBackgroundCandidateKey(candidate, cfg.target)
-		if shouldSkipTranslateBackgroundCandidate(skipped, key, candidate.SourceText) {
-			_ = database.SkipTranslationJob(job.TweetID, job.Field, job.TargetLang, "locally skipped")
-			continue
-		}
-		if !shouldAutoTranslateCandidate(candidate.SourceLang, candidate.SourceText, cfg.target, cfg.skipSet) {
-			skipped[key] = translateBackgroundSkip{sourceText: candidate.SourceText}
-			_ = database.SkipTranslationJob(job.TweetID, job.Field, job.TargetLang, "not eligible")
-			continue
-		}
-		wrote, err := translateAndCacheBackgroundCandidate(ctx, database, cfg, candidate)
-		if err != nil {
-			if errors.Is(err, context.Canceled) || (errors.Is(err, context.DeadlineExceeded) && ctx.Err() != nil) {
+		groupsByKey := make(map[string]*translateBackgroundWorkGroup)
+		var groupOrder []string
+		for _, job := range jobs {
+			if err := ctx.Err(); err != nil {
 				return translated, err
 			}
-			if errors.Is(err, ErrProviderRateLimited) {
-				_ = database.RetryTranslationJob(job.TweetID, job.Field, job.TargetLang, "rate_limited", err.Error(), translateBackgroundRateLimitDelay)
+
+			candidate := db.TranslationCandidate{
+				TweetID:       job.TweetID,
+				Field:         job.Field,
+				SourceText:    job.SourceText,
+				SourceLang:    job.SourceLang,
+				BodyText:      job.BodyText,
+				QuoteBodyText: job.QuoteBodyText,
+			}
+			key := translateBackgroundCandidateKey(candidate, cfg.target)
+			if shouldSkipTranslateBackgroundCandidate(skipped, key, candidate.SourceText) {
+				_ = database.SkipTranslationJob(job.TweetID, job.Field, job.TargetLang, "locally skipped")
+				continue
+			}
+			if !shouldAutoTranslateCandidate(candidate.SourceLang, candidate.SourceText, cfg.target, cfg.skipSet) {
+				skipped[key] = translateBackgroundSkip{sourceText: candidate.SourceText}
+				_ = database.SkipTranslationJob(job.TweetID, job.Field, job.TargetLang, "not eligible")
+				continue
+			}
+			if _, ok, err := reusableTranslation(database, job.TweetID, job.Field, candidate.SourceText, cfg.target, cfg.skipSet); err != nil {
+				failures++
+				lastErr = err
+				skipped[key] = translateBackgroundSkip{sourceText: candidate.SourceText, retryable: true}
+				_ = database.RetryTranslationJob(job.TweetID, job.Field, job.TargetLang, "reuse_error", err.Error(), translateBackgroundErrorDelay)
+				continue
+			} else if ok {
+				translated++
+				delete(skipped, key)
+				_ = database.CompleteTranslationJob(job.TweetID, job.Field, job.TargetLang)
+				continue
+			}
+
+			cleanSource, placeholders := protectForTranslate(candidate.SourceText)
+			if !hasTranslatableContent(cleanSource) {
+				skipped[key] = translateBackgroundSkip{sourceText: candidate.SourceText}
+				_ = database.SkipTranslationJob(job.TweetID, job.Field, job.TargetLang, "no translatable content")
+				continue
+			}
+
+			groupKey, threadOrder := translateBackgroundGroupKey(database, cfg.backend, candidate, cfg.target)
+			group := groupsByKey[groupKey]
+			if group == nil {
+				group = &translateBackgroundWorkGroup{key: groupKey}
+				groupsByKey[groupKey] = group
+				groupOrder = append(groupOrder, groupKey)
+			}
+			group.items = append(group.items, translateBackgroundWorkItem{
+				candidate:    candidate,
+				cleanSource:  cleanSource,
+				placeholders: placeholders,
+				contextHint:  stripForTranslateContext(buildContext(candidate.BodyText, candidate.QuoteBodyText, candidate.Field)),
+				threadOrder:  threadOrder,
+			})
+		}
+
+		groups := make([]translateBackgroundWorkGroup, 0, len(groupOrder))
+		for _, groupKey := range groupOrder {
+			group := groupsByKey[groupKey]
+			if group == nil || len(group.items) == 0 {
+				continue
+			}
+			sort.SliceStable(group.items, func(i, j int) bool {
+				if group.items[i].threadOrder != group.items[j].threadOrder {
+					return group.items[i].threadOrder < group.items[j].threadOrder
+				}
+				if group.items[i].candidate.TweetID != group.items[j].candidate.TweetID {
+					return group.items[i].candidate.TweetID < group.items[j].candidate.TweetID
+				}
+				return group.items[i].candidate.Field < group.items[j].candidate.Field
+			})
+			groups = append(groups, *group)
+		}
+
+		for i, group := range groups {
+			if err := ctx.Err(); err != nil {
 				return translated, err
 			}
-			failures++
-			lastErr = err
-			skipped[key] = translateBackgroundSkip{sourceText: candidate.SourceText, retryable: true}
-			_ = database.RetryTranslationJob(job.TweetID, job.Field, job.TargetLang, "provider_error", err.Error(), translateBackgroundErrorDelay)
-			if failures >= translateBackgroundMaxErrors {
-				break
+			remaining, reused, err := reuseBackgroundWorkItems(database, cfg, group.items, skipped)
+			translated += reused
+			if err != nil {
+				failures++
+				lastErr = err
+				if failures >= translateBackgroundMaxErrors {
+					if i+1 < len(groups) {
+						retryBackgroundGroups(database, cfg, groups[i+1:], "provider_error", err.Error(), translateBackgroundErrorDelay, skipped)
+					}
+					break
+				}
 			}
-			continue
+			group.items = remaining
+			groups[i].items = remaining
+			if len(group.items) == 0 {
+				continue
+			}
+			if attempted > 0 && cfg.delay > 0 {
+				timer := time.NewTimer(cfg.delay)
+				select {
+				case <-ctx.Done():
+					timer.Stop()
+					return translated, ctx.Err()
+				case <-timer.C:
+				}
+			}
+			attempted++
+
+			wrote, err := translateAndCacheBackgroundCandidates(ctx, database, cfg, group.items, skipped)
+			if err != nil {
+				if errors.Is(err, context.Canceled) || (errors.Is(err, context.DeadlineExceeded) && ctx.Err() != nil) {
+					return translated, err
+				}
+				if errors.Is(err, ErrProviderRateLimited) {
+					retryBackgroundGroups(database, cfg, groups[i:], "rate_limited", err.Error(), translateBackgroundRateLimitDelay, skipped)
+					return translated, err
+				}
+				failures += len(group.items)
+				lastErr = err
+				retryBackgroundGroups(database, cfg, groups[i:i+1], "provider_error", err.Error(), translateBackgroundErrorDelay, skipped)
+				if failures >= translateBackgroundMaxErrors {
+					if i+1 < len(groups) {
+						retryBackgroundGroups(database, cfg, groups[i+1:], "provider_error", err.Error(), translateBackgroundErrorDelay, skipped)
+					}
+					break
+				}
+				continue
+			}
+			translated += wrote
 		}
-		if wrote {
-			translated++
-			delete(skipped, key)
-			_ = database.CompleteTranslationJob(job.TweetID, job.Field, job.TargetLang)
-			continue
+
+		if failures >= translateBackgroundMaxErrors {
+			break
 		}
-		skipped[key] = translateBackgroundSkip{sourceText: candidate.SourceText}
-		_ = database.SkipTranslationJob(job.TweetID, job.Field, job.TargetLang, "no translation written")
 	}
 	if translated == 0 && lastErr != nil {
 		return translated, lastErr
@@ -268,52 +362,141 @@ func shouldSkipTranslateBackgroundCandidate(skipped map[string]translateBackgrou
 	return true
 }
 
-func translateAndCacheBackgroundCandidate(ctx context.Context, database *db.DB, cfg translateBackgroundConfig, candidate db.TranslationCandidate) (bool, error) {
-	cleanSource, placeholders := protectForTranslate(candidate.SourceText)
-	if !hasTranslatableContent(cleanSource) {
-		return false, nil
+func translateAndCacheBackgroundCandidates(ctx context.Context, database *db.DB, cfg translateBackgroundConfig, items []translateBackgroundWorkItem, skipped map[string]translateBackgroundSkip) (int, error) {
+	if len(items) == 0 {
+		return 0, nil
+	}
+	requests := make([]translationTextRequest, 0, len(items))
+	for _, item := range items {
+		requests = append(requests, translationTextRequest{
+			Text:           item.cleanSource,
+			ContextHint:    item.contextHint,
+			SourceLangHint: item.candidate.SourceLang,
+		})
 	}
 
-	contextHint := stripForTranslateContext(buildContext(candidate.BodyText, candidate.QuoteBodyText, candidate.Field))
 	translateCtx, cancel := context.WithTimeout(ctx, 25*time.Second)
 	defer cancel()
 
-	result, provider, err := translateTextWithDB(translateCtx, database, cleanSource, cfg.target, contextHint, candidate.SourceLang)
-	if err != nil || result == nil {
-		slog.Warn("translate background candidate failed", "provider", provider, "tweet_id", candidate.TweetID, "field", candidate.Field, "err", err)
-		return false, err
+	results, provider, err := translateTextBatchWithDB(translateCtx, database, requests, cfg.target)
+	if err != nil {
+		slog.Warn("translate background group failed", "provider", provider, "items", len(items), "err", err)
+		return 0, err
+	}
+	if len(results) != len(items) {
+		return 0, ErrTranslationFailed
 	}
 
-	translatedText := strings.TrimSpace(result.TranslatedText)
-	if translatedText == "" {
-		return false, nil
-	}
-	restoredText := restoreFromTranslate(translatedText, placeholders)
-	if !preservedProtectedTokens(translatedText, restoredText, placeholders) {
-		slog.Warn("translate background candidate dropped protected token", "provider", provider, "tweet_id", candidate.TweetID, "field", candidate.Field)
-		return false, nil
-	}
+	wrote := 0
+	for i, result := range results {
+		item := items[i]
+		candidate := item.candidate
+		key := translateBackgroundCandidateKey(candidate, cfg.target)
+		if result == nil {
+			retryBackgroundWorkItem(database, cfg, item, "provider_error", "no translation written", translateBackgroundErrorDelay, skipped)
+			continue
+		}
 
-	srcLang := language.DisplayName(result.SourceLang)
-	if sourceLanguageMatchesTarget(srcLang, cfg.target) {
-		return false, nil
-	}
-	if language.InSet(srcLang, cfg.skipSet) {
-		return false, nil
-	}
+		translatedText := strings.TrimSpace(result.TranslatedText)
+		if translatedText == "" {
+			retryBackgroundWorkItem(database, cfg, item, "provider_error", "no translation written", translateBackgroundErrorDelay, skipped)
+			continue
+		}
+		restoredText := restoreFromTranslate(translatedText, item.placeholders)
+		if !preservedProtectedTokens(translatedText, restoredText, item.placeholders) {
+			slog.Warn("translate background candidate dropped protected token", "provider", provider, "tweet_id", candidate.TweetID, "field", candidate.Field)
+			retryBackgroundWorkItem(database, cfg, item, "provider_error", "protected token dropped", translateBackgroundErrorDelay, skipped)
+			continue
+		}
 
-	translatedText = restoredText
-	cacheLang := srcLang
-	if cacheLang == "" {
-		cacheLang = language.DisplayName(candidate.SourceLang)
+		srcLang := language.DisplayName(result.SourceLang)
+		if sourceLanguageMatchesTarget(srcLang, cfg.target) || language.InSet(srcLang, cfg.skipSet) {
+			skipped[key] = translateBackgroundSkip{sourceText: candidate.SourceText}
+			_ = database.SkipTranslationJob(candidate.TweetID, candidate.Field, cfg.target, "not eligible")
+			continue
+		}
+
+		cacheLang := srcLang
+		if cacheLang == "" {
+			cacheLang = language.DisplayName(candidate.SourceLang)
+		}
+		if cacheLang == "" {
+			cacheLang = "und"
+		}
+		if err := database.SetTranslation(candidate.TweetID, candidate.Field, cacheLang, cfg.target, restoredText); err != nil {
+			return wrote, err
+		}
+		if err := database.CompleteTranslationJob(candidate.TweetID, candidate.Field, cfg.target); err != nil {
+			return wrote, err
+		}
+		wrote++
+		delete(skipped, key)
 	}
-	if cacheLang == "" {
-		cacheLang = "und"
+	return wrote, nil
+}
+
+func retryBackgroundGroups(database *db.DB, cfg translateBackgroundConfig, groups []translateBackgroundWorkGroup, kind, message string, delay time.Duration, skipped map[string]translateBackgroundSkip) {
+	for _, group := range groups {
+		for _, item := range group.items {
+			retryBackgroundWorkItem(database, cfg, item, kind, message, delay, skipped)
+		}
 	}
-	if err := database.SetTranslation(candidate.TweetID, candidate.Field, cacheLang, cfg.target, translatedText); err != nil {
-		return false, err
+}
+
+func retryBackgroundWorkItem(database *db.DB, cfg translateBackgroundConfig, item translateBackgroundWorkItem, kind, message string, delay time.Duration, skipped map[string]translateBackgroundSkip) {
+	candidate := item.candidate
+	key := translateBackgroundCandidateKey(candidate, cfg.target)
+	skipped[key] = translateBackgroundSkip{sourceText: candidate.SourceText, retryable: true}
+	_ = database.RetryTranslationJob(candidate.TweetID, candidate.Field, cfg.target, kind, message, delay)
+}
+
+func reuseBackgroundWorkItems(database *db.DB, cfg translateBackgroundConfig, items []translateBackgroundWorkItem, skipped map[string]translateBackgroundSkip) ([]translateBackgroundWorkItem, int, error) {
+	remaining := make([]translateBackgroundWorkItem, 0, len(items))
+	reused := 0
+	var firstErr error
+	for _, item := range items {
+		candidate := item.candidate
+		key := translateBackgroundCandidateKey(candidate, cfg.target)
+		if _, ok, err := reusableTranslation(database, candidate.TweetID, candidate.Field, candidate.SourceText, cfg.target, cfg.skipSet); err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			skipped[key] = translateBackgroundSkip{sourceText: candidate.SourceText, retryable: true}
+			_ = database.RetryTranslationJob(candidate.TweetID, candidate.Field, cfg.target, "reuse_error", err.Error(), translateBackgroundErrorDelay)
+			continue
+		} else if ok {
+			reused++
+			delete(skipped, key)
+			_ = database.CompleteTranslationJob(candidate.TweetID, candidate.Field, cfg.target)
+			continue
+		}
+		remaining = append(remaining, item)
 	}
-	return true, nil
+	return remaining, reused, firstErr
+}
+
+func translateBackgroundGroupKey(database *db.DB, backend string, candidate db.TranslationCandidate, targetLang string) (string, int) {
+	unique := translateBackgroundCandidateKey(candidate, targetLang)
+	if !providerSupportsBatch(backend) || candidate.Field != "body" || language.IsUnknown(candidate.SourceLang) {
+		return unique, 0
+	}
+	chain, err := database.GetThreadChain(candidate.TweetID)
+	if err != nil || len(chain) == 0 {
+		return unique, 0
+	}
+	rootID := strings.TrimSpace(chain[0].TweetID)
+	if rootID == "" {
+		return unique, 0
+	}
+	order := len(chain) - 1
+	for i, item := range chain {
+		if item.TweetID == candidate.TweetID {
+			order = i
+			break
+		}
+	}
+	sourceLang := strings.ToLower(strings.TrimSpace(candidate.SourceLang))
+	return "thread\x00" + targetLang + "\x00" + sourceLang + "\x00" + rootID, order
 }
 
 func shouldAutoTranslateCandidate(sourceLang, sourceText, targetLang string, skipSet map[string]bool) bool {
