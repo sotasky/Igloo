@@ -193,6 +193,10 @@ function q(sel, root) {
   return (root || document).querySelector(sel)
 }
 
+function autoAdvanceEnabled() {
+  return !!(_state && (_state.storyMode || _state.autoPlayNext))
+}
+
 function navigateStoryFromClick(entry, event) {
   if (!_state || !_state.storyMode || !_fns) return false
   var wrapper = entry && entry.refs && entry.refs.wrapper
@@ -340,7 +344,7 @@ export function makeShortItem(entryData, existingEl) {
       slideshowAudio.className = 'native-short-video slideshow-audio'
       slideshowAudio.preload = 'none'
       slideshowAudio.src = slideshowAudioSrc
-      slideshowAudio.loop = !_state.autoPlayNext
+      slideshowAudio.loop = !autoAdvanceEnabled()
       slideshowAudio.muted = _state.muted
       slideshowAudio.addEventListener('error', function () {
         if (slideshowAudio) slideshowAudio.removeAttribute('src')
@@ -571,10 +575,10 @@ export function makeShortItem(entryData, existingEl) {
     })
     makeDraggableSeekbar(progressContainer, progressBar, video)
     attachSeekTooltip(progressContainer, video)
-    video.loop = !_state.autoPlayNext
+    video.loop = !autoAdvanceEnabled()
     video.muted = _state.muted
     video.addEventListener('ended', function () {
-      if (_state.autoPlayNext) _fns.goNext()
+      if (autoAdvanceEnabled()) _fns.goNext()
       else {
         try {
           video.currentTime = 0

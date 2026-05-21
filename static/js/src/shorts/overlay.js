@@ -275,9 +275,10 @@ export function updateCurrentActionButtons() {
       refs.muteBtn.title = _state.muted ? t('action_unmute', 'Unmute') : t('action_mute', 'Mute')
     }
     if (refs.autoplayBtn) {
-      refs.autoplayBtn.classList.toggle('active', _state.autoPlayNext && isCurrent)
-      setSvgContent(refs.autoplayBtn, _fns.iconSvg('autoplay', _state.autoPlayNext && isCurrent))
-      refs.autoplayBtn.title = tf('shorts_autoplay_next_state', 'Auto-play next short: %1$s', _state.autoPlayNext ? t('state_on', 'ON') : t('state_off', 'OFF'))
+      var autoAdvance = _state.storyMode || _state.autoPlayNext
+      refs.autoplayBtn.classList.toggle('active', autoAdvance && isCurrent)
+      setSvgContent(refs.autoplayBtn, _fns.iconSvg('autoplay', autoAdvance && isCurrent))
+      refs.autoplayBtn.title = tf('shorts_autoplay_next_state', 'Auto-play next short: %1$s', autoAdvance ? t('state_on', 'ON') : t('state_off', 'OFF'))
     }
     if (refs.bookmarkBtn) {
       refs.bookmarkBtn.classList.toggle('active', !!entry.data.bookmarked)

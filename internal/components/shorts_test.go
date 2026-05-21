@@ -186,12 +186,16 @@ func TestShortsStoryAvatarOpenDoesNotReuseSidebarQueue(t *testing.T) {
 	}
 }
 
-func TestShortsStoryModeDoesNotForceAutoplay(t *testing.T) {
+func TestShortsStoryModeAutoAdvancesWithoutChangingMomentAutoplay(t *testing.T) {
 	indexBytes, err := os.ReadFile("../../static/js/src/shorts/index.js")
 	if err != nil {
 		t.Fatal(err)
 	}
 	playbackBytes, err := os.ReadFile("../../static/js/src/shorts/playback.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	overlayBytes, err := os.ReadFile("../../static/js/src/shorts/overlay.js")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -201,21 +205,76 @@ func TestShortsStoryModeDoesNotForceAutoplay(t *testing.T) {
 	}
 	indexSrc := string(indexBytes)
 	playbackSrc := string(playbackBytes)
+	overlaySrc := string(overlayBytes)
 	itemsSrc := string(itemsBytes)
 
 	if !strings.Contains(indexSrc, "state.autoPlayNext = false") {
-		t.Fatal("story mode should not force autoplay when it opens")
+		t.Fatal("story mode should preserve the normal moments autoplay setting while it is open")
 	}
-	for _, bad := range []string{"_state.storyMode || _state.autoPlayNext"} {
-		if strings.Contains(playbackSrc, bad) || strings.Contains(itemsSrc, bad) {
-			t.Fatalf("story mode should not be treated as autoplay: found %q", bad)
+	for _, check := range []string{
+		"return !!(_state && (_state.storyMode || _state.autoPlayNext))",
+		"if (autoAdvanceEnabled()) _goNext()",
+	} {
+		if !strings.Contains(playbackSrc, check) {
+			t.Errorf("story playback auto-advance missing %q", check)
 		}
 	}
-	if !strings.Contains(playbackSrc, "function autoAdvanceEnabled()") {
-		t.Fatal("playback should route auto-advance through the explicit autoplay flag")
+	for _, check := range []string{
+		"function autoAdvanceEnabled()",
+		"return !!(_state && (_state.storyMode || _state.autoPlayNext))",
+		"slideshowAudio.loop = !autoAdvanceEnabled()",
+		"video.loop = !autoAdvanceEnabled()",
+		"if (autoAdvanceEnabled()) _fns.goNext()",
+	} {
+		if !strings.Contains(itemsSrc, check) {
+			t.Errorf("story media auto-advance wiring missing %q", check)
+		}
 	}
-	if !strings.Contains(itemsSrc, "if (_state.autoPlayNext) _fns.goNext()") {
-		t.Fatal("media-ended advance should use the explicit autoplay flag")
+	for _, check := range []string{
+		"var autoAdvance = _state.storyMode || _state.autoPlayNext",
+		"refs.autoplayBtn.classList.toggle('active', autoAdvance && isCurrent)",
+		"autoAdvance ? t('state_on', 'ON') : t('state_off', 'OFF')",
+	} {
+		if !strings.Contains(overlaySrc, check) {
+			t.Errorf("story autoplay display state missing %q", check)
+		}
+	}
+	for _, bad := range []string{
+		"if (_state.storyMode && !audio) return",
+		"slideshowAudio.loop = !_state.autoPlayNext",
+		"video.loop = !_state.autoPlayNext",
+		"if (_state.autoPlayNext) _fns.goNext()",
+	} {
+		if strings.Contains(playbackSrc, bad) || strings.Contains(itemsSrc, bad) {
+			t.Fatalf("story media should not loop through normal autoplay-only wiring: found %q", bad)
+		}
+	}
+}
+
+func TestShortsStoryNextExitsWhenQueueIsExhausted(t *testing.T) {
+	srcBytes, err := os.ReadFile("../../static/js/src/shorts/index.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := string(srcBytes)
+	start := strings.Index(src, "function goStoryNextManual()")
+	if start < 0 {
+		t.Fatal("goStoryNextManual missing")
+	}
+	end := strings.Index(src[start:], "function goStoryPrevManual()")
+	if end < 0 {
+		t.Fatal("goStoryPrevManual should follow goStoryNextManual")
+	}
+	fn := src[start : start+end]
+	for _, check := range []string{
+		"if (state.currentIndex < state.cards.length - 1)",
+		"scrollToIndex(state.currentIndex + 1, 'instant')",
+		"if (openNextQueuedStory()) return",
+		"showGrid()",
+	} {
+		if !strings.Contains(fn, check) {
+			t.Errorf("story next exhaustion behavior missing %q", check)
+		}
 	}
 }
 

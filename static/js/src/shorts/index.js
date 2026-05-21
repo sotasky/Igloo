@@ -590,7 +590,8 @@ if (layout) {
         scrollToIndex(state.currentIndex + 1, 'instant')
         return
       }
-      openNextQueuedStory()
+      if (openNextQueuedStory()) return
+      showGrid()
     }
 
     function goStoryPrevManual() {

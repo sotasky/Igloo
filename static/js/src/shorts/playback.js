@@ -14,7 +14,7 @@ function currentData() {
 }
 
 function autoAdvanceEnabled() {
-  return !!(_state && _state.autoPlayNext)
+  return !!(_state && (_state.storyMode || _state.autoPlayNext))
 }
 
 function slideshowSlides(slideshow) {
@@ -154,7 +154,6 @@ export function startSlideshowPlayback(entry) {
     if (vp && typeof vp.catch === 'function') vp.catch(function () {})
     return
   }
-  if (_state.storyMode && !audio) return
   if (slideshow.count <= 1) {
     if (!slideshow.audio || !slideshow.audio.src) {
       slideshow.timer = setTimeout(function () {
