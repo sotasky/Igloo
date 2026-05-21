@@ -12,6 +12,10 @@ function fakeElement() {
   const classes = new Set();
   const attrs = new Map();
   const element = {
+    children: [],
+    parentElement: null,
+    textContent: "",
+    id: "",
     style: {
       setProperty(property, value) {
         this[property] = value;
@@ -49,10 +53,17 @@ function fakeElement() {
       },
     },
     appendChild(child) {
+      child.parentElement = element;
+      element.children.push(child);
       return child;
     },
     insertAdjacentElement() {},
-    remove() {},
+    remove() {
+      if (element.parentElement) {
+        element.parentElement.children =
+          element.parentElement.children.filter((child) => child !== element);
+      }
+    },
     setAttribute(name, value) {
       attrs.set(name, String(value));
     },
@@ -187,7 +198,7 @@ function buildHarness({
   const requests = [];
   const requestCalls = [];
   const downloadCalls = [];
-  const notifications = [];
+  const toasts = [];
   const menu = new Map();
   const promptCalls = [];
   const followButtons = followHandles.map((handle) => {
@@ -198,6 +209,14 @@ function buildHarness({
   const documentElement = fakeElement();
   const body = fakeElement();
   const head = fakeElement();
+  const appendBodyChild = body.appendChild;
+  body.appendChild = (child) => {
+    appendBodyChild(child);
+    if (child.id === "x-sync-toast") {
+      toasts.push(child.children.map((toastChild) => toastChild.textContent).join(""));
+    }
+    return child;
+  };
   const computedStyleElements = new Map();
   for (const [selector, style] of Object.entries(computedStyles)) {
     const target =
@@ -243,8 +262,8 @@ function buildHarness({
       head,
       documentElement,
       addEventListener() {},
-      getElementById() {
-        return null;
+      getElementById(id) {
+        return body.children.find((child) => child.id === id) || null;
       },
       querySelector(selector) {
         if (computedStyleElements.has(selector)) {
@@ -278,9 +297,6 @@ function buildHarness({
     },
     GM_registerMenuCommand(name, callback) {
       menu.set(name, callback);
-    },
-    GM_notification(options) {
-      notifications.push(options?.text || "");
     },
     GM_setClipboard() {},
     GM_download(options) {
@@ -344,7 +360,7 @@ function buildHarness({
     promptCalls,
     followButtons,
     downloadCalls,
-    notifications,
+    toasts,
   };
 }
 
@@ -741,7 +757,7 @@ test("expired refresh token asks for login without password fallback", async () 
   assert.equal(harness.values.get("xsync_auth_refresh"), "");
   assert.equal(harness.values.has("xsync_auth_pass"), false);
   assert.ok(
-    harness.notifications.some((message) =>
+    harness.toasts.some((message) =>
       message.includes("Log in to server"),
     ),
   );
@@ -818,6 +834,8 @@ test("declares Tampermonkey update metadata", () => {
     script,
     /^\/\/ @downloadURL\s+https:\/\/raw\.githubusercontent\.com\/screwys\/Igloo\/main\/scripts\/tampermonkey\/igloo-site-sync\.user\.js$/m,
   );
+  assert.doesNotMatch(script, /^\/\/ @grant\s+GM_notification$/m);
+  assert.doesNotMatch(script, /\bGM_notification\b/);
 });
 
 test("themes current X composer toolbar buttons", () => {
@@ -1207,6 +1225,10 @@ test("ghost-resubscribed X handles can be unfollowed immediately", async () => {
     `expected immediate unfollow DELETE, got ${harness.requestCalls
       .map((call) => `${call.method} ${call.url}`)
       .join(", ")}`,
+  );
+  assert.ok(
+    harness.toasts.includes("Removed @bob"),
+    `expected unfollow toast, got ${harness.toasts.join(", ")}`,
   );
 });
 

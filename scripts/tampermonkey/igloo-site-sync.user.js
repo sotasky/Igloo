@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Igloo Site Sync
 // @namespace    local.igloo.site.sync
-// @version      8.0.33
+// @version      8.0.34
 // @author       screwys
 // @description  Follow X, TikTok, Instagram, and YouTube channels in Igloo; includes the full X media workflow.
 // @homepageURL  https://github.com/screwys/Igloo
@@ -21,7 +21,6 @@
 // @grant        GM_setValue
 // @grant        GM_deleteValue
 // @grant        GM_registerMenuCommand
-// @grant        GM_notification
 // @grant        GM_setClipboard
 // @grant        unsafeWindow
 // @connect      localhost
@@ -37,7 +36,7 @@
 
 (function () {
   "use strict";
-  const SCRIPT_VERSION = "8.0.33";
+  const SCRIPT_VERSION = "8.0.34";
 
   const SETTINGS = {
     apiBase: "xsync_api_base",
@@ -491,10 +490,14 @@
   let serverHandleToChannelId = {};
 
   const notify = (text) => {
-    try {
-      GM_notification({ title: "Igloo Sync", text, timeout: 2500 });
-    } catch (_) {}
     console.log("[IglooSync]", text);
+    const display = () => {
+      if (!document.body) return false;
+      showToast(text);
+      return true;
+    };
+    if (display()) return;
+    window.addEventListener("DOMContentLoaded", display, { once: true });
   };
 
   function isLikelyHandle(value) {
