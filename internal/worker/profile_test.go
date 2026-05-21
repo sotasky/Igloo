@@ -1384,6 +1384,63 @@ func TestRefreshFeedProfileCompletenessDownloadsStoredTwitterAvatarForFreshRow(t
 	}
 }
 
+func TestRefreshFeedProfileCompletenessFetchesRichTwitterProfileAfterStoredAvatarDownload(t *testing.T) {
+	d := newTestWorkerDB(t)
+	dir := t.TempDir()
+	mediaServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		_, _ = w.Write(testProfilePNGBytes())
+	}))
+	defer mediaServer.Close()
+
+	if err := d.ExecRaw(`
+		INSERT INTO feed_items (
+			tweet_id, author_handle, author_avatar_url, published_at, fetched_at
+		) VALUES ('tweet_sample_author', 'sample_author', 'https://pbs.twimg.com/profile_images/111/avatar_normal.jpg', 200, 200)
+	`); err != nil {
+		t.Fatalf("seed feed item: %v", err)
+	}
+	if _, err := d.SeedChannelProfileRows(); err != nil {
+		t.Fatalf("SeedChannelProfileRows: %v", err)
+	}
+
+	f := newFakeFetcher()
+	f.results["twitter_sample_author"] = &fetchprofile.Profile{
+		ChannelID:   "twitter_sample_author",
+		Platform:    "twitter",
+		Handle:      "sample_author",
+		DisplayName: "Sample Author",
+		Bio:         "full profile bio",
+		AvatarURL:   "https://pbs.twimg.com/profile_images/111/avatar_normal.jpg",
+		BannerURL:   mediaServer.URL + "/banner.png",
+	}
+
+	m := &Manager{db: d, cfg: testCfg(dir), downloader: testTwimgAvatarDownloader(mediaServer)}
+	avDir, bnDir := filepath.Join(dir, "avatars"), filepath.Join(dir, "banners")
+	_ = os.MkdirAll(avDir, 0o755)
+	_ = os.MkdirAll(bnDir, 0o755)
+
+	if worked := m.refreshFeedProfileCompletenessBatch(context.Background(), f.Fetch, avDir, bnDir, 10); !worked {
+		t.Fatal("expected feed profile completeness batch to work")
+	}
+	if got := f.calls["twitter_sample_author"]; got != 1 {
+		t.Fatalf("full profile fetch calls = %d, want 1 in same pass", got)
+	}
+	if !hasConventionalMediaFile(avDir, "twitter_sample_author") {
+		t.Fatal("expected sample author avatar file on disk")
+	}
+	if !hasConventionalMediaFile(bnDir, "twitter_sample_author") {
+		t.Fatal("expected sample author banner file on disk")
+	}
+	profile, err := d.GetChannelProfile("twitter_sample_author")
+	if err != nil {
+		t.Fatalf("GetChannelProfile: %v", err)
+	}
+	if profile == nil || profile.Bio != "full profile bio" || profile.FetchedAt == nil {
+		t.Fatalf("rich profile was not fetched: %+v", profile)
+	}
+}
+
 func TestRefreshFeedProfileCompletenessScansStoredAvatarsBeyondProfileFetchLimit(t *testing.T) {
 	d := newTestWorkerDB(t)
 	dir := t.TempDir()
