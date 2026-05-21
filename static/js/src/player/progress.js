@@ -9,7 +9,9 @@ export function initProgress(video, videoId, root) {
   function saveProgress() {
     const pos = Number(video.currentTime || 0)
     const dur = Number(video.duration || 0)
-    if (pos <= 5) return
+    const completed = video.ended && dur > 0
+    const savedPos = completed ? 0 : pos
+    if (!completed && pos <= 5) return
 
     if (channelPlatform === 'tiktok' || channelPlatform === 'instagram') return
     if (dur > 0 && dur < 65) return
@@ -17,7 +19,7 @@ export function initProgress(video, videoId, root) {
     apiFetch('/api/videos/' + encodeURIComponent(videoId) + '/progress', {
       method: 'POST',
       body: JSON.stringify({
-        position: pos,
+        position: savedPos,
         duration: dur,
         updated_at_ms: Date.now(),
         client_type: 'web',

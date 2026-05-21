@@ -664,6 +664,8 @@ func resumePosition(v model.Video) string {
 	pos := v.PlaybackPosition
 	if v.IsShortForm {
 		pos = 0.0
+	} else if v.Duration > 0 && pos >= float64(v.Duration)-2.0 {
+		pos = 0.0
 	}
 	return fmt.Sprintf("%.1f", pos)
 }
