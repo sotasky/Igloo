@@ -57,18 +57,6 @@ class MomentsPlayerTest {
     }
 
     @Test
-    fun share_enabled_follows_synced_canonical_url() {
-        val synced = storyItem("sample_video", "tiktok_sample").copy(
-            canonicalUrl = "https://www.tiktok.com/@sample/video/sample_video",
-            mediaKind = null,
-        )
-        val stale = synced.copy(canonicalUrl = "")
-
-        assertTrue(momentShareEnabled(synced))
-        assertFalse(momentShareEnabled(stale))
-    }
-
-    @Test
     fun moment_slide_count_treats_single_images_as_one_page() {
         assertEquals(0, momentSlideCount(mediaKind = null, slideCount = 0))
         assertEquals(1, momentSlideCount(mediaKind = "image", slideCount = 0))

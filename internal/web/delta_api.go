@@ -168,6 +168,9 @@ func (s *Server) handleShortsDelta(w http.ResponseWriter, r *http.Request) {
 	bundles := make([]deltaBundle, 0, len(videos))
 	for _, v := range videos {
 		primary := videoToBundlePrimary(v)
+		if canonicalURL := s.androidSyncCanonicalVideoURL(v); canonicalURL != "" {
+			primary["canonical_url"] = canonicalURL
+		}
 		if bi, ok := bookmarks[v.VideoID]; ok {
 			applyBookmarkBundleFields(primary, bi)
 		}
@@ -219,6 +222,9 @@ func (s *Server) handleVideosDelta(w http.ResponseWriter, r *http.Request) {
 	bundles := make([]deltaBundle, 0, len(videos))
 	for _, v := range videos {
 		primary := videoToBundlePrimary(v)
+		if canonicalURL := s.androidSyncCanonicalVideoURL(v); canonicalURL != "" {
+			primary["canonical_url"] = canonicalURL
+		}
 		if bi, ok := bookmarks[v.VideoID]; ok {
 			applyBookmarkBundleFields(primary, bi)
 		}

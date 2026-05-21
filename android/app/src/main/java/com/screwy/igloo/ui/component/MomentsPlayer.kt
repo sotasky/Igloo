@@ -105,9 +105,6 @@ internal fun momentCaptionBaseBottomPaddingDp(mediaMode: MomentMediaMode): Int =
     MomentMediaMode.Slideshow -> MomentCaptionBaseBottomPaddingDp
 }
 
-internal fun momentShareEnabled(item: MomentItem): Boolean =
-    item.canonicalUrl.isNotBlank()
-
 internal fun momentCollapsedCaptionStartPaddingDp(): Int = MomentCollapsedCaptionStartPaddingDp
 
 internal fun momentCaptionDescriptionMaxLines(expanded: Boolean): Int =

@@ -453,6 +453,19 @@ func TestVideosDeltaCarriesYouTubeAttachments(t *testing.T) {
 	}
 }
 
+func TestVideosDeltaCarriesCanonicalVideoURL(t *testing.T) {
+	srv := newTestServer(t)
+	insertChannel(t, srv, "youtube_channel_link", "youtube", "Channel Link")
+	insertVideo(t, srv, "youtube_sample_video_link", "youtube_channel_link")
+
+	body := callDelta(t, srv, "/api/videos/delta", "alice", "")
+	b := mustOneBundle(t, body)
+	want := "https://www.youtube.com/watch?v=sample_video_link"
+	if got := b.Primary["canonical_url"]; got != want {
+		t.Fatalf("canonical_url = %#v, want %#v in primary %#v", got, want, b.Primary)
+	}
+}
+
 func TestVideosDeltaReemitsVideoWhenCommentsArriveAfterCursor(t *testing.T) {
 	srv := newTestServer(t)
 	insertChannel(t, srv, "youtube_chan_comments", "youtube", "Comments Channel")
@@ -649,6 +662,26 @@ func TestShortsDeltaCarriesBookmarkAndChannelState(t *testing.T) {
 	follows := userStateRows(t, b, "channel_follows")
 	if len(follows) != 1 || follows[0]["followed"] != true {
 		t.Fatalf("expected channel follow attachment, got %#v", follows)
+	}
+}
+
+func TestShortsDeltaCarriesCanonicalVideoURL(t *testing.T) {
+	srv := newTestServer(t)
+	insertChannel(t, srv, "tiktok_sample_channel_link", "tiktok", "Sample Channel")
+	insertVideo(t, srv, "tiktok_sample_video_link", "tiktok_sample_channel_link")
+	if err := srv.db.ExecRaw(
+		`UPDATE channels SET source_id = ? WHERE channel_id = ?`,
+		"sample_handle",
+		"tiktok_sample_channel_link",
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	body := callDelta(t, srv, "/api/shorts/delta", "alice", "")
+	b := mustOneBundle(t, body)
+	want := "https://www.tiktok.com/@sample_handle/video/sample_video_link"
+	if got := b.Primary["canonical_url"]; got != want {
+		t.Fatalf("canonical_url = %#v, want %#v in primary %#v", got, want, b.Primary)
 	}
 }
 

@@ -99,9 +99,7 @@ fun ShortsRoute(
                 onFollowChannel = vm::followChannel,
                 onUnfollowChannel = vm::unfollowChannel,
                 onShare = { item ->
-                    item.canonicalUrl.takeIf { it.isNotBlank() }?.let {
-                        sharePlainText(context, it, useEmbedFriendlyShareLinks)
-                    }
+                    sharePlainText(context, item.canonicalUrl, useEmbedFriendlyShareLinks)
                 },
                 onMentionClick = vm::resolveMentionAndNavigate,
                 onSwipeLeftToChannel = { cid ->

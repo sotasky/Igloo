@@ -410,10 +410,9 @@ internal fun MomentPage(
             ShadowIcon(
                 Icons.Filled.Share,
                 shareLabel,
-                { if (momentShareEnabled(bookmarkItem)) onShare(bookmarkItem) },
+                { onShare(bookmarkItem) },
                 false,
                 colors.primary,
-                enabled = momentShareEnabled(bookmarkItem),
             )
         }
 

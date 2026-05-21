@@ -96,9 +96,7 @@ fun MomentsRoute(
                 onFollowChannel = vm::followChannel,
                 onUnfollowChannel = vm::unfollowChannel,
                 onShare = { item ->
-                    item.canonicalUrl.takeIf { it.isNotBlank() }?.let { url ->
-                        scope.launch { sharePlainText(context, url, useEmbedFriendlyShareLinks) }
-                    }
+                    scope.launch { sharePlainText(context, item.canonicalUrl, useEmbedFriendlyShareLinks) }
                 },
                 onMentionClick = vm::resolveMentionAndNavigate,
                 onSwipeLeftToChannel = { cid ->
