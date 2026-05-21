@@ -32,18 +32,20 @@ import java.util.concurrent.TimeUnit
 internal data class PeriodicSyncDrainStatus(
     val generationId: String?,
     val incompleteImports: Int,
-    val activeOrEligibleAssets: Int,
+    val pendingAssets: Int,
     val runnerWork: Boolean,
 ) {
     val remainingWork: Int
-        get() = incompleteImports + activeOrEligibleAssets + if (runnerWork) 1 else 0
+        get() = incompleteImports + pendingAssets + if (runnerWork) 1 else 0
 }
 
 internal data class PeriodicSyncDrainResult(
     val completed: Boolean,
+    val stalled: Boolean,
     val elapsedMs: Long,
     val remainingWork: Int,
     val incompleteImports: Int,
+    val pendingAssets: Int,
     val runnerWork: Boolean,
 )
 
@@ -73,12 +75,13 @@ internal suspend fun awaitSyncDrainOrCap(
     val startedMs = nowMs()
     val deadline = startedMs + maxRunDurationMs
     var idleStreak = 0
+    var stalledStreak = 0
     var sawGeneration = false
     var completed = false
     var last = PeriodicSyncDrainStatus(
         generationId = null,
         incompleteImports = 0,
-        activeOrEligibleAssets = 0,
+        pendingAssets = 0,
         runnerWork = false,
     )
     while (nowMs() < deadline) {
@@ -91,19 +94,35 @@ internal suspend fun awaitSyncDrainOrCap(
             continue
         }
         if (last.remainingWork == 0) {
+            stalledStreak = 0
             if (++idleStreak >= idleStreakRequired) {
                 completed = true
                 break
             }
         } else {
             idleStreak = 0
+            if (!last.runnerWork && ++stalledStreak >= idleStreakRequired) {
+                return PeriodicSyncDrainResult(
+                    completed = false,
+                    stalled = true,
+                    elapsedMs = nowMs() - startedMs,
+                    remainingWork = last.remainingWork,
+                    incompleteImports = last.incompleteImports,
+                    pendingAssets = last.pendingAssets,
+                    runnerWork = last.runnerWork,
+                )
+            } else if (last.runnerWork) {
+                stalledStreak = 0
+            }
         }
     }
     return PeriodicSyncDrainResult(
         completed = completed,
+        stalled = false,
         elapsedMs = nowMs() - startedMs,
         remainingWork = last.remainingWork,
         incompleteImports = last.incompleteImports,
+        pendingAssets = last.pendingAssets,
         runnerWork = last.runnerWork,
     )
 }
@@ -144,10 +163,19 @@ class PeriodicSyncWorker(
                 return ListenableWorker.Result.success()
             }
 
+            val prefs: PreferencesRepo = koin.get()
             val scheduler: Scheduler = koin.get()
             val logger: Logger = koin.get()
             val syncDao: AndroidSyncDao = koin.get()
             val androidSync: AndroidSyncMirror = koin.get()
+            if (!prefs.syncEnabled().first()) {
+                cancel(applicationContext)
+                logger.info(event = "periodic_sync_disabled", fields = emptyMap())
+                PerfProbe.log(event = "workmanager_catchup_done") {
+                    mapOf("prepared" to true, "enabled" to false)
+                }
+                return ListenableWorker.Result.success()
+            }
 
             // Promote to foreground BEFORE kicking the scheduler so the
             // foreground-service token covers the entire drain — including the
@@ -183,6 +211,7 @@ class PeriodicSyncWorker(
                 mapOf(
                     "prepared" to true,
                     "completed" to drain.completed,
+                    "stalled" to drain.stalled,
                     "elapsed_ms" to drain.elapsedMs,
                     "remaining_work" to drain.remainingWork,
                 )
@@ -214,12 +243,12 @@ class PeriodicSyncWorker(
             val syncAssetWork = if (generationId == null) {
                 0
             } else {
-                syncDao.countActiveOrEligiblePending(generationId, nowMs)
+                syncDao.countPending(generationId)
             }
             PeriodicSyncDrainStatus(
                 generationId = generationId,
                 incompleteImports = incompleteImports,
-                activeOrEligibleAssets = syncAssetWork,
+                pendingAssets = syncAssetWork,
                 runnerWork = runnerWork,
             )
         }
@@ -227,10 +256,12 @@ class PeriodicSyncWorker(
             event = "periodic_sync_drain_done",
             fields = mapOf(
                 "completed" to result.completed.toString(),
+                "stalled" to result.stalled.toString(),
                 "elapsed_ms" to result.elapsedMs.toString(),
-                "remaining_sync_active_or_eligible" to result.remainingWork.toString(),
+                "remaining_sync_pending_assets" to result.pendingAssets.toString(),
                 "remaining_sync_incomplete_imports" to result.incompleteImports.toString(),
                 "remaining_sync_runner_work" to result.runnerWork.toString(),
+                "remaining_sync_total_work" to result.remainingWork.toString(),
             ),
         )
         return result
@@ -291,6 +322,10 @@ class PeriodicSyncWorker(
         private const val SYNC_STARTUP_GRACE_MS = 60_000L
 
         suspend fun enqueue(context: Context, prefs: PreferencesRepo) {
+            if (!prefs.syncEnabled().first()) {
+                cancel(context)
+                return
+            }
             val intervalMin = prefs.syncIntervalMinutes().first().toLong().coerceAtLeast(MIN_INTERVAL_MINUTES)
             val wifiOnly = prefs.syncWifiOnly().first()
             val constraints = Constraints.Builder()
@@ -306,5 +341,18 @@ class PeriodicSyncWorker(
         fun cancel(context: Context) {
             WorkManager.getInstance(context).cancelUniqueWork(WORK_NAME)
         }
+    }
+}
+
+interface PeriodicSyncScheduler {
+    suspend fun applyPreferences()
+}
+
+internal class WorkManagerPeriodicSyncScheduler(
+    private val context: Context,
+    private val prefs: PreferencesRepo,
+) : PeriodicSyncScheduler {
+    override suspend fun applyPreferences() {
+        PeriodicSyncWorker.enqueue(context, prefs)
     }
 }

@@ -73,6 +73,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import java.io.File
+import java.io.IOException
 import java.security.MessageDigest
 import java.util.Collections
 import java.util.concurrent.CountDownLatch
@@ -168,6 +169,51 @@ class AndroidSyncMirrorTest {
         withTimeout(1_000L) {
             while (!mirror.hasPendingOrActiveWork()) delay(10L)
         }
+    }
+
+    @Test fun syncOnceDoesNotScheduleRefreshRetryWhenRetryIsDisabled() = runBlocking {
+        val engine = MockEngine { request ->
+            when (request.url.encodedPath) {
+                "/api/android/sync/generation/latest" -> respondJson(
+                    AndroidSyncLatestResponse(
+                        generation = AndroidSyncGenerationDto(
+                            generation_id = GENERATION_ID,
+                            created_at_ms = nowMs,
+                            status = "published",
+                            source_version = "test",
+                        ),
+                        refreshing = true,
+                    ),
+                )
+                "/api/android/sync/generation/$GENERATION_ID/items" -> respondJson(
+                    AndroidSyncItemsResponse(
+                        generation_id = GENERATION_ID,
+                        items = emptyList(),
+                        end_of_stream = true,
+                    ),
+                )
+                "/api/android/sync/generation/$GENERATION_ID/assets" -> respondJson(
+                    AndroidSyncAssetsResponse(
+                        generation_id = GENERATION_ID,
+                        assets = emptyList(),
+                        end_of_stream = true,
+                    ),
+                )
+                "/api/android/sync/health" -> respond("""{"ok":true}""", HttpStatusCode.OK, jsonHeaders())
+                else -> error("Unexpected request ${request.url}")
+            }
+        }
+        val mirror = buildMirror(
+            engine,
+            refreshRetryDelayMs = 1L,
+            refreshRetryEnabledProvider = { false },
+        )
+
+        mirror.syncOnce()
+        delay(25L)
+
+        assertFalse(mirror.hasPendingOrActiveWork())
+        assertEquals("false", waitForLog("android_sync_generation_refresh_pending").fields["retry_scheduled"])
     }
 
     @Test fun sameGenerationSyncSkipsRepeatedOrphanFileWalkWhenNothingWasPruned() = runBlocking {
@@ -501,6 +547,50 @@ class AndroidSyncMirrorTest {
         assertEquals(1, latestAttempts.get())
     }
 
+    @Test fun transportMetadataFailureStopsAfterBoundedRetries() = runBlocking {
+        val latestAttempts = AtomicInteger(0)
+        val engine = MockEngine { request ->
+            when (request.url.encodedPath) {
+                "/api/android/sync/generation/latest" -> {
+                    latestAttempts.incrementAndGet()
+                    throw IOException("socket failed: EPERM (Operation not permitted)")
+                }
+                else -> error("Unexpected request ${request.url}")
+            }
+        }
+        val mirror = buildMirror(engine, metadataRetryDelaysMs = listOf(1L, 1L))
+
+        val failure = runCatching { mirror.syncOnce() }.exceptionOrNull()
+
+        assertTrue(failure is IOException)
+        assertEquals(3, latestAttempts.get())
+        val exhausted = waitForLog("android_sync_metadata_retry_exhausted")
+        assertEquals("latest_generation", exhausted.fields["label"])
+        assertEquals(3, exhausted.fields["attempts"])
+    }
+
+    @Test fun runnerTreatsTransportFailureAsCompletedTrigger() = runBlocking {
+        val engine = MockEngine { request ->
+            when (request.url.encodedPath) {
+                "/api/android/sync/generation/latest" ->
+                    throw IOException("socket failed: EPERM (Operation not permitted)")
+                else -> error("Unexpected request ${request.url}")
+            }
+        }
+        val mirror = buildMirror(engine, metadataRetryDelaysMs = listOf(1L))
+        val job = launch { mirror.run() }
+        try {
+            mirror.trigger()
+            waitForLog("android_sync_unhandled")
+
+            withTimeout(1_000L) {
+                while (mirror.hasPendingOrActiveWork()) delay(10L)
+            }
+        } finally {
+            job.cancel()
+        }
+    }
+
     @Test fun staleGenerationAssetConflictTriggersResyncWithoutPermanentAssetFailure() = runBlocking {
         val assetRequests = AtomicInteger(0)
         val asset = AndroidSyncAssetDto(
@@ -684,9 +774,77 @@ class AndroidSyncMirrorTest {
         val job = launch { mirror.run() }
         try {
             mirror.trigger()
-            waitForLog("android_sync_generation_stale_retry")
+            val retry = waitForLog("android_sync_generation_stale_retry")
 
+            assertEquals("true", retry.fields["retry_scheduled"])
             assertFalse(logSink.snapshot().any { it.event == "android_sync_unhandled" })
+        } finally {
+            job.cancel()
+        }
+    }
+
+    @Test fun runnerCompletesStaleGenerationTriggerWhenRetryIsDisabled() = runBlocking {
+        val asset = AndroidSyncAssetDto(
+            seq = 1,
+            asset_id = "asset-1",
+            asset_kind = "post_thumbnail",
+            owner_id = "sample_video",
+            owner_kind = "video",
+            bucket = "thumbnails",
+            server_url = "/api/android/sync/generation/$GENERATION_ID/assets/asset-1",
+            content_type = "image/jpeg",
+            size_bytes = 10L,
+            sha256 = "expected-hash",
+            state = "ready",
+            effective_recency_ms = nowMs,
+        )
+        val engine = MockEngine { request ->
+            when (request.url.encodedPath) {
+                "/api/android/sync/generation/latest" -> respondJson(
+                    AndroidSyncLatestResponse(
+                        generation = AndroidSyncGenerationDto(
+                            generation_id = GENERATION_ID,
+                            created_at_ms = nowMs,
+                            status = "published",
+                            source_version = "test",
+                            asset_count = 1,
+                            ready_asset_count = 1,
+                        ),
+                    ),
+                )
+                "/api/android/sync/generation/$GENERATION_ID/items" -> respondJson(
+                    AndroidSyncItemsResponse(
+                        generation_id = GENERATION_ID,
+                        items = emptyList(),
+                        end_of_stream = true,
+                    ),
+                )
+                "/api/android/sync/generation/$GENERATION_ID/assets" -> respondJson(
+                    AndroidSyncAssetsResponse(
+                        generation_id = GENERATION_ID,
+                        assets = listOf(asset),
+                        end_of_stream = true,
+                    ),
+                )
+                "/api/android/sync/health" -> respond("""{"ok":true}""", HttpStatusCode.OK, jsonHeaders())
+                "/api/android/sync/generation/$GENERATION_ID/assets/asset-1" -> respond(
+                    "asset changed; request latest generation",
+                    HttpStatusCode.Conflict,
+                    headersOf("Content-Type", ContentType.Text.Plain.toString()),
+                )
+                else -> error("Unexpected request ${request.url}")
+            }
+        }
+        val mirror = buildMirror(engine, refreshRetryEnabledProvider = { false })
+        val job = launch { mirror.run() }
+        try {
+            mirror.trigger()
+            val retry = waitForLog("android_sync_generation_stale_retry")
+
+            assertEquals("false", retry.fields["retry_scheduled"])
+            withTimeout(1_000L) {
+                while (mirror.hasPendingOrActiveWork()) delay(10L)
+            }
         } finally {
             job.cancel()
         }
@@ -2253,6 +2411,8 @@ class AndroidSyncMirrorTest {
             AndroidSyncRetentionRequest(feedDays = 7, youtubeDays = 7, momentsDays = 7, storyHours = 48)
         },
         refreshRetryDelayMs: Long = 30_000L,
+        metadataRetryDelaysMs: List<Long> = listOf(1_000L, 5_000L, 15_000L),
+        refreshRetryEnabledProvider: () -> Boolean = { true },
     ): AndroidSyncMirror {
         client = HttpClient(engine) {
             expectSuccess = false
@@ -2282,6 +2442,8 @@ class AndroidSyncMirrorTest {
             retentionProvider = retentionProvider,
             nowMsProvider = { nowMs },
             refreshRetryDelayMs = refreshRetryDelayMs,
+            metadataRetryDelaysMs = metadataRetryDelaysMs,
+            refreshRetryEnabledProvider = refreshRetryEnabledProvider,
         )
     }
 

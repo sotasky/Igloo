@@ -135,7 +135,14 @@ val iglooFeatureModule = module {
             outboxWriter = get(),
         )
     }
-    viewModel { StorageViewModel(cacheOps = get(), prefs = get(), scheduler = get()) }
+    viewModel {
+        StorageViewModel(
+            cacheOps = get(),
+            prefs = get(),
+            scheduler = get(),
+            periodicSyncScheduler = get(),
+        )
+    }
     viewModel { AccountSettingsViewModel(prefs = get(), authRepo = get()) }
     viewModel { FeedSettingsViewModel(prefs = get()) }
     viewModel { PlaybackSettingsViewModel(prefs = get()) }

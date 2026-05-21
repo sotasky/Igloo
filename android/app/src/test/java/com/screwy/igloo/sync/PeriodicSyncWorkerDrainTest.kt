@@ -21,12 +21,13 @@ class PeriodicSyncWorkerDrainTest {
             PeriodicSyncDrainStatus(
                 generationId = "android-sync-test",
                 incompleteImports = 0,
-                activeOrEligibleAssets = 0,
+                pendingAssets = 0,
                 runnerWork = false,
             )
         }
 
         assertTrue(result.completed)
+        assertFalse(result.stalled)
         assertEquals(0, result.remainingWork)
         assertEquals(20, result.elapsedMs)
     }
@@ -44,14 +45,39 @@ class PeriodicSyncWorkerDrainTest {
             PeriodicSyncDrainStatus(
                 generationId = "android-sync-test",
                 incompleteImports = 1,
-                activeOrEligibleAssets = 2,
+                pendingAssets = 2,
                 runnerWork = true,
             )
         }
 
         assertFalse(result.completed)
+        assertFalse(result.stalled)
         assertEquals(4, result.remainingWork)
         assertEquals(1, result.incompleteImports)
         assertTrue(result.runnerWork)
+    }
+
+    @Test fun drainStopsWhenRemainingWorkHasNoRunner() = runBlocking {
+        var now = 0L
+        val result = awaitSyncDrainOrCap(
+            maxRunDurationMs = 100,
+            pollIntervalMs = 10,
+            startupGraceMs = 0,
+            idleStreakRequired = 2,
+            nowMs = { now },
+            delayMs = { now += it },
+        ) {
+            PeriodicSyncDrainStatus(
+                generationId = "android-sync-test",
+                incompleteImports = 1,
+                pendingAssets = 2,
+                runnerWork = false,
+            )
+        }
+
+        assertFalse(result.completed)
+        assertTrue(result.stalled)
+        assertEquals(3, result.remainingWork)
+        assertEquals(20, result.elapsedMs)
     }
 }

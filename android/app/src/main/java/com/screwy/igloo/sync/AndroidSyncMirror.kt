@@ -86,6 +86,8 @@ class AndroidSyncMirror(
     },
     private val nowMsProvider: () -> Long = { System.currentTimeMillis() },
     private val refreshRetryDelayMs: Long = SYNC_REFRESH_RETRY_MS,
+    private val metadataRetryDelaysMs: List<Long> = METADATA_RETRY_DELAYS_MS,
+    private val refreshRetryEnabledProvider: () -> Boolean = { true },
 ) : AndroidSyncRunner {
 
     private val triggerChannel = Channel<Unit>(capacity = Channel.CONFLATED)
@@ -128,28 +130,35 @@ class AndroidSyncMirror(
             syncActive.set(true)
             try {
                 syncOnce()
-                completedTriggerSeq.set(maxOf(completedTriggerSeq.get(), observedTriggerSeq))
+                markTriggerCompleted(observedTriggerSeq)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: AndroidSyncStaleGenerationException) {
+                val retryEnabled = refreshRetryEnabledProvider()
                 logger.info(
                     event = "android_sync_generation_stale_retry",
-                    fields = mapOf("generation_id" to e.generationId),
+                    fields = mapOf(
+                        "generation_id" to e.generationId,
+                        "retry_scheduled" to retryEnabled.toString(),
+                    ),
                 )
-                delay(SYNC_FAILURE_RETRY_MS)
-                trigger()
+                markTriggerCompleted(observedTriggerSeq)
+                if (retryEnabled) scheduleRefreshRetry()
             } catch (e: Exception) {
                 logger.error(
                     event = "android_sync_unhandled",
                     fields = mapOf("error" to (e.message ?: e::class.simpleName.orEmpty())),
                     throwable = e,
                 )
-                delay(SYNC_FAILURE_RETRY_MS)
-                trigger()
+                markTriggerCompleted(observedTriggerSeq)
             } finally {
                 syncActive.set(false)
             }
         }
+    }
+
+    private fun markTriggerCompleted(triggerSeqValue: Long) {
+        completedTriggerSeq.set(maxOf(completedTriggerSeq.get(), triggerSeqValue))
     }
 
     suspend fun syncOnce() {
@@ -227,11 +236,15 @@ class AndroidSyncMirror(
                 ),
             )
             if (latest.refreshing) {
+                val retryEnabled = refreshRetryEnabledProvider()
                 logger.info(
                     event = "android_sync_generation_refresh_pending",
-                    fields = mapOf("generation_id" to generation.generation_id),
+                    fields = mapOf(
+                        "generation_id" to generation.generation_id,
+                        "retry_scheduled" to retryEnabled.toString(),
+                    ),
                 )
-                scheduleRefreshRetry()
+                if (retryEnabled) scheduleRefreshRetry()
             }
         } finally {
             foregroundPromoter.finishActiveDrain()
@@ -603,7 +616,7 @@ class AndroidSyncMirror(
         vararg fields: Pair<String, Any?>,
         block: suspend () -> T,
     ): T {
-        var attempt = 0
+        var failures = 0
         while (true) {
             try {
                 return block()
@@ -614,24 +627,34 @@ class AndroidSyncMirror(
             } catch (e: Exception) {
                 if (e.isTerminalMetadataFailure()) throw e
                 if (e.isLikelyTransportFailure()) reachability.downgrade()
-                val retryDelay = METADATA_RETRY_DELAYS_MS.getOrElse(attempt) { METADATA_RETRY_DELAYS_MS.last() }
+                failures++
+                if (failures > metadataRetryDelaysMs.size) {
+                    logger.info(
+                        event = "android_sync_metadata_retry_exhausted",
+                        fields = mapOf(
+                            "label" to label,
+                            "attempts" to failures,
+                            "error" to (e.message ?: e::class.simpleName.orEmpty()),
+                        ) + fields.toMap(),
+                    )
+                    throw e
+                }
+                val retryDelay = metadataRetryDelaysMs[failures - 1]
                 logger.info(
                     event = "android_sync_metadata_retry",
                     fields = mapOf(
                         "label" to label,
-                        "attempt" to (attempt + 1),
+                        "attempt" to failures,
                         "delay_ms" to retryDelay,
                         "error" to (e.message ?: e::class.simpleName.orEmpty()),
                     ) + fields.toMap(),
                 )
-                attempt++
                 delay(retryDelay)
             }
         }
     }
 
     private companion object {
-        const val SYNC_FAILURE_RETRY_MS = 30_000L
         const val SYNC_REFRESH_RETRY_MS = 30_000L
 
         val METADATA_RETRY_DELAYS_MS = listOf(1_000L, 5_000L, 15_000L)
@@ -651,6 +674,8 @@ internal fun Throwable.isLikelyTransportFailure(): Boolean {
         }
         val message = cause.message?.lowercase().orEmpty()
         if (message.contains("failed to connect") ||
+            message.contains("socket failed") ||
+            message.contains("operation not permitted") ||
             message.contains("unable to resolve host") ||
             message.contains("timeout") ||
             message.contains("connection reset") ||

@@ -5,6 +5,7 @@ import com.screwy.igloo.data.PreferencesRepo
 import com.screwy.igloo.data.RoomTestSupport
 import com.screwy.igloo.media.CacheActions
 import com.screwy.igloo.media.CacheStats
+import com.screwy.igloo.sync.PeriodicSyncScheduler
 import com.screwy.igloo.testutil.FakeSchedulerActions
 import com.screwy.igloo.testutil.ViewModelTestTracker
 import kotlinx.coroutines.CoroutineScope
@@ -35,6 +36,7 @@ class StorageViewModelTest {
     private lateinit var prefs: PreferencesRepo
     private lateinit var cacheOps: FakeCacheActions
     private lateinit var scheduler: FakeSchedulerActions
+    private lateinit var periodicSyncScheduler: FakePeriodicSyncScheduler
     private val viewModels = ViewModelTestTracker()
 
     @Before fun setUp() {
@@ -44,6 +46,7 @@ class StorageViewModelTest {
         prefs = PreferencesRepo(db.preferenceDao(), scope, nowMsProvider = { 0L })
         cacheOps = FakeCacheActions()
         scheduler = FakeSchedulerActions()
+        periodicSyncScheduler = FakePeriodicSyncScheduler()
     }
 
     @After fun tearDown() {
@@ -54,7 +57,7 @@ class StorageViewModelTest {
     }
 
     private fun newViewModel(): StorageViewModel =
-        viewModels.track(StorageViewModel(cacheOps, prefs, scheduler))
+        viewModels.track(StorageViewModel(cacheOps, prefs, scheduler, periodicSyncScheduler))
 
     private suspend fun eventuallyVerify(timeoutMs: Long = 5_000L, assertion: () -> Unit): Boolean =
         withTimeoutOrNull(timeoutMs) {
@@ -83,6 +86,18 @@ class StorageViewModelTest {
                 delay(10)
             }
             true
+        }
+        assertEquals(true, ok)
+    }
+
+    @Test fun setSyncPrefs_refreshPeriodicSchedule() = runBlocking {
+        val vm = newViewModel()
+        vm.setSyncEnabled(false)
+        vm.setSyncWifiOnly(true)
+        vm.setSyncIntervalMinutes(120)
+
+        val ok = eventuallyVerify {
+            assertEquals(3, periodicSyncScheduler.applyCount)
         }
         assertEquals(true, ok)
     }
@@ -157,6 +172,15 @@ class StorageViewModelTest {
 
         override suspend fun clearCaches(buckets: Collection<String>) {
             clearCachesCalls += buckets.toList()
+        }
+    }
+
+    private class FakePeriodicSyncScheduler : PeriodicSyncScheduler {
+        var applyCount = 0
+            private set
+
+        override suspend fun applyPreferences() {
+            applyCount++
         }
     }
 }

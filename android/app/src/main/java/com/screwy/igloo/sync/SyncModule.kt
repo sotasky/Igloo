@@ -9,6 +9,7 @@ import com.screwy.igloo.outbox.OutboxDrainRunner
 import com.screwy.igloo.outbox.OutboxDrainSignal
 import com.screwy.igloo.outbox.OutboxWriter
 import kotlinx.coroutines.flow.first
+import org.koin.android.ext.koin.androidContext
 import org.koin.core.qualifier.named
 import org.koin.dsl.bind
 import org.koin.dsl.module
@@ -24,6 +25,13 @@ import org.koin.dsl.module
  * `iglooDataModule` so sync services stay current across login/logout swaps.
  */
 val iglooSyncModule = module {
+
+    single<PeriodicSyncScheduler> {
+        WorkManagerPeriodicSyncScheduler(
+            context = androidContext(),
+            prefs = get(),
+        )
+    }
 
     single {
         OutboxWriter(
@@ -84,6 +92,7 @@ val iglooSyncModule = module {
 
     single {
         val prefs = get<PreferencesRepo>()
+        val foregroundLifecycle = get<com.screwy.igloo.net.ForegroundLifecycleFlow>()
         AndroidSyncMirror(
             scope = get(named("applicationScope")),
             db = get<DatabaseHolder>().requireCurrent(),
@@ -104,6 +113,7 @@ val iglooSyncModule = module {
                     storyHours = prefs.storiesWindowHours().first(),
                 )
             },
+            refreshRetryEnabledProvider = { foregroundLifecycle.isForeground() },
         )
     } bind AndroidSyncRunner::class
 

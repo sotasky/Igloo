@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.screwy.igloo.data.PreferencesRepo
 import com.screwy.igloo.media.CacheActions
 import com.screwy.igloo.media.CacheStats
+import com.screwy.igloo.sync.PeriodicSyncScheduler
 import com.screwy.igloo.sync.SchedulerActions
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
@@ -26,6 +27,7 @@ class StorageViewModel(
     private val cacheOps: CacheActions,
     private val prefs: PreferencesRepo,
     private val scheduler: SchedulerActions? = null,
+    private val periodicSyncScheduler: PeriodicSyncScheduler? = null,
 ) : ViewModel() {
 
     val syncEnabled: StateFlow<Boolean> =
@@ -52,15 +54,24 @@ class StorageViewModel(
     init { refresh() }
 
     fun setSyncEnabled(value: Boolean) {
-        viewModelScope.launch { prefs.setSyncEnabled(value) }
+        viewModelScope.launch {
+            prefs.setSyncEnabled(value)
+            periodicSyncScheduler?.applyPreferences()
+        }
     }
 
     fun setSyncIntervalMinutes(value: Int) {
-        viewModelScope.launch { prefs.setSyncIntervalMinutes(value) }
+        viewModelScope.launch {
+            prefs.setSyncIntervalMinutes(value)
+            periodicSyncScheduler?.applyPreferences()
+        }
     }
 
     fun setSyncWifiOnly(value: Boolean) {
-        viewModelScope.launch { prefs.setSyncWifiOnly(value) }
+        viewModelScope.launch {
+            prefs.setSyncWifiOnly(value)
+            periodicSyncScheduler?.applyPreferences()
+        }
     }
 
     fun setRetentionDaysYoutube(value: Int) {

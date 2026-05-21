@@ -109,6 +109,10 @@ class ForegroundLifecycleFlow(@Suppress("UNUSED_PARAMETER") scope: CoroutineScop
 
     val flow: kotlinx.coroutines.flow.Flow<Boolean> = buildForegroundFlow()
 
+    fun isForeground(): Boolean =
+        androidx.lifecycle.ProcessLifecycleOwner.get().lifecycle.currentState
+            .isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED)
+
     private fun buildForegroundFlow(): kotlinx.coroutines.flow.Flow<Boolean> {
         val lifecycle = androidx.lifecycle.ProcessLifecycleOwner.get().lifecycle
         return lifecycle.eventFlow
