@@ -8,6 +8,7 @@ import { recordShortsDebugEvent } from './debug.js'
 var _state = null
 var _dom = null
 var _fns = null
+var _snapSettleFrame = 0
 
 // initOverlay sets up module-level refs.
 //   dom: { shortsContainer, gridShell, layout, upToDateOverlay, sourceContainer,
@@ -159,6 +160,7 @@ export function setOverlayVisible(visible) {
   _dom.doc.body.classList.toggle('shorts-mode', _state.overlayOpen)
   _dom.doc.body.classList.toggle('shorts-open', _state.overlayOpen)
   if (!_state.overlayOpen) {
+    clearSnapSettleCorrection()
     pauseAllShorts()
     _fns.closeBookmarkMenu()
     var card = _state.cards[_state.currentIndex]
@@ -303,6 +305,79 @@ function isSnapSettled(entry) {
   return Math.abs(snapOffset(entry)) < 2
 }
 
+function clearSnapSettleCorrection() {
+  if (_snapSettleFrame) {
+    try { cancelAnimationFrame(_snapSettleFrame) } catch (_) {}
+    _snapSettleFrame = 0
+  }
+  if (_state) _state.pendingSnapSettleEntry = null
+}
+
+function activeEntryMatches(entry) {
+  if (!entry || !_state || !_state.overlayOpen) return false
+  var current = currentData()
+  return !!(current && entry.data && current.id === entry.data.id)
+}
+
+function alignVerticalActiveItem(entry, reason) {
+  if (_state.storyMode || !entry || !entry.el || !_dom.shortsContainer) return false
+  if (typeof entry.el.getBoundingClientRect !== 'function' ||
+      typeof _dom.shortsContainer.getBoundingClientRect !== 'function') return false
+  var delta = snapOffset(entry)
+  if (Math.abs(delta) < 2) return false
+  var previousScrollBehavior = _dom.shortsContainer.style.scrollBehavior
+  _dom.shortsContainer.style.scrollBehavior = 'auto'
+  var top = Number(_dom.shortsContainer.scrollTop || 0) + delta
+  if (typeof _dom.shortsContainer.scrollTo === 'function') {
+    _dom.shortsContainer.scrollTo({ top: top, behavior: 'auto' })
+  } else {
+    _dom.shortsContainer.scrollTop = top
+  }
+  requestAnimationFrame(function () {
+    _dom.shortsContainer.style.scrollBehavior = previousScrollBehavior
+  })
+  recordShortsDebugEvent(entry, 'scroll:settle-align', {
+    delta: Math.round(delta),
+    reason: reason || 'idle'
+  })
+  return true
+}
+
+function scheduleSnapSettleCorrection(entry) {
+  if (_state.storyMode || !entry || !entry.el || !_dom.shortsContainer) return
+  clearSnapSettleCorrection()
+  var now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()
+  var startedAt = now
+  var lastScrollTop = Number(_dom.shortsContainer.scrollTop || 0)
+  var quietFrames = 0
+  _state.pendingSnapSettleEntry = entry
+
+  _snapSettleFrame = requestAnimationFrame(function checkSettle() {
+    _snapSettleFrame = 0
+    if (_state.pendingSnapSettleEntry !== entry || !activeEntryMatches(entry)) return
+    var delta = snapOffset(entry)
+    if (Math.abs(delta) < 2) {
+      _state.pendingSnapSettleEntry = null
+      recordShortsDebugEvent(entry, 'snap:settled', { delta: Math.round(delta) })
+      return
+    }
+
+    var scrollTop = Number(_dom.shortsContainer.scrollTop || 0)
+    if (Math.abs(scrollTop - lastScrollTop) < 0.5) quietFrames += 1
+    else quietFrames = 0
+    lastScrollTop = scrollTop
+
+    var t = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()
+    if ((_state.touchActive || quietFrames < 2) && t - startedAt < 420) {
+      _snapSettleFrame = requestAnimationFrame(checkSettle)
+      return
+    }
+
+    _state.pendingSnapSettleEntry = null
+    alignVerticalActiveItem(entry, _state.touchActive ? 'timeout' : 'idle')
+  })
+}
+
 function activateVisibleShort(index) {
   if (_state.storyMode) {
     activateIndex(index, { force: false })
@@ -341,6 +416,8 @@ export function activateIndex(index, options) {
   recordShortsDebugEvent(entry, 'activate', { snapSettled: !!snapSettled })
   if (snapSettled) recordShortsDebugEvent(entry, 'snap:settled', { delta: Math.round(snapOffset(entry)) })
   recordShortsDebugEvent(entry, 'chrome:snapshot', { phase: 'activate', snapSettled: !!snapSettled })
+  if (!_state.storyMode && !snapSettled) scheduleSnapSettleCorrection(entry)
+  else clearSnapSettleCorrection()
 
   pauseAllShorts(entry.data.id)
   _state.lastVisibleId = entry.data.id
@@ -405,6 +482,7 @@ export function ensureObserver() {
 }
 
 export function renderShortsWindow(centerIndex) {
+  clearSnapSettleCorrection()
   if (_state.observer) {
     _state.observer.disconnect()
     _state.observer = null

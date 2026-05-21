@@ -459,6 +459,8 @@ func TestShortsActivationDoesNotWaitForSnapBeforePlayback(t *testing.T) {
 		"activateIndex(index, { force: false, snapSettled: settled })",
 		"activateVisibleShort(index)",
 		"recordShortsDebugEvent(entry, 'activate', { snapSettled: !!snapSettled })",
+		"scheduleSnapSettleCorrection(entry)",
+		"recordShortsDebugEvent(entry, 'scroll:settle-align'",
 	} {
 		if !strings.Contains(src, check) {
 			t.Errorf("shorts activation immediate snap reporting missing %q", check)
@@ -473,6 +475,44 @@ func TestShortsActivationDoesNotWaitForSnapBeforePlayback(t *testing.T) {
 	} {
 		if strings.Contains(src, forbidden) {
 			t.Errorf("shorts activation should not wait for snap before playback; found %q", forbidden)
+		}
+	}
+}
+
+func TestShortsPreSnapActivationCorrectsExposedEdgesWithoutWaitingToPlay(t *testing.T) {
+	overlayBytes, err := os.ReadFile("../../static/js/src/shorts/overlay.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	indexBytes, err := os.ReadFile("../../static/js/src/shorts/index.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	overlaySrc := string(overlayBytes)
+	indexSrc := string(indexBytes)
+
+	for _, check := range []string{
+		"function scheduleSnapSettleCorrection(entry)",
+		"function alignVerticalActiveItem(entry, reason)",
+		"_state.pendingSnapSettleEntry = entry",
+		"(_state.touchActive || quietFrames < 2) && t - startedAt < 420",
+		"alignVerticalActiveItem(entry, _state.touchActive ? 'timeout' : 'idle')",
+		"if (!_state.storyMode && !snapSettled) scheduleSnapSettleCorrection(entry)",
+		"playShortVideoFromStart(entry)",
+	} {
+		if !strings.Contains(overlaySrc, check) {
+			t.Errorf("shorts pre-snap settle correction missing %q", check)
+		}
+	}
+	for _, check := range []string{
+		"touchActive: false",
+		"state.touchActive = true",
+		"function releaseTouchSoon(delayMs)",
+		"releaseTouchSoon(90)",
+		"layout.addEventListener('touchcancel', onTouchCancel",
+	} {
+		if !strings.Contains(indexSrc, check) {
+			t.Errorf("shorts touch settle guard missing %q", check)
 		}
 	}
 }

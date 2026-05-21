@@ -65,6 +65,8 @@ if (layout) {
       touchStartX: 0,
       touchStartY: 0,
       touchStartScrollTop: 0,
+      touchActive: false,
+      touchActiveTimer: 0,
       bookmarkCategories: [],
       bookmarkMenu: null,
       bookmarkOutsideListener: null,
@@ -1350,14 +1352,28 @@ if (layout) {
     function onTouchStart(event) {
       if (!state.overlayOpen) return
       if (!event.changedTouches || !event.changedTouches.length) return
+      state.touchActive = true
+      if (state.touchActiveTimer) {
+        clearTimeout(state.touchActiveTimer)
+        state.touchActiveTimer = 0
+      }
       state.touchStartX = Number(event.changedTouches[0].screenX || 0)
       state.touchStartY = Number(event.changedTouches[0].screenY || 0)
       state.touchStartScrollTop = Number(shortsContainer.scrollTop || 0)
     }
 
+    function releaseTouchSoon(delayMs) {
+      if (state.touchActiveTimer) clearTimeout(state.touchActiveTimer)
+      state.touchActiveTimer = setTimeout(function () {
+        state.touchActive = false
+        state.touchActiveTimer = 0
+      }, Math.max(0, Number(delayMs || 0)))
+    }
+
     function onTouchEnd(event) {
       if (!state.overlayOpen) return
       if (!event.changedTouches || !event.changedTouches.length) return
+      releaseTouchSoon(90)
       var endX = Number(event.changedTouches[0].screenX || 0)
       var endY = Number(event.changedTouches[0].screenY || 0)
       var diffX = state.touchStartX - endX
@@ -1372,6 +1388,11 @@ if (layout) {
       var scrollDiff = Math.abs(Number(shortsContainer.scrollTop || 0) - Number(state.touchStartScrollTop || 0))
       if (scrollDiff > 30) return
       if (diff > 0) goNext(); else goPrev()
+    }
+
+    function onTouchCancel() {
+      if (!state.overlayOpen) return
+      releaseTouchSoon(0)
     }
 
     function onTabClick(event) {
@@ -1478,6 +1499,7 @@ if (layout) {
       layout.addEventListener('wheel', onWheel, { passive: false })
       layout.addEventListener('touchstart', onTouchStart, { passive: true })
       layout.addEventListener('touchend', onTouchEnd, { passive: true })
+      layout.addEventListener('touchcancel', onTouchCancel, { passive: true })
       shortsContainer.addEventListener('scroll', function () {
         if (!state.overlayOpen) return
         requestMoreIfNeeded()
