@@ -215,7 +215,7 @@ internal class NativeFeedViewHolder(
         callbacks: NativeFeedCallbacks,
     ) {
         val chain = threaded.chain
-        if (chain.isEmpty()) {
+        if (!nativeThreadCapsuleVisible(chain)) {
             views.threadCapsule.visibility = View.GONE
             views.threadCapsule.setOnClickListener(null)
             views.threadCapsuleText.text = ""

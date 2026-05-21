@@ -28,6 +28,16 @@ func TestFeedItemThreadRendersCapsuleBelowReply(t *testing.T) {
 				AuthorAvatarURL:   "/api/media/avatar/twitter_sample_root_author",
 				BodyText:          "root body",
 			},
+			{
+				TweetID:           "parent_1",
+				AuthorHandle:      "sample_parent_author",
+				AuthorDisplayName: "Parent Author",
+				AuthorAvatarURL:   "/api/media/avatar/twitter_sample_parent_author",
+				BodyText:          "parent body",
+				IsReply:           true,
+				ReplyToHandle:     "sample_root_author",
+				ReplyToStatus:     "root_1",
+			},
 		},
 	}
 
@@ -45,6 +55,7 @@ func TestFeedItemThreadRendersCapsuleBelowReply(t *testing.T) {
 		`href="/thread/leaf_1"`,
 		`class="feed-thread-capsule-avatar"`,
 		`src="/api/media/avatar/twitter_sample_root_author"`,
+		`src="/api/media/avatar/twitter_sample_parent_author"`,
 		`src="/api/media/avatar/twitter_sample_author_a"`,
 	} {
 		if !strings.Contains(html, want) {
@@ -65,6 +76,51 @@ func TestFeedItemThreadRendersCapsuleBelowReply(t *testing.T) {
 	}
 	if !strings.Contains(html, `Reposter A`) || !strings.Contains(html, `reposted`) {
 		t.Fatalf("repost label missing: %s", html)
+	}
+}
+
+func TestFeedItemTwoPostThreadOmitsCapsule(t *testing.T) {
+	item := model.FeedItem{
+		TweetID:           "leaf_1",
+		AuthorHandle:      "sample_author_b",
+		AuthorDisplayName: "Leaf Author",
+		BodyText:          "reply body",
+		IsReply:           true,
+		ReplyToHandle:     "sample_author_a",
+		ReplyToStatus:     "root_1",
+		ThreadChain: []model.FeedItem{
+			{
+				TweetID:           "root_1",
+				AuthorHandle:      "sample_author_a",
+				AuthorDisplayName: "Root Author",
+				BodyText:          "root body",
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	if err := FeedItem(PageProps{}, item).Render(context.Background(), &buf); err != nil {
+		t.Fatalf("render feed item: %v", err)
+	}
+	html := buf.String()
+	for _, want := range []string{
+		`class="feed-thread"`,
+		`data-feed-thread-row`,
+		`root body`,
+		`reply body`,
+	} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("missing %q in html: %s", want, html)
+		}
+	}
+	for _, notWant := range []string{
+		`data-feed-thread-capsule`,
+		`data-feed-thread-open`,
+		`feed-thread-capsule-text`,
+	} {
+		if strings.Contains(html, notWant) {
+			t.Fatalf("two-post thread should not render capsule %q in html: %s", notWant, html)
+		}
 	}
 }
 

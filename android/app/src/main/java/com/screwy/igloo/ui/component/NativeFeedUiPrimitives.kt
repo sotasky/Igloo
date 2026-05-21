@@ -129,6 +129,9 @@ internal fun nativeShouldClampBody(text: String): Boolean =
 internal fun <T> nativeThreadPreviewAncestors(chain: List<T>): List<T> =
     chain.take(1)
 
+internal fun <T> nativeThreadCapsuleVisible(chain: List<T>): Boolean =
+    chain.size > nativeThreadPreviewAncestors(chain).size
+
 internal fun remoteUriFor(url: String, baseUrl: String): MediaUri.Remote {
     val resolved = when {
         url.startsWith("http://") || url.startsWith("https://") -> url

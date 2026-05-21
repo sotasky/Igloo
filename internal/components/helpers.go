@@ -509,7 +509,12 @@ func threadPreviewAncestorVisible(index int, chain []model.FeedItem) bool {
 }
 
 func threadCapsuleVisible(chain []model.FeedItem) bool {
-	return len(chain) > 0
+	for i := range chain {
+		if !threadPreviewAncestorVisible(i, chain) {
+			return true
+		}
+	}
+	return false
 }
 
 func threadCapsulePostCount(item model.FeedItem) int {

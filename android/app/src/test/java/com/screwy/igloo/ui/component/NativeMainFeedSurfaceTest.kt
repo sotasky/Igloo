@@ -206,6 +206,13 @@ class NativeMainFeedSurfaceTest {
     }
 
     @Test
+    fun nativeThreadCapsuleOnlyShowsWhenPreviewOmitsPosts() {
+        assertFalse(nativeThreadCapsuleVisible(emptyList<String>()))
+        assertFalse(nativeThreadCapsuleVisible(listOf("root")))
+        assertTrue(nativeThreadCapsuleVisible(listOf("root", "parent")))
+    }
+
+    @Test
     fun nativeFeedScrollRestoreFindsTheSamePostAfterRecreation() {
         val items = listOf(
             NativeFeedAdapterItem.Post(threadedRow("tweet-1"), post("tweet-1")),
@@ -276,6 +283,7 @@ class NativeMainFeedSurfaceTest {
 
         assertTrue(threadText.contains("nativeThreadPreviewAncestors(chain)"))
         assertFalse(threadText.contains("feed_thread_load_more_replies"))
+        assertTrue(threadText.contains("if (!nativeThreadCapsuleVisible(chain))"))
         assertTrue(threadText.contains("R.string.feed_thread_capsule"))
         assertTrue(threadText.contains("callbacks.onRowClick(threaded.row)"))
         assertTrue(threadText.contains("bindThreadCapsuleAvatars(threaded, colors)"))
