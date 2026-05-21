@@ -387,7 +387,7 @@ test("CodeQL runs on published releases and manual dispatch only", () => {
   assert.doesNotMatch(workflow, /cron:/);
 });
 
-test("CI covers pull requests and pushes to main with three jobs", () => {
+test("CI covers pull requests and pushes to main with static, Go, runtime, and Android jobs", () => {
   const workflow = readFileSync(
     new URL("../../.github/workflows/ci.yml", import.meta.url),
     "utf8",
@@ -403,9 +403,13 @@ test("CI covers pull requests and pushes to main with three jobs", () => {
   );
   assert.match(workflow, /\n  static:\n/);
   assert.match(workflow, /\n  go:\n/);
+  assert.match(workflow, /\n  runtime:\n/);
   assert.match(workflow, /\n  android:\n/);
   assert.match(workflow, /run: go test \.\/\.\.\./);
   assert.match(workflow, /run: scripts\/dev\/web-test\.sh/);
+  assert.match(workflow, /DeterminateSystems\/determinate-nix-action@[0-9a-f]{40}/);
+  assert.match(workflow, /DeterminateSystems\/magic-nix-cache-action@[0-9a-f]{40}/);
+  assert.match(workflow, /run: nix build \.#yt-dlp \.#gallery-dl --no-link --print-build-logs/);
   assert.match(workflow, /run: \.\/test\.sh/);
   assert.doesNotMatch(workflow, /workflow-pin-check\.sh/);
   assert.match(workflow, /No Android-relevant changes/);

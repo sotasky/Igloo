@@ -2,7 +2,15 @@
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "description": "Renovate owns dependency updates for Go, Gradle, GitHub Actions, Docker images, and runtime tools.",
   "extends": ["config:recommended"],
-  "enabledManagers": ["gomod", "gradle", "github-actions", "dockerfile", "nix", "pip_requirements", "custom.regex"],
+  "enabledManagers": [
+    "gomod",
+    "gradle",
+    "github-actions",
+    "dockerfile",
+    "nix",
+    "pip_requirements",
+    "custom.regex"
+  ],
   "dependencyDashboard": true,
   "minimumReleaseAge": "7 days",
   "prCreation": "not-pending",
@@ -11,6 +19,14 @@
   "platformAutomerge": false,
   "prConcurrentLimit": 3,
   "prHourlyLimit": 1,
+  "customDatasources": {
+    "pypi-sdist": {
+      "defaultRegistryUrlTemplate": "https://pypi.org/pypi/{{packageName}}/json",
+      "transformTemplates": [
+        "{ \"releases\": $map($filter($keys(releases), function($v) { $exists($lookup(releases, $v)[packagetype=\"sdist\"]) }), function($v) { ( $sdist := $lookup(releases, $v)[packagetype=\"sdist\"][0]; {\"version\": $v, \"digest\": $sdist.digests.sha256, \"releaseTimestamp\": $sdist.upload_time_iso_8601} ) }), \"sourceUrl\": info.project_urls.Source, \"homepage\": info.project_url }"
+      ]
+    }
+  },
   "customManagers": [
     {
       "customType": "regex",
@@ -27,6 +43,16 @@
       "matchStrings": [
         "# renovate: datasource=(?<datasource>[a-z-]+) packageName=(?<packageName>[^\\s]+) versioning=(?<versioning>[a-z0-9-]+)\\s+[A-Z0-9_]+_VERSION=(?<currentValue>[^\\s]+)"
       ]
+    },
+    {
+      "customType": "regex",
+      "description": "Update Nix PyPI source hashes for runtime downloader tools.",
+      "managerFilePatterns": ["/(^|/)flake\\.nix$/"],
+      "matchStrings": [
+        "# renovate: packageName=(?<packageName>[^\\s]+) depName=(?<depName>[^\\s]+) versioning=(?<versioning>[^\\s]+)\\s+\"(?<depKey>[^\"]+)\" = \\{\\s+pypiName = \"(?<pypiName>[^\"]+)\";\\s+version = \"(?<currentValue>[^\"]+)\";\\s+sha256 = \"(?<currentDigest>[a-f0-9]+)\";"
+      ],
+      "datasourceTemplate": "custom.pypi-sdist",
+      "autoReplaceStringTemplate": "# renovate: packageName={{{packageName}}} depName={{{depName}}} versioning={{{versioning}}}\n            \"{{{depKey}}}\" = {\n              pypiName = \"{{{pypiName}}}\";\n              version = \"{{{newValue}}}\";\n              sha256 = \"{{{newDigest}}}\";"
     }
   ],
   "packageRules": [
@@ -51,9 +77,25 @@
     },
     {
       "description": "Keep Docker and runtime tool updates together.",
-      "matchManagers": ["dockerfile", "nix", "pip_requirements", "custom.regex"],
+      "matchManagers": [
+        "dockerfile",
+        "nix",
+        "pip_requirements",
+        "custom.regex"
+      ],
+      "matchPackageNames": ["!yt-dlp", "!gallery-dl"],
       "groupName": "container runtime dependencies",
       "groupSlug": "container-runtime"
+    },
+    {
+      "description": "yt-dlp and gallery-dl updates are most of the time urgent.",
+      "matchManagers": ["pip_requirements", "custom.regex"],
+      "matchPackageNames": ["yt-dlp", "gallery-dl"],
+      "minimumReleaseAge": null,
+      "automerge": true,
+      "prPriority": 10,
+      "groupName": "downloader runtime dependencies",
+      "groupSlug": "downloader-runtime"
     }
   ]
 }

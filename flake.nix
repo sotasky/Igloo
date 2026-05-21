@@ -78,17 +78,37 @@
           go = goFor system pkgs;
           buildGoModule = pkgs.buildGoModule.override { inherit go; };
           pythonPackages = pkgs.python3Packages;
+          runtimeTools = {
+            # renovate: packageName=yt-dlp depName=yt-dlp versioning=pep440
+            "yt-dlp" = {
+              pypiName = "yt_dlp";
+              version = "2026.3.17";
+              sha256 = "ba7aa31d533f1ffccfe70e421596d7ca8ff0bf1398dc6bb658b7d9dec057d2c9";
+            };
+            # renovate: packageName=gallery-dl depName=gallery-dl versioning=pep440
+            "gallery-dl" = {
+              pypiName = "gallery_dl";
+              version = "1.32.1";
+              sha256 = "b59f1c3b58783c9c904d38ba24cb64e2004341c84100903564913340fb97767f";
+            };
+          };
           runtimeRequirementLines = lib.splitString "\n" (builtins.readFile ./requirements-runtime.txt);
           runtimeToolVersion =
             package:
             let
               prefix = "${package}==";
               matches = builtins.filter (line: lib.hasPrefix prefix line) runtimeRequirementLines;
+              requirementVersion = lib.removePrefix prefix (builtins.head matches);
+              tool = runtimeTools.${package} or (throw "expected ${package} metadata in flake.nix");
             in
             if builtins.length matches != 1 then
               throw "expected exactly one ${package} pin in requirements-runtime.txt"
+            else if requirementVersion != tool.version then
+              throw "expected ${package} requirement ${requirementVersion} to match flake metadata ${tool.version}"
             else
-              lib.removePrefix prefix (builtins.head matches);
+              requirementVersion;
+          runtimeToolPypiName = package: runtimeTools.${package}.pypiName;
+          runtimeToolSha256 = package: runtimeTools.${package}.sha256;
 
           ytDlp = pythonPackages.buildPythonApplication rec {
             pname = "yt-dlp";
@@ -96,9 +116,9 @@
             pyproject = true;
 
             src = pkgs.fetchPypi {
-              pname = "yt_dlp";
+              pname = runtimeToolPypiName "yt-dlp";
               inherit version;
-              hash = "sha256-unqjHVM/H/zP5w5CFZbXyo/wvxOY3Gu2WLfZ3sBX0sk=";
+              sha256 = runtimeToolSha256 "yt-dlp";
             };
 
             build-system = [
@@ -127,8 +147,9 @@
             pyproject = true;
 
             src = pkgs.fetchPypi {
-              inherit pname version;
-              hash = "sha256-tZ8cO1h4PJyQTTi6JMtk4gBDQchBAJA1ZJEzQPuXdn8=";
+              pname = runtimeToolPypiName "gallery-dl";
+              inherit version;
+              sha256 = runtimeToolSha256 "gallery-dl";
             };
 
             build-system = [

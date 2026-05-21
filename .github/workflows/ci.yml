@@ -77,6 +77,20 @@ jobs:
       - name: Run web process-level test
         run: scripts/dev/web-test.sh
 
+  runtime:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - uses: DeterminateSystems/determinate-nix-action@bafaa638b9d5ec0e7e3ac1a7fc80453ef1fd265f # v3
+
+      - uses: DeterminateSystems/magic-nix-cache-action@908b263ff629f4cc17666315b7fd3ec127c6244d # main
+        with:
+          use-flakehub: false
+
+      - name: Build downloader runtime tools
+        run: nix build .#yt-dlp .#gallery-dl --no-link --print-build-logs
+
   android:
     runs-on: ubuntu-latest
     steps:
