@@ -601,6 +601,21 @@ func (m *Manager) rememberInstagramProfileFromRefs(ch model.Channel, refs []down
 		profile.Tombstone = existing.Tombstone
 	}
 	for _, ref := range refs {
+		if ref.IsRepost && ref.ReposterChannelID == ch.ChannelID {
+			if ref.ReposterHandle != "" {
+				profile.Handle = ref.ReposterHandle
+			}
+			if ref.ReposterDisplayName != "" {
+				profile.DisplayName = ref.ReposterDisplayName
+			}
+			if ref.ReposterAvatarURL != "" {
+				profile.AvatarURL = ref.ReposterAvatarURL
+			}
+			if profile.Handle != "" && profile.DisplayName != "" && profile.AvatarURL != "" {
+				break
+			}
+			continue
+		}
 		if ref.IsRepost && ref.ChannelID != "" && ref.ChannelID != ch.ChannelID {
 			continue
 		}

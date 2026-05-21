@@ -157,6 +157,7 @@ type VideoRef struct {
 	ReposterChannelID   string
 	ReposterHandle      string
 	ReposterDisplayName string
+	ReposterAvatarURL   string
 	RepostedAtMs        int64
 }
 

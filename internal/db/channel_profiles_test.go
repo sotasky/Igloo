@@ -87,6 +87,86 @@ func TestMarkChannelProfileRefreshDueClearsFreshness(t *testing.T) {
 	}
 }
 
+func TestUpsertChannelProfilePreservesRetryOnPartialUpdate(t *testing.T) {
+	d := openWritableTestDB(t)
+
+	fetchedAt := time.Now().Add(-time.Hour).UTC().Truncate(time.Millisecond)
+	nextRetry := time.Now().Add(time.Hour).UTC().Truncate(time.Millisecond)
+	if err := d.UpsertChannelProfile(model.ChannelProfile{
+		ChannelID:   "instagram_sample_profile",
+		Platform:    "instagram",
+		Handle:      "sample_profile",
+		DisplayName: "Cached",
+		AvatarURL:   "https://cdn.example/avatar.jpg",
+		FetchedAt:   &fetchedAt,
+		FailCount:   2,
+		NextRetryAt: &nextRetry,
+	}); err != nil {
+		t.Fatalf("seed profile: %v", err)
+	}
+
+	if err := d.UpsertChannelProfile(model.ChannelProfile{
+		ChannelID:   "instagram_sample_profile",
+		Platform:    "instagram",
+		Handle:      "sample_profile",
+		DisplayName: "Cached Updated",
+		AvatarURL:   "https://cdn.example/avatar-new.jpg",
+		FetchedAt:   &fetchedAt,
+	}); err != nil {
+		t.Fatalf("partial update: %v", err)
+	}
+
+	got, err := d.GetChannelProfile("instagram_sample_profile")
+	if err != nil || got == nil {
+		t.Fatalf("GetChannelProfile: %v / %+v", err, got)
+	}
+	if got.FailCount != 2 || got.NextRetryAt == nil || !got.NextRetryAt.Equal(nextRetry) {
+		t.Fatalf("retry state was not preserved: %+v", got)
+	}
+	if got.DisplayName != "Cached Updated" || got.AvatarURL != "https://cdn.example/avatar-new.jpg" {
+		t.Fatalf("profile metadata was not updated: %+v", got)
+	}
+}
+
+func TestUpsertChannelProfileClearsRetryOnNewFetch(t *testing.T) {
+	d := openWritableTestDB(t)
+
+	oldFetchedAt := time.Now().Add(-time.Hour).UTC().Truncate(time.Millisecond)
+	newFetchedAt := time.Now().UTC().Truncate(time.Millisecond)
+	nextRetry := time.Now().Add(time.Hour).UTC().Truncate(time.Millisecond)
+	if err := d.UpsertChannelProfile(model.ChannelProfile{
+		ChannelID:   "instagram_sample_profile",
+		Platform:    "instagram",
+		Handle:      "sample_profile",
+		DisplayName: "Cached",
+		AvatarURL:   "https://cdn.example/avatar.jpg",
+		FetchedAt:   &oldFetchedAt,
+		FailCount:   2,
+		NextRetryAt: &nextRetry,
+	}); err != nil {
+		t.Fatalf("seed profile: %v", err)
+	}
+
+	if err := d.UpsertChannelProfile(model.ChannelProfile{
+		ChannelID:   "instagram_sample_profile",
+		Platform:    "instagram",
+		Handle:      "sample_profile",
+		DisplayName: "Cached",
+		AvatarURL:   "https://cdn.example/avatar-new.jpg",
+		FetchedAt:   &newFetchedAt,
+	}); err != nil {
+		t.Fatalf("new fetch: %v", err)
+	}
+
+	got, err := d.GetChannelProfile("instagram_sample_profile")
+	if err != nil || got == nil {
+		t.Fatalf("GetChannelProfile: %v / %+v", err, got)
+	}
+	if got.FailCount != 0 || got.NextRetryAt != nil {
+		t.Fatalf("retry state was not cleared: %+v", got)
+	}
+}
+
 func TestUpsertChannelProfilePreservesNonEmpty(t *testing.T) {
 	d := openWritableTestDB(t)
 

@@ -42,8 +42,22 @@ func (db *DB) UpsertChannelProfile(p model.ChannelProfile) error {
 				avatar_url    = COALESCE(excluded.avatar_url, channel_profiles.avatar_url),
 				banner_url    = COALESCE(excluded.banner_url, channel_profiles.banner_url),
 				fetched_at    = COALESCE(excluded.fetched_at, channel_profiles.fetched_at),
-				fail_count    = excluded.fail_count,
-				next_retry_at = excluded.next_retry_at,
+				fail_count    = CASE
+					WHEN excluded.fail_count = 0
+					     AND excluded.next_retry_at = 0
+					     AND channel_profiles.next_retry_at != 0
+					     AND (excluded.fetched_at = 0 OR excluded.fetched_at <= channel_profiles.fetched_at)
+					THEN channel_profiles.fail_count
+					ELSE excluded.fail_count
+				END,
+				next_retry_at = CASE
+					WHEN excluded.fail_count = 0
+					     AND excluded.next_retry_at = 0
+					     AND channel_profiles.next_retry_at != 0
+					     AND (excluded.fetched_at = 0 OR excluded.fetched_at <= channel_profiles.fetched_at)
+					THEN channel_profiles.next_retry_at
+					ELSE excluded.next_retry_at
+				END,
 				tombstone     = excluded.tombstone
 		`,
 			channelID, p.Platform, nilIfEmpty(p.Handle), p.DisplayName, p.Bio,

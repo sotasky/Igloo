@@ -1,6 +1,11 @@
 package download
 
-import "testing"
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 func TestParseInstagramChannelDump(t *testing.T) {
 	dump := []byte(`
@@ -49,9 +54,22 @@ func TestParseInstagramChannelDumpForHandleUsesCoauthorSource(t *testing.T) {
 	}
 }
 
+func TestParseInstagramChannelDumpUsesMatchingAudioUserAvatar(t *testing.T) {
+	dump := []byte(`
+[2, {"subcategory":"posts","type":"post","username":"sample.creator","fullname":"Sample Creator","audio_user":{"username":"sample.creator","full_name":"Sample Creator","profile_pic_url":"https://cdn.example/audio-avatar.jpg"},"post_shortcode":"POST123","post_url":"https://www.instagram.com/p/POST123/","description":"A post","date":"2026-04-30 16:26:41"}]
+`)
+	refs := ParseInstagramChannelDump(dump)
+	if len(refs) != 1 {
+		t.Fatalf("len(refs) = %d, want 1: %#v", len(refs), refs)
+	}
+	if refs[0].AuthorAvatarURL != "https://cdn.example/audio-avatar.jpg" {
+		t.Fatalf("avatar = %q", refs[0].AuthorAvatarURL)
+	}
+}
+
 func TestParseInstagramTaggedDumpForHandleKeepsOriginalOwner(t *testing.T) {
 	dump := []byte(`
-[2, {"subcategory":"tagged","type":"post","username":"owner.one","fullname":"Owner One","profile_pic_url":"https://cdn.example/owner.jpg","post_shortcode":"TAG123","post_url":"https://www.instagram.com/p/TAG123/","description":"Tagged post","date":1714494401,"tagged_username":"followed.one","tagged_users":[{"username":"followed.one","full_name":"Followed One"},{"username":"other.two","full_name":"Other Two"}]}]
+[2, {"subcategory":"tagged","type":"post","username":"owner.one","fullname":"Owner One","profile_pic_url":"https://cdn.example/owner.jpg","post_shortcode":"TAG123","post_url":"https://www.instagram.com/p/TAG123/","description":"Tagged post","date":1714494401,"tagged_username":"followed.one","tagged_users":[{"username":"followed.one","full_name":"Followed One","profile_pic_url":"https://cdn.example/followed.jpg"},{"username":"other.two","full_name":"Other Two"}]}]
 `)
 	refs := ParseInstagramTaggedDumpForHandle(dump, "followed.one")
 	if len(refs) != 1 {
@@ -66,6 +84,9 @@ func TestParseInstagramTaggedDumpForHandleKeepsOriginalOwner(t *testing.T) {
 	}
 	if !ref.IsRepost || ref.ReposterChannelID != "instagram_followed.one" || ref.ReposterHandle != "followed.one" {
 		t.Fatalf("tagged route should mark followed account as introducer: %#v", ref)
+	}
+	if ref.ReposterDisplayName != "Followed One" || ref.ReposterAvatarURL != "https://cdn.example/followed.jpg" {
+		t.Fatalf("tagged route should keep introducer profile media: %#v", ref)
 	}
 	if ref.PublishedAtMs == 0 {
 		t.Fatalf("PublishedAtMs should be parsed from post date: %#v", ref)
@@ -192,15 +213,61 @@ func TestParseInstagramProfileDump(t *testing.T) {
 	}
 }
 
-func TestParseInstagramProfileDumpDoesNotUsePostCaptionAsBio(t *testing.T) {
+func TestParseInstagramProfileDumpUsesMatchingAudioUserAvatar(t *testing.T) {
 	dump := []byte(`
-[2, {"subcategory":"posts","type":"post","username":"cinema","fullname":"Cinema Page","profile_pic_url":"https://cdn.example/avatar.jpg","post_shortcode":"POST123","post_url":"https://www.instagram.com/p/POST123/","description":"This is a post caption, not a profile bio.","url":"https://www.instagram.com/p/POST123/"}]
+[2, {"subcategory":"posts","type":"post","username":"sample.creator","fullname":"Sample Creator","audio_user":{"username":"sample.creator","full_name":"Sample Creator","profile_pic_url":"https://cdn.example/audio-avatar.jpg"},"post_shortcode":"POST123"}]
 `)
-	profile := ParseInstagramProfileDump(dump, "cinema")
+	profile := ParseInstagramProfileDump(dump, "sample.creator")
 	if profile == nil {
 		t.Fatal("profile missing")
 	}
-	if profile.Handle != "cinema" || profile.DisplayName != "Cinema Page" {
+	if profile.Handle != "sample.creator" || profile.DisplayName != "Sample Creator" {
+		t.Fatalf("profile identity = %#v", profile)
+	}
+	if profile.AvatarURL != "https://cdn.example/audio-avatar.jpg" {
+		t.Fatalf("avatar = %q", profile.AvatarURL)
+	}
+}
+
+func TestInstagramProfileContinuesPastFallbackDumpForAvatar(t *testing.T) {
+	bin := t.TempDir()
+	writeExecutable(t, filepath.Join(bin, "gallery-dl"), `#!/bin/sh
+last=""
+for arg in "$@"; do
+  last="$arg"
+done
+case "$last" in
+  */reels/)
+    printf '[2, {"subcategory":"reels","type":"reel","username":"sample.creator","fullname":"Sample Creator","post_shortcode":"sample_reel"}]\n'
+    ;;
+  */posts/)
+    printf '[2, {"subcategory":"posts","type":"post","username":"sample.creator","fullname":"Sample Creator","audio_user":{"username":"sample.creator","full_name":"Sample Creator","profile_pic_url":"https://cdn.example/audio-avatar.jpg"},"post_shortcode":"sample_post"}]\n'
+    ;;
+esac
+`)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	profile, err := (&GalleryDLWrapper{Runner: CommandRunner{}}).InstagramProfile(context.Background(), "sample.creator", "")
+	if err != nil {
+		t.Fatalf("InstagramProfile: %v", err)
+	}
+	if profile == nil {
+		t.Fatal("profile missing")
+	}
+	if profile.AvatarURL != "https://cdn.example/audio-avatar.jpg" {
+		t.Fatalf("avatar = %q", profile.AvatarURL)
+	}
+}
+
+func TestParseInstagramProfileDumpDoesNotUsePostCaptionAsBio(t *testing.T) {
+	dump := []byte(`
+[2, {"subcategory":"posts","type":"post","username":"sample_cinema","fullname":"Sample Cinema Page","profile_pic_url":"https://cdn.example/avatar.jpg","post_shortcode":"sample_post","post_url":"https://www.instagram.com/p/sample_post/","description":"This is a post caption, not a profile bio.","url":"https://www.instagram.com/p/sample_post/"}]
+`)
+	profile := ParseInstagramProfileDump(dump, "sample_cinema")
+	if profile == nil {
+		t.Fatal("profile missing")
+	}
+	if profile.Handle != "sample_cinema" || profile.DisplayName != "Sample Cinema Page" {
 		t.Fatalf("profile identity = %#v", profile)
 	}
 	if profile.Bio != "" {

@@ -135,6 +135,7 @@ func (g *GalleryDLWrapper) InstagramProfile(ctx context.Context, handle string, 
 	}
 	var firstErr error
 	anySuccess := false
+	var best *InstagramProfile
 	cookieAttempts := instagramProfileCookieAttempts(cookiesFile, optionalCookieBrowser(cookiesBrowser))
 	for _, suffix := range instagramSourceSuffixes {
 		rawURL := "https://www.instagram.com/" + handle + "/" + suffix + "/"
@@ -149,14 +150,43 @@ func (g *GalleryDLWrapper) InstagramProfile(ctx context.Context, handle string, 
 			}
 			anySuccess = true
 			if profile != nil {
-				return profile, nil
+				if best == nil || instagramProfileScore(*profile, handle) > instagramProfileScore(*best, handle) {
+					copy := *profile
+					best = &copy
+				}
+				if profile.AvatarURL != "" {
+					return profile, nil
+				}
 			}
 		}
 	}
 	if firstErr != nil && !anySuccess {
 		return nil, firstErr
 	}
+	if best != nil {
+		return best, nil
+	}
 	return &InstagramProfile{Handle: handle, DisplayName: handle}, nil
+}
+
+func instagramProfileScore(profile InstagramProfile, fallbackHandle string) int {
+	score := 0
+	if profile.Handle != "" {
+		score++
+	}
+	if profile.DisplayName != "" && profile.DisplayName != fallbackHandle {
+		score += 2
+	}
+	if profile.AvatarURL != "" {
+		score += 8
+	}
+	if profile.Bio != "" || profile.Website != "" {
+		score += 2
+	}
+	if profile.Followers > 0 || profile.Following > 0 || profile.Verified {
+		score += 2
+	}
+	return score
 }
 
 func instagramProfileCookieAttempts(cookiesFile, cookiesBrowser string) []CookieSet {
@@ -297,7 +327,9 @@ func ParseInstagramTaggedDumpForHandle(output []byte, taggedHandle string) []Vid
 			ref.IsRepost = true
 			ref.ReposterHandle = reposterHandle
 			ref.ReposterChannelID = "instagram_" + reposterHandle
-			ref.ReposterDisplayName = instagramTaggedDisplayNameFromObject(obj, reposterHandle)
+			reposterProfile := instagramTaggedProfileFromObject(obj, reposterHandle)
+			ref.ReposterDisplayName = reposterProfile.DisplayName
+			ref.ReposterAvatarURL = reposterProfile.AvatarURL
 			ref.RepostedAtMs = firstMillis(obj, "tagged_at", "reposted_at")
 			seen[ref.VideoID] = struct{}{}
 			refs = append(refs, ref)
@@ -474,6 +506,13 @@ func instagramVideoRefFromGalleryDLObject(obj map[string]any, sourceHandle strin
 	handle := normalizeInstagramHandle(firstString(obj, "username", "owner_username", "uploader_id"))
 	displayName := firstString(obj, "fullname", "full_name", "name")
 	avatarURL := firstExactString(obj, "profile_pic_url_hd", "profile_pic_url", "avatar_url", "profile_image_url")
+	if avatarURL == "" && handle != "" {
+		nested := instagramNestedProfileForHandle(obj, handle)
+		if nested.DisplayName != "" && displayName == "" {
+			displayName = nested.DisplayName
+		}
+		avatarURL = nested.AvatarURL
+	}
 	if sourceHandle != "" {
 		if coauthorDisplayName, ok := instagramCoauthorDisplayName(obj, sourceHandle); ok || handle == "" {
 			nested := instagramNestedProfileForHandle(obj, sourceHandle)
@@ -525,7 +564,7 @@ func instagramNestedProfileForHandle(obj map[string]any, handle string) Instagra
 	if handle == "" {
 		return InstagramProfile{}
 	}
-	for _, nestedKey := range []string{"user", "owner", "author"} {
+	for _, nestedKey := range []string{"user", "owner", "author", "audio_user"} {
 		nested, ok := obj[nestedKey].(map[string]any)
 		if !ok {
 			continue
@@ -586,27 +625,31 @@ func instagramTaggedHandleFromObject(obj map[string]any, fallbackHandle string) 
 	return ""
 }
 
-func instagramTaggedDisplayNameFromObject(obj map[string]any, handle string) string {
+func instagramTaggedProfileFromObject(obj map[string]any, handle string) InstagramProfile {
 	handle = strings.ToLower(strings.TrimPrefix(strings.TrimSpace(handle), "@"))
 	if handle == "" {
-		return ""
+		return InstagramProfile{}
 	}
 	raw, ok := obj["tagged_users"].([]any)
 	if !ok {
-		return ""
+		return InstagramProfile{}
 	}
 	for _, item := range raw {
 		tagged, ok := item.(map[string]any)
 		if !ok {
 			continue
 		}
-		username := strings.ToLower(strings.TrimPrefix(firstExactString(tagged, "username"), "@"))
+		username := normalizeInstagramHandle(firstExactString(tagged, "username", "owner_username", "uploader_id"))
 		if username != handle {
 			continue
 		}
-		return firstExactString(tagged, "full_name", "fullname", "name")
+		return InstagramProfile{
+			Handle:      username,
+			DisplayName: firstExactString(tagged, "full_name", "fullname", "name"),
+			AvatarURL:   firstExactString(tagged, "profile_pic_url_hd", "profile_pic_url", "avatar_url", "profile_image_url"),
+		}
 	}
-	return ""
+	return InstagramProfile{}
 }
 
 func firstExactString(item map[string]any, keys ...string) string {
