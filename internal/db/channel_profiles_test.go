@@ -912,6 +912,42 @@ func TestSeedChannelProfileRowsForFeedItemsPrimesBatchBeforeFeedRowsExist(t *tes
 	}
 }
 
+func TestSeedChannelProfileRowsForFeedItemsPreservesTwitterDefaultAvatarFreshness(t *testing.T) {
+	d := openWritableTestDB(t)
+
+	oldFetched := time.Now().Add(-time.Hour).UTC()
+	nextRetry := time.Now().Add(time.Hour).UTC()
+	defaultAvatar := "https://abs.twimg.com/sticky/default_profile_images/default_profile_normal.png"
+	if err := d.UpsertChannelProfile(model.ChannelProfile{
+		ChannelID:   "twitter_sample_avatar_batch",
+		Platform:    "twitter",
+		Handle:      "sample_avatar_batch",
+		AvatarURL:   defaultAvatar,
+		FetchedAt:   &oldFetched,
+		FailCount:   2,
+		NextRetryAt: &nextRetry,
+	}); err != nil {
+		t.Fatalf("seed default-avatar profile: %v", err)
+	}
+
+	if _, err := d.SeedChannelProfileRowsForFeedItems([]model.FeedItem{{
+		AuthorHandle: "sample_avatar_batch",
+	}}); err != nil {
+		t.Fatalf("SeedChannelProfileRowsForFeedItems: %v", err)
+	}
+
+	got, err := d.GetChannelProfile("twitter_sample_avatar_batch")
+	if err != nil {
+		t.Fatalf("GetChannelProfile: %v", err)
+	}
+	if got == nil || got.AvatarURL != defaultAvatar {
+		t.Fatalf("default avatar should be preserved: %+v", got)
+	}
+	if got.FetchedAt == nil || got.FetchedAt.UnixMilli() != oldFetched.UnixMilli() || got.FailCount != 2 || got.NextRetryAt == nil {
+		t.Fatalf("default avatar freshness should be preserved: %+v", got)
+	}
+}
+
 func TestSeedChannelProfileRowsRejectsInvalidTwitterAvatarURLs(t *testing.T) {
 	d := openWritableTestDB(t)
 
@@ -963,6 +999,64 @@ func TestSeedChannelProfileRowsRejectsInvalidTwitterAvatarURLs(t *testing.T) {
 	}
 	if quote.FetchedAt != nil || quote.FailCount != 0 || quote.NextRetryAt != nil {
 		t.Fatalf("poisoned quote retry state should be reset: %+v", quote)
+	}
+}
+
+func TestSeedChannelProfileRowsPreservesTwitterDefaultAvatarFreshness(t *testing.T) {
+	d := openWritableTestDB(t)
+
+	oldFetched := time.Now().Add(-time.Hour).UTC()
+	nextRetry := time.Now().Add(time.Hour).UTC()
+	defaultAvatar := "https://abs.twimg.com/sticky/default_profile_images/default_profile_normal.png"
+	if err := d.UpsertChannelProfile(model.ChannelProfile{
+		ChannelID:   "twitter_sample_avatar_default",
+		Platform:    "twitter",
+		Handle:      "sample_avatar_default",
+		AvatarURL:   defaultAvatar,
+		FetchedAt:   &oldFetched,
+		FailCount:   2,
+		NextRetryAt: &nextRetry,
+	}); err != nil {
+		t.Fatalf("seed default-avatar profile: %v", err)
+	}
+	if err := d.UpsertChannelProfile(model.ChannelProfile{
+		ChannelID:   "twitter_sample_avatar_promoted",
+		Platform:    "twitter",
+		Handle:      "sample_avatar_promoted",
+		AvatarURL:   defaultAvatar,
+		FetchedAt:   &oldFetched,
+		FailCount:   2,
+		NextRetryAt: &nextRetry,
+	}); err != nil {
+		t.Fatalf("seed promoted-avatar profile: %v", err)
+	}
+	if _, err := d.conn.Exec(`
+		INSERT INTO feed_items (
+			tweet_id, author_handle, author_avatar_url, published_at, fetched_at
+		) VALUES
+			('sample_tweet_default_avatar', 'sample_avatar_default', '', 1, 1),
+			('sample_tweet_promoted_avatar', 'sample_avatar_promoted', 'https://pbs.twimg.com/profile_images/777/promoted_normal.jpg', 1, 1)
+	`); err != nil {
+		t.Fatalf("seed feed items: %v", err)
+	}
+
+	if _, err := d.SeedChannelProfileRows(); err != nil {
+		t.Fatalf("SeedChannelProfileRows: %v", err)
+	}
+
+	kept, _ := d.GetChannelProfile("twitter_sample_avatar_default")
+	if kept == nil || kept.AvatarURL != defaultAvatar {
+		t.Fatalf("default avatar should be preserved: %+v", kept)
+	}
+	if kept.FetchedAt == nil || kept.FetchedAt.UnixMilli() != oldFetched.UnixMilli() || kept.FailCount != 2 || kept.NextRetryAt == nil {
+		t.Fatalf("default avatar freshness should be preserved: %+v", kept)
+	}
+	promoted, _ := d.GetChannelProfile("twitter_sample_avatar_promoted")
+	if promoted == nil || promoted.AvatarURL != "https://pbs.twimg.com/profile_images/777/promoted_normal.jpg" {
+		t.Fatalf("feed avatar should replace default avatar: %+v", promoted)
+	}
+	if promoted.FetchedAt != nil || promoted.FailCount != 0 || promoted.NextRetryAt != nil {
+		t.Fatalf("promoted avatar should reset profile freshness: %+v", promoted)
 	}
 }
 

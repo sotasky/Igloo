@@ -181,9 +181,18 @@ func (m *Manager) refreshFeedProfileCompletenessIDs(ctx context.Context, fetch f
 			!hasConventionalMediaFile(avDir, channelID) &&
 			canDownloadStoredAvatar(channelID, existing.AvatarURL)
 		fullRefreshDue := shouldRefreshFullProfile(channelID, existing, now)
+		if fullRefreshDue && attempts >= limit {
+			continue
+		}
+		if storedInstagramAvatarAttempt && attempts >= limit {
+			continue
+		}
 		downloaded, attempted := m.downloadStoredProfileMedia(ctx, channelID, existing, avDir, bnDir)
 		if downloaded {
 			worked = true
+			if storedInstagramAvatarAttempt {
+				attempts++
+			}
 			if fullRefreshDue && attempts < limit {
 				m.refreshProfile(ctx, fetch, channelID, avDir, bnDir)
 				attempts++

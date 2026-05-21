@@ -634,6 +634,10 @@ func (db *DB) SeedChannelProfileRowsForFeedItems(items []model.FeedItem) (int, e
 					WHEN channel_profiles.platform = 'twitter'
 					     AND COALESCE(channel_profiles.avatar_url, '') LIKE 'http%'
 					     AND LOWER(channel_profiles.avatar_url) NOT LIKE '%pbs.twimg.com/profile_images/%'
+					     AND (
+					          LOWER(channel_profiles.avatar_url) NOT LIKE '%abs.twimg.com/sticky/default_profile_images/%'
+					          OR COALESCE(excluded.avatar_url, '') != ''
+					     )
 						THEN excluded.avatar_url
 					ELSE COALESCE(NULLIF(channel_profiles.avatar_url, ''), excluded.avatar_url)
 				END,
@@ -641,6 +645,10 @@ func (db *DB) SeedChannelProfileRowsForFeedItems(items []model.FeedItem) (int, e
 					WHEN channel_profiles.platform = 'twitter'
 					     AND COALESCE(channel_profiles.avatar_url, '') LIKE 'http%'
 					     AND LOWER(channel_profiles.avatar_url) NOT LIKE '%pbs.twimg.com/profile_images/%'
+					     AND (
+					          LOWER(channel_profiles.avatar_url) NOT LIKE '%abs.twimg.com/sticky/default_profile_images/%'
+					          OR COALESCE(excluded.avatar_url, '') != ''
+					     )
 						THEN 0
 					ELSE channel_profiles.fetched_at
 				END,
@@ -648,6 +656,10 @@ func (db *DB) SeedChannelProfileRowsForFeedItems(items []model.FeedItem) (int, e
 					WHEN channel_profiles.platform = 'twitter'
 					     AND COALESCE(channel_profiles.avatar_url, '') LIKE 'http%'
 					     AND LOWER(channel_profiles.avatar_url) NOT LIKE '%pbs.twimg.com/profile_images/%'
+					     AND (
+					          LOWER(channel_profiles.avatar_url) NOT LIKE '%abs.twimg.com/sticky/default_profile_images/%'
+					          OR COALESCE(excluded.avatar_url, '') != ''
+					     )
 						THEN 0
 					ELSE channel_profiles.fail_count
 				END,
@@ -655,6 +667,10 @@ func (db *DB) SeedChannelProfileRowsForFeedItems(items []model.FeedItem) (int, e
 					WHEN channel_profiles.platform = 'twitter'
 					     AND COALESCE(channel_profiles.avatar_url, '') LIKE 'http%'
 					     AND LOWER(channel_profiles.avatar_url) NOT LIKE '%pbs.twimg.com/profile_images/%'
+					     AND (
+					          LOWER(channel_profiles.avatar_url) NOT LIKE '%abs.twimg.com/sticky/default_profile_images/%'
+					          OR COALESCE(excluded.avatar_url, '') != ''
+					     )
 						THEN 0
 					ELSE channel_profiles.next_retry_at
 				END
@@ -664,7 +680,11 @@ func (db *DB) SeedChannelProfileRowsForFeedItems(items []model.FeedItem) (int, e
 			   OR (COALESCE(channel_profiles.avatar_url, '') = '' AND COALESCE(excluded.avatar_url, '') != '')
 			   OR (channel_profiles.platform = 'twitter'
 			       AND COALESCE(channel_profiles.avatar_url, '') LIKE 'http%'
-			       AND LOWER(channel_profiles.avatar_url) NOT LIKE '%pbs.twimg.com/profile_images/%')
+			       AND LOWER(channel_profiles.avatar_url) NOT LIKE '%pbs.twimg.com/profile_images/%'
+			       AND (
+			            LOWER(channel_profiles.avatar_url) NOT LIKE '%abs.twimg.com/sticky/default_profile_images/%'
+			            OR COALESCE(excluded.avatar_url, '') != ''
+			       ))
 		`)
 		if err != nil {
 			return err
@@ -777,6 +797,10 @@ func (db *DB) SeedChannelProfileRows() (int, error) {
 					WHEN channel_profiles.platform = 'twitter'
 					     AND COALESCE(channel_profiles.avatar_url, '') LIKE 'http%'
 					     AND LOWER(channel_profiles.avatar_url) NOT LIKE '%pbs.twimg.com/profile_images/%'
+					     AND (
+					          LOWER(channel_profiles.avatar_url) NOT LIKE '%abs.twimg.com/sticky/default_profile_images/%'
+					          OR COALESCE(excluded.avatar_url, '') != ''
+					     )
 						THEN excluded.avatar_url
 					ELSE COALESCE(NULLIF(channel_profiles.avatar_url, ''), excluded.avatar_url)
 				END,
@@ -784,6 +808,10 @@ func (db *DB) SeedChannelProfileRows() (int, error) {
 					WHEN channel_profiles.platform = 'twitter'
 					     AND COALESCE(channel_profiles.avatar_url, '') LIKE 'http%'
 					     AND LOWER(channel_profiles.avatar_url) NOT LIKE '%pbs.twimg.com/profile_images/%'
+					     AND (
+					          LOWER(channel_profiles.avatar_url) NOT LIKE '%abs.twimg.com/sticky/default_profile_images/%'
+					          OR COALESCE(excluded.avatar_url, '') != ''
+					     )
 						THEN 0
 					ELSE channel_profiles.fetched_at
 				END,
@@ -791,6 +819,10 @@ func (db *DB) SeedChannelProfileRows() (int, error) {
 					WHEN channel_profiles.platform = 'twitter'
 					     AND COALESCE(channel_profiles.avatar_url, '') LIKE 'http%'
 					     AND LOWER(channel_profiles.avatar_url) NOT LIKE '%pbs.twimg.com/profile_images/%'
+					     AND (
+					          LOWER(channel_profiles.avatar_url) NOT LIKE '%abs.twimg.com/sticky/default_profile_images/%'
+					          OR COALESCE(excluded.avatar_url, '') != ''
+					     )
 						THEN 0
 					ELSE channel_profiles.fail_count
 				END,
@@ -798,6 +830,10 @@ func (db *DB) SeedChannelProfileRows() (int, error) {
 					WHEN channel_profiles.platform = 'twitter'
 					     AND COALESCE(channel_profiles.avatar_url, '') LIKE 'http%'
 					     AND LOWER(channel_profiles.avatar_url) NOT LIKE '%pbs.twimg.com/profile_images/%'
+					     AND (
+					          LOWER(channel_profiles.avatar_url) NOT LIKE '%abs.twimg.com/sticky/default_profile_images/%'
+					          OR COALESCE(excluded.avatar_url, '') != ''
+					     )
 						THEN 0
 					ELSE channel_profiles.next_retry_at
 				END
@@ -806,7 +842,11 @@ func (db *DB) SeedChannelProfileRows() (int, error) {
 			   OR (COALESCE(channel_profiles.avatar_url, '') = '' AND COALESCE(excluded.avatar_url, '') != '')
 			   OR (channel_profiles.platform = 'twitter'
 			       AND COALESCE(channel_profiles.avatar_url, '') LIKE 'http%'
-			       AND LOWER(channel_profiles.avatar_url) NOT LIKE '%pbs.twimg.com/profile_images/%')
+			       AND LOWER(channel_profiles.avatar_url) NOT LIKE '%pbs.twimg.com/profile_images/%'
+			       AND (
+			            LOWER(channel_profiles.avatar_url) NOT LIKE '%abs.twimg.com/sticky/default_profile_images/%'
+			            OR COALESCE(excluded.avatar_url, '') != ''
+			       ))
 		`)
 		if err != nil {
 			return err

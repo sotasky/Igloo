@@ -1492,6 +1492,98 @@ func TestRefreshFeedProfileCompletenessScansStoredAvatarsBeyondProfileFetchLimit
 	}
 }
 
+func TestRefreshFeedProfileCompletenessDefersDueTwitterAvatarWhenProfileLimitExhausted(t *testing.T) {
+	d := newTestWorkerDB(t)
+	dir := t.TempDir()
+	avatarServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		_, _ = w.Write(testProfilePNGBytes())
+	}))
+	defer avatarServer.Close()
+
+	if err := d.ExecRaw(`
+		INSERT INTO feed_items (
+			tweet_id, author_handle, author_avatar_url, published_at, fetched_at
+		) VALUES
+			('sample_tweet_newer_profile', 'sample_newer_profile', '', 300, 300),
+			('sample_tweet_waiting_profile', 'sample_profile_waiting', 'https://pbs.twimg.com/profile_images/1998822702501838848/OUPVuvCJ_normal.jpg', 200, 200)
+	`); err != nil {
+		t.Fatalf("seed feed items: %v", err)
+	}
+	if _, err := d.SeedChannelProfileRows(); err != nil {
+		t.Fatalf("SeedChannelProfileRows: %v", err)
+	}
+
+	f := newFakeFetcher()
+	m := &Manager{db: d, cfg: testCfg(dir), downloader: testTwimgAvatarDownloader(avatarServer)}
+	avDir, bnDir := filepath.Join(dir, "avatars"), filepath.Join(dir, "banners")
+	_ = os.MkdirAll(avDir, 0o755)
+	_ = os.MkdirAll(bnDir, 0o755)
+
+	if worked := m.refreshFeedProfileCompletenessBatch(context.Background(), f.Fetch, avDir, bnDir, 1); !worked {
+		t.Fatal("expected feed profile completeness batch to work")
+	}
+	if got := f.calls["twitter_sample_newer_profile"]; got != 1 {
+		t.Fatalf("newer profile fetch calls = %d, want 1", got)
+	}
+	if got := f.calls["twitter_sample_profile_waiting"]; got != 0 {
+		t.Fatalf("waiting profile fetch calls = %d, want 0 while limit is exhausted", got)
+	}
+	if hasConventionalMediaFile(avDir, "twitter_sample_profile_waiting") {
+		t.Fatal("waiting profile avatar should not be downloaded without full profile budget")
+	}
+	profile, err := d.GetChannelProfile("twitter_sample_profile_waiting")
+	if err != nil {
+		t.Fatalf("GetChannelProfile: %v", err)
+	}
+	if profile == nil || profile.AvatarURL == "" || profile.FetchedAt != nil {
+		t.Fatalf("waiting profile should remain due with stored avatar URL: %+v", profile)
+	}
+}
+
+func TestRefreshFeedProfileCompletenessLimitsInstagramStoredAvatarAttempts(t *testing.T) {
+	d := newTestWorkerDB(t)
+	dir := t.TempDir()
+	installGalleryDLAvatarStub(t, dir)
+	oldLookup := lookupStoredMediaHost
+	t.Cleanup(func() { lookupStoredMediaHost = oldLookup })
+	lookupStoredMediaHost = func(host string) ([]netip.Addr, error) {
+		if host != "cdn.example" {
+			t.Fatalf("unexpected DNS lookup for %q", host)
+		}
+		return []netip.Addr{netip.MustParseAddr("93.184.216.34")}, nil
+	}
+
+	now := time.Now().UTC()
+	for _, channelID := range []string{"instagram_sample_first_profile", "instagram_sample_second_profile"} {
+		if err := d.UpsertChannelProfile(model.ChannelProfile{
+			ChannelID:   channelID,
+			Platform:    "instagram",
+			Handle:      strings.TrimPrefix(channelID, "instagram_"),
+			AvatarURL:   "https://cdn.example/avatar.png",
+			FetchedAt:   &now,
+			NextRetryAt: nil,
+		}); err != nil {
+			t.Fatalf("seed profile %s: %v", channelID, err)
+		}
+	}
+
+	m := &Manager{db: d, cfg: testCfg(dir), downloader: testDownloader()}
+	avDir, bnDir := filepath.Join(dir, "avatars"), filepath.Join(dir, "banners")
+	_ = os.MkdirAll(avDir, 0o755)
+	_ = os.MkdirAll(bnDir, 0o755)
+
+	if worked := m.refreshFeedProfileCompletenessIDs(context.Background(), newFakeFetcher().Fetch, avDir, bnDir, []string{"instagram_sample_first_profile", "instagram_sample_second_profile"}, 1); !worked {
+		t.Fatal("expected feed profile completeness ids to work")
+	}
+	if !hasConventionalMediaFile(avDir, "instagram_sample_first_profile") {
+		t.Fatal("expected first instagram avatar file on disk")
+	}
+	if hasConventionalMediaFile(avDir, "instagram_sample_second_profile") {
+		t.Fatal("second instagram avatar should wait for the next capped pass")
+	}
+}
+
 func TestRefreshFeedProfileCompletenessFetchesInstagramSourceWindowProfile(t *testing.T) {
 	d := newTestWorkerDB(t)
 	dir := t.TempDir()
