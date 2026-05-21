@@ -89,6 +89,34 @@ func TestManualLangsTreatsYouTubeASRSubtitleEntriesAsAuto(t *testing.T) {
 	}
 }
 
+func TestManualLangsKeepsCapsASRSubtitleManualWithoutASRAutomaticTrack(t *testing.T) {
+	dir := t.TempDir()
+	infoPath := filepath.Join(dir, "video.info.json")
+	body := `{
+		"subtitles": {
+			"en": [
+				{"ext":"vtt","url":"https://www.youtube.com/api/timedtext?v=sample&caps=asr&lang=en&fmt=vtt","name":"English"}
+			]
+		},
+		"automatic_captions": {
+			"en": [
+				{"ext":"vtt","protocol":"m3u8_native","url":"https://manifest.googlevideo.com/api/manifest/hls_timedtext_playlist/tts_params/caps%3Dasr%26lang%3Den/playlist/index.m3u8"}
+			]
+		}
+	}`
+	if err := os.WriteFile(infoPath, []byte(body), 0o644); err != nil {
+		t.Fatalf("write info: %v", err)
+	}
+
+	langs := ManualLangs(infoPath)
+	if !langs["en"] {
+		t.Fatal("caps=asr subtitles.en without a same-language kind=asr automatic track should be manual")
+	}
+	if IsAuto(infoPath, "en") {
+		t.Fatal("caps=asr subtitles.en without a same-language kind=asr automatic track should not be auto")
+	}
+}
+
 func TestLanguage(t *testing.T) {
 	dir := t.TempDir()
 	infoPath := filepath.Join(dir, "video.info.json")

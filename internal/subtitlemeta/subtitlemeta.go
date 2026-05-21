@@ -28,14 +28,15 @@ func ManualLangs(infoPath string) map[string]bool {
 		return nil
 	}
 	var info struct {
-		Subtitles map[string]json.RawMessage `json:"subtitles"`
+		Subtitles         map[string]json.RawMessage `json:"subtitles"`
+		AutomaticCaptions map[string]json.RawMessage `json:"automatic_captions"`
 	}
 	if json.Unmarshal(data, &info) != nil {
 		return nil
 	}
 	langs := make(map[string]bool)
 	for lang, raw := range info.Subtitles {
-		if subtitleListHasManualEntries(raw) {
+		if subtitleListHasManualEntries(raw) && !subtitleListHasASREntries(info.AutomaticCaptions[lang]) {
 			langs[lang] = true
 		}
 	}
@@ -90,6 +91,23 @@ func subtitleListHasManualEntries(raw json.RawMessage) bool {
 	return v != nil
 }
 
+func subtitleListHasASREntries(raw json.RawMessage) bool {
+	var entries []subtitleFormat
+	if err := json.Unmarshal(raw, &entries); err == nil {
+		for _, entry := range entries {
+			if subtitleFormatLooksAuto(entry) {
+				return true
+			}
+		}
+		return false
+	}
+	var entry subtitleFormat
+	if err := json.Unmarshal(raw, &entry); err == nil {
+		return subtitleFormatLooksAuto(entry)
+	}
+	return false
+}
+
 func subtitleFormatLooksAuto(entry subtitleFormat) bool {
 	if strings.EqualFold(strings.TrimSpace(entry.Kind), "asr") {
 		return true
@@ -107,13 +125,11 @@ func subtitleURLHasASRSignal(rawURL string) bool {
 	}
 	if parsed, err := url.Parse(rawURL); err == nil {
 		query := parsed.Query()
-		if strings.EqualFold(query.Get("kind"), "asr") || strings.EqualFold(query.Get("caps"), "asr") {
+		if strings.EqualFold(query.Get("kind"), "asr") {
 			return true
 		}
 	}
 	lower := strings.ToLower(rawURL)
 	return strings.Contains(lower, "kind=asr") ||
-		strings.Contains(lower, "caps=asr") ||
-		strings.Contains(lower, "kind%3dasr") ||
-		strings.Contains(lower, "caps%3dasr")
+		strings.Contains(lower, "kind%3dasr")
 }
