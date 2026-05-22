@@ -216,11 +216,10 @@ class PeriodicSyncWorker(
                     "remaining_work" to drain.remainingWork,
                 )
             }
-            if (drain.completed) {
-                ListenableWorker.Result.success()
-            } else {
-                ListenableWorker.Result.retry()
-            }
+            // Periodic work has already made its bounded best effort by this point.
+            // Returning retry hands scheduling to WorkManager backoff, which can push
+            // the next run well past the user configured sync interval.
+            ListenableWorker.Result.success()
         } catch (e: Exception) {
             ListenableWorker.Result.retry()
         }
