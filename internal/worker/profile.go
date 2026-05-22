@@ -954,6 +954,9 @@ func (m *Manager) recordProfileFetchError(channelID string, existing *model.Chan
 		return
 	}
 	tombstone := errors.Is(err, fetchprofile.ErrNotFound)
+	if tombstone && strings.HasPrefix(channelID, "twitter_") {
+		tombstone = false
+	}
 	failCount := 1
 	if existing != nil {
 		failCount = existing.FailCount + 1

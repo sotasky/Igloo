@@ -912,6 +912,47 @@ func TestSeedChannelProfileRowsForFeedItemsPrimesBatchBeforeFeedRowsExist(t *tes
 	}
 }
 
+func TestSeedChannelProfileRowsForFeedItemsClearsStaleTombstone(t *testing.T) {
+	d := openWritableTestDB(t)
+	tombstonedAt := time.UnixMilli(1_000).UTC()
+	nextRetry := time.UnixMilli(9_000).UTC()
+	if err := d.UpsertChannelProfile(model.ChannelProfile{
+		ChannelID:   "twitter_sample_author",
+		Platform:    "twitter",
+		Handle:      "sample_author",
+		DisplayName: "Sample Author",
+		FetchedAt:   &tombstonedAt,
+		FailCount:   2,
+		NextRetryAt: &nextRetry,
+		Tombstone:   true,
+	}); err != nil {
+		t.Fatalf("seed tombstoned profile: %v", err)
+	}
+	publishedAt := time.UnixMilli(2_000).UTC()
+	fetchedAt := time.UnixMilli(2_500).UTC()
+
+	n, err := d.SeedChannelProfileRowsForFeedItems([]model.FeedItem{{
+		AuthorHandle:      "Sample_Author",
+		AuthorDisplayName: "Sample Author",
+		PublishedAt:       &publishedAt,
+		FetchedAt:         fetchedAt,
+	}})
+	if err != nil {
+		t.Fatalf("SeedChannelProfileRowsForFeedItems: %v", err)
+	}
+	if n == 0 {
+		t.Fatal("expected stale tombstone to be updated")
+	}
+
+	got, err := d.GetChannelProfile("twitter_sample_author")
+	if err != nil {
+		t.Fatalf("GetChannelProfile: %v", err)
+	}
+	if got == nil || got.Tombstone || got.FailCount != 0 || got.NextRetryAt != nil || got.FetchedAt != nil {
+		t.Fatalf("stale tombstone was not cleared for visible feed author: %+v", got)
+	}
+}
+
 func TestSeedChannelProfileRowsForFeedItemsPreservesTwitterDefaultAvatarFreshness(t *testing.T) {
 	d := openWritableTestDB(t)
 

@@ -132,12 +132,43 @@ func TestRefreshProfileSeedsBioMentions(t *testing.T) {
 	}
 }
 
-func TestRefreshProfileTombstonesOnNotFound(t *testing.T) {
+func TestRefreshProfileTombstonesNonTwitterOnNotFound(t *testing.T) {
+	d := newTestWorkerDB(t)
+	dir := t.TempDir()
+	f := newFakeFetcher()
+	f.errs["tiktok_sample_ghost"] = fetchprofile.ErrNotFound
+	_ = d.UpsertChannelProfile(model.ChannelProfile{ChannelID: "tiktok_sample_ghost", Platform: "tiktok"})
+
+	m := &Manager{db: d, cfg: testCfg(dir)}
+	avDir, bnDir := filepath.Join(dir, "a"), filepath.Join(dir, "b")
+	_ = os.MkdirAll(avDir, 0o755)
+	_ = os.MkdirAll(bnDir, 0o755)
+
+	m.refreshProfile(context.Background(), f.Fetch, "tiktok_sample_ghost", avDir, bnDir)
+	got, _ := d.GetChannelProfile("tiktok_sample_ghost")
+	if got == nil {
+		t.Fatalf("row missing")
+	}
+	if !got.Tombstone {
+		t.Fatalf("expected tombstone, got %+v", got)
+	}
+}
+
+func TestRefreshProfileDoesNotTombstoneTwitterOnNotFound(t *testing.T) {
 	d := newTestWorkerDB(t)
 	dir := t.TempDir()
 	f := newFakeFetcher()
 	f.errs["twitter_ghost"] = fetchprofile.ErrNotFound
-	_ = d.UpsertChannelProfile(model.ChannelProfile{ChannelID: "twitter_ghost", Platform: "twitter"})
+	oldFetched := time.UnixMilli(1_000).UTC()
+	if err := d.UpsertChannelProfile(model.ChannelProfile{
+		ChannelID:   "twitter_ghost",
+		Platform:    "twitter",
+		Handle:      "sample_ghost",
+		DisplayName: "Sample Ghost",
+		FetchedAt:   &oldFetched,
+	}); err != nil {
+		t.Fatalf("seed profile: %v", err)
+	}
 
 	m := &Manager{db: d, cfg: testCfg(dir)}
 	avDir, bnDir := filepath.Join(dir, "a"), filepath.Join(dir, "b")
@@ -149,8 +180,14 @@ func TestRefreshProfileTombstonesOnNotFound(t *testing.T) {
 	if got == nil {
 		t.Fatalf("row missing")
 	}
-	if !got.Tombstone {
-		t.Fatalf("expected tombstone, got %+v", got)
+	if got.Tombstone {
+		t.Fatalf("twitter not-found should not tombstone profile: %+v", got)
+	}
+	if got.FailCount == 0 || got.NextRetryAt == nil {
+		t.Fatalf("not-found should still apply retry backoff: %+v", got)
+	}
+	if got.DisplayName != "Sample Ghost" {
+		t.Fatalf("profile metadata should be preserved: %+v", got)
 	}
 }
 
