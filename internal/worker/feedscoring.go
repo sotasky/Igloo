@@ -16,18 +16,56 @@ func (m *Manager) runFeedScoringWorker(ctx context.Context) {
 
 	// Immediate first run on startup
 	m.scoreFeedItems(ctx)
+	lastRun := time.Now()
 
 	ticker := time.NewTicker(5 * time.Minute)
 	defer ticker.Stop()
+	var kickTimer *time.Timer
+	var kickTimerC <-chan time.Time
+	stopKickTimer := func() {
+		if kickTimer == nil {
+			return
+		}
+		if !kickTimer.Stop() {
+			select {
+			case <-kickTimer.C:
+			default:
+			}
+		}
+		kickTimer = nil
+		kickTimerC = nil
+	}
+	defer func() {
+		stopKickTimer()
+	}()
+
+	runNow := func() {
+		stopKickTimer()
+		m.scoreFeedItems(ctx)
+		lastRun = time.Now()
+	}
+	scheduleKick := func() {
+		delay := time.Until(lastRun.Add(feedScoringKickMinInterval))
+		if delay <= 0 {
+			runNow()
+			return
+		}
+		if kickTimerC == nil {
+			kickTimer = time.NewTimer(delay)
+			kickTimerC = kickTimer.C
+		}
+	}
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-m.feedScoringKick:
-			m.scoreFeedItems(ctx)
+			scheduleKick()
+		case <-kickTimerC:
+			runNow()
 		case <-ticker.C:
-			m.scoreFeedItems(ctx)
+			runNow()
 		}
 	}
 }
@@ -37,6 +75,7 @@ func (m *Manager) runFeedScoringWorker(ctx context.Context) {
 // and gives future multi-user work a grep anchor.
 const scoringUsername = "admin"
 const feedSnapshotBuildTimeout = 30 * time.Second
+const feedScoringKickMinInterval = 30 * time.Second
 
 func (m *Manager) scoreFeedItems(ctx context.Context) {
 	start := time.Now()
