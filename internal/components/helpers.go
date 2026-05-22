@@ -177,6 +177,15 @@ func boolDataAttr(b bool) string {
 	return "0"
 }
 
+func feedMediaRefIsVideo(ref model.MediaRef) bool {
+	switch strings.ToLower(strings.TrimSpace(ref.Type)) {
+	case "video", "gif", "animated_gif":
+		return true
+	default:
+		return false
+	}
+}
+
 func storyStateAttr(state string) string {
 	switch state {
 	case model.StoryStateNew, model.StoryStateSeen:

@@ -2490,7 +2490,7 @@ func feedMedia(p PageProps, item model.FeedItem) templ.Component {
 		}
 		ctx = templ.ClearChildren(ctx)
 		mediaCount := len(item.Media)
-		if mediaCount == 1 && item.Media[0].Type != "photo" {
+		if mediaCount == 1 && feedMediaRefIsVideo(item.Media[0]) {
 			streamURL := item.MediaStreamURL
 			if streamURL == "" {
 				streamURL = "/api/media/slide/" + item.TweetID + "/0"
@@ -2749,7 +2749,7 @@ func feedMediaTile(p PageProps, tweetID string, index int, m model.MediaRef, med
 		ctx = templ.ClearChildren(ctx)
 		slideURL := fmt.Sprintf("/api/media/slide/%s/%d", tweetID, index)
 		ariaLabel := fmt.Sprintf(L(p, "feed_open_media_index", "Open media %d"), index+1)
-		if m.Type == "video" || m.Type == "gif" {
+		if feedMediaRefIsVideo(m) {
 			tileStreamURL := streamURL
 			if mediaCount > 1 || tileStreamURL == "" || strings.HasPrefix(tileStreamURL, "/api/media/slide/") {
 				tileStreamURL = slideURL
@@ -3559,7 +3559,7 @@ func feedQuoteMedia(p PageProps, item model.FeedItem, qMediaCount int) templ.Com
 			templ_7745c5c3_Var194 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
-		if qMediaCount == 1 && item.QuoteMedia[0].Type != "photo" && item.QuoteMediaStreamURL != "" {
+		if qMediaCount == 1 && feedMediaRefIsVideo(item.QuoteMedia[0]) && item.QuoteMediaStreamURL != "" {
 			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 287, "<div class=\"feed-media-wrap\" data-feed-media data-feed-media-kind=\"video\" data-feed-media-stream=\"")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
@@ -3772,7 +3772,7 @@ func feedQuoteMediaTile(p PageProps, quoteTweetID string, index int, qm model.Me
 		ctx = templ.ClearChildren(ctx)
 		slideURL := fmt.Sprintf("/api/media/slide/%s/%d", quoteTweetID, index)
 		ariaLabel := fmt.Sprintf(L(p, "feed_open_media_index", "Open media %d"), index+1)
-		if qm.Type == "video" || qm.Type == "gif" {
+		if feedMediaRefIsVideo(qm) {
 			tileStreamURL := streamURL
 			if qMediaCount > 1 || tileStreamURL == "" || strings.HasPrefix(tileStreamURL, "/api/media/slide/") {
 				tileStreamURL = slideURL

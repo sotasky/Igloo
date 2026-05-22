@@ -227,6 +227,41 @@ func TestFeedItemRendersSingleVideoFromSlideEndpointWhenStreamMissing(t *testing
 	}
 }
 
+func TestFeedItemRendersArticleCoverAsImage(t *testing.T) {
+	item := model.FeedItem{
+		TweetID:      "article_1",
+		AuthorHandle: "sample_author_a",
+		BodyText:     "https://x.com/i/article/1000000000000000001",
+		Media: []model.MediaRef{{
+			Type: "article:cover",
+			URL:  "https://pbs.twimg.com/media/article-cover.jpg",
+		}},
+	}
+
+	var buf bytes.Buffer
+	if err := FeedItem(PageProps{}, item).Render(context.Background(), &buf); err != nil {
+		t.Fatalf("render feed item: %v", err)
+	}
+	html := buf.String()
+	for _, want := range []string{
+		`data-feed-media-kind="image"`,
+		`<img class="feed-media-image" src="/api/media/slide/article_1/0"`,
+	} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("missing %q in html: %s", want, html)
+		}
+	}
+	for _, notWant := range []string{
+		`data-feed-media-kind="video"`,
+		`data-feed-media-stream="/api/media/slide/article_1/0"`,
+		`<video class="feed-media-video"`,
+	} {
+		if strings.Contains(html, notWant) {
+			t.Fatalf("article cover should not render as video %q in html: %s", notWant, html)
+		}
+	}
+}
+
 func TestFeedItemMultiVideoTilesUseIndexedSlideEndpoints(t *testing.T) {
 	item := model.FeedItem{
 		TweetID:        "video_multi",
