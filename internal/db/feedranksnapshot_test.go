@@ -606,6 +606,48 @@ func TestListPreDiversityRankedSetsThreadRootID(t *testing.T) {
 	}
 }
 
+func TestListPreDiversityRankedSetsPureRepostTargetThreadRootID(t *testing.T) {
+	d := openWritableTestDB(t)
+	rootAt := time.Now().Add(-2 * time.Hour)
+	replyAt := rootAt.Add(time.Minute)
+	repostAt := replyAt.Add(time.Minute)
+	const rootID = "1000000000000000001"
+	const replyID = "1000000000000000002"
+	const repostID = "1000000000000000003"
+	if _, err := d.conn.Exec(`INSERT INTO feed_items
+		(tweet_id, author_handle, source_handle, body_text, is_retweet, is_reply,
+		 reply_to_status, is_ghost, canonical_url, canonical_tweet_id, content_hash,
+		 published_at, fetched_at, algo_interest, algo_scored_at)
+		VALUES
+		(?, 'sample_root', 'sample_root', 'root', 0, 0, '', 1, '', ?, 'hash_root', ?, ?, 30, 1),
+		(?, 'sample_reply', 'sample_reply', 'reply', 0, 1, ?, 0, '', ?, 'hash_reply', ?, ?, 30, 1),
+		(?, 'sample_root', 'sample_reposter', 'root', 1, 0, '', 0, 'https://x.com/sample_root/status/1000000000000000001', ?, 'hash_repost', ?, ?, 30, 1)`,
+		rootID, rootID, rootAt.UnixMilli(), rootAt.UnixMilli(),
+		replyID, rootID, replyID, replyAt.UnixMilli(), replyAt.UnixMilli(),
+		repostID, rootID, repostAt.UnixMilli(), repostAt.UnixMilli(),
+	); err != nil {
+		t.Fatalf("insert thread repost rows: %v", err)
+	}
+
+	rows, err := d.ListPreDiversityRanked("")
+	if err != nil {
+		t.Fatalf("ListPreDiversityRanked: %v", err)
+	}
+	byID := map[string]PreDiversitySnapshotRow{}
+	for _, row := range rows {
+		byID[row.TweetID] = row
+	}
+	if _, ok := byID[rootID]; ok {
+		t.Fatalf("ghost root should not be ranked: %+v", rows)
+	}
+	if got := byID[replyID].ThreadRootID; got != rootID {
+		t.Fatalf("reply thread root = %q, want %s", got, rootID)
+	}
+	if got := byID[repostID].RepostTargetThreadRootID; got != rootID {
+		t.Fatalf("repost target thread root = %q, want %s", got, rootID)
+	}
+}
+
 func TestListPreDiversityRankedIncludesNonCanonicalPureReposts(t *testing.T) {
 	d := openWritableTestDB(t)
 	publishedAt := time.Now().Add(-time.Hour).UnixMilli()

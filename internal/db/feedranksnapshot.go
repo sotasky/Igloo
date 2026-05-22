@@ -305,20 +305,21 @@ func (db *DB) SnapshotComputedAt(username string) (int64, error) {
 // PreDiversitySnapshotRow holds one item with its score breakdown,
 // before diversity MMR and jitter are applied in Go.
 type PreDiversitySnapshotRow struct {
-	TweetID           string
-	AuthorHandle      string
-	SourceHandle      string
-	RelatedContentKey string
-	ContentHash       string
-	IsRetweet         bool
-	IsReply           bool
-	QuoteTweetID      string
-	ThreadRootID      string
-	PublishedAtMs     int64
-	BaseScore         float64
-	DecayFactor       float64
-	FreshnessBonus    float64
-	ReplyPenalty      float64
+	TweetID                  string
+	AuthorHandle             string
+	SourceHandle             string
+	RelatedContentKey        string
+	ContentHash              string
+	IsRetweet                bool
+	IsReply                  bool
+	QuoteTweetID             string
+	ThreadRootID             string
+	RepostTargetThreadRootID string
+	PublishedAtMs            int64
+	BaseScore                float64
+	DecayFactor              float64
+	FreshnessBonus           float64
+	ReplyPenalty             float64
 }
 
 // ListPreDiversityRanked returns every eligible feed item with its score
@@ -403,6 +404,7 @@ func (db *DB) ListPreDiversityRankedContext(ctx context.Context, username string
 				       COALESCE(fi.is_retweet, 0) AS is_retweet,
 				       COALESCE(fi.is_reply, 0) AS is_reply,
 				       COALESCE(fi.quote_tweet_id, '') AS quote_tweet_id,
+				       COALESCE(fi.canonical_url, '') AS canonical_url,
 				       fi.published_at,
 				       %s AS base,
 				       %s AS decay,
@@ -423,24 +425,39 @@ func (db *DB) ListPreDiversityRankedContext(ctx context.Context, username string
 	}()
 
 	out := make([]PreDiversitySnapshotRow, 0, snapshotMaxItems)
+	repostTargetByTweetID := make(map[string]string)
 	for rows.Next() {
 		var r PreDiversitySnapshotRow
 		var isRetweet, isReply int
+		var canonicalURL string
 		if err := rows.Scan(&r.TweetID, &r.AuthorHandle, &r.SourceHandle,
-			&r.RelatedContentKey, &r.ContentHash, &isRetweet, &isReply, &r.QuoteTweetID, &r.PublishedAtMs,
+			&r.RelatedContentKey, &r.ContentHash, &isRetweet, &isReply, &r.QuoteTweetID, &canonicalURL, &r.PublishedAtMs,
 			&r.BaseScore, &r.DecayFactor, &r.FreshnessBonus, &r.ReplyPenalty); err != nil {
 			return nil, err
 		}
 		r.IsRetweet = isRetweet != 0
 		r.IsReply = isReply != 0
+		if r.IsRetweet && r.QuoteTweetID == "" {
+			if targetID := tweetIDFromStatusURL(canonicalURL); targetID != "" && targetID != r.TweetID {
+				repostTargetByTweetID[r.TweetID] = targetID
+			}
+		}
 		out = append(out, r)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	ids := make([]string, 0, len(out))
+	seenIDs := make(map[string]bool, len(out)+len(repostTargetByTweetID))
 	for _, row := range out {
-		ids = append(ids, row.TweetID)
+		if !seenIDs[row.TweetID] {
+			seenIDs[row.TweetID] = true
+			ids = append(ids, row.TweetID)
+		}
+		if targetID := repostTargetByTweetID[row.TweetID]; targetID != "" && !seenIDs[targetID] {
+			seenIDs[targetID] = true
+			ids = append(ids, targetID)
+		}
 	}
 	roots, err := db.threadRootIDsForTweetIDsContext(ctx, ids)
 	if err != nil {
@@ -450,8 +467,35 @@ func (db *DB) ListPreDiversityRankedContext(ctx context.Context, username string
 		if rootID := roots[out[i].TweetID]; rootID != "" {
 			out[i].ThreadRootID = rootID
 		}
+		if targetID := repostTargetByTweetID[out[i].TweetID]; targetID != "" {
+			if rootID := roots[targetID]; rootID != "" {
+				out[i].RepostTargetThreadRootID = rootID
+			}
+		}
 	}
 	return out, nil
+}
+
+func tweetIDFromStatusURL(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	lower := strings.ToLower(raw)
+	const marker = "/status/"
+	idx := strings.Index(lower, marker)
+	if idx < 0 {
+		return ""
+	}
+	rest := raw[idx+len(marker):]
+	end := 0
+	for end < len(rest) && rest[end] >= '0' && rest[end] <= '9' {
+		end++
+	}
+	if end == 0 {
+		return ""
+	}
+	return rest[:end]
 }
 
 func (db *DB) threadRootIDsForTweetIDsContext(ctx context.Context, tweetIDs []string) (map[string]string, error) {

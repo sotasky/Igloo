@@ -161,6 +161,38 @@ func TestBuildSnapshotCompactsConversationRoots(t *testing.T) {
 	}
 }
 
+func TestBuildSnapshotCompactsPureRepostIntoThreadAtBestRank(t *testing.T) {
+	in := []db.PreDiversitySnapshotRow{
+		{TweetID: "sample_repost", AuthorHandle: "sample_root_author", SourceHandle: "sample_reposter", ContentHash: "same_content", IsRetweet: true, RepostTargetThreadRootID: "thread_root", BaseScore: 100, DecayFactor: 1},
+		{TweetID: "sample_repost_b", AuthorHandle: "sample_root_author", SourceHandle: "sample_reposter_b", ContentHash: "same_content", IsRetweet: true, RepostTargetThreadRootID: "thread_root", BaseScore: 95, DecayFactor: 1},
+		{TweetID: "other_thread", AuthorHandle: "sample_author_c", ThreadRootID: "other_thread", BaseScore: 90, DecayFactor: 1},
+		{TweetID: "thread_leaf", AuthorHandle: "sample_reply_author", ThreadRootID: "thread_root", IsReply: true, BaseScore: 10, DecayFactor: 1},
+	}
+
+	out := BuildSnapshot(in, time.Unix(0, 0))
+	if got, want := snapshotIDs(out), []string{"thread_leaf", "other_thread"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("snapshot IDs = %v, want %v", got, want)
+	}
+	if out[0].RankPosition != 1 {
+		t.Fatalf("thread rank_position = %d, want 1", out[0].RankPosition)
+	}
+	if out[0].FinalScore < 99 {
+		t.Fatalf("thread final score = %.3f, want repost-owned best score", out[0].FinalScore)
+	}
+}
+
+func TestBuildSnapshotKeepsQuoteRepostSeparateFromThread(t *testing.T) {
+	in := []db.PreDiversitySnapshotRow{
+		{TweetID: "sample_quote_repost", AuthorHandle: "sample_root_author", SourceHandle: "sample_reposter", ContentHash: "same_content", IsRetweet: true, QuoteTweetID: "quoted_status", RepostTargetThreadRootID: "thread_root", BaseScore: 100, DecayFactor: 1},
+		{TweetID: "thread_leaf", AuthorHandle: "sample_reply_author", ThreadRootID: "thread_root", IsReply: true, BaseScore: 90, DecayFactor: 1},
+	}
+
+	out := BuildSnapshot(in, time.Unix(0, 0))
+	if !snapshotHasID(out, "sample_quote_repost") || !snapshotHasID(out, "thread_leaf") {
+		t.Fatalf("expected quote repost and thread leaf to remain separate, got %v", snapshotIDs(out))
+	}
+}
+
 func TestBuildSnapshot_EmptyInput(t *testing.T) {
 	out := BuildSnapshot(nil, time.Unix(0, 0))
 	if out != nil {

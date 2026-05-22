@@ -129,7 +129,8 @@ func BuildSnapshot(in []db.PreDiversitySnapshotRow, now time.Time) []db.Snapshot
 		recentRelated.push(c.relatedLower)
 	}
 	out = mergeNearbyOriginalsIntoPureReposts(out, in)
-	return compactThreadRoots(out, in)
+	out = compactThreadRoots(out, in)
+	return compactPureRepostsIntoThreadRepresentatives(out, in)
 }
 
 func compactThreadRoots(rows []db.SnapshotRow, meta []db.PreDiversitySnapshotRow) []db.SnapshotRow {
@@ -170,6 +171,88 @@ func compactThreadRoots(rows []db.SnapshotRow, meta []db.PreDiversitySnapshotRow
 		out[i].RankPosition = i + 1
 	}
 	return out
+}
+
+// compactPureRepostsIntoThreadRepresentatives collapses a pure repost and the
+// thread that starts from the repost target into one snapshot row. The thread
+// card is the visible representative, but the group keeps the best rank/score.
+func compactPureRepostsIntoThreadRepresentatives(rows []db.SnapshotRow, meta []db.PreDiversitySnapshotRow) []db.SnapshotRow {
+	if len(rows) < 2 || len(meta) == 0 {
+		return rows
+	}
+	metadata := make(map[string]db.PreDiversitySnapshotRow, len(meta))
+	for _, row := range meta {
+		metadata[row.TweetID] = row
+	}
+
+	type mergeGroup struct {
+		bestRow   db.SnapshotRow
+		threadID  string
+		hasPure   bool
+		hasThread bool
+	}
+	groups := make(map[string]mergeGroup, len(rows))
+	for _, row := range rows {
+		rowMeta, ok := metadata[row.TweetID]
+		if !ok {
+			continue
+		}
+		rootID, isThreadRepresentative, isPureRepost := threadRepostMergeRoot(rowMeta)
+		if rootID == "" {
+			continue
+		}
+		group, exists := groups[rootID]
+		if !exists {
+			group.bestRow = row
+		}
+		if isThreadRepresentative && !group.hasThread {
+			group.threadID = row.TweetID
+			group.hasThread = true
+		}
+		if isPureRepost {
+			group.hasPure = true
+		}
+		groups[rootID] = group
+	}
+
+	emitted := make(map[string]bool, len(groups))
+	out := make([]db.SnapshotRow, 0, len(rows))
+	for _, row := range rows {
+		rowMeta, ok := metadata[row.TweetID]
+		if !ok {
+			out = append(out, row)
+			continue
+		}
+		rootID, _, _ := threadRepostMergeRoot(rowMeta)
+		group, ok := groups[rootID]
+		if rootID == "" || !ok || !group.hasThread || !group.hasPure {
+			out = append(out, row)
+			continue
+		}
+		if emitted[rootID] {
+			continue
+		}
+		promoted := group.bestRow
+		promoted.TweetID = group.threadID
+		out = append(out, promoted)
+		emitted[rootID] = true
+	}
+	for i := range out {
+		out[i].RankPosition = i + 1
+	}
+	return out
+}
+
+func threadRepostMergeRoot(row db.PreDiversitySnapshotRow) (rootID string, isThreadRepresentative bool, isPureRepost bool) {
+	if isPureRepostSnapshotRow(row) {
+		rootID = strings.ToLower(strings.TrimSpace(row.RepostTargetThreadRootID))
+		return rootID, false, rootID != ""
+	}
+	if row.IsReply {
+		rootID = strings.ToLower(strings.TrimSpace(row.ThreadRootID))
+		return rootID, rootID != "", false
+	}
+	return "", false, false
 }
 
 func mergeNearbyOriginalsIntoPureReposts(rows []db.SnapshotRow, meta []db.PreDiversitySnapshotRow) []db.SnapshotRow {
