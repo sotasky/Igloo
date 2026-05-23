@@ -199,6 +199,13 @@ templ ProfileCardMenu(props PageProps, p *model.ChannelProfile, isFollowing bool
 				data-profile-card-label={ profileLabel(p) }
 				data-profile-card-platform={ p.Platform }
 			>{ L(props, "action_channel_settings", "Channel settings") }&#x2026;</button>
+			<button
+				class="feed-card-menu-item"
+				type="button"
+				data-profile-card-menu-action="refresh"
+				data-profile-card-channel-id={ p.ChannelID }
+				data-profile-card-label={ profileLabel(p) }
+			>{ L(props, "feed_refresh_account", "Refresh account") }</button>
 			if isFollowing {
 				<button
 					class="feed-card-menu-item danger"

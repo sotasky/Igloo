@@ -387,6 +387,9 @@ func TestChannelPageShortsMode(t *testing.T) {
 	if !strings.Contains(html, `data-profile-card-menu-action="settings"`) {
 		t.Error("expected profile hero settings menu item")
 	}
+	if !strings.Contains(html, `data-profile-card-menu-action="refresh"`) {
+		t.Error("expected profile hero refresh menu item")
+	}
 	if strings.Contains(html, `class="page-actions-bar"`) {
 		t.Error("tiktok profile hero should replace page-actions-bar")
 	}
@@ -471,6 +474,9 @@ func TestChannelPageYouTubeUsesProfileHero(t *testing.T) {
 	if !strings.Contains(html, `data-profile-card-menu-action="settings"`) {
 		t.Error("expected youtube profile hero settings menu item")
 	}
+	if !strings.Contains(html, `data-profile-card-menu-action="refresh"`) {
+		t.Error("expected youtube profile hero refresh menu item")
+	}
 	if strings.Contains(html, `class="page-actions-bar"`) {
 		t.Error("youtube profile hero should replace page-actions-bar")
 	}
@@ -521,6 +527,8 @@ func TestProfileHoverOwnsStaticProfileCardFollowWhenFeedBundleAbsent(t *testing.
 		".profile-card",
 		"data-profile-follow-wired",
 		"data-profile-card-menu-action",
+		"action === 'refresh'",
+		"/api/channels/' + encodeURIComponent(channelID) + '/refresh",
 		"data-profile-card-menu-action=\"unfollow\"",
 		"data-feed-menu-action=\"unfollow\"",
 		"MpaSiteBase.syncChannelFollowState",

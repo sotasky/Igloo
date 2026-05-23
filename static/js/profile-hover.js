@@ -35,6 +35,13 @@
 		return i18nText(key, fallback).replace(/%1\$s/g, String(value == null ? '' : value));
 	}
 
+	function isCurrentChannelPath(channelID) {
+		const cid = String(channelID || '').trim();
+		if (!cid) return false;
+		const path = window.location && window.location.pathname ? window.location.pathname : '';
+		return path === '/channels/' + cid || path === '/channels/' + encodeURIComponent(cid);
+	}
+
 	function channelIDFor(el) {
 		if (!el) return null;
 		if (el.matches('a.shorts-channel, a.shorts-rail-avatar-link, a.shorts-repost-link')) {
@@ -357,6 +364,23 @@
 				if (action === 'settings') {
 					if (typeof mpa.openChannelSettingsModal === 'function') {
 						mpa.openChannelSettingsModal({ channelId: channelID, channelName: label, platform, anchorEl: menu });
+					}
+					return;
+				}
+
+				if (action === 'refresh') {
+					item.disabled = true;
+					try {
+						const payload = await mpa.apiJson('/api/channels/' + encodeURIComponent(channelID) + '/refresh', {
+							method: 'POST',
+							body: JSON.stringify({}),
+						});
+						mpa.showToast((payload && payload.message) || i18nFormat('toast_refreshed_channel', 'Refreshed %1$s', label));
+						if (isCurrentChannelPath(channelID)) window.location.reload();
+					} catch (err) {
+						mpa.showToast((err && err.payload && err.payload.error) || i18nText('error_refresh_failed', 'Refresh failed'));
+					} finally {
+						item.disabled = false;
 					}
 					return;
 				}
