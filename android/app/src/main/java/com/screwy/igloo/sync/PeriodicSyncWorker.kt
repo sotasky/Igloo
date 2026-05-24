@@ -23,10 +23,12 @@ import com.screwy.igloo.data.DatabaseHolder
 import com.screwy.igloo.data.PreferencesRepo
 import com.screwy.igloo.data.dao.AndroidSyncDao
 import com.screwy.igloo.log.Logger
+import com.screwy.igloo.media.ForegroundPromoter
 import com.screwy.igloo.perf.PerfProbe
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import org.koin.core.context.GlobalContext
+import java.io.Closeable
 import java.util.concurrent.TimeUnit
 
 internal data class PeriodicSyncDrainStatus(
@@ -168,6 +170,7 @@ class PeriodicSyncWorker(
             val logger: Logger = koin.get()
             val syncDao: AndroidSyncDao = koin.get()
             val androidSync: AndroidSyncMirror = koin.get()
+            val foregroundPromoter: ForegroundPromoter = koin.get()
             if (!prefs.syncEnabled().first()) {
                 cancel(applicationContext)
                 logger.info(event = "periodic_sync_disabled", fields = emptyMap())
@@ -181,10 +184,11 @@ class PeriodicSyncWorker(
             // foreground-service token covers the entire drain — including the
             // MediaForegroundService start that ForegroundPromoter would
             // otherwise block on under Android 12+ background-start rules.
-            runCatching {
+            val workerForegroundActive = runCatching {
                 PerfProbe.timedSuspend(event = "workmanager_set_foreground") {
                     setForeground(getForegroundInfo())
                 }
+                true
             }
                 .onFailure { error ->
                     logger.info(
@@ -195,26 +199,35 @@ class PeriodicSyncWorker(
                         ),
                     )
                 }
+                .getOrDefault(false)
 
-            PerfProbe.timed(event = "workmanager_scheduler_trigger") {
-                scheduler.start()
-                scheduler.triggerAll()
-            }
-            logger.info(event = "periodic_sync_triggered", fields = emptyMap())
+            var foregroundLease: Closeable? = null
+            try {
+                if (workerForegroundActive) {
+                    foregroundLease = foregroundPromoter.acquireExternalForegroundLease()
+                }
+                PerfProbe.timed(event = "workmanager_scheduler_trigger") {
+                    scheduler.start()
+                    scheduler.triggerAll()
+                }
+                logger.info(event = "periodic_sync_triggered", fields = emptyMap())
 
-            val drain = PerfProbe.timedSuspend(event = "workmanager_await_drain") {
-                awaitDrainOrCap(syncDao, androidSync, logger)
-            }
-            PerfProbe.log(
-                event = "workmanager_catchup_done",
-            ) {
-                mapOf(
-                    "prepared" to true,
-                    "completed" to drain.completed,
-                    "stalled" to drain.stalled,
-                    "elapsed_ms" to drain.elapsedMs,
-                    "remaining_work" to drain.remainingWork,
-                )
+                val drain = PerfProbe.timedSuspend(event = "workmanager_await_drain") {
+                    awaitDrainOrCap(syncDao, androidSync, logger)
+                }
+                PerfProbe.log(
+                    event = "workmanager_catchup_done",
+                ) {
+                    mapOf(
+                        "prepared" to true,
+                        "completed" to drain.completed,
+                        "stalled" to drain.stalled,
+                        "elapsed_ms" to drain.elapsedMs,
+                        "remaining_work" to drain.remainingWork,
+                    )
+                }
+            } finally {
+                foregroundLease?.close()
             }
             // Periodic work has already made its bounded best effort by this point.
             // Returning retry hands scheduling to WorkManager backoff, which can push

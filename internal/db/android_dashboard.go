@@ -389,8 +389,11 @@ func androidEligibleFeedCTE(username string, cutoffMs int64) (string, []any) {
 			UNION
 
 			SELECT fi.tweet_id
-			FROM feed_items fi
-			JOIN recent_hashes rh ON rh.content_hash = fi.content_hash
+			FROM recent_hashes rh
+			CROSS JOIN feed_items fi INDEXED BY idx_feed_items_content_hash
+			WHERE fi.content_hash = rh.content_hash
+			  AND fi.content_hash IS NOT NULL
+			  AND fi.content_hash != ''
 
 			UNION
 
@@ -415,8 +418,11 @@ func androidEligibleFeedCTE(username string, cutoffMs int64) (string, []any) {
 			UNION
 
 			SELECT fi.tweet_id
-			FROM feed_items fi
-			JOIN protected_hashes ph ON ph.content_hash = fi.content_hash
+			FROM protected_hashes ph
+			CROSS JOIN feed_items fi INDEXED BY idx_feed_items_content_hash
+			WHERE fi.content_hash = ph.content_hash
+			  AND fi.content_hash IS NOT NULL
+			  AND fi.content_hash != ''
 		)
 	`, []any{
 			cutoffMs, cutoffMs, cutoffMs,

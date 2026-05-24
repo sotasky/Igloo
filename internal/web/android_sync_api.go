@@ -30,6 +30,7 @@ const (
 	androidSyncServeHashVerifyMaxBytes = 32 << 20
 	androidSyncFreshGenerationTTL      = 6 * time.Hour
 	androidSyncFreshGenerationSkew     = 5 * time.Minute
+	androidSyncStaleGenerationTTL      = 24 * time.Hour
 	androidSyncFeedRankMaxRows         = 5000
 )
 
@@ -531,9 +532,19 @@ func (s *Server) androidSyncGenerationForRequest(username string, retention db.A
 	}
 	if latest, err := s.db.GetLatestAndroidSyncGeneration(); err != nil {
 		return nil, false, err
-	} else if latest != nil && androidSyncCanServeStaleGeneration() && androidSyncGenerationFreshForRequestWindow(latest, retention, nowMs) {
-		s.queueAndroidSyncGenerationRefresh(username, retention, sourceVersion)
-		return latest, true, nil
+	} else if latest != nil && androidSyncCanServeStaleGeneration() && androidSyncGenerationStaleForRequestWindow(latest, retention, nowMs) {
+		if androidSyncGenerationFreshForRequestWindow(latest, retention, nowMs) {
+			s.queueAndroidSyncGenerationRefresh(username, retention, sourceVersion)
+			return latest, true, nil
+		}
+		debt, err := s.db.AndroidSyncPruneDebt(nowMs, db.DefaultAndroidSyncPrunePolicy())
+		if err != nil {
+			return nil, false, err
+		}
+		if debt.EligibleGenerations == 0 && debt.EligibleItems == 0 && debt.EligibleAssets == 0 {
+			s.queueAndroidSyncGenerationRefresh(username, retention, sourceVersion)
+			return latest, true, nil
+		}
 	}
 	gen, err := s.ensureAndroidSyncGeneration(username, retention)
 	return gen, false, err
@@ -608,13 +619,28 @@ func androidSyncGenerationFreshForRetention(gen *model.AndroidSyncGeneration, re
 }
 
 func androidSyncGenerationFreshForRequestWindow(gen *model.AndroidSyncGeneration, retention db.AndroidRetentionSettings, nowMs int64) bool {
-	if gen == nil || gen.Status != "ready" {
-		return false
-	}
-	if !androidSyncGenerationRequestWindowMatches(gen.Retention, retention) {
+	if !androidSyncGenerationReadyForRequestWindow(gen, retention) {
 		return false
 	}
 	return androidSyncGenerationFreshByAge(gen, nowMs)
+}
+
+func androidSyncGenerationReadyForRequestWindow(gen *model.AndroidSyncGeneration, retention db.AndroidRetentionSettings) bool {
+	if gen == nil || gen.Status != "ready" {
+		return false
+	}
+	return androidSyncGenerationRequestWindowMatches(gen.Retention, retention)
+}
+
+func androidSyncGenerationStaleForRequestWindow(gen *model.AndroidSyncGeneration, retention db.AndroidRetentionSettings, nowMs int64) bool {
+	if !androidSyncGenerationReadyForRequestWindow(gen, retention) {
+		return false
+	}
+	age := time.Duration(nowMs-gen.CreatedAtMs) * time.Millisecond
+	if age < -androidSyncFreshGenerationSkew {
+		return false
+	}
+	return age <= androidSyncStaleGenerationTTL
 }
 
 func androidSyncGenerationFreshByAge(gen *model.AndroidSyncGeneration, nowMs int64) bool {

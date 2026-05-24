@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import androidx.core.content.ContextCompat
 import com.screwy.igloo.log.Logger
+import java.io.Closeable
 
 private const val DRAIN_TOKEN = "__media_drain__"
 
@@ -17,10 +18,18 @@ private const val DRAIN_TOKEN = "__media_drain__"
 open class ForegroundPromoter(
     private val context: Context,
     private val logger: Logger,
+    private val startForegroundService: (Intent) -> Unit = { intent ->
+        ContextCompat.startForegroundService(context, intent)
+    },
+    private val stopForegroundService: (Intent) -> Unit = { intent ->
+        context.stopService(intent)
+    },
 ) {
 
     private val inflight = mutableSetOf<String>()
     private val lock = Any()
+    private var serviceStarted = false
+    private var externalForegroundLeases = 0
 
     open fun startActiveDrain() {
         startDownloading(listOf(DRAIN_TOKEN))
@@ -28,6 +37,23 @@ open class ForegroundPromoter(
 
     open fun finishActiveDrain() {
         finishedBatch(listOf(DRAIN_TOKEN))
+    }
+
+    open fun acquireExternalForegroundLease(): Closeable {
+        synchronized(lock) {
+            externalForegroundLeases++
+        }
+        return object : Closeable {
+            private var closed = false
+
+            override fun close() {
+                synchronized(lock) {
+                    if (closed) return
+                    closed = true
+                    externalForegroundLeases = (externalForegroundLeases - 1).coerceAtLeast(0)
+                }
+            }
+        }
     }
 
     /**
@@ -39,13 +65,24 @@ open class ForegroundPromoter(
             val wasEmpty = inflight.isEmpty()
             inflight.addAll(assetIds)
             if (wasEmpty && inflight.isNotEmpty()) {
+                if (externalForegroundLeases > 0) {
+                    logger.debug(
+                        event = "media_foreground_service_start_suppressed",
+                        fields = mapOf(
+                            "count" to inflight.size.toString(),
+                            "external_foreground_leases" to externalForegroundLeases.toString(),
+                        ),
+                    )
+                    return
+                }
                 logger.debug(
                     event = "media_foreground_service_start",
                     fields = mapOf("count" to inflight.size.toString()),
                 )
                 val intent = Intent(context, MediaForegroundService::class.java)
                 try {
-                    ContextCompat.startForegroundService(context, intent)
+                    startForegroundService(intent)
+                    serviceStarted = true
                 } catch (e: Exception) {
                     logger.info(
                         event = "media_foreground_service_start_skipped",
@@ -67,13 +104,14 @@ open class ForegroundPromoter(
     open fun finishedBatch(assetIds: Collection<String>) {
         synchronized(lock) {
             inflight.removeAll(assetIds.toSet())
-            if (inflight.isEmpty()) {
+            if (inflight.isEmpty() && serviceStarted) {
+                serviceStarted = false
                 logger.debug(
                     event = "media_foreground_service_stop",
                     fields = emptyMap(),
                 )
                 try {
-                    context.stopService(Intent(context, MediaForegroundService::class.java))
+                    stopForegroundService(Intent(context, MediaForegroundService::class.java))
                 } catch (e: Exception) {
                     logger.info(
                         event = "media_foreground_service_stop_skipped",

@@ -158,8 +158,9 @@ func (db *DB) ListAndroidSyncDesiredSets(username string, settings AndroidRetent
 	if err := collect("tweets", cte+`
 		SELECT DISTINCT fi.tweet_id
 		FROM eligible_tweet_ids e
-		JOIN feed_items fi ON fi.tweet_id = e.tweet_id
-		WHERE `+retweetFilterClause("fi"), args, out.Tweets); err != nil {
+		CROSS JOIN feed_items fi
+		WHERE fi.tweet_id = e.tweet_id
+		  AND `+retweetFilterClause("fi"), args, out.Tweets); err != nil {
 		return out, fmt.Errorf("android sync desired tweets: %w", err)
 	}
 	if err := collect("thread_ancestors", cte+`,

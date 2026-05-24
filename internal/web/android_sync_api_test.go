@@ -1501,6 +1501,95 @@ func TestAndroidSyncLatestServesFreshGenerationWhileRefreshBuilds(t *testing.T) 
 	}
 }
 
+func TestAndroidSyncLatestServesOldGenerationWhileRefreshBuilds(t *testing.T) {
+	srv := newAndroidSyncTestServer(t)
+	now := time.Now().UnixMilli()
+	retention := db.AndroidRetentionSettings{FeedDays: 3, YoutubeDays: 2, MomentsDays: 90, StoryHours: 48}
+	oldGenerationID := "android-sync-old-window"
+	oldCreatedAt := now - (androidSyncFreshGenerationTTL + time.Hour).Milliseconds()
+	storeAndroidSyncGenerationForWebTestWithSource(
+		t,
+		srv.db,
+		oldGenerationID,
+		oldCreatedAt,
+		"old-window-source",
+		map[string]int{
+			"feed_days":            retention.FeedDays,
+			"youtube_days":         retention.YoutubeDays,
+			"moments_days":         retention.MomentsDays,
+			"story_hours":          retention.StoryHours,
+			"materializer_version": db.AndroidSyncMaterializerVersion,
+		},
+	)
+	currentSource, err := srv.db.AndroidSyncSourceVersion("alice", retention)
+	if err != nil {
+		t.Fatalf("current source version: %v", err)
+	}
+
+	srv.androidSyncGenerationMu.Lock()
+	locked := true
+	defer func() {
+		if locked {
+			srv.androidSyncGenerationMu.Unlock()
+		}
+	}()
+
+	req := httptest.NewRequest("GET", "/api/android/sync/generation/latest?feed_days=3&youtube_days=2&moments_days=90&story_hours=48", nil)
+	req = attachTestAuth(req, "alice")
+	rec := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		srv.mux.ServeHTTP(rec, req)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(500 * time.Millisecond):
+		srv.androidSyncGenerationMu.Unlock()
+		locked = false
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+		}
+		t.Fatalf("latest generation request blocked behind old generation refresh")
+	}
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var latest struct {
+		Generation model.AndroidSyncGeneration `json:"generation"`
+		Refreshing bool                        `json:"refreshing"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&latest); err != nil {
+		t.Fatalf("decode latest: %v", err)
+	}
+	if latest.Generation.GenerationID != oldGenerationID {
+		t.Fatalf("served generation = %s, want existing old generation %s", latest.Generation.GenerationID, oldGenerationID)
+	}
+	if !latest.Refreshing {
+		t.Fatalf("refreshing = false, want true while old generation refresh is queued")
+	}
+
+	srv.androidSyncGenerationMu.Unlock()
+	locked = false
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		existing, err := srv.db.GetAndroidSyncGenerationBySource(currentSource)
+		if err != nil {
+			t.Fatalf("lookup refreshed source: %v", err)
+		}
+		if existing != nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("background old generation refresh did not store source %s", currentSource)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func TestAndroidSyncLatestServesFreshGenerationDuringMaterializerRefresh(t *testing.T) {
 	srv := newAndroidSyncTestServer(t)
 	now := time.Now().UnixMilli()
