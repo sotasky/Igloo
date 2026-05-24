@@ -55,6 +55,17 @@ export function updateAndroidBuildGradle(text, versionName, versionCode) {
   return updated;
 }
 
+export function repositoryFromRemote(value) {
+  const remote = String(value || "").trim();
+  const match = /github\.com[:/]([^/\s]+)\/([^/\s?#]+?)(?:\.git)?(?:[?#].*)?$/.exec(remote);
+  if (!match) return "";
+  return `${match[1]}/${match[2]}`;
+}
+
+function releaseRepository() {
+  return process.env.GITHUB_REPOSITORY || repositoryFromRemote(gitMaybe(["remote", "get-url", "origin"]));
+}
+
 function commitRef(sha, repository) {
   const short = sha.slice(0, 7);
   if (!repository) return `\`${short}\``;
@@ -203,7 +214,7 @@ function prepareRelease(argv) {
     renderReleaseNotes({
       newTag: nextTag,
       previousTag,
-      repository: process.env.GITHUB_REPOSITORY || "",
+      repository: releaseRepository(),
       commits,
       description,
     }),

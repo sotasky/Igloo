@@ -6,6 +6,7 @@ import {
   bumpSemver,
   normalizeReleaseBump,
   parseAndroidVersion,
+  repositoryFromRemote,
   renderReleaseNotes,
   updateAndroidBuildGradle,
 } from "./release.mjs";
@@ -486,4 +487,11 @@ test("renders release summary before commit list", () => {
   });
 
   assert.match(notes, /^Igloo no longer depends on RSSHub\.\n\nChangelog/m);
+});
+
+test("infers GitHub repository from common origin remotes", () => {
+  assert.equal(repositoryFromRemote("https://github.com/screwys/Igloo.git"), "screwys/Igloo");
+  assert.equal(repositoryFromRemote("git@github.com:screwys/Igloo.git"), "screwys/Igloo");
+  assert.equal(repositoryFromRemote("ssh://git@github.com/screwys/Igloo.git"), "screwys/Igloo");
+  assert.equal(repositoryFromRemote("https://example.com/screwys/Igloo.git"), "");
 });
