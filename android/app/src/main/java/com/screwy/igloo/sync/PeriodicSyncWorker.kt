@@ -10,9 +10,11 @@ import androidx.core.app.NotificationCompat
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
 import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.ExistingWorkPolicy
 import androidx.work.ForegroundInfo
 import androidx.work.ListenableWorker
 import androidx.work.NetworkType
+import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
@@ -313,6 +315,7 @@ class PeriodicSyncWorker(
     companion object {
         /** Stable name so re-enqueues replace the prior request. */
         const val WORK_NAME = "igloo_periodic_sync"
+        const val CATCHUP_WORK_NAME = "igloo_sync_catchup"
 
         /** WorkManager clamps to a 15-minute floor. */
         const val MIN_INTERVAL_MINUTES = 15L
@@ -333,26 +336,48 @@ class PeriodicSyncWorker(
         /** Give a freshly triggered process time to fetch/import its first Sync generation. */
         private const val SYNC_STARTUP_GRACE_MS = 60_000L
 
-        suspend fun enqueue(context: Context, prefs: PreferencesRepo) {
+        suspend fun enqueue(
+            context: Context,
+            prefs: PreferencesRepo,
+            policy: ExistingPeriodicWorkPolicy = ExistingPeriodicWorkPolicy.UPDATE,
+        ) {
             if (!prefs.syncEnabled().first()) {
                 cancel(context)
                 return
             }
             val intervalMin = prefs.syncIntervalMinutes().first().toLong().coerceAtLeast(MIN_INTERVAL_MINUTES)
             val wifiOnly = prefs.syncWifiOnly().first()
-            val constraints = Constraints.Builder()
-                .setRequiredNetworkType(if (wifiOnly) NetworkType.UNMETERED else NetworkType.CONNECTED)
-                .build()
+            val constraints = constraintsFor(wifiOnly)
             val request = PeriodicWorkRequestBuilder<PeriodicSyncWorker>(intervalMin, TimeUnit.MINUTES)
                 .setConstraints(constraints)
                 .build()
             WorkManager.getInstance(context)
-                .enqueueUniquePeriodicWork(WORK_NAME, ExistingPeriodicWorkPolicy.UPDATE, request)
+                .enqueueUniquePeriodicWork(WORK_NAME, policy, request)
+        }
+
+        suspend fun enqueueCatchup(context: Context, prefs: PreferencesRepo) {
+            if (!prefs.syncEnabled().first()) {
+                cancel(context)
+                return
+            }
+            val wifiOnly = prefs.syncWifiOnly().first()
+            val request = OneTimeWorkRequestBuilder<PeriodicSyncWorker>()
+                .setConstraints(constraintsFor(wifiOnly))
+                .build()
+            WorkManager.getInstance(context)
+                .enqueueUniqueWork(CATCHUP_WORK_NAME, ExistingWorkPolicy.REPLACE, request)
         }
 
         fun cancel(context: Context) {
-            WorkManager.getInstance(context).cancelUniqueWork(WORK_NAME)
+            val workManager = WorkManager.getInstance(context)
+            workManager.cancelUniqueWork(WORK_NAME)
+            workManager.cancelUniqueWork(CATCHUP_WORK_NAME)
         }
+
+        private fun constraintsFor(wifiOnly: Boolean): Constraints =
+            Constraints.Builder()
+                .setRequiredNetworkType(if (wifiOnly) NetworkType.UNMETERED else NetworkType.CONNECTED)
+                .build()
     }
 }
 
@@ -365,6 +390,7 @@ internal class WorkManagerPeriodicSyncScheduler(
     private val prefs: PreferencesRepo,
 ) : PeriodicSyncScheduler {
     override suspend fun applyPreferences() {
-        PeriodicSyncWorker.enqueue(context, prefs)
+        PeriodicSyncWorker.enqueue(context, prefs, ExistingPeriodicWorkPolicy.CANCEL_AND_REENQUEUE)
+        PeriodicSyncWorker.enqueueCatchup(context, prefs)
     }
 }
