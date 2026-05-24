@@ -17,6 +17,7 @@ cmd/igloo-assets
 | `build.sh android` | build the server, then build/install the Android APK |
 | `build.sh all` | build, restart the server, then build/install Android |
 | `doctor.sh` | for local data/config paths |
+| `igloo-mcp.sh` | build and run the local MCP server |
 | `test-full.sh` | self-explanatory |
 | `web-test.sh` | start a throwaway server and and do web tests |
 | `container-check.sh` | build and check the container |

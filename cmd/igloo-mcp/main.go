@@ -237,7 +237,7 @@ func main() {
 	})
 
 	s.AddTool(mcp.NewTool("pipeline_status",
-		mcp.WithDescription("Queue health for download, feed media, and channel pipelines: counts, oldest pending, stuck jobs, recent errors."),
+		mcp.WithDescription("Queue health for download, feed media, channel, translation, and asset pipelines: counts, claim readiness, leases, stuck jobs, error kinds, recent errors."),
 	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		result, err := pipelineStatus()
 		if err != nil {
@@ -250,6 +250,38 @@ func main() {
 		mcp.WithDescription("Read-only local doctor report: DB/WAL size, dbstat, Android sync age, queue counts, profile/media readiness, downloader failures, masked recent errors."),
 	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		result, err := doctorStatus()
+		if err != nil {
+			return mcp.NewToolResultText("Error: " + err.Error()), nil
+		}
+		return mcp.NewToolResultText(result), nil
+	})
+
+	s.AddTool(mcp.NewTool("android_sync_status",
+		mcp.WithDescription("Focused Android sync convergence report: latest generation, sync assets, server_missing groups, health reports, asset inventory, and recent Android client sync failures."),
+		mcp.WithNumber("minutes", mcp.Description("How far back to scan Android client logs. Default 60.")),
+	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		result, err := androidSyncStatus(int(req.GetFloat("minutes", 60)))
+		if err != nil {
+			return mcp.NewToolResultText("Error: " + err.Error()), nil
+		}
+		return mcp.NewToolResultText(result), nil
+	})
+
+	s.AddTool(mcp.NewTool("identity_media_status",
+		mcp.WithDescription("Trace profile/avatar/banner readiness for a channel identity or feed tweet: profile row, cached files, avatar/banner assets, channel queue, and feed timeline."),
+		mcp.WithString("channel_id", mcp.Description("Optional canonical channel id, e.g. twitter_sample_handle.")),
+		mcp.WithString("platform", mcp.Description("Optional platform for handle lookup. Default twitter.")),
+		mcp.WithString("handle", mcp.Description("Optional profile handle, with or without @.")),
+		mcp.WithString("tweet_id", mcp.Description("Optional feed tweet/post id. When set, inspects source, author, retweeter, quote author, and reply parent identities.")),
+		mcp.WithNumber("limit", mcp.Description("Recent feed rows per identity. Default 5, max 20.")),
+	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		result, err := identityMediaStatus(
+			req.GetString("channel_id", ""),
+			req.GetString("platform", ""),
+			req.GetString("handle", ""),
+			req.GetString("tweet_id", ""),
+			int(req.GetFloat("limit", 5)),
+		)
 		if err != nil {
 			return mcp.NewToolResultText("Error: " + err.Error()), nil
 		}

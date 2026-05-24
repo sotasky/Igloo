@@ -175,7 +175,7 @@ func TestCodeIndexBuildConfigMap(t *testing.T) {
 	mustWrite(".mcp.json", `{
   "mcpServers": {
     "igloo": {
-      "command": "./bin/igloo-mcp"
+      "command": "./scripts/dev/igloo-mcp.sh"
     }
   }
 }`)
@@ -207,7 +207,7 @@ jobs:
 	configMap := idx.GetConfigMap("")
 	for _, want := range []string{
 		".mcp.json [mcp]",
-		"command: ./bin/igloo-mcp",
+		"command: ./scripts/dev/igloo-mcp.sh",
 		"compose.yaml [compose]",
 		"service: igloo",
 		".github/dependabot.yml [dependabot]",

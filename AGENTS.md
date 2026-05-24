@@ -9,6 +9,13 @@
 ## Evidence
 
 - Start from local evidence: files, DB rows, logs, running DOM, device/app state, then code.
+- When the Igloo MCP is available, prefer its read-only tools for first-pass
+  orientation and runtime evidence: `doctor_status`, `server_query`,
+  `db_schema`, `list_logs`, `read_log`, `recent_errors`, `pipeline_status`,
+  `android_sync_status`, `identity_media_status`, `trace_endpoint`,
+  `trace_page`, `trace_screen`, `trace_data_flow`, and `get_context`. Use raw
+  shell commands when MCP is unavailable, missing the needed view, or a result
+  needs independent verification.
 - Inspect the DB read-only when possible:
   `sqlite3 "file:$HOME/.local/share/igloo/igloo.db?mode=ro"`
 - Do not fetch public X, YouTube, TikTok, or Instagram pages when stored identifiers or local data can answer the question.
