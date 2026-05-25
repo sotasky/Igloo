@@ -12,8 +12,7 @@
 
 ![Igloo web app](static/screenshots/igloo.png)
 
-Igloo is an opinionated self-hosted personal social inbox for X, YouTube, TikTok and Instagram written in [Go](https://go.dev/). It pulls content from imported creators, and syncs it to an offline-first Android app. It is not meant to be a complete front-end replacement for these services, it intentionally stays out of any interaction with these platforms, such as posting or commenting. The published image is built with Nix to keep it small, about 200~ MB compressed and 500~ MB local image size. You can also build the image yourself. [Jump to installation](#install)
-
+Igloo is an opinionated self-hosted personal social inbox for X, YouTube, TikTok and Instagram written in [Go](https://go.dev/). It pulls content from accounts you can import or freely add, creates an all-in-one site for you to browse their content or configure the server, and optionally lets you access these from an Android app, which is fully usable even when disconnected from the server.  It is not meant to be a complete front-end replacement for these services, it intentionally stays out of any interaction with these platforms, such as posting or commenting. The published image is built with Nix to keep it small, about 200~ MiB compressed and 500~ MiB local image size. You can also build the image yourself, or just install it natively. [Jump to installation](#install)
 
 Any interaction you do on the client, stays in your machine which includes likes, follows or bookmarks. You don't need to log in to your accounts on these platforms, but that can also affect what media the server can fetch, since it uses [yt-dlp](https://github.com/yt-dlp/yt-dlp) and [gallery-dl](https://github.com/mikf/gallery-dl) to download media, you can only go as far as these packages let you go without cookies. On the web UI, you can upload one or more cookie files or set the browser with cookies to automatically enable cookies (supported out of the box on native installations on Linux, you would need to mount your browser folder if you want to use it with the image).
 
@@ -25,17 +24,12 @@ Once you import a few subscriptions, you can expand your subscriptions list thro
 
 ## Features
 
-- A fast to navigate web UI for browsing platforms, watching saved media,
-  searching your archive, and managing the server
+- Highly optimized, fast to navigate web UI for browsing platforms and managing the server
 - Discovery through Igloo alone: follow accounts from posts, reposts, stories
   profile cards, and even handles in descriptions!
-- Easily upload cookies through web
-
-- With a redirect extension such as [LibRedirect](https://addons.mozilla.org/en-US/firefox/addon/libredirect/) can use Igloo
-  as a custom Invidious target. Set your instance URL to
-  `http://server/temp`, and YouTube watch links can land on
-  `/temp/watch?v=...` for local temporary download and playback. You can also pin the temporary downloads to make them, uh, not temporary.
-
+- With a redirect extension such as [LibRedirect](https://addons.mozilla.org/en-US/firefox/addon/libredirect/), you can redirect all YouTube videos to the server. Set your instance URL to
+  `SERVER_URL/temp`, and YouTube watch links can land on
+  `/temp/watch?v=...` for local temporary download and playback. You can also pin the temporary downloads to make them, well, not temporary.
 - Both web and app are made to be themeable, you can select from the ready themes, or bring your own custom CSS. 
 - 
 <img src="static/screenshots/themes.webp" alt="Theme controls" width="100%">
