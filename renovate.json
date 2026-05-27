@@ -11,9 +11,8 @@
     "pip_requirements",
     "custom.regex"
   ],
-  "dependencyDashboard": true,
+  "dependencyDashboard": false,
   "minimumReleaseAge": "7 days",
-  "prCreation": "not-pending",
   "internalChecksFilter": "strict",
   "automergeType": "pr",
   "platformAutomerge": false,
