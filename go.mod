@@ -7,7 +7,7 @@ require (
 	github.com/evanw/esbuild v0.28.0
 	github.com/gorilla/sessions v1.4.0
 	github.com/lrstanley/go-ytdlp v1.3.5
-	github.com/mark3labs/mcp-go v0.53.0
+	github.com/mark3labs/mcp-go v0.54.0
 	github.com/taruti/langdetect v0.0.0-20160316071627-327bfa898307
 	golang.org/x/crypto v0.51.0
 	golang.org/x/text v0.37.0
