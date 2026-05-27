@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Igloo Site Sync
 // @namespace    local.igloo.site.sync
-// @version      8.0.34
+// @version      8.0.35
 // @author       screwys
 // @description  Follow X, TikTok, Instagram, and YouTube channels in Igloo; includes the full X media workflow.
 // @homepageURL  https://github.com/screwys/Igloo
@@ -36,7 +36,7 @@
 
 (function () {
   "use strict";
-  const SCRIPT_VERSION = "8.0.34";
+  const SCRIPT_VERSION = "8.0.35";
 
   const SETTINGS = {
     apiBase: "xsync_api_base",
@@ -474,6 +474,59 @@
     if (json.refresh_token)
       GM_setValue(SETTINGS.authRefresh, String(json.refresh_token));
     return true;
+  }
+
+  function responseErrorCode(resp) {
+    return String(resp?.json?.error_code || "");
+  }
+
+  function responseErrorDetail(resp) {
+    return (
+      resp?.json?.error_message ||
+      resp?.json?.error_code ||
+      resp?.error ||
+      resp?.status ||
+      "error"
+    );
+  }
+
+  function isHTMLAuthRedirect(resp) {
+    return (
+      resp?.status === 303 ||
+      (resp?.ok && resp?.json === null && resp?.text?.includes("<!DOCTYPE"))
+    );
+  }
+
+  function shouldRefreshAuthResponse(resp) {
+    if (!resp) return false;
+    if (isHTMLAuthRedirect(resp)) return true;
+    if (resp.status !== 401) return false;
+    const code = responseErrorCode(resp);
+    if (code === "access_token_expired" || code === "legacy_token_invalid") {
+      return true;
+    }
+    return !code && !!getToken();
+  }
+
+  function authFailureNotice(resp, refreshResp) {
+    const code = responseErrorCode(refreshResp) || responseErrorCode(resp);
+    if (code === "refresh_token_expired" || code === "access_token_expired") {
+      return "Session expired; use Tampermonkey menu \u2192 Log in to server";
+    }
+    if (code === "refresh_token_replayed" || code === "session_revoked") {
+      return "Session revoked; use Tampermonkey menu \u2192 Log in to server";
+    }
+    if (
+      code === "legacy_token_invalid" ||
+      code === "refresh_token_invalid" ||
+      code === "access_token_invalid"
+    ) {
+      return "Saved login was rejected; use Tampermonkey menu \u2192 Log in to server";
+    }
+    if (code === "unauthenticated") {
+      return "Not logged in; use Tampermonkey menu \u2192 Log in to server";
+    }
+    return `Authentication failed (${responseErrorDetail(refreshResp || resp)}); use Tampermonkey menu \u2192 Log in to server`;
   }
 
   function forgetLegacyDashboardPassword() {
@@ -982,7 +1035,8 @@
 
   async function _refreshToken() {
     const refresh = getRefresh();
-    if (!refresh) return false;
+    const access = getToken();
+    if (!refresh) return { ok: false, response: null };
     const r = await _rawApiRequest(
       "POST",
       "/api/auth/refresh",
@@ -991,33 +1045,33 @@
     );
     if (r.ok && storeAuthTokens(r.json)) {
       console.log("[XSync] token rotated");
-      return true;
+      return { ok: true, response: r };
+    }
+    if (getRefresh() !== refresh && getToken() !== access) {
+      console.log("[XSync] refresh superseded by newer login");
+      return { ok: true, response: r, superseded: true };
     }
     if (r.status === 401) {
-      GM_setValue(SETTINGS.authRefresh, "");
-      GM_setValue(SETTINGS.authToken, "");
+      if (getRefresh() === refresh) GM_setValue(SETTINGS.authRefresh, "");
+      if (getToken() === access) GM_setValue(SETTINGS.authToken, "");
     }
-    return false;
+    return { ok: false, response: r };
   }
 
   async function apiRequest(method, path, body, withAuth = true) {
     const resp = await _rawApiRequest(method, path, body, withAuth);
-    // Detect expired token: 303 redirect to /login, or 401
-    if (
-      withAuth &&
-      (resp.status === 303 ||
-        resp.status === 401 ||
-        (resp.ok && resp.json === null && resp.text.includes("<!DOCTYPE")))
-    ) {
+    if (withAuth && shouldRefreshAuthResponse(resp)) {
       if (!_refreshingToken) {
-        _refreshingToken = _refreshToken().then((ok) => {
+        _refreshingToken = _refreshToken().then((result) => {
           _refreshingToken = null;
-          return ok;
+          return result;
         });
       }
-      const refreshed = await _refreshingToken;
-      if (refreshed) return _rawApiRequest(method, path, body, withAuth);
-      notify("Token expired — use Tampermonkey menu → Log in to server");
+      const refreshResult = await _refreshingToken;
+      if (refreshResult.ok) return _rawApiRequest(method, path, body, withAuth);
+      notify(authFailureNotice(resp, refreshResult.response));
+    } else if (withAuth && resp.status === 401) {
+      notify(authFailureNotice(resp, null));
     }
     return resp;
   }

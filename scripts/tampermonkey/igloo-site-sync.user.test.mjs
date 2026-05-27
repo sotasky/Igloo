@@ -181,6 +181,8 @@ function buildHarness({
   unsafeWindow = {},
   userAgent = "Mozilla/5.0 Chrome/120.0.0.0",
   initialValues = {},
+  onRequest = null,
+  responseOverrides = {},
   twitterChannels = [
     {
       channel_id: "twitter_alice",
@@ -323,8 +325,11 @@ function buildHarness({
       });
       const response = responseFor(options.url, {
         data: options.data,
+        headers: options.headers || {},
+        responseOverrides,
         twitterChannels,
       });
+      onRequest?.(requestCalls[requestCalls.length - 1], values);
       queueMicrotask(() => {
         options.onload({
           status: response.status,
@@ -364,7 +369,16 @@ function buildHarness({
   };
 }
 
-function responseFor(url, { data, twitterChannels } = {}) {
+function responseFor(
+  url,
+  { data, headers = {}, responseOverrides = {}, twitterChannels } = {},
+) {
+  const override = responseOverrides[url];
+  if (override) {
+    return typeof override === "function"
+      ? override({ data, headers, twitterChannels })
+      : override;
+  }
   if (url === "http://127.0.0.1:5001/api/health/live") {
     return {
       status: 400,
@@ -760,6 +774,85 @@ test("expired refresh token asks for login without password fallback", async () 
     harness.toasts.some((message) =>
       message.includes("Log in to server"),
     ),
+  );
+});
+
+test("failed refresh does not clear tokens replaced by a newer login", async () => {
+  const freshAccess = "fresh-access";
+  const freshRefresh = "fresh-refresh";
+  const harness = buildHarness({
+    initialValues: {
+      xsync_auth_token: "expired-access",
+      xsync_auth_refresh: "expired-refresh",
+    },
+    onRequest(call, values) {
+      if (call.url === "https://localhost:5001/api/auth/refresh") {
+        values.set("xsync_auth_token", freshAccess);
+        values.set("xsync_auth_refresh", freshRefresh);
+      }
+    },
+    responseOverrides: {
+      "https://localhost:5001/api/stats": ({ headers }) => {
+        if (headers.Authorization === `Bearer ${freshAccess}`) {
+          return { status: 200, text: JSON.stringify({ ok: true }) };
+        }
+        return {
+          status: 401,
+          text: JSON.stringify({
+            error_code: "access_token_expired",
+            error_message: "token expired",
+          }),
+        };
+      },
+    },
+  });
+  runScript(harness);
+
+  const testConnection = harness.menu.get("Test connection");
+  await testConnection();
+  await drainMicrotasks();
+
+  assert.ok(
+    harness.requests.includes("https://localhost:5001/api/auth/refresh"),
+    `expected refresh request, got ${harness.requests.join(", ")}`,
+  );
+  assert.equal(harness.values.get("xsync_auth_token"), freshAccess);
+  assert.equal(harness.values.get("xsync_auth_refresh"), freshRefresh);
+  assert.ok(
+    harness.toasts.some((message) => message.includes("Server connection OK")),
+    `expected successful retry toast, got ${harness.toasts.join(", ")}`,
+  );
+});
+
+test("unauthenticated API response does not claim token expiry", async () => {
+  const harness = buildHarness({
+    responseOverrides: {
+      "https://localhost:5001/api/stats": {
+        status: 401,
+        text: JSON.stringify({
+          error_code: "unauthenticated",
+          error_message: "Authentication required",
+        }),
+      },
+    },
+  });
+  runScript(harness);
+
+  const testConnection = harness.menu.get("Test connection");
+  await testConnection();
+  await drainMicrotasks();
+
+  assert.equal(
+    harness.requests.includes("https://localhost:5001/api/auth/refresh"),
+    false,
+  );
+  assert.equal(
+    harness.toasts.some((message) => message.includes("Token expired")),
+    false,
+  );
+  assert.ok(
+    harness.toasts.some((message) => message.includes("Not logged in")),
+    `expected login guidance, got ${harness.toasts.join(", ")}`,
   );
 });
 
