@@ -7,8 +7,8 @@ import kotlin.math.min
 import kotlin.math.pow
 
 const val SystemThemeId = "system"
-const val DefaultThemeId = SystemThemeId
-const val DefaultThemeAccentHex = "#f38ba8"
+const val DefaultThemeId = "occult-umbral"
+const val DefaultThemeAccentHex = "#e6c27a"
 
 internal data class ThemeSpec(
     val id: String,

@@ -33,7 +33,6 @@ val iglooAuthModule = module {
 
     single {
         AuthRepo(
-            context = get(),
             storage = get(),
             databaseHolder = get(),
             uiEffects = get(),

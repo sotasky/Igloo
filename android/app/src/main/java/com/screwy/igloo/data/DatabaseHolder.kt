@@ -10,8 +10,8 @@ import kotlinx.coroutines.flow.asStateFlow
  * Single that wraps the currently-open per-user `IglooDatabase`.
  *
  * Single-user today, multi-user-ready shape. Login calls `openForUser(username)`; logout
- * calls `closeAndDelete(username)`. DAO accessors resolve through `requireCurrent()` so
- * every call site picks up the post-swap instance transparently.
+ * calls `detachForLogout()`. DAO accessors resolve through `requireCurrent()` so every
+ * call site picks up the post-swap instance transparently.
  *
  * Thread-safe: state changes happen under `lock`; reads after the instance is published
  * are plain volatile reads on `current`. Intended use is single-writer (login/logout) +
@@ -26,6 +26,8 @@ class DatabaseHolder(
 
     @Volatile
     private var currentInstance: IglooDatabase? = null
+    @Volatile
+    private var currentDatabaseUsername: String? = null
     @Volatile
     private var currentUsername: String? = null
     private val usernameState = MutableStateFlow<String?>(null)
@@ -47,14 +49,28 @@ class DatabaseHolder(
      */
     fun openForUser(username: String): IglooDatabase = synchronized(lock) {
         val existing = currentInstance
-        if (existing != null && currentUsername == username) return existing
+        if (existing != null && currentDatabaseUsername == username) {
+            currentUsername = username
+            usernameState.value = username
+            return existing
+        }
 
         existing?.close()
         val db = IglooDatabase.buildForUser(appContext, username)
         currentInstance = db
+        currentDatabaseUsername = username
         currentUsername = username
         usernameState.value = username
         db
+    }
+
+    /**
+     * Mark the app logged out without destroying local content or invalidating DB-bound
+     * singletons. The preserved DB is re-attached when the same user logs in again.
+     */
+    fun detachForLogout(): Unit = synchronized(lock) {
+        currentUsername = null
+        usernameState.value = null
     }
 
     /**
@@ -67,6 +83,7 @@ class DatabaseHolder(
             inst.close()
         }
         currentInstance = null
+        currentDatabaseUsername = null
         currentUsername = null
         usernameState.value = null
 
@@ -83,6 +100,7 @@ class DatabaseHolder(
     fun closeCurrent(): Unit = synchronized(lock) {
         currentInstance?.close()
         currentInstance = null
+        currentDatabaseUsername = null
         currentUsername = null
         usernameState.value = null
     }

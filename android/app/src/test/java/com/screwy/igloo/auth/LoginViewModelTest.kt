@@ -237,7 +237,6 @@ class LoginViewModelTest {
     // ─── helpers ─────────────────────────────────────────────────────────────
 
     private fun buildRepo(api: AuthApi): AuthRepo = AuthRepo(
-        context = ctx,
         storage = storage,
         databaseHolder = databaseHolder,
         uiEffects = UiEffects(),

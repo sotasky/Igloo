@@ -38,28 +38,31 @@ func TestBuiltInThemeCatalogAndAccentNormalization(t *testing.T) {
 	}
 }
 
-func TestDefaultThemeFollowsSystemColorScheme(t *testing.T) {
+func TestDefaultThemeUsesOccultAmber(t *testing.T) {
 	got := NormalizeSettings(Settings{})
-	if got.ThemeID != SystemThemeID {
-		t.Fatalf("ThemeID = %q, want %q", got.ThemeID, SystemThemeID)
+	if got.ThemeID != DefaultThemeID {
+		t.Fatalf("ThemeID = %q, want %q", got.ThemeID, DefaultThemeID)
+	}
+	if got.AccentHex != DefaultAccentHex {
+		t.Fatalf("AccentHex = %q, want %q", got.AccentHex, DefaultAccentHex)
 	}
 
 	css := CSS(got)
 	for _, want := range []string{
-		`color-scheme: light dark;`,
-		`--web-theme-id: "system";`,
-		`--bg-primary: #1e1e2e;`,
-		`@media (prefers-color-scheme: light)`,
-		`--bg-primary: #eff1f5;`,
+		`color-scheme: dark;`,
+		`--web-theme-id: "occult-umbral";`,
+		`--bg-primary: #0a0a12;`,
+		`--accent-primary: #e6c27a;`,
+		`--accent-secondary: #8b2e2e;`,
 	} {
 		if !strings.Contains(css, want) {
-			t.Fatalf("system CSS missing %q:\n%s", want, css)
+			t.Fatalf("default CSS missing %q:\n%s", want, css)
 		}
 	}
 }
 
 func TestThemeSnapshotIncludesSystemLightAndDarkTokens(t *testing.T) {
-	snapshot := ThemeSnapshot(Settings{})
+	snapshot := ThemeSnapshot(Settings{ThemeID: SystemThemeID})
 	if snapshot.ThemeID != SystemThemeID {
 		t.Fatalf("ThemeID = %q, want %q", snapshot.ThemeID, SystemThemeID)
 	}
@@ -96,8 +99,8 @@ func TestNormalizeSettingsFallsBackToDefaultThemeAccent(t *testing.T) {
 	if got.ThemeID != DefaultThemeID {
 		t.Fatalf("ThemeID = %q, want %q", got.ThemeID, DefaultThemeID)
 	}
-	if got.AccentHex != "#f38ba8" {
-		t.Fatalf("AccentHex = %q, want Catppuccin Mocha red", got.AccentHex)
+	if got.AccentHex != "#e6c27a" {
+		t.Fatalf("AccentHex = %q, want Occult Amber", got.AccentHex)
 	}
 	if len(got.CustomCSS) != MaxCustomCSSBytes {
 		t.Fatalf("CustomCSS length = %d, want cap %d", len(got.CustomCSS), MaxCustomCSSBytes)

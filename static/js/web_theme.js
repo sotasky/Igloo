@@ -1,7 +1,7 @@
 (function () {
   const doc = document;
-  const DEFAULT_THEME = 'system';
-  const DEFAULT_ACCENT = '#f38ba8';
+  const DEFAULT_THEME = 'occult-umbral';
+  const DEFAULT_ACCENT = '#e6c27a';
   const MAX_CUSTOM_CSS_BYTES = 64 * 1024;
   const accentNames = [
     ['rosewater', 'Rosewater'], ['flamingo', 'Flamingo'], ['pink', 'Pink'], ['mauve', 'Mauve'],
@@ -136,7 +136,8 @@
     };
   }
   function onAccent(accent) { return luminance(rgb(accent)) > 0.35 ? '#11111b' : '#ffffff'; }
-  function derivedSecondary(themeData, accent) {
+  function derivedSecondary(id, themeData, accent) {
+    if (id === DEFAULT_THEME && normalizeHex(accent) === normalizeHex(DEFAULT_ACCENT)) return '#8b2e2e';
     if (normalizeHex(accent) === normalizeHex(themeData.defaultAccent)) return themeData.secondary.toLowerCase();
     const base = rgb(accent);
     const target = luminance(base) > 0.45 ? rgb(themeData.crust) : rgb(themeData.text);
@@ -147,7 +148,7 @@
   function rgbLine(name, value) { return line(name, rgbText(rgb(value))); }
 
   function themeVars(id, themeData, accent, colorScheme) {
-    const secondary = derivedSecondary(themeData, accent);
+    const secondary = derivedSecondary(id, themeData, accent);
     let css = '';
     css += line('color-scheme', colorScheme || (themeData.dark ? 'dark' : 'light'));
     css += line('--web-theme-id', JSON.stringify(id));

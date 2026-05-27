@@ -17,8 +17,8 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 /**
- * DatabaseHolder lifecycle — sanitization, idempotent re-open, swap on username change,
- * close+delete removes the underlying file + WAL/SHM sidecars.
+ * DatabaseHolder lifecycle — sanitization, idempotent re-open, session detach,
+ * swap on username change, close+delete removes the underlying file + WAL/SHM sidecars.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], manifest = Config.NONE)
@@ -33,7 +33,9 @@ class DatabaseHolderTest {
     }
 
     @After fun tearDown() {
-        holder.username?.let { holder.closeAndDelete(it) }
+        holder.closeCurrent()
+        ctx.deleteDatabase(IglooDatabase.fileNameFor("alice"))
+        ctx.deleteDatabase(IglooDatabase.fileNameFor("bob"))
     }
 
     @Test fun requireCurrent_beforeLogin_throws() {
@@ -64,6 +66,22 @@ class DatabaseHolderTest {
         assertSame(b, holder.current)
         assertEquals("bob", holder.username)
         assertEquals("bob", holder.usernameFlow.value)
+    }
+
+    @Test fun detachForLogout_hidesSessionButReattachesSameUserDb() {
+        val a = holder.openForUser("alice")
+
+        holder.detachForLogout()
+
+        assertSame(a, holder.current)
+        assertNull(holder.username)
+        assertNull(holder.usernameFlow.value)
+
+        val b = holder.openForUser("alice")
+
+        assertSame(a, b)
+        assertEquals("alice", holder.username)
+        assertEquals("alice", holder.usernameFlow.value)
     }
 
     @Test fun closeAndDelete_removesFile() {

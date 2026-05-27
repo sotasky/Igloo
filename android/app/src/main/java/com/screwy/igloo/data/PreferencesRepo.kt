@@ -107,8 +107,8 @@ class PreferencesRepo(
         const val SYNC_ENABLED               = true
         const val SYNC_INTERVAL_MINUTES      = 30
         const val SYNC_WIFI_ONLY             = false
-        const val THEME_ID                   = "system"
-        const val THEME_ACCENT_HEX           = "#f38ba8"
+        const val THEME_ID                   = "occult-umbral"
+        const val THEME_ACCENT_HEX           = "#e6c27a"
         const val THEME_CUSTOM_CSS           = ""
         const val THEME_CUSTOM_CSS_MAX_BYTES = 64 * 1024
         // Auto-swipe off by default: letting shorts silently self-advance was

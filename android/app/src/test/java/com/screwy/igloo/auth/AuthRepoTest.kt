@@ -4,6 +4,8 @@ import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import com.screwy.igloo.R
 import com.screwy.igloo.data.DatabaseHolder
+import com.screwy.igloo.data.IglooDatabase
+import com.screwy.igloo.data.PreferencesRepo
 import com.screwy.igloo.net.AuthApi
 import com.screwy.igloo.ui.UiEffect
 import com.screwy.igloo.ui.UiEffects
@@ -36,6 +38,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -45,8 +48,9 @@ import org.robolectric.annotation.Config
 
 /**
  * `AuthRepo` lifecycle: login persists tokens and opens the per-user Room DB,
- * logout wipes auth keys except the server URL and closes the DB, refresh rotates
- * token pairs, and refresh failure fires `UiEffect.RequireLogin`.
+ * logout wipes auth keys except the server URL, detaches the visible session while
+ * preserving local data, refresh rotates token pairs, and refresh failure fires
+ * `UiEffect.RequireLogin`.
  */
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
@@ -87,7 +91,9 @@ class AuthRepoTest {
     }
 
     @After fun tearDown() {
-        databaseHolder.username?.let { databaseHolder.closeAndDelete(it) }
+        databaseHolder.closeCurrent()
+        ctx.deleteDatabase(IglooDatabase.fileNameFor("alice"))
+        ctx.deleteDatabase(IglooDatabase.fileNameFor("bob"))
         effectsScope.cancel()
         scope.cancel()
         Dispatchers.resetMain()
@@ -145,14 +151,17 @@ class AuthRepoTest {
 
     // ─── logout ──────────────────────────────────────────────────────────────
 
-    @Test fun logout_wipesTokensAndClosesDbButKeepsServerUrl() = runBlocking {
+    @Test fun logout_wipesTokensAndDetachesSessionButKeepsLocalDataAndServerUrl() = runBlocking {
         val api = buildAuthApi(
             loginResponder = respondJson(LOGIN_RESPONSE_BOB),
             logoutResponder = respondJson("""{"ok":true}"""),
         )
         val repo = buildRepo(api)
         repo.login("https://igloo.local", "bob", "pw")
-        assertNotNull(databaseHolder.current)
+        val dbBeforeLogout = databaseHolder.current
+        assertNotNull(dbBeforeLogout)
+        databaseHolder.requireCurrent().preferenceDao()
+            .put(PreferencesRepo.Keys.THEME_ID, "occult-umbral", nowMs = 123L)
 
         repo.logout(LogoutReason.UserInitiated)
 
@@ -160,10 +169,24 @@ class AuthRepoTest {
         assertNull(repo.refreshTokenSync())
         assertNull(repo.usernameSync())
         assertEquals("https://igloo.local", repo.serverUrlSync())
-        assertNull(databaseHolder.current)
+        assertSame(dbBeforeLogout, databaseHolder.current)
+        assertNull(databaseHolder.username)
+        assertEquals(
+            "occult-umbral",
+            databaseHolder.requireCurrent().preferenceDao().getValue(PreferencesRepo.Keys.THEME_ID),
+        )
         // user-initiated logout surfaces no toast
         assertTrue(collectedEffects.isEmpty())
         assertEquals(mapOf(AuthKeys.SERVER_URL to "https://igloo.local"), storage.snapshot())
+
+        repo.login("https://igloo.local", "bob", "pw")
+
+        assertSame(dbBeforeLogout, databaseHolder.current)
+        assertEquals("bob", databaseHolder.username)
+        assertEquals(
+            "occult-umbral",
+            databaseHolder.requireCurrent().preferenceDao().getValue(PreferencesRepo.Keys.THEME_ID),
+        )
     }
 
     @Test fun logout_withReason_surfacesToast() = runBlocking {
@@ -336,7 +359,8 @@ class AuthRepoTest {
         assertNull(repo.accessTokenSync())
         assertNull(repo.refreshTokenSync())
         assertNull(repo.usernameSync())
-        assertNull(databaseHolder.current)
+        assertNotNull(databaseHolder.current)
+        assertNull(databaseHolder.username)
     }
 
     // ─── URL normalization ───────────────────────────────────────────────────
@@ -356,7 +380,6 @@ class AuthRepoTest {
         onBootstrap: () -> Unit = {},
         nowMsProvider: () -> Long = { 0L },
     ): AuthRepo = AuthRepo(
-        context = ctx,
         storage = storage,
         databaseHolder = databaseHolder,
         uiEffects = uiEffects,

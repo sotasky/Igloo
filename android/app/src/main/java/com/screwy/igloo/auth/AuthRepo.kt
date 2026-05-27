@@ -1,6 +1,5 @@
 package com.screwy.igloo.auth
 
-import android.content.Context
 import com.screwy.igloo.R
 import com.screwy.igloo.data.DatabaseHolder
 import com.screwy.igloo.data.PreferencesRepo
@@ -10,7 +9,6 @@ import com.screwy.igloo.net.RefreshResponse
 import com.screwy.igloo.net.auth.AuthTokenProvider
 import com.screwy.igloo.ui.UiEffect
 import com.screwy.igloo.ui.UiEffects
-import java.io.File
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -33,9 +31,10 @@ interface AccountSessionActions {
  *  - `login` — POSTs `/api/auth/login`, persists tokens + server URL + username, opens
  *    the per-user Room DB, kicks off post-login bootstrap (reachability / scheduler /
  *    first log emit) on the supplied callback.
- *  - `logout` — fire-and-forget `/api/auth/logout`, stops the scheduler, closes + deletes
- *    the per-user DB, wipes the per-user media dir, clears auth keys except the server
- *    URL. Surfaces a reason toast when non-user-initiated.
+ *  - `logout` — fire-and-forget `/api/auth/logout`, stops the scheduler, detaches the
+ *    visible session, and clears auth keys except the server URL. The per-user DB and
+ *    media cache stay local so re-login does not reset preferences or rebuild Sync.
+ *    Surfaces a reason toast when non-user-initiated.
  *  - `onAuthExpired` — 401 handshake. Branches on envelope `error_code`: refresh-eligible
  *    (`access_token_expired`, null) → rotates tokens via `/api/auth/refresh`; terminal
  *    (`session_revoked`, `refresh_token_*`, `legacy_token_invalid`, `access_token_invalid`)
@@ -45,7 +44,6 @@ interface AccountSessionActions {
  * cycle: `AuthRepo → AuthApi → HttpClient → AuthTokenProvider (AuthRepo)`.
  */
 class AuthRepo(
-    private val context: Context,
     private val storage: AuthStorage,
     private val databaseHolder: DatabaseHolder,
     private val uiEffects: UiEffects,
@@ -151,14 +149,12 @@ class AuthRepo(
     // ─── Logout ──────────────────────────────────────────────────────────────
 
     /**
-     * Clears user-scoped state in the order specified by `06-auth-and-multiuser.md` §5:
-     * fire-and-forget server revoke → stop scheduler → close + delete DB → delete media
-     * dir → clear auth keys while retaining the server URL. Safe to call from any
-     * thread; DB mutation happens on IO.
+     * Clears the signed-in session without deleting local mirrors: fire-and-forget
+     * server revoke → stop scheduler → detach the visible DB session → clear auth keys
+     * while retaining the server URL. Safe to call from any thread.
      */
     override suspend fun logout(reason: LogoutReason) {
         val refresh = refreshTokenCache.value
-        val username = usernameCache.value
         val retainedServerUrl = serverUrlCache.value
 
         if (refresh != null) {
@@ -166,11 +162,7 @@ class AuthRepo(
         }
 
         stopReconcilersOnLogout()
-
-        if (username != null) {
-            databaseHolder.closeAndDelete(username)
-            deleteUserMediaDir(username)
-        }
+        databaseHolder.detachForLogout()
         storage.clearAll()
         persistServerUrl(retainedServerUrl)
         accessTokenCache.value = null
@@ -193,12 +185,6 @@ class AuthRepo(
             LogoutReason.UserInitiated -> return
         }
         uiEffects.emit(UiEffect.ToastRes(resId = messageRes, longDuration = true))
-    }
-
-    private fun deleteUserMediaDir(username: String) {
-        val sanitized = slug(username)
-        val dir = File(context.applicationContext.filesDir, "users/$sanitized/media")
-        runCatching { dir.deleteRecursively() }
     }
 
     // ─── Refresh / 401 handshake ─────────────────────────────────────────────
@@ -313,14 +299,5 @@ class AuthRepo(
             return if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) trimmed
             else "http://$trimmed"
         }
-
-        private fun slug(username: String): String = buildString(username.length) {
-            for (c in username) {
-                append(
-                    if (c.isLetterOrDigit() || c == '.' || c == '_' || c == '-') c.lowercaseChar()
-                    else '_',
-                )
-            }
-        }.ifEmpty { "anonymous" }
     }
 }

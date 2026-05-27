@@ -46,8 +46,17 @@ class IglooThemeTest {
     }
 
     @Test
-    fun resolve_system_theme_uses_latte_for_light_system() {
+    fun resolve_default_theme_uses_occult_amber() {
         val colors = resolveIglooColors(DefaultThemeId, DefaultThemeAccentHex, systemDark = false)
+
+        assertEquals(Color(0xFF0A0A12), colors.background)
+        assertEquals(Color(0xFFE4DED2), colors.onSurface)
+        assertEquals(Color(0xFFE6C27A), colors.primary)
+    }
+
+    @Test
+    fun resolve_system_theme_uses_latte_for_light_system() {
+        val colors = resolveIglooColors(SystemThemeId, "#f38ba8", systemDark = false)
 
         assertEquals(Color(0xFFEFF1F5), colors.background)
         assertEquals(Color(0xFF4C4F69), colors.onSurface)

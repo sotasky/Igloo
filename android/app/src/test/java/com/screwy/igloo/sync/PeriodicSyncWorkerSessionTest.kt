@@ -106,7 +106,6 @@ class PeriodicSyncWorkerSessionTest {
             }
         }
         return AuthRepo(
-            context = ctx,
             storage = storage,
             databaseHolder = databaseHolder,
             uiEffects = UiEffects(),

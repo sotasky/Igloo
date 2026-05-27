@@ -113,8 +113,8 @@ func SponsorBlockDefaultAction(category string) string {
 // default should use the helpers below.
 var Defaults = map[string]any{
 	"quality":                          "best",
-	"web_theme_id":                     "system",
-	"web_theme_accent":                 "#f38ba8",
+	"web_theme_id":                     "occult-umbral",
+	"web_theme_accent":                 "#e6c27a",
 	"web_custom_css":                   "",
 	"share_embed_friendly_links":       false,
 	"youtube_fetch_delay":              120,

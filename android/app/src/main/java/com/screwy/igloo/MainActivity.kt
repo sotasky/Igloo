@@ -134,7 +134,7 @@ object AppRuntime {
                 }
             }
 
-            return databaseHolder.current != null
+            return databaseHolder.current != null && databaseHolder.username != null
         }
     }
 

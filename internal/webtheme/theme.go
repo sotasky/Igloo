@@ -11,10 +11,10 @@ import (
 
 const (
 	SystemThemeID     = "system"
-	DefaultThemeID    = SystemThemeID
-	DefaultAccentHex  = "#f38ba8"
+	DefaultThemeID    = "occult-umbral"
+	DefaultAccentHex  = "#e6c27a"
 	MaxCustomCSSBytes = 64 * 1024
-	defaultSecondary  = "#eba0ac"
+	defaultSecondary  = "#8b2e2e"
 )
 
 // Settings are the persisted web-only theme preferences.
@@ -279,9 +279,15 @@ func NormalizeCustomCSS(raw string) string {
 // NormalizeSettings normalizes the persisted web theme settings as a unit.
 func NormalizeSettings(settings Settings) Settings {
 	themeID := NormalizeThemeID(settings.ThemeID)
+	accentHex := NormalizeAccentHex(themeID, settings.AccentHex)
+	if _, themeOK := Lookup(settings.ThemeID); !themeOK {
+		if _, accentOK := normalizeHex(settings.AccentHex); !accentOK {
+			accentHex = DefaultAccentHex
+		}
+	}
 	return Settings{
 		ThemeID:   themeID,
-		AccentHex: NormalizeAccentHex(themeID, settings.AccentHex),
+		AccentHex: accentHex,
 		CustomCSS: NormalizeCustomCSS(settings.CustomCSS),
 	}
 }
@@ -615,6 +621,9 @@ func catppuccinLatte() Theme {
 }
 
 func deriveSecondary(theme Theme, accent string) string {
+	if theme.ID == DefaultThemeID && strings.EqualFold(accent, DefaultAccentHex) {
+		return defaultSecondary
+	}
 	if strings.EqualFold(accent, theme.DefaultAccent) {
 		return strings.ToLower(theme.Secondary)
 	}
