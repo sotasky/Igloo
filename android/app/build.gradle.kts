@@ -128,12 +128,12 @@ ksp {
 }
 
 val roomVersion = "2.8.4"
-val ktorVersion = "3.4.3"
+val ktorVersion = "3.5.0"
 val lifecycleVersion = "2.10.0"
 val koinVersion = "4.2.1"
 val coilVersion = "3.4.0"
 val media3Version = "1.10.1"
-val asmVersion = "9.9.1"
+val asmVersion = "9.10"
 
 dependencies {
     // Core Android
@@ -148,7 +148,7 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-process:$lifecycleVersion")
 
     // Compose
-    implementation(platform("androidx.compose:compose-bom:2026.05.00"))
+    implementation(platform("androidx.compose:compose-bom:2026.05.01"))
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-graphics")
     implementation("androidx.compose.ui:ui-tooling-preview")
@@ -188,7 +188,7 @@ dependencies {
     implementation("androidx.security:security-crypto:1.1.0")
 
     // NewPipeExtractor — YouTube stream resolution
-    implementation("com.github.TeamNewPipe:NewPipeExtractor:v0.26.1")
+    implementation("com.github.TeamNewPipe:NewPipeExtractor:0.26.1")
 
     // Tests
     testImplementation("junit:junit:4.13.2")
@@ -213,7 +213,7 @@ dependencies {
     androidTestImplementation("androidx.test:runner:1.7.0")
     androidTestImplementation("androidx.test.ext:junit:1.3.0")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.7.0")
-    androidTestImplementation(platform("androidx.compose:compose-bom:2026.05.00"))
+    androidTestImplementation(platform("androidx.compose:compose-bom:2026.05.01"))
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
     androidTestImplementation("com.squareup.okhttp3:mockwebserver:5.3.2")
     debugImplementation("androidx.compose.ui:ui-tooling")
