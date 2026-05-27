@@ -28,7 +28,9 @@ import com.screwy.igloo.log.Logger
 import com.screwy.igloo.media.ForegroundPromoter
 import com.screwy.igloo.perf.PerfProbe
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.sync.Mutex
 import org.koin.core.context.GlobalContext
 import java.io.Closeable
 import java.util.concurrent.TimeUnit
@@ -152,9 +154,15 @@ class PeriodicSyncWorker(
 ) : CoroutineWorker(appContext, params) {
 
     override suspend fun doWork(): ListenableWorker.Result {
+        if (!RUN_LOCK.tryLock()) {
+            PerfProbe.log(event = "workmanager_catchup_skipped") {
+                mapOf("reason" to "already_running")
+            }
+            return ListenableWorker.Result.success()
+        }
         return try {
             PerfProbe.timedSuspend(event = "workmanager_catchup_do_work") {
-                AppRuntime.ensureStarted(applicationContext as Application)
+                AppRuntime.prepareLocalSession(applicationContext as Application)
             }
             val koin = GlobalContext.get()
             val databaseHolder: DatabaseHolder = koin.get()
@@ -186,22 +194,23 @@ class PeriodicSyncWorker(
             // foreground-service token covers the entire drain — including the
             // MediaForegroundService start that ForegroundPromoter would
             // otherwise block on under Android 12+ background-start rules.
-            val workerForegroundActive = runCatching {
+            val workerForegroundActive = try {
                 PerfProbe.timedSuspend(event = "workmanager_set_foreground") {
                     setForeground(getForegroundInfo())
                 }
                 true
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                logger.info(
+                    event = "periodic_sync_foreground_failed",
+                    fields = mapOf(
+                        "class" to (e::class.simpleName ?: "Exception"),
+                        "error" to (e.message ?: e::class.simpleName.orEmpty()),
+                    ),
+                )
+                false
             }
-                .onFailure { error ->
-                    logger.info(
-                        event = "periodic_sync_foreground_failed",
-                        fields = mapOf(
-                            "class" to (error::class.simpleName ?: "Exception"),
-                            "error" to (error.message ?: error::class.simpleName.orEmpty()),
-                        ),
-                    )
-                }
-                .getOrDefault(false)
 
             var foregroundLease: Closeable? = null
             try {
@@ -235,8 +244,12 @@ class PeriodicSyncWorker(
             // Returning retry hands scheduling to WorkManager backoff, which can push
             // the next run well past the user configured sync interval.
             ListenableWorker.Result.success()
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             ListenableWorker.Result.retry()
+        } finally {
+            RUN_LOCK.unlock()
         }
     }
 
@@ -323,9 +336,13 @@ class PeriodicSyncWorker(
         /** Foreground notification — separate ID from MediaForegroundService (1001). */
         private const val NOTIFICATION_ID = 1002
         private const val CHANNEL_ID = "igloo_background_sync"
+        private val RUN_LOCK = Mutex()
 
-        /** Cap one run at ~50 minutes — well under Android's 6-hour FGS-time-out. */
-        private const val MAX_RUN_DURATION_MS = 50L * 60_000L
+        /**
+         * Keep each JobScheduler pass comfortably below OEM timeout behavior.
+         * Sync is idempotent, so incomplete drains resume on the next catch-up.
+         */
+        private const val MAX_RUN_DURATION_MS = 8L * 60_000L
 
         /** Poll the queue every 5 seconds to decide whether to keep holding the FGS. */
         private const val POLL_INTERVAL_MS = 5_000L
@@ -383,6 +400,7 @@ class PeriodicSyncWorker(
 
 interface PeriodicSyncScheduler {
     suspend fun applyPreferences()
+    suspend fun enqueueCatchup()
 }
 
 internal class WorkManagerPeriodicSyncScheduler(
@@ -391,6 +409,10 @@ internal class WorkManagerPeriodicSyncScheduler(
 ) : PeriodicSyncScheduler {
     override suspend fun applyPreferences() {
         PeriodicSyncWorker.enqueue(context, prefs, ExistingPeriodicWorkPolicy.CANCEL_AND_REENQUEUE)
+        PeriodicSyncWorker.enqueueCatchup(context, prefs)
+    }
+
+    override suspend fun enqueueCatchup() {
         PeriodicSyncWorker.enqueueCatchup(context, prefs)
     }
 }

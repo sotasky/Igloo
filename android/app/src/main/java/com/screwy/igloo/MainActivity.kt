@@ -92,6 +92,13 @@ object AppRuntime {
     @Volatile private var appStartLogged = false
 
     fun ensureStarted(application: Application) {
+        if (prepareLocalSession(application)) {
+            bootstrapPostLogin()
+        }
+    }
+
+    @Synchronized
+    fun prepareLocalSession(application: Application): Boolean {
         PerfProbe.timed(event = "app_runtime_ensure_started") {
             if (GlobalContext.getOrNull() == null) {
                 PerfProbe.timed(event = "app_runtime_start_koin") {
@@ -127,9 +134,7 @@ object AppRuntime {
                 }
             }
 
-            if (databaseHolder.current != null) {
-                bootstrapPostLogin()
-            }
+            return databaseHolder.current != null
         }
     }
 
@@ -153,6 +158,7 @@ object AppRuntime {
                     if (authRepo.canOpenLocalSessionSync()) {
                         scheduler.start()
                         PeriodicSyncWorker.enqueue(koin.get<Application>(), prefs)
+                        PeriodicSyncWorker.enqueueCatchup(koin.get<Application>(), prefs)
                     }
                 }
             }

@@ -153,11 +153,15 @@ class StorageViewModelTest {
         assertEquals(true, ok)
     }
 
-    @Test fun triggerSyncNow_forwardsToScheduler() {
+    @Test fun triggerSyncNow_forwardsToSchedulerAndDurableCatchup() = runBlocking {
         val vm = newViewModel()
         vm.triggerSyncNow()
 
         assertEquals(1, scheduler.triggerAllCount)
+        val ok = eventuallyVerify {
+            assertEquals(1, periodicSyncScheduler.catchupCount)
+        }
+        assertEquals(true, ok)
     }
 
     private class FakeCacheActions : CacheActions {
@@ -178,9 +182,15 @@ class StorageViewModelTest {
     private class FakePeriodicSyncScheduler : PeriodicSyncScheduler {
         var applyCount = 0
             private set
+        var catchupCount = 0
+            private set
 
         override suspend fun applyPreferences() {
             applyCount++
+        }
+
+        override suspend fun enqueueCatchup() {
+            catchupCount++
         }
     }
 }
