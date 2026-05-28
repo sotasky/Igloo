@@ -353,29 +353,9 @@ func (db *DB) GetBookmarkLabelCounts(userID string) ([]BookmarkLabelCountRow, er
 func (db *DB) AddBookmark(userID, videoID string, categoryID int64, customTitle, accountHandles, mediaIndices string) error {
 	return db.WithWrite(func(tx *sql.Tx) error {
 		// Ensure a videos row exists for this bookmark. GetBookmarks inner-joins
-		// videos, so without a stub the bookmark is invisible in the UI until
-		// EnsureBookmarkVideoStubs runs on the next server restart. Mirrors that
-		// startup job's logic, scoped to this single tweet.
-		if _, err := tx.Exec(`
-			INSERT OR IGNORE INTO videos (video_id, channel_id, title, duration, file_path)
-			SELECT
-				?,
-				COALESCE(
-					'twitter_' || LOWER(NULLIF(
-						COALESCE(direct.author_handle, quoted.quote_author_handle),
-					'')),
-					'twitter_'
-				),
-				'X post ' || ?,
-				0,
-				''
-			FROM (SELECT 1) _
-			LEFT JOIN feed_items direct ON direct.tweet_id = ? AND direct.author_handle != ''
-			LEFT JOIN feed_items quoted ON quoted.quote_tweet_id = ? AND quoted.quote_author_handle != ''
-		`, videoID, videoID, videoID, videoID); err != nil {
-			return err
-		}
-		if err := db.ensureFeedItemStubFromBookmarkTx(tx, videoID); err != nil {
+		// videos, so mobile and web bookmark writes share the same scoped stub
+		// materialization as the startup repair.
+		if err := db.ensureBookmarkTargetStubsTx(tx, videoID); err != nil {
 			return err
 		}
 

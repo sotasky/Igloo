@@ -151,6 +151,9 @@ func (db *DB) ApplyBookmarkMutation(userID string, m BookmarkMutation) (Mutation
 			if m.CategoryID != nil {
 				catID = *m.CategoryID
 			}
+			if err := db.ensureBookmarkTargetStubsTx(tx, m.VideoID); err != nil {
+				return err
+			}
 			_, err := tx.Exec(`
 				INSERT INTO bookmarks (user_id, video_id, category_id,
 				  custom_title, account_handles, media_indices, bookmarked_at)

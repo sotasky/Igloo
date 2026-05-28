@@ -111,3 +111,65 @@ func TestBookmarkMutationUsesCurrentTimeWhenUpdatedAtMissing(t *testing.T) {
 		t.Fatalf("sync value did not carry repaired timestamp: %s", value)
 	}
 }
+
+func TestBookmarkMutationCreatesVideoStubForFeedItem(t *testing.T) {
+	d := openWritableTestDB(t)
+
+	const (
+		tweetID       = "sample_feed_bookmark"
+		authorHandle  = "sample_author"
+		publishedAtMs = int64(1745100000000)
+	)
+	if err := d.ExecRaw(`
+		INSERT INTO feed_items (
+			tweet_id, source_handle, author_handle, body_text,
+			canonical_url, published_at, fetched_at
+		) VALUES (?, ?, ?, 'sample body', ?, ?, ?)`,
+		tweetID,
+		authorHandle,
+		authorHandle,
+		"https://x.com/sample_author/status/sample_feed_bookmark",
+		publishedAtMs,
+		publishedAtMs,
+	); err != nil {
+		t.Fatalf("insert feed item: %v", err)
+	}
+
+	if _, err := d.ApplyBookmarkMutation("admin", BookmarkMutation{
+		VideoID:     tweetID,
+		Action:      "set",
+		UpdatedAtMs: publishedAtMs + 1000,
+	}); err != nil {
+		t.Fatalf("ApplyBookmarkMutation: %v", err)
+	}
+
+	var channelID string
+	var syncSeq int64
+	if err := d.QueryRow(`
+		SELECT channel_id, sync_seq
+		FROM videos
+		WHERE video_id = ?
+	`, tweetID).Scan(&channelID, &syncSeq); err != nil {
+		t.Fatalf("read video stub: %v", err)
+	}
+	if channelID != "twitter_sample_author" {
+		t.Fatalf("channel_id = %q, want twitter_sample_author", channelID)
+	}
+	if syncSeq <= 0 {
+		t.Fatalf("sync_seq = %d, want bumped stub", syncSeq)
+	}
+
+	bookmarks, err := d.GetBookmarks(GetBookmarksOpts{UserID: "admin", Limit: 10})
+	if err != nil {
+		t.Fatalf("GetBookmarks: %v", err)
+	}
+	if len(bookmarks) != 1 {
+		t.Fatalf("bookmarks = %d, want 1", len(bookmarks))
+	}
+	if got := bookmarks[0].VideoID; got != tweetID {
+		t.Fatalf("bookmark VideoID = %q, want %q", got, tweetID)
+	}
+	if got := bookmarks[0].Title; got != "sample body" {
+		t.Fatalf("bookmark Title = %q, want sample body", got)
+	}
+}

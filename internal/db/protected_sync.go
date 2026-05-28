@@ -193,6 +193,33 @@ func (db *DB) ensureFeedItemStubFromBookmarkTx(tx *sql.Tx, videoID string) error
 	return err
 }
 
+func (db *DB) ensureBookmarkTargetStubsTx(tx *sql.Tx, videoID string) error {
+	if strings.TrimSpace(videoID) == "" {
+		return nil
+	}
+	_, err := tx.Exec(`
+		INSERT OR IGNORE INTO videos (video_id, channel_id, title, duration, file_path)
+		SELECT
+			?,
+			COALESCE(
+				'twitter_' || LOWER(NULLIF(
+					COALESCE(direct.author_handle, quoted.quote_author_handle),
+				'')),
+				'twitter_'
+			),
+			'X post ' || ?,
+			0,
+			''
+		FROM (SELECT 1) _
+		LEFT JOIN feed_items direct ON direct.tweet_id = ? AND direct.author_handle != ''
+		LEFT JOIN feed_items quoted ON quoted.quote_tweet_id = ? AND quoted.quote_author_handle != ''
+	`, videoID, videoID, videoID, videoID)
+	if err != nil {
+		return err
+	}
+	return db.ensureFeedItemStubFromBookmarkTx(tx, videoID)
+}
+
 // CountProtectedFeedItemStubCandidates returns how many distinct protected
 // Twitter rows would be materialized by EnsureProtectedFeedItemStubs.
 func (db *DB) CountProtectedFeedItemStubCandidates() (int, error) {
