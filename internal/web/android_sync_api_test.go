@@ -922,6 +922,33 @@ func TestAndroidSyncItemsCarryServerThreadContext(t *testing.T) {
 	}
 }
 
+func TestAndroidSyncItemsCarriesRetweetSourcesAsRoomRows(t *testing.T) {
+	srv := newAndroidSyncTestServer(t)
+	now := time.Now().UnixMilli()
+	insertFeedItemWithRetweetSource(t, srv, "tw_original", "hash_retweeted", now, 302)
+
+	items, _, err := srv.buildAndroidSyncItems("alice", db.AndroidSyncDesiredSets{
+		Tweets: map[string]struct{}{
+			"tw_original": {},
+		},
+	})
+	if err != nil {
+		t.Fatalf("buildAndroidSyncItems: %v", err)
+	}
+	for _, item := range items {
+		if item.ItemKind != "feed_items" || item.ItemID != "tw_original" {
+			continue
+		}
+		var bundle deltaBundle
+		if err := json.Unmarshal(item.PayloadJSON, &bundle); err != nil {
+			t.Fatalf("decode feed item payload: %v", err)
+		}
+		assertRetweetSourceRoomRow(t, bundle, "hash_retweeted", "sample_reposter", "Sample Reposter", "sample_tweet_repost", now-1_000)
+		return
+	}
+	t.Fatalf("feed item missing from payloads: %+v", items)
+}
+
 func TestAndroidSyncItemsCarryUserStateAttachments(t *testing.T) {
 	srv := newAndroidSyncTestServer(t)
 	now := time.Now().UnixMilli()

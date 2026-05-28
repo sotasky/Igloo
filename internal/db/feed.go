@@ -571,6 +571,64 @@ func (db *DB) GetRetweetSources(contentHashes []string) (map[string][]model.Retw
 	return result, rows.Err()
 }
 
+// RetweetSourceRow is the Android sync contract row for retweet_sources.
+// It mirrors the server table columns and matches Android's RetweetSourceEntity.
+type RetweetSourceRow struct {
+	ContentHash          string  `json:"content_hash"`
+	RetweeterHandle      string  `json:"retweeter_handle"`
+	RetweeterDisplayName *string `json:"retweeter_display_name,omitempty"`
+	TweetID              string  `json:"tweet_id"`
+	PublishedAt          int64   `json:"published_at"`
+}
+
+// GetRetweetSourceRows returns raw retweet_sources rows grouped by content_hash.
+// Callers should treat the returned rows as server-owned schema, not UI hints.
+func (db *DB) GetRetweetSourceRows(contentHashes []string) (map[string][]RetweetSourceRow, error) {
+	if len(contentHashes) == 0 {
+		return make(map[string][]RetweetSourceRow), nil
+	}
+
+	placeholders := strings.Repeat("?,", len(contentHashes))
+	placeholders = placeholders[:len(placeholders)-1]
+
+	args := make([]any, 0, len(contentHashes))
+	for _, h := range contentHashes {
+		args = append(args, h)
+	}
+
+	rows, err := db.conn.Query(`
+		SELECT content_hash,
+		       retweeter_handle,
+		       retweeter_display_name,
+		       tweet_id,
+		       COALESCE(published_at, 0)
+		FROM retweet_sources
+		WHERE content_hash IN (`+placeholders+`)
+		ORDER BY content_hash, published_at DESC
+	`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		_ = rows.Close()
+	}()
+
+	out := make(map[string][]RetweetSourceRow)
+	for rows.Next() {
+		var row RetweetSourceRow
+		var displayName sql.NullString
+		if err := rows.Scan(&row.ContentHash, &row.RetweeterHandle, &displayName, &row.TweetID, &row.PublishedAt); err != nil {
+			return nil, err
+		}
+		if displayName.Valid {
+			v := displayName.String
+			row.RetweeterDisplayName = &v
+		}
+		out[row.ContentHash] = append(out[row.ContentHash], row)
+	}
+	return out, rows.Err()
+}
+
 // GetVideosByIDs returns videos keyed by video_id.
 func (db *DB) GetVideosByIDs(videoIDs []string) (map[string]model.Video, error) {
 	if len(videoIDs) == 0 {
