@@ -40,18 +40,18 @@ func TestAndroidDashboardExpectationsDoNotProtectViewedOldMoments(t *testing.T) 
 
 	if err := d.ExecRaw(`
 		INSERT INTO videos (video_id, channel_id, title, file_path, file_size, published_at, sync_seq)
-		VALUES ('old_short', 'tiktok_channel', 'Old short', 'media/tiktok/channel/old_short.mp4', 10, 1, 1)
+			VALUES ('old_short', 'tiktok_sample_channel', 'Old short', 'media/tiktok/channel/old_short.mp4', 10, 1, 1)
 	`); err != nil {
 		t.Fatalf("insert old short: %v", err)
 	}
 	if err := d.ExecRaw(`
 		INSERT INTO moment_views (username, video_id, viewed_at)
-		VALUES ('alice', 'old_short', ?)
+			VALUES ('sample_user', 'old_short', ?)
 	`, nowMs); err != nil {
 		t.Fatalf("insert moment view: %v", err)
 	}
 
-	got, err := d.GetAndroidDashboardExpectations("alice", settings, nowMs)
+	got, err := d.GetAndroidDashboardExpectations("sample_user", settings, nowMs)
 	if err != nil {
 		t.Fatalf("expectations: %v", err)
 	}
