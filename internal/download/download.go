@@ -207,6 +207,9 @@ func shouldTryNextCookieAttempt(err error) bool {
 		return true
 	}
 	text := strings.ToLower(err.Error())
+	if containsInstagramAccessThrottleSignal(text) {
+		return true
+	}
 	return containsAny(text, "login required", "not logged in", "use --cookies", "--cookies-from-browser")
 }
 

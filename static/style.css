@@ -3220,17 +3220,20 @@ select.input.themed-select-native {
 /* Player Layout */
 .player-layout {
     display: grid;
-    grid-template-columns: 1fr 320px;
+    grid-template-columns: minmax(0, 1fr) 320px;
     min-height: calc(100vh - var(--header-height));
+    min-width: 0;
 }
 
 .player-main {
     padding: 1.5rem;
+    min-width: 0;
 }
 
 .player-wrapper {
     width: 100%;
     max-width: 100%;
+    min-width: 0;
     background: #000;
     border-radius: var(--border-radius);
     overflow: hidden;
@@ -3294,6 +3297,7 @@ select.input.themed-select-native {
     --media-tooltip-background: rgba(var(--bg-tertiary-rgb), 0.95);
     --dashboard-media-aspect-ratio: 16 / 9;
     aspect-ratio: var(--dashboard-media-aspect-ratio);
+    min-width: 0;
 }
 
 /* Main YouTube player control bar transparency (do not affect shorts/native audio controls). */
@@ -3749,6 +3753,7 @@ select.input.themed-select-native {
     border: 1px solid rgba(255, 255, 255, 0.14);
     box-shadow: 0 8px 22px rgba(0, 0, 0, 0.28);
     margin-top: 1rem;
+    min-width: 0;
 }
 
 .player-meta-inline {
@@ -3761,6 +3766,7 @@ select.input.themed-select-native {
 
 .player-meta-inline #player-title {
     width: 100%;
+    overflow-wrap: anywhere;
 }
 
 .player-meta-inline .channel-name {
@@ -3941,6 +3947,10 @@ select.input.themed-select-native {
 /* ── Player comments ── */
 .player-comments { padding: 1rem; border-top: 1px solid var(--border-color); overflow-y: auto; }
 .player-comments.hidden { display: none; }
+#player-comments-section,
+#player-comments-list {
+    min-width: 0;
+}
 .player-comments-header { display: flex; align-items: center; justify-content: space-between; gap: 0.6rem; font-weight: 600; font-size: 0.95rem; color: var(--text-primary); margin-bottom: 0.75rem; }
 .player-comments-refresh-btn { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 8px; border: 1px solid rgba(var(--accent-primary-rgb), 0.35); background: rgba(var(--accent-primary-rgb), 0.12); color: var(--accent-primary); cursor: pointer; transition: background var(--transition-fast), border-color var(--transition-fast), transform var(--transition-fast); flex: 0 0 auto; }
 .player-comments-refresh-btn:hover { background: rgba(var(--accent-primary-rgb), 0.2); border-color: rgba(var(--accent-primary-rgb), 0.55); }
@@ -4033,6 +4043,7 @@ select.input.themed-select-native {
     border-left: 1px solid rgba(255, 255, 255, 0.14);
     padding: 3.5rem 1.5rem 1.5rem;
     overflow-y: auto;
+    min-width: 0;
 }
 
 .player-layout:fullscreen {
@@ -4364,6 +4375,7 @@ select.input.themed-select-native {
     position: relative;
     width: 100%;
     max-width: none;
+    min-width: 0;
     margin-top: 0.4rem;
     padding: 0.78rem 0.95rem 0.68rem;
     border: 1px solid rgba(255, 255, 255, 0.14);
@@ -4384,6 +4396,8 @@ select.input.themed-select-native {
     display: block;
     max-height: 9.3rem;
     overflow: hidden;
+    overflow-wrap: anywhere;
+    word-break: break-word;
 }
 
 .player-description-text.expanded {

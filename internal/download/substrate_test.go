@@ -90,6 +90,18 @@ func TestClassifyErrorPatterns(t *testing.T) {
 		{"auth", errors.New("login required; cookies missing"), nil, ErrorKindAuth},
 		{"rate", errors.New("HTTP Error 429: Too Many Requests"), nil, ErrorKindRateLimit},
 		{"hyphenated_rate_limit", errors.New("Requested content is not available, rate-limit reached or login required. Use --cookies for authentication"), nil, ErrorKindRateLimit},
+		{
+			"instagram_api_access_denial",
+			errors.New("yt-dlp: exit status 1 WARNING: [Instagram] SAMPLE: Instagram API is not granting access ERROR: [Instagram] SAMPLE: Unable to download webpage: HTTP Error 302: Found (redirect loop detected)"),
+			nil,
+			ErrorKindRateLimit,
+		},
+		{
+			"instagram_media_info_bad_request",
+			errors.New("gallery-dl: exit status 4: [instagram][error] HttpError: '400 Bad Request' for 'https://instagram.invalid/api/v1/media/1234567890/info/'"),
+			nil,
+			ErrorKindRateLimit,
+		},
 		{"not_found", nil, []byte("Requested post not available"), ErrorKindNotFound},
 		{
 			"cookie_log_with_forbidden_media",

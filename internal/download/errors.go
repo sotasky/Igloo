@@ -88,6 +88,9 @@ func ClassifyError(err error, output []byte) string {
 	if containsAny(text, "429", "too many requests", "rate limit", "rate-limit", "ratelimit", "rate limited") {
 		return ErrorKindRateLimit
 	}
+	if containsInstagramAccessThrottleSignal(text) {
+		return ErrorKindRateLimit
+	}
 	if containsAuthSignal(text) {
 		return ErrorKindAuth
 	}
@@ -184,6 +187,17 @@ func containsAny(s string, needles ...string) bool {
 		}
 	}
 	return false
+}
+
+func containsInstagramAccessThrottleSignal(s string) bool {
+	if !strings.Contains(s, "instagram") {
+		return false
+	}
+	if containsAny(s, "api is not granting access", "redirect loop detected") {
+		return true
+	}
+	return strings.Contains(s, "400 bad request") &&
+		strings.Contains(s, "/api/v1/media/")
 }
 
 func containsAuthSignal(s string) bool {
