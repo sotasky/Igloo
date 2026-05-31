@@ -322,7 +322,7 @@ function eventMinInterval(eventName) {
     case 'video:timeupdate':
       return 1000
     case 'intersect:candidate':
-    case 'activate:pre-snap':
+    case 'deck:transition-start':
       return 500
     default:
       return 0

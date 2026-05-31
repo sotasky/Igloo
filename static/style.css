@@ -5263,7 +5263,9 @@ select.input.themed-select-native {
     top: 0;
     left: 0;
     right: 0;
-    bottom: 0;
+    bottom: auto;
+    height: 100vh;
+    height: 100dvh;
     background: #000;
     z-index: 200;
     /* Above everything including sticky search bar */
@@ -5295,7 +5297,9 @@ select.input.themed-select-native {
     position: relative;
     background: #000;
     overscroll-behavior-y: contain;
+    overscroll-behavior-x: contain;
     scrollbar-width: none;
+    touch-action: none;
 }
 
 @media (max-width: 768px) {
@@ -5314,14 +5318,14 @@ select.input.themed-select-native {
 .shorts-item {
     height: 100%;
     width: 100%;
-    position: relative;
-    scroll-snap-align: start;
-    scroll-snap-stop: always;
+    position: absolute;
+    inset: 0;
     flex-shrink: 0;
     display: flex;
     justify-content: center;
     background: #000;
     contain: layout style;
+    will-change: transform;
 }
 
 .shorts-layout.shorts-story-mode .shorts-container {
@@ -5331,11 +5335,18 @@ select.input.themed-select-native {
     scroll-snap-type: x mandatory !important;
     overscroll-behavior-x: contain;
     overscroll-behavior-y: none;
+    touch-action: pan-x;
 }
 
 .shorts-layout.shorts-story-mode .shorts-item {
+    position: relative;
+    inset: auto;
+    transform: none !important;
+    transition: none !important;
+    visibility: visible !important;
     min-width: 100%;
     scroll-snap-align: start;
+    scroll-snap-stop: always;
 }
 
 .shorts-story-chrome {

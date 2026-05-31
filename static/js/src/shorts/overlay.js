@@ -8,7 +8,9 @@ import { recordShortsDebugEvent } from './debug.js'
 var _state = null
 var _dom = null
 var _fns = null
-var _snapSettleFrame = 0
+var _deckTransitionTimer = 0
+var DECK_WINDOW = 10
+var DECK_TRANSITION_MS = 340
 
 // initOverlay sets up module-level refs.
 //   dom: { shortsContainer, gridShell, layout, upToDateOverlay, sourceContainer,
@@ -43,6 +45,130 @@ function isSkeletonCard(card) {
   return !!(card && card.getAttribute && card.getAttribute('data-shorts-card-skeleton') === '1')
 }
 
+export function cancelShortsNavigationIntent() {
+  if (!_state) return
+  clearDeckTransition()
+}
+
+function deckState() {
+  if (!_state.deck) _state.deck = { phase: 'idle', targetIndex: -1, fromIndex: -1 }
+  return _state.deck
+}
+
+function deckIsTransitioning() {
+  return !_state.storyMode && deckState().phase === 'transitioning'
+}
+
+function clearDeckTransition() {
+  if (_deckTransitionTimer) {
+    try { clearTimeout(_deckTransitionTimer) } catch (_) {}
+    _deckTransitionTimer = 0
+  }
+  if (_state && _state.deck) {
+    _state.deck.phase = 'idle'
+    _state.deck.targetIndex = -1
+    _state.deck.fromIndex = -1
+  }
+}
+
+function forceDeckLayout() {
+  try { void _dom.shortsContainer.offsetHeight } catch (_) {}
+}
+
+function setDeckItemPosition(entry, index, centerIndex, animate) {
+  if (!entry || !entry.el) return
+  var offset = (index - centerIndex) * 100
+  entry.el.style.transition = animate ? ('transform ' + DECK_TRANSITION_MS + 'ms cubic-bezier(0.22, 0.61, 0.36, 1)') : 'none'
+  entry.el.style.transform = 'translate3d(0, ' + offset + '%, 0)'
+  entry.el.style.visibility = Math.abs(index - centerIndex) <= 2 ? '' : 'hidden'
+}
+
+function positionDeckItems(centerIndex, animate) {
+  if (_state.storyMode || !Number.isFinite(centerIndex)) return
+  _state.items.forEach(function (entry, index) {
+    if (!entry) return
+    setDeckItemPosition(entry, index, centerIndex, !!animate)
+  })
+}
+
+function resetSlideshowFromStart(entry) {
+  var slideshow = entry && entry.refs && entry.refs.slideshow
+  if (!slideshow) return
+  if (slideshow.timer) {
+    try { clearTimeout(slideshow.timer) } catch (_) {}
+    slideshow.timer = 0
+  }
+  if (slideshow.audio) {
+    try {
+      slideshow.audio.pause()
+      slideshow.audio.currentTime = 0
+    } catch (_) {}
+  }
+  setSlideshowIndex(entry, 0)
+}
+
+function playEntryFromStart(entry) {
+  var video = entry && entry.refs && entry.refs.video
+  if (video) {
+    playShortVideoFromStart(entry)
+    return
+  }
+  if (entry && entry.refs && entry.refs.slideshow) {
+    resetSlideshowFromStart(entry)
+    startSlideshowPlayback(entry)
+  }
+}
+
+function ensureEntryAtIndex(index) {
+  if (!Number.isFinite(index) || index < 0 || index >= _state.cards.length) return null
+  if (_state.items[index]) return _state.items[index]
+  var card = _state.cards[index]
+  if (!card || isSkeletonCard(card)) return null
+  var data = _fns.parseCardData(card)
+  if (!data) return null
+  var entry = _fns.makeShortItem(data)
+  _state.items[index] = entry
+  _state.byId.set(data.id, entry)
+  _dom.shortsContainer.appendChild(entry.el)
+  if (_state.storyMode && _state.observer) _state.observer.observe(entry.el)
+  return entry
+}
+
+function recomputeRenderedBounds() {
+  var start = -1
+  var end = -1
+  _state.items.forEach(function (entry, index) {
+    if (!entry) return
+    if (start < 0) start = index
+    end = index
+  })
+  _state.renderedStart = start
+  _state.renderedEnd = end
+}
+
+function pruneDeckWindow(centerIndex) {
+  if (_state.storyMode || !Number.isFinite(centerIndex)) return
+  var start = Math.max(0, centerIndex - DECK_WINDOW)
+  var end = Math.min(_state.cards.length - 1, centerIndex + DECK_WINDOW)
+  _state.items.forEach(function (entry, index) {
+    if (!entry || (index >= start && index <= end)) return
+    if (entry.el && entry.el.parentNode) entry.el.parentNode.removeChild(entry.el)
+    if (entry.data && entry.data.id) _state.byId.delete(entry.data.id)
+    _state.items[index] = null
+  })
+  recomputeRenderedBounds()
+}
+
+function ensureDeckRange(centerIndex, opts) {
+  if (!Number.isFinite(centerIndex)) return
+  var start = Math.max(0, centerIndex - DECK_WINDOW)
+  var end = Math.min(_state.cards.length - 1, centerIndex + DECK_WINDOW)
+  for (var i = start; i <= end; i += 1) ensureEntryAtIndex(i)
+  recomputeRenderedBounds()
+  if (!(opts && opts.skipPosition)) positionDeckItems(centerIndex, false)
+  warmNearbyShortVideos(centerIndex)
+}
+
 function hydrateCardAtIndex(index, opts) {
   if (!Number.isFinite(index) || index < 0 || index >= _state.cards.length) return false
   var card = _state.cards[index]
@@ -56,6 +182,11 @@ function hydrateCardAtIndex(index, opts) {
       return
     }
     if (!_state.overlayOpen) return
+    if (!_state.storyMode) {
+      ensureEntryAtIndex(index)
+      ensureDeckRange(_state.currentIndex >= 0 ? _state.currentIndex : index)
+      return
+    }
     if (!_state.items[index] && index >= _state.renderedStart && index <= _state.renderedEnd) {
       renderShortsWindow(index)
     } else if (!_state.items[index]) {
@@ -65,8 +196,10 @@ function hydrateCardAtIndex(index, opts) {
         _extendForwardTo(index)
       }
     }
-    scrollToIndex(index, (opts && opts.behavior) || 'smooth')
-    activateIndex(index, { force: true, play: !(opts && opts.play === false) })
+    if (!(opts && opts.preloadOnly)) {
+      scrollToIndex(index, (opts && opts.behavior) || 'smooth')
+      activateIndex(index, { force: true, play: !(opts && opts.play === false) })
+    }
   }).catch(function () {})
   return true
 }
@@ -144,12 +277,14 @@ function warmShortVideo(entry, eager) {
 
 function warmNearbyShortVideos(index) {
   if (!Number.isFinite(index) || !_state || !_state.items) return
-  var start = Math.max(0, index - 2)
+  var start = Math.max(0, index - 4)
   var end = Math.min(_state.items.length - 1, index + 5)
+  var eagerStart = Math.max(0, index - 3)
+  var eagerEnd = Math.min(_state.items.length - 1, index + 4)
   for (var i = start; i <= end; i += 1) {
     var entry = _state.items[i]
     if (!entry) continue
-    warmShortVideo(entry, i >= index && i <= index + 4)
+    warmShortVideo(entry, i >= eagerStart && i <= eagerEnd)
   }
 }
 
@@ -160,7 +295,7 @@ export function setOverlayVisible(visible) {
   _dom.doc.body.classList.toggle('shorts-mode', _state.overlayOpen)
   _dom.doc.body.classList.toggle('shorts-open', _state.overlayOpen)
   if (!_state.overlayOpen) {
-    clearSnapSettleCorrection()
+    clearDeckTransition()
     pauseAllShorts()
     _fns.closeBookmarkMenu()
     var card = _state.cards[_state.currentIndex]
@@ -173,8 +308,11 @@ export function setOverlayVisible(visible) {
     }
     _fns.ensureGridThumbnails()
   } else {
-    ensureObserver()
-    _dom.shortsContainer.focus({ preventScroll: true })
+    if (_state.storyMode) ensureObserver()
+    else positionDeckItems(_state.currentIndex, false)
+    if (_dom.shortsContainer && typeof _dom.shortsContainer.focus === 'function') {
+      _dom.shortsContainer.focus({ preventScroll: true })
+    }
   }
 }
 
@@ -191,9 +329,7 @@ export function showUpToDateOverlay() {
   }, 1200)
 }
 
-export function scrollToIndex(index, behavior) {
-  if (!Number.isFinite(index)) return false
-  if (index < 0 || index >= _state.cards.length) return false
+function scrollStoryToIndex(index, behavior) {
   if (hydrateCardAtIndex(index, { behavior: behavior || 'smooth', play: true })) return true
   if (!_state.items[index]) {
     if (index < _state.renderedStart && _state.renderedStart > 0) {
@@ -206,30 +342,90 @@ export function scrollToIndex(index, behavior) {
   if (!entry || !entry.el) return false
   warmNearbyShortVideos(index)
   try {
-    if (_state.storyMode) {
-      if (behavior === 'smooth') {
-        entry.el.scrollIntoView({ inline: 'start', block: 'nearest', behavior: 'smooth' })
-      } else {
-        var previousScrollBehavior = _dom.shortsContainer.style.scrollBehavior
-        _dom.shortsContainer.style.scrollBehavior = 'auto'
-        var left = entry.el.offsetLeft || 0
-        if (typeof _dom.shortsContainer.scrollTo === 'function') {
-          _dom.shortsContainer.scrollTo({ left: left, top: 0, behavior: 'auto' })
-        } else {
-          _dom.shortsContainer.scrollLeft = left
-        }
-        requestAnimationFrame(function () {
-          _dom.shortsContainer.style.scrollBehavior = previousScrollBehavior
-        })
-      }
+    if (behavior === 'smooth') {
+      entry.el.scrollIntoView({ inline: 'start', block: 'nearest', behavior: 'smooth' })
     } else {
-      entry.el.scrollIntoView({ block: 'start', behavior: behavior || 'smooth' })
+      var previousScrollBehavior = _dom.shortsContainer.style.scrollBehavior
+      _dom.shortsContainer.style.scrollBehavior = 'auto'
+      var left = entry.el.offsetLeft || 0
+      if (typeof _dom.shortsContainer.scrollTo === 'function') {
+        _dom.shortsContainer.scrollTo({ left: left, top: 0, behavior: 'auto' })
+      } else {
+        _dom.shortsContainer.scrollLeft = left
+      }
+      requestAnimationFrame(function () {
+        _dom.shortsContainer.style.scrollBehavior = previousScrollBehavior
+      })
     }
   } catch (_) {
     entry.el.scrollIntoView()
   }
-  if (_state.storyMode) activateIndex(index, { force: true, play: true })
+  activateIndex(index, { force: true, play: true })
   return true
+}
+
+function completeDeckTransition() {
+  var deck = deckState()
+  if (deck.phase !== 'transitioning') return
+  var index = deck.targetIndex
+  clearDeckTransition()
+  positionDeckItems(index, false)
+  var entry = _state.items[index]
+  persistShortPosition(index, entry)
+  pruneDeckWindow(index)
+  ensureDeckRange(index)
+  updateCurrentActionButtons()
+}
+
+function startDeckTransition(index) {
+  if (deckIsTransitioning()) return true
+  var target = ensureEntryAtIndex(index)
+  if (!target) {
+    hydrateCardAtIndex(index, { preloadOnly: true })
+    warmNearbyShortVideos(_state.currentIndex)
+    return true
+  }
+  var fromIndex = _state.currentIndex
+  if (fromIndex < 0 || fromIndex === index) {
+    activateIndex(index, { force: true, play: true, persist: true })
+    return true
+  }
+  ensureDeckRange(index, { skipPosition: true })
+  positionDeckItems(fromIndex, false)
+  forceDeckLayout()
+  var deck = deckState()
+  deck.phase = 'transitioning'
+  deck.fromIndex = fromIndex
+  deck.targetIndex = index
+  activateIndex(index, { force: true, play: true, persist: false, updatePosition: false })
+  recordShortsDebugEvent(target, 'deck:transition-start', { fromIndex: fromIndex, targetIndex: index })
+  requestAnimationFrame(function () {
+    if (deckState().phase !== 'transitioning' || deckState().targetIndex !== index) return
+    positionDeckItems(index, true)
+  })
+  _deckTransitionTimer = setTimeout(completeDeckTransition, DECK_TRANSITION_MS)
+  return true
+}
+
+export function scrollToIndex(index, behavior) {
+  if (!Number.isFinite(index)) return false
+  if (index < 0 || index >= _state.cards.length) return false
+  if (_state.storyMode) return scrollStoryToIndex(index, behavior)
+  if (deckIsTransitioning()) return true
+  if (isSkeletonCard(_state.cards[index])) {
+    hydrateCardAtIndex(index, { preloadOnly: true })
+    return true
+  }
+  var entry = ensureEntryAtIndex(index)
+  if (!entry) return false
+  if (behavior === 'instant') {
+    clearDeckTransition()
+    activateIndex(index, { force: true, play: true, persist: true })
+    pruneDeckWindow(index)
+    ensureDeckRange(index)
+    return true
+  }
+  return startDeckTransition(index)
 }
 
 export function requestMoreIfNeeded() {
@@ -292,107 +488,18 @@ export function updateCurrentActionButtons() {
   if (d) _fns.updateTopControls()
 }
 
-function snapOffset(entry) {
-  if (!entry || !entry.el || !_dom.shortsContainer) return 0
-  if (typeof entry.el.getBoundingClientRect !== 'function' ||
-      typeof _dom.shortsContainer.getBoundingClientRect !== 'function') return 0
-  var itemRect = entry.el.getBoundingClientRect()
-  var containerRect = _dom.shortsContainer.getBoundingClientRect()
-  return itemRect.top - containerRect.top
-}
-
-function isSnapSettled(entry) {
-  return Math.abs(snapOffset(entry)) < 2
-}
-
-function clearSnapSettleCorrection() {
-  if (_snapSettleFrame) {
-    try { cancelAnimationFrame(_snapSettleFrame) } catch (_) {}
-    _snapSettleFrame = 0
-  }
-  if (_state) _state.pendingSnapSettleEntry = null
-}
-
-function activeEntryMatches(entry) {
-  if (!entry || !_state || !_state.overlayOpen) return false
-  var current = currentData()
-  return !!(current && entry.data && current.id === entry.data.id)
-}
-
-function alignVerticalActiveItem(entry, reason) {
-  if (_state.storyMode || !entry || !entry.el || !_dom.shortsContainer) return false
-  if (typeof entry.el.getBoundingClientRect !== 'function' ||
-      typeof _dom.shortsContainer.getBoundingClientRect !== 'function') return false
-  var delta = snapOffset(entry)
-  if (Math.abs(delta) < 2) return false
-  var previousScrollBehavior = _dom.shortsContainer.style.scrollBehavior
-  _dom.shortsContainer.style.scrollBehavior = 'auto'
-  var top = Number(_dom.shortsContainer.scrollTop || 0) + delta
-  if (typeof _dom.shortsContainer.scrollTo === 'function') {
-    _dom.shortsContainer.scrollTo({ top: top, behavior: 'auto' })
-  } else {
-    _dom.shortsContainer.scrollTop = top
-  }
-  requestAnimationFrame(function () {
-    _dom.shortsContainer.style.scrollBehavior = previousScrollBehavior
-  })
-  recordShortsDebugEvent(entry, 'scroll:settle-align', {
-    delta: Math.round(delta),
-    reason: reason || 'idle'
-  })
-  return true
-}
-
-function scheduleSnapSettleCorrection(entry) {
-  if (_state.storyMode || !entry || !entry.el || !_dom.shortsContainer) return
-  clearSnapSettleCorrection()
-  var now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()
-  var startedAt = now
-  var lastScrollTop = Number(_dom.shortsContainer.scrollTop || 0)
-  var quietFrames = 0
-  _state.pendingSnapSettleEntry = entry
-
-  _snapSettleFrame = requestAnimationFrame(function checkSettle() {
-    _snapSettleFrame = 0
-    if (_state.pendingSnapSettleEntry !== entry || !activeEntryMatches(entry)) return
-    var delta = snapOffset(entry)
-    if (Math.abs(delta) < 2) {
-      _state.pendingSnapSettleEntry = null
-      recordShortsDebugEvent(entry, 'snap:settled', { delta: Math.round(delta) })
-      return
-    }
-
-    var scrollTop = Number(_dom.shortsContainer.scrollTop || 0)
-    if (Math.abs(scrollTop - lastScrollTop) < 0.5) quietFrames += 1
-    else quietFrames = 0
-    lastScrollTop = scrollTop
-
-    var t = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()
-    if ((_state.touchActive || quietFrames < 2) && t - startedAt < 420) {
-      _snapSettleFrame = requestAnimationFrame(checkSettle)
-      return
-    }
-
-    _state.pendingSnapSettleEntry = null
-    alignVerticalActiveItem(entry, _state.touchActive ? 'timeout' : 'idle')
-  })
+function persistShortPosition(index, entry) {
+  if (!entry || !_state || _state.currentIndex !== index) return
+  if (_state.items[index] !== entry) return
+  if (typeof _fns.markShortViewed === 'function') _fns.markShortViewed(entry.data.id)
+  _fns.setLastViewedShortId(entry.data.id)
+  _fns.setLastViewedShortResume(entry.data.id, index, entry.data.page, entry.data.sortAtMs)
 }
 
 function activateVisibleShort(index) {
   if (_state.storyMode) {
     activateIndex(index, { force: false })
-    return
   }
-  var entry = _state.items[index]
-  if (!entry || !entry.el) return
-  var settled = isSnapSettled(entry)
-  if (!settled) {
-    recordShortsDebugEvent(entry, 'activate:pre-snap', { delta: Math.round(snapOffset(entry)) })
-  } else {
-    recordShortsDebugEvent(entry, 'snap:settled', { delta: Math.round(snapOffset(entry)) })
-  }
-  recordShortsDebugEvent(entry, 'chrome:snapshot', { phase: 'visible-short', snapSettled: settled })
-  activateIndex(index, { force: false, snapSettled: settled })
 }
 
 export function activateIndex(index, options) {
@@ -407,47 +514,34 @@ export function activateIndex(index, options) {
     prevEntry.el.classList.remove('is-active')
   }
   _state.currentIndex = index
-  var entry = _state.items[index]
+  var entry = _state.items[index] || ensureEntryAtIndex(index)
   if (!entry || !entry.refs) return
-  extendShortsWindow()
   entry.el.classList.add('is-active')
-  var snapSettled = opts.snapSettled
-  if (snapSettled === undefined) snapSettled = _state.storyMode || isSnapSettled(entry)
-  recordShortsDebugEvent(entry, 'activate', { snapSettled: !!snapSettled })
-  if (snapSettled) recordShortsDebugEvent(entry, 'snap:settled', { delta: Math.round(snapOffset(entry)) })
-  recordShortsDebugEvent(entry, 'chrome:snapshot', { phase: 'activate', snapSettled: !!snapSettled })
-  if (!_state.storyMode && !snapSettled) scheduleSnapSettleCorrection(entry)
-  else clearSnapSettleCorrection()
+  var shouldPersist = opts.persist
+  if (shouldPersist === undefined) shouldPersist = true
+  if (_state.storyMode) {
+    extendShortsWindow()
+  } else {
+    ensureDeckRange(index, { skipPosition: opts.updatePosition === false })
+    if (opts.updatePosition !== false) positionDeckItems(index, !!opts.animate)
+  }
+  recordShortsDebugEvent(entry, 'activate', { deck: !_state.storyMode })
+  recordShortsDebugEvent(entry, 'chrome:snapshot', { phase: 'activate', deck: !_state.storyMode })
 
   pauseAllShorts(entry.data.id)
   _state.lastVisibleId = entry.data.id
-  if (typeof _fns.markShortViewed === 'function') _fns.markShortViewed(entry.data.id)
-  _fns.setLastViewedShortId(entry.data.id)
-  _fns.setLastViewedShortResume(entry.data.id, index, entry.data.page, entry.data.sortAtMs)
+  if (shouldPersist) persistShortPosition(index, entry)
   updateUrlForCurrent()
   requestMoreIfNeeded()
   updateCurrentActionButtons()
 
-  var video = entry.refs.video
-  if (video) {
-    warmNearbyShortVideos(index)
-    if (opts.play !== false) {
-      if (_state.storyMode) {
-        playShortVideoFromStart(entry)
-      } else {
-        playShortVideoFromStart(entry)
-      }
-    }
-    return
-  }
-  if (entry.refs.slideshow) {
-    if (opts.play !== false) startSlideshowPlayback(entry)
-    else setSlideshowIndex(entry, entry.refs.slideshow.index || 0)
-  }
+  warmNearbyShortVideos(index)
+  if (opts.play !== false) playEntryFromStart(entry)
+  else if (entry.refs.slideshow) setSlideshowIndex(entry, entry.refs.slideshow.index || 0)
 }
 
 export function onShortIntersect(entries) {
-  if (!_state.overlayOpen) return
+  if (!_state.overlayOpen || !_state.storyMode) return
   var best = null
   entries.forEach(function (entry) {
     if (!entry.isIntersecting) return
@@ -462,7 +556,7 @@ export function onShortIntersect(entries) {
     if (entry) {
       recordShortsDebugEvent(entry, 'intersect:candidate', {
         ratio: Number((best.intersectionRatio || 0).toFixed(3)),
-        delta: Math.round(snapOffset(entry))
+        story: true
       })
     }
     activateVisibleShort(index)
@@ -470,6 +564,7 @@ export function onShortIntersect(entries) {
 }
 
 export function ensureObserver() {
+  if (!_state.storyMode) return
   if (_state.observer) return
   _state.observer = new IntersectionObserver(onShortIntersect, {
     root: _dom.shortsContainer,
@@ -482,7 +577,7 @@ export function ensureObserver() {
 }
 
 export function renderShortsWindow(centerIndex) {
-  clearSnapSettleCorrection()
+  clearDeckTransition()
   if (_state.observer) {
     _state.observer.disconnect()
     _state.observer = null
@@ -491,9 +586,8 @@ export function renderShortsWindow(centerIndex) {
   _state.items = new Array(_state.cards.length).fill(null)
   _state.byId = new Map()
 
-  var WINDOW = 10
-  var start = Math.max(0, centerIndex - WINDOW)
-  var end = Math.min(_state.cards.length - 1, centerIndex + WINDOW)
+  var start = Math.max(0, centerIndex - DECK_WINDOW)
+  var end = Math.min(_state.cards.length - 1, centerIndex + DECK_WINDOW)
 
   var frag = _dom.doc.createDocumentFragment()
   for (var i = start; i <= end; i++) {
@@ -508,7 +602,9 @@ export function renderShortsWindow(centerIndex) {
 
   _state.renderedStart = start
   _state.renderedEnd = end
+  if (!_state.storyMode) positionDeckItems(centerIndex, false)
   warmNearbyShortVideos(centerIndex)
+  if (_state.storyMode) ensureObserver()
 }
 
 function _extendForwardTo(targetEnd) {
@@ -521,19 +617,20 @@ function _extendForwardTo(targetEnd) {
     var entry = _fns.makeShortItem(data)
     _state.items[i] = entry
     _state.byId.set(data.id, entry)
-    if (_state.observer) _state.observer.observe(entry.el)
+    if (_state.storyMode && _state.observer) _state.observer.observe(entry.el)
     frag.appendChild(entry.el)
   }
   _dom.shortsContainer.appendChild(frag)
   _state.renderedEnd = newEnd
+  if (!_state.storyMode) positionDeckItems(_state.currentIndex, false)
   warmNearbyShortVideos(_state.currentIndex)
 }
 
 function _extendBackwardTo(targetStart) {
   var newStart = Math.max(0, targetStart)
   if (newStart >= _state.renderedStart) return
-  var scrollBefore = _dom.shortsContainer.scrollTop
-  var heightBefore = _dom.shortsContainer.scrollHeight
+  var scrollBefore = _state.storyMode ? _dom.shortsContainer.scrollTop : 0
+  var heightBefore = _state.storyMode ? _dom.shortsContainer.scrollHeight : 0
   var frag = _dom.doc.createDocumentFragment()
   for (var i = newStart; i < _state.renderedStart; i++) {
     var data = _fns.parseCardData(_state.cards[i])
@@ -541,17 +638,22 @@ function _extendBackwardTo(targetStart) {
     var entry = _fns.makeShortItem(data)
     _state.items[i] = entry
     _state.byId.set(data.id, entry)
-    if (_state.observer) _state.observer.observe(entry.el)
+    if (_state.storyMode && _state.observer) _state.observer.observe(entry.el)
     frag.appendChild(entry.el)
   }
   _dom.shortsContainer.insertBefore(frag, _dom.shortsContainer.firstChild)
-  _dom.shortsContainer.scrollTop = scrollBefore + (_dom.shortsContainer.scrollHeight - heightBefore)
+  if (_state.storyMode) _dom.shortsContainer.scrollTop = scrollBefore + (_dom.shortsContainer.scrollHeight - heightBefore)
   _state.renderedStart = newStart
+  if (!_state.storyMode) positionDeckItems(_state.currentIndex, false)
   warmNearbyShortVideos(_state.currentIndex)
 }
 
 export function extendShortsWindow() {
   if (_state.renderedEnd < 0 || _state.currentIndex < 0) return
+  if (!_state.storyMode) {
+    ensureDeckRange(_state.currentIndex)
+    return
+  }
   var remainingAhead = _state.renderedEnd - _state.currentIndex
   if (remainingAhead <= 5) {
     _extendForwardTo(_state.renderedEnd + 15)
@@ -586,7 +688,10 @@ export function appendNewItemsFromGrid() {
       entry.data.bookmarkCategoryId = data.bookmarkCategoryId
     }
   })
-  if (_state.currentIndex >= 0) extendShortsWindow()
+  if (_state.currentIndex >= 0) {
+    if (_state.storyMode) extendShortsWindow()
+    else ensureDeckRange(_state.currentIndex)
+  }
   _fns.updateTopControls()
   updateCurrentActionButtons()
   return _state.cards.length - prevLength
@@ -613,13 +718,14 @@ export function ensureOverlayHydrated() {
 
 export function ensureContainerScrollBehavior() {
   _dom.shortsContainer.style.display = ''
-  _dom.shortsContainer.style.overflowX = ''
-  _dom.shortsContainer.style.overflowY = 'auto'
-  _dom.shortsContainer.style.scrollSnapType = 'y mandatory'
-  _dom.shortsContainer.style.scrollBehavior = 'smooth'
-  _dom.shortsContainer.style.webkitOverflowScrolling = 'touch'
+  _dom.shortsContainer.style.overflowX = 'hidden'
+  _dom.shortsContainer.style.overflowY = 'hidden'
+  _dom.shortsContainer.style.scrollSnapType = 'none'
+  _dom.shortsContainer.style.scrollBehavior = 'auto'
+  _dom.shortsContainer.style.webkitOverflowScrolling = 'auto'
   _dom.shortsContainer.style.overscrollBehaviorY = 'contain'
-  _dom.shortsContainer.style.overscrollBehaviorX = ''
+  _dom.shortsContainer.style.overscrollBehaviorX = 'contain'
+  _dom.shortsContainer.style.touchAction = 'none'
 }
 
 export function ensureStoryContainerScrollBehavior() {
@@ -631,6 +737,7 @@ export function ensureStoryContainerScrollBehavior() {
   _dom.shortsContainer.style.webkitOverflowScrolling = 'touch'
   _dom.shortsContainer.style.overscrollBehaviorX = 'contain'
   _dom.shortsContainer.style.overscrollBehaviorY = 'none'
+  _dom.shortsContainer.style.touchAction = 'pan-x'
 }
 
 export function showGrid() {
@@ -651,9 +758,8 @@ export function openOverlayAtIndex(index, immediate) {
   var wasOpen = _state.overlayOpen
   renderShortsWindow(index)
   setOverlayVisible(true)
-  activateIndex(index, { force: true, play: false })
-  ensureCurrentVisible(index, true)
-  activateIndex(index, { force: true, play: true })
+  activateIndex(index, { force: true, play: true, persist: true })
+  if (_state.storyMode) ensureCurrentVisible(index, true)
   if (!wasOpen && _fns && typeof _fns.afterOverlayOpen === 'function') _fns.afterOverlayOpen()
 }
 

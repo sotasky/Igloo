@@ -373,9 +373,11 @@ func TestShortsOverlayPrewarmsNearbyVideosBeforeScrollActivation(t *testing.T) {
 		"function warmShortVideo(entry, eager)",
 		"function warmNearbyShortVideos(index)",
 		"video.preload = eager ? 'auto' : 'metadata'",
-		"var start = Math.max(0, index - 2)",
+		"var start = Math.max(0, index - 4)",
 		"var end = Math.min(_state.items.length - 1, index + 5)",
-		"warmShortVideo(entry, i >= index && i <= index + 4)",
+		"var eagerStart = Math.max(0, index - 3)",
+		"var eagerEnd = Math.min(_state.items.length - 1, index + 4)",
+		"warmShortVideo(entry, i >= eagerStart && i <= eagerEnd)",
 		"video._shortsPrewarmStarted = true",
 		"warmNearbyShortVideos(index)",
 		"warmNearbyShortVideos(centerIndex)",
@@ -388,19 +390,90 @@ func TestShortsOverlayPrewarmsNearbyVideosBeforeScrollActivation(t *testing.T) {
 	}
 }
 
-func TestShortsItemsDoNotAnimateViewportSizeDuringScrollSnap(t *testing.T) {
+func TestShortsVerticalMomentsUseControlledDeckLayout(t *testing.T) {
 	cssBytes, err := os.ReadFile("../../static/style.css")
 	if err != nil {
 		t.Fatal(err)
 	}
-	body := cssRuleBody(t, string(cssBytes), ".shorts-item")
-	for _, bad := range []string{
-		"transform:",
-		"transition:",
-		"opacity: 0.",
+	overlayBytes, err := os.ReadFile("../../static/js/src/shorts/overlay.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	indexBytes, err := os.ReadFile("../../static/js/src/shorts/index.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	css := string(cssBytes)
+	overlaySrc := string(overlayBytes)
+	indexSrc := string(indexBytes)
+	containerBody := cssRuleBody(t, css, ".shorts-container")
+	itemBody := cssRuleBody(t, css, ".shorts-item")
+	storyContainerBody := cssRuleBody(t, css, ".shorts-layout.shorts-story-mode .shorts-container")
+	storyItemBody := cssRuleBody(t, css, ".shorts-layout.shorts-story-mode .shorts-item")
+
+	for _, check := range []string{
+		"overflow: hidden",
+		"touch-action: none",
+		"overscroll-behavior-y: contain",
 	} {
-		if strings.Contains(body, bad) {
-			t.Errorf(".shorts-item should not animate viewport size during scroll snap; found %q in %s", bad, body)
+		if !strings.Contains(containerBody, check) {
+			t.Errorf(".shorts-container controlled deck layout missing %q in %s", check, containerBody)
+		}
+	}
+	for _, check := range []string{
+		"position: absolute",
+		"inset: 0",
+		"will-change: transform",
+	} {
+		if !strings.Contains(itemBody, check) {
+			t.Errorf(".shorts-item controlled deck panel missing %q in %s", check, itemBody)
+		}
+	}
+	for _, check := range []string{
+		"overflow-x: auto",
+		"scroll-snap-type: x mandatory",
+		"touch-action: pan-x",
+	} {
+		if !strings.Contains(storyContainerBody, check) {
+			t.Errorf("story mode should retain horizontal native scrolling; missing %q in %s", check, storyContainerBody)
+		}
+	}
+	for _, check := range []string{
+		"position: relative",
+		"scroll-snap-align: start",
+		"scroll-snap-stop: always",
+	} {
+		if !strings.Contains(storyItemBody, check) {
+			t.Errorf("story mode item should retain snap behavior; missing %q in %s", check, storyItemBody)
+		}
+	}
+	for _, bad := range []string{
+		"_dom.shortsContainer.style.overflowY = 'auto'",
+		"_dom.shortsContainer.style.scrollSnapType = 'y mandatory'",
+		"entry.el.scrollIntoView({ block: 'start'",
+	} {
+		if strings.Contains(overlaySrc, bad) {
+			t.Errorf("vertical Moments should not use native scroll-snap path; found %q", bad)
+		}
+	}
+	for _, check := range []string{
+		"function startDeckTransition(index)",
+		"function completeDeckTransition()",
+		"recordShortsDebugEvent(target, 'deck:transition-start'",
+		"_dom.shortsContainer.style.scrollSnapType = 'none'",
+		"_dom.shortsContainer.style.touchAction = 'none'",
+	} {
+		if !strings.Contains(overlaySrc, check) {
+			t.Errorf("controlled deck wiring missing %q", check)
+		}
+	}
+	for _, check := range []string{
+		"wheelLockTimer",
+		"function keepWheelLocked()",
+		"layout.addEventListener('touchmove', onTouchMove, { passive: false })",
+	} {
+		if !strings.Contains(indexSrc, check) {
+			t.Errorf("desktop/touch deck input guard missing %q", check)
 		}
 	}
 }
@@ -442,78 +515,6 @@ func TestShortsMediaEdgesDoNotExposeWrapperBackgroundDuringScrollSnap(t *testing
 	}
 	if !strings.Contains(slideImageBody, "inset: 0") {
 		t.Errorf(".slide-image should pin every absolute slide to the wrapper; missing %q in %s", "inset: 0", slideImageBody)
-	}
-}
-
-func TestShortsActivationDoesNotWaitForSnapBeforePlayback(t *testing.T) {
-	srcBytes, err := os.ReadFile("../../static/js/src/shorts/overlay.js")
-	if err != nil {
-		t.Fatal(err)
-	}
-	src := string(srcBytes)
-	for _, check := range []string{
-		"function snapOffset(entry)",
-		"function isSnapSettled(entry)",
-		"function activateVisibleShort(index)",
-		"recordShortsDebugEvent(entry, 'activate:pre-snap'",
-		"activateIndex(index, { force: false, snapSettled: settled })",
-		"activateVisibleShort(index)",
-		"recordShortsDebugEvent(entry, 'activate', { snapSettled: !!snapSettled })",
-		"scheduleSnapSettleCorrection(entry)",
-		"recordShortsDebugEvent(entry, 'scroll:settle-align'",
-	} {
-		if !strings.Contains(src, check) {
-			t.Errorf("shorts activation immediate snap reporting missing %q", check)
-		}
-	}
-	for _, forbidden := range []string{
-		"_snapActivationFrame",
-		"pendingSnapActivation",
-		"activate:wait-snap",
-		"scheduleSnapSettledActivation",
-		"performance.now() - pending.startedAt > 350",
-	} {
-		if strings.Contains(src, forbidden) {
-			t.Errorf("shorts activation should not wait for snap before playback; found %q", forbidden)
-		}
-	}
-}
-
-func TestShortsPreSnapActivationCorrectsExposedEdgesWithoutWaitingToPlay(t *testing.T) {
-	overlayBytes, err := os.ReadFile("../../static/js/src/shorts/overlay.js")
-	if err != nil {
-		t.Fatal(err)
-	}
-	indexBytes, err := os.ReadFile("../../static/js/src/shorts/index.js")
-	if err != nil {
-		t.Fatal(err)
-	}
-	overlaySrc := string(overlayBytes)
-	indexSrc := string(indexBytes)
-
-	for _, check := range []string{
-		"function scheduleSnapSettleCorrection(entry)",
-		"function alignVerticalActiveItem(entry, reason)",
-		"_state.pendingSnapSettleEntry = entry",
-		"(_state.touchActive || quietFrames < 2) && t - startedAt < 420",
-		"alignVerticalActiveItem(entry, _state.touchActive ? 'timeout' : 'idle')",
-		"if (!_state.storyMode && !snapSettled) scheduleSnapSettleCorrection(entry)",
-		"playShortVideoFromStart(entry)",
-	} {
-		if !strings.Contains(overlaySrc, check) {
-			t.Errorf("shorts pre-snap settle correction missing %q", check)
-		}
-	}
-	for _, check := range []string{
-		"touchActive: false",
-		"state.touchActive = true",
-		"function releaseTouchSoon(delayMs)",
-		"releaseTouchSoon(90)",
-		"layout.addEventListener('touchcancel', onTouchCancel",
-	} {
-		if !strings.Contains(indexSrc, check) {
-			t.Errorf("shorts touch settle guard missing %q", check)
-		}
 	}
 }
 
@@ -641,11 +642,10 @@ func TestShortsDebugToolsExposeOptInMediaSnapshots(t *testing.T) {
 	}
 	for _, check := range []string{
 		"recordShortsDebugEvent(entry, 'intersect:candidate'",
-		"recordShortsDebugEvent(entry, 'activate:pre-snap'",
 		"recordShortsDebugEvent(entry, 'activate'",
 		"recordShortsDebugEvent(entry, 'play:attempt')",
-		"recordShortsDebugEvent(entry, 'snap:settled'",
 		"recordShortsDebugEvent(entry, 'chrome:snapshot'",
+		"recordShortsDebugEvent(target, 'deck:transition-start'",
 	} {
 		if !strings.Contains(string(overlayBytes), check) {
 			t.Errorf("shorts overlay debug event missing %q", check)
