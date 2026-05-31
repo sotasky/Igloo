@@ -112,6 +112,39 @@ func TestBookmarkMutationUsesCurrentTimeWhenUpdatedAtMissing(t *testing.T) {
 	}
 }
 
+func TestMomentsCursorMutationKeepsNewerClientTimestamp(t *testing.T) {
+	d := openWritableTestDB(t)
+
+	if _, err := d.ApplyMomentsCursorMutationWithSortAt("admin", "moment_newer", 0, 2_000, "all", 20_000); err != nil {
+		t.Fatalf("newer cursor mutation: %v", err)
+	}
+	if _, err := d.ApplyMomentsCursorMutationWithSortAt("admin", "moment_older", 0, 1_000, "all", 10_000); err != nil {
+		t.Fatalf("older cursor mutation: %v", err)
+	}
+
+	var videoID, updatedAt, sortAt string
+	if err := d.QueryRow(`SELECT value FROM settings WHERE key = 'shorts_cursor_video_id_admin_all'`).Scan(&videoID); err != nil {
+		t.Fatalf("read cursor video: %v", err)
+	}
+	if err := d.QueryRow(`SELECT value FROM settings WHERE key = 'shorts_cursor_updated_at_ms_admin_all'`).Scan(&updatedAt); err != nil {
+		t.Fatalf("read cursor timestamp: %v", err)
+	}
+	if err := d.QueryRow(`SELECT value FROM settings WHERE key = 'shorts_cursor_sort_at_ms_admin_all'`).Scan(&sortAt); err != nil {
+		t.Fatalf("read cursor sort: %v", err)
+	}
+	if videoID != "moment_newer" || updatedAt != "2000" || sortAt != "20000" {
+		t.Fatalf("cursor = (%q, %q, %q), want newer cursor", videoID, updatedAt, sortAt)
+	}
+
+	var staleRows int
+	if err := d.QueryRow(`SELECT COUNT(*) FROM sync_changes WHERE type = 'moments_cursor' AND item_id = 'moment_older'`).Scan(&staleRows); err != nil {
+		t.Fatalf("count stale cursor changes: %v", err)
+	}
+	if staleRows != 0 {
+		t.Fatalf("stale cursor wrote %d sync changes, want 0", staleRows)
+	}
+}
+
 func TestBookmarkMutationCreatesVideoStubForFeedItem(t *testing.T) {
 	d := openWritableTestDB(t)
 

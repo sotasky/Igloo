@@ -68,6 +68,38 @@ func TestSyncRoundTrip_AllPhase1Endpoints(t *testing.T) {
 	}
 }
 
+func TestWebMomentsCursorUsesClientTimestampForLWW(t *testing.T) {
+	srv := newTestServer(t)
+
+	if rr := do(t, srv, "POST", "/api/sync/moments-cursor", strings.NewReader(`{
+	  "video_id": "moment_newer",
+	  "scope": "all",
+	  "updated_at_ms": 2000,
+	  "sort_at_ms": 20000
+	}`), "alice"); rr.Code != http.StatusOK {
+		t.Fatalf("newer cursor: %d - %s", rr.Code, rr.Body.String())
+	}
+	if rr := do(t, srv, "POST", "/api/sync/moments-cursor", strings.NewReader(`{
+	  "video_id": "moment_older",
+	  "scope": "all",
+	  "updated_at_ms": 1000,
+	  "sort_at_ms": 10000
+	}`), "alice"); rr.Code != http.StatusOK {
+		t.Fatalf("older cursor: %d - %s", rr.Code, rr.Body.String())
+	}
+
+	var videoID, updatedAt string
+	if err := srv.db.QueryRow(`SELECT value FROM settings WHERE key = 'shorts_cursor_video_id_alice_all'`).Scan(&videoID); err != nil {
+		t.Fatalf("read cursor video: %v", err)
+	}
+	if err := srv.db.QueryRow(`SELECT value FROM settings WHERE key = 'shorts_cursor_updated_at_ms_alice_all'`).Scan(&updatedAt); err != nil {
+		t.Fatalf("read cursor timestamp: %v", err)
+	}
+	if videoID != "moment_newer" || updatedAt != "2000" {
+		t.Fatalf("cursor = (%q, %q), want newer client timestamp", videoID, updatedAt)
+	}
+}
+
 func do(t *testing.T, srv *testServer, method, path string, body io.Reader, user string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(method, path, body)

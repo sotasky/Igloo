@@ -396,6 +396,31 @@ exit 1
 	}
 }
 
+func TestDownloadKeepsPrimaryErrorWhenYtDlpFallbackWritesNoFiles(t *testing.T) {
+	bin := t.TempDir()
+	writeExecutable(t, filepath.Join(bin, "gallery-dl"), `#!/bin/sh
+echo '[instagram][error] HTTP redirect to login page (https://www.instagram.com/accounts/login/)' >&2
+exit 4
+`)
+	writeExecutable(t, filepath.Join(bin, "yt-dlp"), `#!/bin/sh
+printf '{"id":"sample"}\n'
+exit 0
+`)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	d := NewDownloader("")
+	paths, err := d.Download(context.Background(), "https://www.instagram.com/p/sample/", "video", Opts{
+		OutputDir: t.TempDir(),
+		ID:        "sample",
+	})
+	if err == nil {
+		t.Fatalf("Download returned nil error with paths %#v, want auth failure", paths)
+	}
+	if got := ClassifyError(err, nil); got != ErrorKindAuth {
+		t.Fatalf("error kind = %q, want auth; err=%v", got, err)
+	}
+}
+
 func writeExecutable(t *testing.T, path, body string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(body), 0o755); err != nil {

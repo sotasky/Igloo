@@ -247,6 +247,9 @@ func (d *Downloader) downloadTikTok(ctx context.Context, rawURL string, opts Opt
 	if ytErr == nil && len(ytPaths) > 0 {
 		return ytPaths, nil
 	}
+	if ytErr == nil {
+		ytErr = errors.New("yt-dlp returned no files")
+	}
 	return ytPaths, fallbackDownloadError(gdlErr, ytErr)
 }
 
@@ -262,6 +265,9 @@ func (d *Downloader) downloadGalleryDLFirst(ctx context.Context, rawURL string, 
 	ytPaths, ytErr := d.YtDlp.Download(ctx, rawURL, opts)
 	if ytErr == nil && len(ytPaths) > 0 {
 		return ytPaths, nil
+	}
+	if ytErr == nil {
+		ytErr = errors.New("yt-dlp returned no files")
 	}
 	return ytPaths, fallbackDownloadError(gdlErr, ytErr)
 }
