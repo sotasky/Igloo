@@ -397,17 +397,23 @@ export async function openBookmarkMenu(anchorEl, root, opts) {
       })
       filtered = filtered.slice(0, 6)
       if (!filtered.length) { suggestBox.style.display = 'none'; return }
+      function chooseLabelSuggestion(lbl, e) {
+        if (e) {
+          e.preventDefault()
+          e.stopPropagation()
+        }
+        titleInput.value = lbl
+        suggestBox.style.display = 'none'
+        _labelActiveIdx = -1
+        try { titleInput.focus({ preventScroll: true }) } catch (_) {}
+      }
       filtered.forEach(function (lbl) {
         var item = document.createElement('div')
         item.className = 'bookmark-label-suggestion-item'
         var labelSpan = document.createElement('span')
         labelSpan.textContent = lbl
         item.appendChild(labelSpan)
-        labelSpan.addEventListener('mousedown', function (e) {
-          e.preventDefault()
-          titleInput.value = lbl
-          suggestBox.style.display = 'none'
-        })
+        item.addEventListener('mousedown', function (e) { chooseLabelSuggestion(lbl, e) })
         var removeBtn = document.createElement('button')
         removeBtn.className = 'bookmark-label-remove-btn'
         removeBtn.type = 'button'
