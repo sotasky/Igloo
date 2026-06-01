@@ -1499,8 +1499,9 @@ func (db *DB) CountFeedItems() (int, error) {
 	return count, err
 }
 
-// ListFeedItemsFiltered returns feed items with cursor pagination and optional handle filter.
-func (db *DB) ListFeedItemsFiltered(limit int, cursor *model.FeedCursor, sourceHandle string) ([]model.FeedItem, error) {
+// ListFeedItemsFiltered returns feed items with cursor pagination, optional
+// handle filter, and per-user seen suppression when username is set.
+func (db *DB) ListFeedItemsFiltered(limit int, cursor *model.FeedCursor, sourceHandle string, username string) ([]model.FeedItem, error) {
 	if limit <= 0 {
 		limit = 40
 	}
@@ -1526,6 +1527,11 @@ func (db *DB) ListFeedItemsFiltered(limit int, cursor *model.FeedCursor, sourceH
 	if sourceHandle != "" {
 		where = append(where, "LOWER(source_handle) = LOWER(?)")
 		args = append(args, sourceHandle)
+	}
+
+	if username != "" {
+		where = append(where, feedUnseenPredicate("feed_items"))
+		args = append(args, feedUnseenPredicateArgs(username)...)
 	}
 
 	if cursor != nil && cursor.BeforePublishedAtMs > 0 && cursor.BeforeTweetID != "" {

@@ -604,7 +604,7 @@ func (s *Server) handleFeedX(w http.ResponseWriter, r *http.Request) {
 
 	sourceHandle := r.URL.Query().Get("source_handle")
 
-	items, err := s.db.ListFeedItemsFiltered(limit+1, cursor, sourceHandle)
+	items, err := s.db.ListFeedItemsFiltered(limit+1, cursor, sourceHandle, username)
 	if err != nil {
 		slog.Error("ListFeedItemsFiltered", "err", err)
 		items = nil

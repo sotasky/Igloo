@@ -127,6 +127,68 @@ func TestFeedXEnrichmentContract(t *testing.T) {
 	assertEnrichedItem(t, seeded)
 }
 
+func TestFeedXExcludesSeenContent(t *testing.T) {
+	srv := newTestServer(t)
+	user := "alice"
+	now := time.Now().UnixMilli()
+
+	for _, row := range []struct {
+		id        string
+		hash      string
+		published int64
+	}{
+		{id: "seen_post", hash: "shared_content", published: now},
+		{id: "same_content_copy", hash: "shared_content", published: now - 1},
+		{id: "fresh_post", hash: "fresh_content", published: now - 2},
+	} {
+		if err := srv.db.ExecRaw(`INSERT INTO feed_items
+			(tweet_id, author_handle, source_handle, body_text, content_hash,
+			 canonical_tweet_id, published_at, fetched_at, algo_interest, algo_scored_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			row.id, "sample_author", "sample_author", "body "+row.id, row.hash,
+			row.id, row.published, now, 20.0, 1); err != nil {
+			t.Fatalf("insert %s: %v", row.id, err)
+		}
+	}
+	if err := srv.db.ExecRaw(
+		`INSERT INTO feed_seen (username, tweet_id, seen_at) VALUES (?, ?, ?)`,
+		user, "seen_post", now,
+	); err != nil {
+		t.Fatalf("insert seen row: %v", err)
+	}
+
+	req := httptest.NewRequest("GET", "/api/feed/x?limit=10", nil)
+	req = attachTestAuth(req, user)
+	rr := httptest.NewRecorder()
+	srv.mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rr.Code, rr.Body.String())
+	}
+
+	var body struct {
+		Items []map[string]any `json:"items"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	seenIDs := map[string]bool{}
+	for _, item := range body.Items {
+		if id, ok := item["tweet_id"].(string); ok {
+			seenIDs[id] = true
+		}
+	}
+	if seenIDs["seen_post"] {
+		t.Fatalf("seen post returned in /api/feed/x response: %#v", seenIDs)
+	}
+	if seenIDs["same_content_copy"] {
+		t.Fatalf("same-content sibling returned in /api/feed/x response: %#v", seenIDs)
+	}
+	if !seenIDs["fresh_post"] {
+		t.Fatalf("fresh post missing from /api/feed/x response: %#v", seenIDs)
+	}
+}
+
 func TestChannelFeedEnrichmentContract(t *testing.T) {
 	srv := newTestServer(t)
 	seedEnrichmentFixture(t, srv)
