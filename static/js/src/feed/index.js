@@ -435,6 +435,15 @@ function propagateLikeState(tweetId, isLiked) {
   }
 }
 
+function applyLikeState(root, tweetId, isLiked) {
+  if (root) {
+    setStateBool(root, 'liked', isLiked)
+    syncFeedButtons(root)
+    syncSiblingCards(root)
+  }
+  if (tweetId) propagateLikeState(tweetId, isLiked)
+}
+
 function resolveFeedRootForActionNode(node) {
   var direct = itemRootFromNode(node)
   if (direct) return direct
@@ -472,13 +481,17 @@ function runFeedAction(root, actionType, form) {
   if (actionType === 'like') {
     var currentlyLiked = stateBool(root, 'liked')
     var method = currentlyLiked ? 'DELETE' : 'POST'
+    applyLikeState(root, tweetId, !currentlyLiked)
     return apiFetch('/api/feed/like/' + encodeURIComponent(tweetId), {
       method: method,
       body: method === 'POST' ? JSON.stringify({ item: feedItemPayloadFromForm(form, tweetId) }) : undefined
     }).then(function (payload) {
       var nextLiked = payload && typeof payload.is_liked === 'boolean' ? payload.is_liked : !currentlyLiked
-      propagateLikeState(tweetId, nextLiked)
+      applyLikeState(root, tweetId, nextLiked)
       if (payload && payload.sync_version && window.SyncPoller) window.SyncPoller.advance(payload.sync_version)
+    }).catch(function (err) {
+      applyLikeState(root, tweetId, currentlyLiked)
+      throw err
     })
   }
   if (actionType === 'bookmark') {
@@ -548,6 +561,7 @@ function runQuoteOverlayLike(quoteTweetId, btn) {
   var isLiked = btn.classList.contains('active')
   var method = isLiked ? 'DELETE' : 'POST'
   btn.disabled = true
+  propagateLikeState(quoteTweetId, !isLiked)
   apiFetch('/api/feed/like/' + encodeURIComponent(quoteTweetId), {
     method: method,
     body: method === 'POST' ? JSON.stringify({ item: { tweet_id: quoteTweetId } }) : undefined
@@ -556,7 +570,10 @@ function runQuoteOverlayLike(quoteTweetId, btn) {
     propagateLikeState(quoteTweetId, nextLiked)
     showToast(nextLiked ? t('toast_liked', 'Liked') : t('toast_unliked', 'Unliked'))
     if (payload && payload.sync_version && window.SyncPoller) window.SyncPoller.advance(payload.sync_version)
-  }).catch(function () { showToast(t('logs_status_failed', 'Failed')) }).finally(function () { btn.disabled = false })
+  }).catch(function () {
+    propagateLikeState(quoteTweetId, isLiked)
+    showToast(t('logs_status_failed', 'Failed'))
+  }).finally(function () { btn.disabled = false })
 }
 
 // ── Bookmark menu integration ──
@@ -1376,6 +1393,34 @@ document.body.addEventListener('followChanged', function (e) {
   if (!channelId) return
   syncFollowButtons(channelId, true)
 })
+
+document.body.addEventListener('htmx:beforeSend', function (e) {
+  var elt = e.detail && e.detail.elt
+  if (!elt || elt.getAttribute('data-feed-action') !== 'heart') return
+  var card = elt.closest('[data-feed-item]')
+  if (!card) return
+  var tid = card.getAttribute('data-tweet-id')
+  if (!tid) return
+  var nextLiked = elt.hasAttribute('hx-post') ? true : elt.hasAttribute('hx-delete') ? false : null
+  if (nextLiked === null) return
+  elt.setAttribute('data-feed-like-before', stateBool(card, 'liked') ? '1' : '0')
+  applyLikeState(card, tid, nextLiked)
+})
+
+function rollbackHTMXLikeState(e) {
+  var elt = e.detail && e.detail.elt
+  if (!elt || elt.getAttribute('data-feed-action') !== 'heart') return
+  var previous = elt.getAttribute('data-feed-like-before')
+  if (previous !== '0' && previous !== '1') return
+  elt.removeAttribute('data-feed-like-before')
+  var card = elt.closest('[data-feed-item]')
+  var tid = card && card.getAttribute('data-tweet-id')
+  if (!card || !tid) return
+  applyLikeState(card, tid, previous === '1')
+}
+
+document.body.addEventListener('htmx:responseError', rollbackHTMXLikeState)
+document.body.addEventListener('htmx:sendError', rollbackHTMXLikeState)
 
 // After like button HTMX swap, propagate state
 document.body.addEventListener('htmx:afterSwap', function (e) {
