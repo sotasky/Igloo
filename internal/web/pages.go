@@ -890,15 +890,15 @@ func (s *Server) renderTwitterChannelFeed(w http.ResponseWriter, r *http.Request
 		username = user.Username
 	}
 
-	items, _ := s.db.GetFeedItemsByAuthorPage(handle, pageSize+1, offset)
+	items, _ := s.db.GetFeedThreadItemsByAuthorPage(handle, pageSize+1, offset)
 	hasMore := len(items) > pageSize
 	if hasMore {
 		items = items[:pageSize]
 	}
+	nextOffset := offset + len(items)
 	items = feed.EnrichFeedItems(s.db, items, username)
 	nextPageURL := ""
 	if hasMore {
-		nextOffset := offset + len(items)
 		nextPageURL = fmt.Sprintf("/channels/%s?offset=%d", url.PathEscape(channelID), nextOffset)
 	}
 

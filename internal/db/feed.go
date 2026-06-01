@@ -776,6 +776,86 @@ func (db *DB) GetFeedItemsByAuthorPage(handle string, limit int, offset int) ([]
 	return scanFeedItems(rows)
 }
 
+// GetFeedThreadItemsByAuthorPage returns one representative row per conversation
+// root for an X profile. Replies in the same stored thread collapse to the
+// newest matching row so profile infinite scroll cannot render the same thread
+// again on a later page.
+func (db *DB) GetFeedThreadItemsByAuthorPage(handle string, limit int, offset int) ([]model.FeedItem, error) {
+	if limit <= 0 {
+		limit = 40
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	rows, err := db.conn.Query(`
+		WITH RECURSIVE
+		matched(tweet_id) AS (
+			SELECT tweet_id
+			FROM feed_items
+			WHERE (LOWER(author_handle) = LOWER(?) OR LOWER(source_handle) = LOWER(?) OR LOWER(quote_author_handle) = LOWER(?))
+			  AND `+feedPrimaryItemPredicate("feed_items")+`
+		),
+		chain(seed_id, tweet_id, reply_to_status, depth) AS (
+			SELECT m.tweet_id, f.tweet_id, COALESCE(f.reply_to_status, ''), 0
+			FROM matched m
+			JOIN feed_items f ON f.tweet_id = m.tweet_id
+			UNION ALL
+			SELECT chain.seed_id, parent.tweet_id, COALESCE(parent.reply_to_status, ''), chain.depth + 1
+			FROM chain
+			JOIN feed_items parent ON parent.tweet_id = chain.reply_to_status
+			WHERE chain.reply_to_status != ''
+			  AND chain.depth < 50
+		),
+		roots AS (
+			SELECT c.seed_id, c.tweet_id AS root_id
+			FROM chain c
+			JOIN (
+				SELECT seed_id, MAX(depth) AS max_depth
+				FROM chain
+				GROUP BY seed_id
+			) deepest ON deepest.seed_id = c.seed_id AND deepest.max_depth = c.depth
+		),
+		ranked AS (
+			SELECT f.tweet_id,
+			       ROW_NUMBER() OVER (
+				       PARTITION BY COALESCE(r.root_id, f.tweet_id)
+				       ORDER BY f.published_at DESC, f.tweet_id DESC
+			       ) AS rn
+			FROM feed_items f
+			JOIN matched m ON m.tweet_id = f.tweet_id
+			LEFT JOIN roots r ON r.seed_id = f.tweet_id
+		)
+		SELECT f.tweet_id, COALESCE(f.source_handle,''), f.author_handle,
+		       COALESCE(f.author_display_name,''), COALESCE(f.author_avatar_url,''),
+		       COALESCE(f.body_text,''), COALESCE(f.lang,''),
+		       COALESCE(f.is_retweet,0), COALESCE(f.retweeted_by_handle,''),
+		       COALESCE(f.retweeted_by_display_name,''),
+		       COALESCE(f.quote_tweet_id,''), COALESCE(f.quote_author_handle,''),
+		       COALESCE(f.quote_author_display_name,''), COALESCE(f.quote_author_avatar_url,''),
+		       COALESCE(f.quote_body_text,''), COALESCE(f.quote_lang,''),
+		       COALESCE(f.quote_media_json,''), COALESCE(f.media_json,''),
+		       COALESCE(f.canonical_url,''), COALESCE(f.reply_to_handle,''),
+		       COALESCE(f.reply_to_status,''),
+		       COALESCE(f.is_reply,0), COALESCE(f.is_ghost,0),
+		       f.quote_published_at,
+		       COALESCE(f.views,0), COALESCE(f.likes,0), COALESCE(f.retweets,0),
+		       f.published_at, f.fetched_at,
+		       COALESCE(f.content_hash,''), COALESCE(f.canonical_tweet_id,'')
+		FROM ranked
+		JOIN feed_items f ON f.tweet_id = ranked.tweet_id
+		WHERE ranked.rn = 1
+		ORDER BY f.published_at DESC, f.tweet_id DESC
+		LIMIT ? OFFSET ?
+	`, handle, handle, handle, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		_ = rows.Close()
+	}()
+	return scanFeedItems(rows)
+}
+
 // scanFeedItems scans rows into FeedItem structs.
 func scanFeedItems(rows *sql.Rows) ([]model.FeedItem, error) {
 	var items []model.FeedItem

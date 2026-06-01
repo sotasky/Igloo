@@ -147,6 +147,112 @@ func TestHandlePageTwitterChannelFeedPaginatesPastFirstChunk(t *testing.T) {
 	}
 }
 
+func TestHandlePageTwitterChannelFeedDoesNotRepeatThreadAcrossPages(t *testing.T) {
+	srv := newTestServer(t)
+	srv.staticV = func(path string) string { return "/static/" + path }
+	if err := srv.db.UpsertChannelProfile(model.ChannelProfile{
+		ChannelID:   "twitter_sample_author",
+		Platform:    "twitter",
+		Handle:      "sample_author",
+		DisplayName: "Sample Author",
+	}); err != nil {
+		t.Fatalf("UpsertChannelProfile: %v", err)
+	}
+
+	base := time.UnixMilli(1700000000000)
+	items := make([]model.FeedItem, 0, 42)
+	for i := 0; i < 39; i++ {
+		publishedAt := base.Add(time.Duration(300-i) * time.Minute)
+		items = append(items, model.FeedItem{
+			TweetID:           fmt.Sprintf("sample_filler_%02d", i+1),
+			AuthorHandle:      "sample_author",
+			AuthorDisplayName: "Sample Author",
+			BodyText:          "filler post",
+			PublishedAt:       &publishedAt,
+			FetchedAt:         publishedAt,
+			ContentHash:       fmt.Sprintf("sample_filler_hash_%02d", i+1),
+			CanonicalTweetID:  fmt.Sprintf("sample_filler_%02d", i+1),
+		})
+	}
+	rootAt := base.Add(100 * time.Minute)
+	leafAt := base.Add(101 * time.Minute)
+	oldAt := base.Add(90 * time.Minute)
+	items = append(items,
+		model.FeedItem{
+			TweetID:           "sample_thread_leaf",
+			AuthorHandle:      "sample_author",
+			AuthorDisplayName: "Sample Author",
+			BodyText:          "thread leaf body",
+			IsReply:           true,
+			ReplyToHandle:     "sample_author",
+			ReplyToStatus:     "sample_thread_root",
+			PublishedAt:       &leafAt,
+			FetchedAt:         leafAt,
+			ContentHash:       "sample_thread_leaf_hash",
+			CanonicalTweetID:  "sample_thread_leaf",
+		},
+		model.FeedItem{
+			TweetID:           "sample_thread_root",
+			AuthorHandle:      "sample_author",
+			AuthorDisplayName: "Sample Author",
+			BodyText:          "thread root body",
+			PublishedAt:       &rootAt,
+			FetchedAt:         rootAt,
+			ContentHash:       "sample_thread_root_hash",
+			CanonicalTweetID:  "sample_thread_root",
+		},
+		model.FeedItem{
+			TweetID:           "sample_old_post",
+			AuthorHandle:      "sample_author",
+			AuthorDisplayName: "Sample Author",
+			BodyText:          "old post body",
+			PublishedAt:       &oldAt,
+			FetchedAt:         oldAt,
+			ContentHash:       "sample_old_post_hash",
+			CanonicalTweetID:  "sample_old_post",
+		},
+	)
+	if _, err := srv.db.UpsertFeedItems(items); err != nil {
+		t.Fatalf("UpsertFeedItems: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/channels/twitter_sample_author", nil)
+	req.SetPathValue("channelID", "twitter_sample_author")
+	rec := httptest.NewRecorder()
+	srv.handlePageChannel(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	html := rec.Body.String()
+	if !strings.Contains(html, `thread root body`) || !strings.Contains(html, `thread leaf body`) {
+		t.Fatalf("initial page should render the thread preview\n%s", html)
+	}
+	if strings.Contains(html, `sample_old_post`) {
+		t.Fatalf("initial page should not include the next representative\n%s", html)
+	}
+	if !strings.Contains(html, `hx-get="/channels/twitter_sample_author?offset=40"`) {
+		t.Fatalf("initial page missing grouped next-page sentinel\n%s", html)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/channels/twitter_sample_author?offset=40", nil)
+	req.Header.Set("HX-Request", "true")
+	req.SetPathValue("channelID", "twitter_sample_author")
+	rec = httptest.NewRecorder()
+	srv.handlePageChannel(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("partial status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	html = rec.Body.String()
+	if !strings.Contains(html, `sample_old_post`) || !strings.Contains(html, `old post body`) {
+		t.Fatalf("partial page should continue after the grouped thread\n%s", html)
+	}
+	if strings.Contains(html, `sample_thread_root`) || strings.Contains(html, `sample_thread_leaf`) || strings.Contains(html, `thread root body`) {
+		t.Fatalf("partial page repeated a thread already rendered on the first page\n%s", html)
+	}
+}
+
 func TestHandlePageShortsStartsAtOldestMoment(t *testing.T) {
 	srv := newTestServer(t)
 	srv.staticV = func(path string) string { return "/static/" + path }
