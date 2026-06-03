@@ -1,7 +1,7 @@
 // Shorts page ES module entry point.
 
 import { apiFetch, cssEscape, escapeHtml, showToast, t, tf } from '../utils.js'
-import { initPlayback, toggleShortPlayback } from './playback.js'
+import { initPlayback, toggleShortPlayback, syncRenderedShortVideoLoop } from './playback.js'
 import {
   initOverlay,
   goNext,
@@ -1329,7 +1329,7 @@ if (layout) {
         if (state.storyMode) return
         state.autoPlayNext = !state.autoPlayNext
         localStorage.setItem('shortsAutoPlayNext', state.autoPlayNext)
-        document.querySelectorAll('#shorts-overlay video').forEach(function (v) { v.loop = !state.autoPlayNext })
+        syncRenderedShortVideoLoop()
         state.items.forEach(function (e) {
           var a = e && e.refs && e.refs.slideshow && e.refs.slideshow.audio
           if (a) a.loop = !state.autoPlayNext

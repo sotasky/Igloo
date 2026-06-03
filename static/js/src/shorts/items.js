@@ -2,7 +2,7 @@
 
 import { apiFetch, askConfirm, cssEscape, escapeHtml, showToast, copyText, makeDraggableSeekbar, attachSeekTooltip, formatRelative, t, tf, toFxTwitterUrl } from '../utils.js'
 import { openBookmarkMenu } from '../bookmark-menu.js'
-import { maybeMarkAspect, handleVideoTimeUpdate, toggleShortPlayback, setSlideshowIndex } from './playback.js'
+import { maybeMarkAspect, handleVideoTimeUpdate, toggleShortPlayback, setSlideshowIndex, syncRenderedShortVideoLoop } from './playback.js'
 import { attachShortVideoDebug } from './debug.js'
 
 var _state = null
@@ -690,7 +690,7 @@ export function makeShortItem(entryData, existingEl) {
       if (_state.storyMode) return
       _state.autoPlayNext = !_state.autoPlayNext
       localStorage.setItem('shortsAutoPlayNext', _state.autoPlayNext)
-      document.querySelectorAll('#shorts-overlay video').forEach(function (v) { v.loop = !_state.autoPlayNext })
+      syncRenderedShortVideoLoop()
       _state.items.forEach(function (e) {
         var a = e && e.refs && e.refs.slideshow && e.refs.slideshow.audio
         if (a) a.loop = !_state.autoPlayNext

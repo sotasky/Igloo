@@ -17,6 +17,13 @@ function autoAdvanceEnabled() {
   return !!(_state && (_state.storyMode || _state.autoPlayNext))
 }
 
+export function syncRenderedShortVideoLoop() {
+  var loop = !autoAdvanceEnabled()
+  document.querySelectorAll('#shorts-container video').forEach(function (video) {
+    video.loop = loop
+  })
+}
+
 function slideshowSlides(slideshow) {
   return (slideshow && (slideshow.slides || slideshow.images)) || []
 }
