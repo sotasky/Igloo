@@ -163,7 +163,8 @@ func (m *Manager) refreshFeedProfileCompletenessBatch(ctx context.Context, fetch
 
 func (m *Manager) refreshFeedProfileCompletenessIDs(ctx context.Context, fetch fetchFn, avDir, bnDir string, channelIDs []string, limit int) bool {
 	worked := false
-	attempts := 0
+	profileAttempts := 0
+	storedMediaAttempts := 0
 	now := time.Now()
 	for _, channelID := range channelIDs {
 		if ctx.Err() != nil {
@@ -181,37 +182,34 @@ func (m *Manager) refreshFeedProfileCompletenessIDs(ctx context.Context, fetch f
 			!hasConventionalMediaFile(avDir, channelID) &&
 			canDownloadStoredAvatar(channelID, existing.AvatarURL)
 		fullRefreshDue := shouldRefreshFullProfile(channelID, existing, now)
-		if fullRefreshDue && attempts >= limit {
-			continue
+		storedMediaDue := storedProfileMediaDue(channelID, existing, avDir, bnDir)
+		downloaded, attempted := false, false
+		if storedMediaDue && storedMediaAttempts < limit {
+			downloaded, attempted = m.downloadStoredProfileMedia(ctx, channelID, existing, avDir, bnDir)
+			if attempted {
+				storedMediaAttempts++
+			}
 		}
-		if storedInstagramAvatarAttempt && attempts >= limit {
-			continue
-		}
-		downloaded, attempted := m.downloadStoredProfileMedia(ctx, channelID, existing, avDir, bnDir)
 		if downloaded {
 			worked = true
-			if storedInstagramAvatarAttempt {
-				attempts++
-			}
-			if fullRefreshDue && attempts < limit {
+			if fullRefreshDue && profileAttempts < limit {
 				m.refreshProfile(ctx, fetch, channelID, avDir, bnDir)
-				attempts++
+				profileAttempts++
 			}
 			continue
 		}
 		if attempted && storedInstagramAvatarAttempt && !profileFetchDue(existing, now) {
 			m.recordInstagramAvatarFallbackError(channelID, existing, errors.New("stored instagram profile media download failed"), now)
 			worked = true
-			attempts++
-			continue
-		}
-		if attempts >= limit {
 			continue
 		}
 		if fullRefreshDue {
+			if profileAttempts >= limit {
+				continue
+			}
 			m.refreshProfile(ctx, fetch, channelID, avDir, bnDir)
 			worked = true
-			attempts++
+			profileAttempts++
 			continue
 		}
 
@@ -219,22 +217,28 @@ func (m *Manager) refreshFeedProfileCompletenessIDs(ctx context.Context, fetch f
 			existing.AvatarURL == "" &&
 			!profileFetchDue(existing, now) &&
 			!hasConventionalMediaFile(avDir, channelID) {
+			if storedMediaAttempts >= limit {
+				continue
+			}
 			downloaded, err := m.downloadInstagramProfileAvatar(ctx, channelID, avDir)
 			if downloaded {
 				worked = true
 			} else if err != nil {
 				m.recordInstagramAvatarFallbackError(channelID, existing, err, now)
 			}
-			attempts++
+			storedMediaAttempts++
 			continue
 		}
 		if attempted || profileFetchDue(existing, now) {
+			if profileAttempts >= limit {
+				continue
+			}
 			m.refreshProfile(ctx, fetch, channelID, avDir, bnDir)
 		} else {
 			continue
 		}
 		worked = true
-		attempts++
+		profileAttempts++
 	}
 	return worked
 }
@@ -273,6 +277,16 @@ func (m *Manager) downloadStoredProfileMedia(ctx context.Context, channelID stri
 		}
 	}
 	return downloaded, attempted
+}
+
+func storedProfileMediaDue(channelID string, p *model.ChannelProfile, avDir, bnDir string) bool {
+	if p == nil {
+		return false
+	}
+	if !hasConventionalMediaFile(avDir, channelID) && canDownloadStoredAvatar(channelID, p.AvatarURL) {
+		return true
+	}
+	return !hasConventionalMediaFile(bnDir, channelID) && canDownloadStoredBanner(p.BannerURL)
 }
 
 func canDownloadStoredAvatar(channelID, avatarURL string) bool {

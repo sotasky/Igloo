@@ -577,6 +577,46 @@ func TestSeedChannelProfileRowsSeedsShortVideoOwners(t *testing.T) {
 	}
 }
 
+func TestSeedChannelProfileRowsRevivesTombstonedShortVideoOwner(t *testing.T) {
+	d := openWritableTestDB(t)
+	tombstonedAt := time.UnixMilli(1_000).UTC()
+	nextRetry := time.UnixMilli(9_000).UTC()
+	if err := d.UpsertChannelProfile(model.ChannelProfile{
+		ChannelID:   "tiktok_sample_creator",
+		Platform:    "tiktok",
+		Handle:      "sample_creator",
+		FetchedAt:   &tombstonedAt,
+		FailCount:   3,
+		NextRetryAt: &nextRetry,
+		Tombstone:   true,
+	}); err != nil {
+		t.Fatalf("seed tombstoned profile: %v", err)
+	}
+	if err := d.InsertVideo(
+		"tiktok_visible_owner", "tiktok_sample_creator", "clip", "",
+		0, "", "media/tiktok/sample/video.mp4", 0,
+		time.Now().UnixMilli(), "", "video", 0, false,
+	); err != nil {
+		t.Fatalf("insert tiktok video: %v", err)
+	}
+
+	n, err := d.SeedChannelProfileRows()
+	if err != nil {
+		t.Fatalf("SeedChannelProfileRows: %v", err)
+	}
+	if n == 0 {
+		t.Fatal("expected tombstoned short owner to be updated")
+	}
+
+	got, err := d.GetChannelProfile("tiktok_sample_creator")
+	if err != nil {
+		t.Fatalf("GetChannelProfile: %v", err)
+	}
+	if got == nil || got.Tombstone || got.FailCount != 0 || got.NextRetryAt != nil || got.FetchedAt != nil {
+		t.Fatalf("short owner tombstone was not cleared for visible content: %+v", got)
+	}
+}
+
 func TestSeedChannelProfileRowsSeedsShortQueueTitleMentions(t *testing.T) {
 	d := openWritableTestDB(t)
 	now := time.Now().UnixMilli()

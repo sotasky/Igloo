@@ -936,7 +936,7 @@ func seedShortVideoOwnerProfileRows(tx *sql.Tx) (int, error) {
 	if len(byChannelID) == 0 {
 		return 0, nil
 	}
-	return upsertMentionSeedRows(tx, byChannelID)
+	return upsertVisibleIdentitySeedRows(tx, byChannelID)
 }
 
 func shortOwnerProfileSeedFromChannelID(raw string) (channelID, platform, handle string) {
@@ -1175,6 +1175,45 @@ func upsertMentionSeedRows(tx *sql.Tx, byChannelID map[string]mentionSeedRow) (i
 				handle = COALESCE(NULLIF(channel_profiles.handle, ''), excluded.handle)
 			WHERE channel_profiles.platform != excluded.platform
 			   OR (COALESCE(channel_profiles.handle, '') = '' AND COALESCE(excluded.handle, '') != '')
+		`, channelID, row.platform, row.handle)
+		if err != nil {
+			return inserted, err
+		}
+		if n, _ := res.RowsAffected(); n > 0 {
+			inserted += int(n)
+		}
+	}
+	return inserted, nil
+}
+
+func upsertVisibleIdentitySeedRows(tx *sql.Tx, byChannelID map[string]mentionSeedRow) (int, error) {
+	inserted := 0
+	for channelID, row := range byChannelID {
+		res, err := tx.Exec(`
+			INSERT INTO channel_profiles (channel_id, platform, handle)
+			VALUES (?, ?, ?)
+			ON CONFLICT(channel_id) DO UPDATE SET
+				platform = excluded.platform,
+				handle = COALESCE(NULLIF(channel_profiles.handle, ''), excluded.handle),
+				fetched_at = CASE
+					WHEN COALESCE(channel_profiles.tombstone, 0) != 0
+						THEN 0
+					ELSE channel_profiles.fetched_at
+				END,
+				fail_count = CASE
+					WHEN COALESCE(channel_profiles.tombstone, 0) != 0
+						THEN 0
+					ELSE channel_profiles.fail_count
+				END,
+				next_retry_at = CASE
+					WHEN COALESCE(channel_profiles.tombstone, 0) != 0
+						THEN 0
+					ELSE channel_profiles.next_retry_at
+				END,
+				tombstone = 0
+			WHERE channel_profiles.platform != excluded.platform
+			   OR (COALESCE(channel_profiles.handle, '') = '' AND COALESCE(excluded.handle, '') != '')
+			   OR COALESCE(channel_profiles.tombstone, 0) != 0
 		`, channelID, row.platform, row.handle)
 		if err != nil {
 			return inserted, err

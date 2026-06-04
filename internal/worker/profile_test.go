@@ -1529,7 +1529,7 @@ func TestRefreshFeedProfileCompletenessScansStoredAvatarsBeyondProfileFetchLimit
 	}
 }
 
-func TestRefreshFeedProfileCompletenessDefersDueTwitterAvatarWhenProfileLimitExhausted(t *testing.T) {
+func TestRefreshFeedProfileCompletenessDownloadsDueTwitterAvatarWhenProfileLimitExhausted(t *testing.T) {
 	d := newTestWorkerDB(t)
 	dir := t.TempDir()
 	avatarServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1566,8 +1566,8 @@ func TestRefreshFeedProfileCompletenessDefersDueTwitterAvatarWhenProfileLimitExh
 	if got := f.calls["twitter_sample_profile_waiting"]; got != 0 {
 		t.Fatalf("waiting profile fetch calls = %d, want 0 while limit is exhausted", got)
 	}
-	if hasConventionalMediaFile(avDir, "twitter_sample_profile_waiting") {
-		t.Fatal("waiting profile avatar should not be downloaded without full profile budget")
+	if !hasConventionalMediaFile(avDir, "twitter_sample_profile_waiting") {
+		t.Fatal("waiting profile avatar should be downloaded from stored URL without full profile budget")
 	}
 	profile, err := d.GetChannelProfile("twitter_sample_profile_waiting")
 	if err != nil {
