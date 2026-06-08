@@ -16,6 +16,11 @@ import (
 // gallery-dl empty user object). Callers should tombstone.
 var ErrNotFound = errors.New("fetchprofile: profile not found upstream")
 
+// ErrIdentityMismatch signals that an upstream profile response resolved to a
+// different platform identity than the channel_id being refreshed. Callers
+// should treat this as transient and preserve existing local data.
+var ErrIdentityMismatch = errors.New("fetchprofile: profile identity mismatch")
+
 // Profile is the platform-generic profile record.
 type Profile struct {
 	ChannelID    string
@@ -31,6 +36,23 @@ type Profile struct {
 	Protected    bool   // twitter only
 	AvatarURL    string
 	BannerURL    string // "" if platform has no banner concept
+}
+
+func ValidateChannelIdentity(channelID string, p *Profile) error {
+	channelID = strings.TrimSpace(channelID)
+	if channelID == "" || p == nil {
+		return nil
+	}
+	if p.ChannelID != "" && !strings.EqualFold(strings.TrimSpace(p.ChannelID), channelID) {
+		return fmt.Errorf("%w: requested %s returned %s", ErrIdentityMismatch, channelID, p.ChannelID)
+	}
+	if handle, ok := strings.CutPrefix(strings.ToLower(channelID), "twitter_"); ok {
+		got := strings.ToLower(strings.TrimSpace(strings.TrimPrefix(p.Handle, "@")))
+		if got != "" && got != handle {
+			return fmt.Errorf("%w: requested @%s returned @%s", ErrIdentityMismatch, handle, got)
+		}
+	}
+	return nil
 }
 
 // normalizeURL prepends "https://" to a URL that lacks a scheme so it renders

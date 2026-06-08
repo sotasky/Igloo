@@ -12,6 +12,13 @@ import (
 
 var shortDescriptionMentionRe = regexp.MustCompile(`(^|[^A-Za-z0-9_@.])@([A-Za-z0-9_](?:[A-Za-z0-9_.]{0,30}[A-Za-z0-9_])?)`)
 
+type twitterProfileSeedRow struct {
+	handle      string
+	displayName string
+	avatarURL   string
+	seenAtMs    int64
+}
+
 // UpsertChannelProfile inserts or updates a profile row keyed by channel_id.
 func (db *DB) UpsertChannelProfile(p model.ChannelProfile) error {
 	channelID := strings.TrimSpace(p.ChannelID)
@@ -579,21 +586,17 @@ func (db *DB) SeedChannelProfileRowsForFeedItems(items []model.FeedItem) (int, e
 	if len(items) == 0 {
 		return 0, nil
 	}
-	type seedRow struct {
-		handle      string
-		displayName string
-		avatarURL   string
-	}
-	rowsByChannel := make(map[string]seedRow)
-	add := func(handle, displayName, avatarURL string) {
+	rowsByChannel := make(map[string]twitterProfileSeedRow)
+	add := func(handle, displayName, avatarURL string, seenAtMs int64) {
 		handle = model.NormalizeTwitterHandle(handle)
 		if handle == "" {
 			return
 		}
 		channelID := "twitter_" + handle
-		row := seedRow{
+		row := twitterProfileSeedRow{
 			handle:      handle,
 			displayName: strings.TrimSpace(displayName),
+			seenAtMs:    seenAtMs,
 		}
 		if model.IsRawTwitterProfileAvatar(avatarURL) {
 			row.avatarURL = strings.TrimSpace(avatarURL)
@@ -605,16 +608,20 @@ func (db *DB) SeedChannelProfileRowsForFeedItems(items []model.FeedItem) (int, e
 			if existing.avatarURL != "" {
 				row.avatarURL = existing.avatarURL
 			}
+			if existing.seenAtMs > row.seenAtMs {
+				row.seenAtMs = existing.seenAtMs
+			}
 		}
 		rowsByChannel[channelID] = row
 	}
 	for _, item := range items {
-		add(item.AuthorHandle, item.AuthorDisplayName, item.AuthorAvatarURL)
-		add(item.QuoteAuthorHandle, item.QuoteAuthorDisplayName, item.QuoteAuthorAvatarURL)
-		add(item.ReplyToHandle, "", "")
-		add(item.RetweetedByHandle, item.RetweetedByDisplayName, "")
+		seenAtMs := feedItemIdentitySeenAtMs(item)
+		add(item.AuthorHandle, item.AuthorDisplayName, item.AuthorAvatarURL, seenAtMs)
+		add(item.QuoteAuthorHandle, item.QuoteAuthorDisplayName, item.QuoteAuthorAvatarURL, seenAtMs)
+		add(item.ReplyToHandle, "", "", seenAtMs)
+		add(item.RetweetedByHandle, item.RetweetedByDisplayName, "", seenAtMs)
 		if item.IsRetweet {
-			add(item.SourceHandle, "", "")
+			add(item.SourceHandle, "", "", seenAtMs)
 		}
 	}
 	if len(rowsByChannel) == 0 {
@@ -623,6 +630,14 @@ func (db *DB) SeedChannelProfileRowsForFeedItems(items []model.FeedItem) (int, e
 
 	var changed int
 	err := db.WithWrite(func(tx *sql.Tx) error {
+		if err := suppressConflictingTwitterSeedRowsTx(tx, rowsByChannel); err != nil {
+			return err
+		}
+		driftRows, err := markTwitterProfileDriftDueTx(tx, rowsByChannel)
+		if err != nil {
+			return err
+		}
+		changed += driftRows
 		stmt, err := tx.Prepare(`
 			INSERT INTO channel_profiles (channel_id, platform, handle, display_name, avatar_url)
 			VALUES (?, 'twitter', ?, ?, ?)
@@ -709,6 +724,209 @@ func (db *DB) SeedChannelProfileRowsForFeedItems(items []model.FeedItem) (int, e
 				changed += int(n)
 			}
 		}
+		return nil
+	})
+	return changed, err
+}
+
+func feedItemIdentitySeenAtMs(item model.FeedItem) int64 {
+	var seenAtMs int64
+	if item.PublishedAt != nil {
+		seenAtMs = item.PublishedAt.UnixMilli()
+	}
+	if !item.FetchedAt.IsZero() && item.FetchedAt.UnixMilli() > seenAtMs {
+		seenAtMs = item.FetchedAt.UnixMilli()
+	}
+	return seenAtMs
+}
+
+func suppressConflictingTwitterSeedRowsTx(tx *sql.Tx, rowsByChannel map[string]twitterProfileSeedRow) error {
+	if len(rowsByChannel) == 0 {
+		return nil
+	}
+	avatarToChannels := make(map[string][]string)
+	for channelID, row := range rowsByChannel {
+		if row.avatarURL == "" {
+			continue
+		}
+		key := model.NormalizeTwitterAvatarURL(row.avatarURL)
+		if key == "" {
+			continue
+		}
+		avatarToChannels[key] = append(avatarToChannels[key], channelID)
+	}
+	if len(avatarToChannels) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(avatarToChannels))
+	for key := range avatarToChannels {
+		keys = append(keys, key)
+	}
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(keys)), ",")
+	args := make([]any, 0, len(keys))
+	for _, key := range keys {
+		args = append(args, key)
+	}
+	dbRows, err := tx.Query(`
+		SELECT LOWER(avatar_url), channel_id
+		FROM channel_profiles
+		WHERE COALESCE(tombstone, 0) = 0
+		  AND COALESCE(avatar_url, '') != ''
+		  AND LOWER(avatar_url) IN (`+placeholders+`)
+	`, args...)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = dbRows.Close()
+	}()
+	for dbRows.Next() {
+		var avatarURL, ownerChannelID string
+		if err := dbRows.Scan(&avatarURL, &ownerChannelID); err != nil {
+			return err
+		}
+		for _, channelID := range avatarToChannels[avatarURL] {
+			if strings.EqualFold(channelID, ownerChannelID) {
+				continue
+			}
+			row := rowsByChannel[channelID]
+			row.displayName = ""
+			row.avatarURL = ""
+			rowsByChannel[channelID] = row
+		}
+	}
+	return dbRows.Err()
+}
+
+func markTwitterProfileDriftDueTx(tx *sql.Tx, rowsByChannel map[string]twitterProfileSeedRow) (int, error) {
+	if len(rowsByChannel) == 0 {
+		return 0, nil
+	}
+	stmt, err := tx.Prepare(`
+		SELECT COALESCE(display_name, ''), COALESCE(avatar_url, ''), fetched_at
+		FROM channel_profiles
+		WHERE channel_id = ?
+		  AND platform = 'twitter'
+		  AND COALESCE(tombstone, 0) = 0
+	`)
+	if err != nil {
+		return 0, err
+	}
+	defer func() {
+		_ = stmt.Close()
+	}()
+	updateStmt, err := tx.Prepare(`
+		UPDATE channel_profiles
+		SET display_name = CASE WHEN ? THEN ? ELSE display_name END,
+		    avatar_url = CASE WHEN ? THEN ? ELSE avatar_url END,
+		    fetched_at = 0,
+		    fail_count = 0,
+		    next_retry_at = 0,
+		    tombstone = 0
+		WHERE channel_id = ?
+		  AND COALESCE(tombstone, 0) = 0
+	`)
+	if err != nil {
+		return 0, err
+	}
+	defer func() {
+		_ = updateStmt.Close()
+	}()
+	var changed int
+	for channelID, row := range rowsByChannel {
+		if row.seenAtMs <= 0 || (row.displayName == "" && row.avatarURL == "") {
+			continue
+		}
+		var displayName, avatarURL string
+		var fetchedAt int64
+		err := stmt.QueryRow(channelID).Scan(&displayName, &avatarURL, &fetchedAt)
+		if err == sql.ErrNoRows {
+			continue
+		}
+		if err != nil {
+			return changed, err
+		}
+		if row.seenAtMs <= fetchedAt {
+			continue
+		}
+		displayDrift := row.displayName != "" && displayName != "" && !strings.EqualFold(strings.TrimSpace(row.displayName), strings.TrimSpace(displayName))
+		avatarDrift := row.avatarURL != "" && avatarURL != "" && model.NormalizeTwitterAvatarURL(row.avatarURL) != model.NormalizeTwitterAvatarURL(avatarURL)
+		if !displayDrift && !avatarDrift {
+			continue
+		}
+		res, err := updateStmt.Exec(displayDrift, row.displayName, avatarDrift, row.avatarURL, channelID)
+		if err != nil {
+			return changed, err
+		}
+		if n, _ := res.RowsAffected(); n > 0 {
+			changed += int(n)
+		}
+	}
+	return changed, nil
+}
+
+// MarkTwitterProfileDriftDueFromFeedRows clears freshness for Twitter profiles
+// whose newest stored feed identity is newer than the profile fetch and
+// disagrees on display name or avatar. The newer feed identity replaces only
+// the contradicted visible fields while the profile worker owns the follow-up
+// canonical refresh.
+func (db *DB) MarkTwitterProfileDriftDueFromFeedRows(limit int) (int, error) {
+	if limit <= 0 {
+		limit = 200
+	}
+	scanLimit := limit * 100
+	if scanLimit < limit {
+		scanLimit = limit
+	}
+	var changed int
+	err := db.WithWrite(func(tx *sql.Tx) error {
+		rows, err := tx.Query(`
+			SELECT
+				LOWER(author_handle) AS handle,
+				COALESCE(author_display_name, '') AS display_name,
+				CASE
+					WHEN LOWER(COALESCE(author_avatar_url, '')) LIKE '%pbs.twimg.com/profile_images/%'
+					THEN author_avatar_url
+					ELSE ''
+				END AS avatar_url,
+				MAX(fetched_at, COALESCE(published_at, 0)) AS seen_at
+			FROM feed_items INDEXED BY idx_feed_items_author_fetched
+			WHERE author_handle IS NOT NULL
+			  AND author_handle != ''
+			ORDER BY fetched_at DESC, published_at DESC, tweet_id DESC
+			LIMIT ?
+		`, scanLimit)
+		if err != nil {
+			return err
+		}
+		rowsByChannel := make(map[string]twitterProfileSeedRow)
+		for rows.Next() {
+			var row twitterProfileSeedRow
+			if err := rows.Scan(&row.handle, &row.displayName, &row.avatarURL, &row.seenAtMs); err != nil {
+				_ = rows.Close()
+				return err
+			}
+			row.handle = model.NormalizeTwitterHandle(row.handle)
+			if row.handle == "" {
+				continue
+			}
+			channelID := "twitter_" + row.handle
+			if _, ok := rowsByChannel[channelID]; ok {
+				continue
+			}
+			rowsByChannel[channelID] = row
+		}
+		if err := rows.Close(); err != nil {
+			return err
+		}
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		n, err := markTwitterProfileDriftDueTx(tx, rowsByChannel)
+		if err != nil {
+			return err
+		}
+		changed = n
 		return nil
 	})
 	return changed, err

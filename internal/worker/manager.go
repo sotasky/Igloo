@@ -150,6 +150,17 @@ func NewManager(database *db.DB, cfg *config.Config) *Manager {
 //  6. [async] runFeedMediaWorker   — long-running download
 //  7. [async] runProfileRefreshLoop — unified profile/avatar/banner refresh for all platforms
 func (m *Manager) StartAll() {
+	startupStarted := time.Now()
+	log.Printf("[worker] startup maintenance started")
+	defer func() {
+		log.Printf("[worker] startup maintenance completed in %s", time.Since(startupStarted).Round(time.Millisecond))
+	}()
+
+	if n, err := m.db.MarkTwitterProfileDriftDueFromFeedRows(200); err != nil {
+		log.Printf("[worker] MarkTwitterProfileDriftDueFromFeedRows: %v", err)
+	} else if n > 0 {
+		log.Printf("[worker] marked %d twitter profile rows refresh-due after feed identity drift", n)
+	}
 	if err := m.db.ResetExpiredIngestBackoff(); err != nil {
 		log.Printf("[worker] ResetExpiredIngestBackoff: %v", err)
 	}
@@ -159,6 +170,16 @@ func (m *Manager) StartAll() {
 		log.Printf("[worker] ResetStaleDownloadQueueItems: %v", err)
 	} else if n > 0 {
 		log.Printf("[worker] reset %d stale download jobs to pending", n)
+	}
+	if n, err := m.db.SeedChannelProfileRows(); err != nil {
+		log.Printf("[worker] SeedChannelProfileRows: %v", err)
+	} else if n > 0 {
+		log.Printf("[worker] seeded/updated %d channel profile rows", n)
+	}
+	if n, err := m.db.SeedSyntheticTwitterAvatarProfiles(); err != nil {
+		log.Printf("[worker] SeedSyntheticTwitterAvatarProfiles: %v", err)
+	} else if n > 0 {
+		log.Printf("[worker] seeded %d synthetic twitter avatar profile rows", n)
 	}
 	if n, err := m.db.ResetStaleFeedMediaJobs(); err != nil {
 		log.Printf("[worker] ResetStaleFeedMediaJobs: %v", err)
@@ -179,16 +200,6 @@ func (m *Manager) StartAll() {
 		log.Printf("[worker] EnqueueMissingBookmarkLikeMedia: %v", err)
 	} else if n > 0 {
 		log.Printf("[worker] enqueued %d feed media jobs for bookmarked/liked items", n)
-	}
-	if n, err := m.db.SeedChannelProfileRows(); err != nil {
-		log.Printf("[worker] SeedChannelProfileRows: %v", err)
-	} else if n > 0 {
-		log.Printf("[worker] seeded/updated %d channel profile rows", n)
-	}
-	if n, err := m.db.SeedSyntheticTwitterAvatarProfiles(); err != nil {
-		log.Printf("[worker] SeedSyntheticTwitterAvatarProfiles: %v", err)
-	} else if n > 0 {
-		log.Printf("[worker] seeded %d synthetic twitter avatar profile rows", n)
 	}
 
 	m.migrateMediaPaths()

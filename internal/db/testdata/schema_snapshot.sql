@@ -79,6 +79,9 @@ CREATE INDEX idx_feed_item_sources_source ON feed_item_sources(source_id, last_s
 -- index: idx_feed_items_algo on feed_items
 CREATE INDEX idx_feed_items_algo ON feed_items(algo_interest DESC, published_at DESC);
 
+-- index: idx_feed_items_author_fetched on feed_items
+CREATE INDEX idx_feed_items_author_fetched ON feed_items(fetched_at DESC, published_at DESC, tweet_id DESC) WHERE author_handle IS NOT NULL AND author_handle != '';
+
 -- index: idx_feed_items_author_lower on feed_items
 CREATE INDEX idx_feed_items_author_lower ON feed_items(LOWER(author_handle));
 

@@ -82,6 +82,11 @@ func (m *Manager) runProfileRefreshLoop(ctx context.Context) {
 				} else if n > 0 {
 					log.Printf("[profile] seeded/updated %d profile rows", n)
 				}
+				if n, err := m.db.MarkTwitterProfileDriftDueFromFeedRows(200); err != nil {
+					log.Printf("[profile] MarkTwitterProfileDriftDueFromFeedRows: %v", err)
+				} else if n > 0 {
+					log.Printf("[profile] marked %d twitter profile rows refresh-due after feed identity drift", n)
+				}
 				if n, err := m.db.SeedSyntheticTwitterAvatarProfiles(); err != nil {
 					log.Printf("[profile] SeedSyntheticTwitterAvatarProfiles: %v", err)
 				} else if n > 0 {
@@ -95,6 +100,11 @@ func (m *Manager) runProfileRefreshLoop(ctx context.Context) {
 			if !worked {
 				if n, err := m.db.SeedChannelProfileRows(); err == nil && n > 0 {
 					log.Printf("[profile] seeded/updated %d profile rows", n)
+					if driftN, driftErr := m.db.MarkTwitterProfileDriftDueFromFeedRows(200); driftErr != nil {
+						log.Printf("[profile] MarkTwitterProfileDriftDueFromFeedRows: %v", driftErr)
+					} else if driftN > 0 {
+						log.Printf("[profile] marked %d twitter profile rows refresh-due after feed identity drift", driftN)
+					}
 					worked = m.refreshFeedProfileCompletenessBatch(ctx, fetchprofile.Fetch, avDir, bnDir, feedProfileBatchPerTick)
 					if !worked {
 						worked = m.refreshStaleProfilesBatch(ctx, fetchprofile.Fetch, avDir, bnDir, profileBatchPerTick)
@@ -517,6 +527,10 @@ func (m *Manager) refreshProfile(ctx context.Context, fetch fetchFn, channelID, 
 	p, err := m.fetchProfile(ctx, fetch, channelID)
 	now := time.Now().UTC()
 	if err != nil {
+		m.recordProfileFetchError(channelID, existing, err, now)
+		return
+	}
+	if err := fetchprofile.ValidateChannelIdentity(channelID, p); err != nil {
 		m.recordProfileFetchError(channelID, existing, err, now)
 		return
 	}

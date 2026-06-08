@@ -2,6 +2,7 @@ package fetchprofile
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -35,6 +36,23 @@ func TestFetchTwitterSuccess(t *testing.T) {
 	}
 	if p.DisplayName == "" || p.Handle == "" {
 		t.Fatalf("display name or handle empty: %+v", p)
+	}
+}
+
+func TestFetchTwitterRejectsMismatchedScreenName(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"code":200,"user":{
+			"screen_name":"other_user",
+			"name":"Other User",
+			"verification":{"verified":false}
+		}}`))
+	}))
+	defer srv.Close()
+	fx := &fxtwitter.Client{BaseURL: srv.URL, HTTP: http.DefaultClient, Timeout: 2 * time.Second}
+
+	_, err := fetchTwitterWithClient(context.Background(), "sample_user", fx)
+	if !errors.Is(err, ErrIdentityMismatch) {
+		t.Fatalf("expected ErrIdentityMismatch, got %v", err)
 	}
 }
 

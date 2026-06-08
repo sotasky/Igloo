@@ -181,6 +181,9 @@ func (s *Server) refreshOneProfile(ctx context.Context, channelID string, existi
 		}
 		return
 	}
+	if err := fetchprofile.ValidateChannelIdentity(channelID, p); err != nil {
+		return
+	}
 	isInstagramStub := instagramFetchProfileIsStub(p)
 	if isInstagramStub && existing == nil {
 		existing, _ = s.db.GetChannelProfile(channelID)

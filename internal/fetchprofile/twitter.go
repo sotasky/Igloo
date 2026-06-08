@@ -23,14 +23,21 @@ func fetchTwitterWithClient(ctx context.Context, handle string, fx *fxtwitter.Cl
 		}
 		return nil, fmt.Errorf("fxtwitter fetch: %w", err)
 	}
+	returnedHandle := strings.ToLower(strings.TrimSpace(strings.TrimPrefix(u.ScreenName, "@")))
+	if returnedHandle == "" {
+		return nil, fmt.Errorf("%w: requested @%s returned empty screen_name", ErrIdentityMismatch, h)
+	}
+	if returnedHandle != h {
+		return nil, fmt.Errorf("%w: requested @%s returned @%s", ErrIdentityMismatch, h, returnedHandle)
+	}
 
 	// Twitter banner URLs need the size suffix for the card-sized crop.
 	bannerURL := fxtwitter.UpgradeBannerURL(u.BannerURL)
 
 	return &Profile{
-		ChannelID:    "twitter_" + h,
+		ChannelID:    "twitter_" + returnedHandle,
 		Platform:     "twitter",
-		Handle:       h,
+		Handle:       returnedHandle,
 		DisplayName:  u.Name,
 		Bio:          u.Description,
 		Website:      normalizeURL(u.Website),

@@ -993,6 +993,219 @@ func TestSeedChannelProfileRowsForFeedItemsClearsStaleTombstone(t *testing.T) {
 	}
 }
 
+func TestSeedChannelProfileRowsForFeedItemsMarksNewerIdentityDriftDue(t *testing.T) {
+	d := openWritableTestDB(t)
+
+	oldFetched := time.UnixMilli(10_000).UTC()
+	nextRetry := time.UnixMilli(50_000).UTC()
+	if err := d.UpsertChannelProfile(model.ChannelProfile{
+		ChannelID:   "twitter_sample_author",
+		Platform:    "twitter",
+		Handle:      "sample_author",
+		DisplayName: "Old Label",
+		AvatarURL:   "https://pbs.twimg.com/profile_images/111/old_normal.jpg",
+		FetchedAt:   &oldFetched,
+		FailCount:   2,
+		NextRetryAt: &nextRetry,
+	}); err != nil {
+		t.Fatalf("seed profile: %v", err)
+	}
+	seenAt := time.UnixMilli(20_000).UTC()
+
+	n, err := d.SeedChannelProfileRowsForFeedItems([]model.FeedItem{{
+		AuthorHandle:      "sample_author",
+		AuthorDisplayName: "New Label",
+		AuthorAvatarURL:   "https://pbs.twimg.com/profile_images/222/new_normal.jpg",
+		FetchedAt:         seenAt,
+	}})
+	if err != nil {
+		t.Fatalf("SeedChannelProfileRowsForFeedItems: %v", err)
+	}
+	if n == 0 {
+		t.Fatal("expected profile freshness to be cleared")
+	}
+
+	got, err := d.GetChannelProfile("twitter_sample_author")
+	if err != nil {
+		t.Fatalf("GetChannelProfile: %v", err)
+	}
+	if got == nil {
+		t.Fatal("profile missing")
+	}
+	if got.FetchedAt != nil || got.FailCount != 0 || got.NextRetryAt != nil {
+		t.Fatalf("profile was not marked refresh-due: %+v", got)
+	}
+	if got.DisplayName != "New Label" || got.AvatarURL != "https://pbs.twimg.com/profile_images/222/new_normal.jpg" {
+		t.Fatalf("profile did not adopt newer visible feed identity: %+v", got)
+	}
+}
+
+func TestSeedChannelProfileRowsForFeedItemsIgnoresOlderIdentityDrift(t *testing.T) {
+	d := openWritableTestDB(t)
+
+	newFetched := time.UnixMilli(20_000).UTC()
+	if err := d.UpsertChannelProfile(model.ChannelProfile{
+		ChannelID:   "twitter_sample_author",
+		Platform:    "twitter",
+		Handle:      "sample_author",
+		DisplayName: "Fresh Label",
+		AvatarURL:   "https://pbs.twimg.com/profile_images/111/fresh_normal.jpg",
+		FetchedAt:   &newFetched,
+	}); err != nil {
+		t.Fatalf("seed profile: %v", err)
+	}
+	olderSeenAt := time.UnixMilli(10_000).UTC()
+
+	if _, err := d.SeedChannelProfileRowsForFeedItems([]model.FeedItem{{
+		AuthorHandle:      "sample_author",
+		AuthorDisplayName: "Older Label",
+		AuthorAvatarURL:   "https://pbs.twimg.com/profile_images/222/older_normal.jpg",
+		FetchedAt:         olderSeenAt,
+	}}); err != nil {
+		t.Fatalf("SeedChannelProfileRowsForFeedItems: %v", err)
+	}
+
+	got, err := d.GetChannelProfile("twitter_sample_author")
+	if err != nil {
+		t.Fatalf("GetChannelProfile: %v", err)
+	}
+	if got == nil || got.FetchedAt == nil || got.FetchedAt.UnixMilli() != newFetched.UnixMilli() {
+		t.Fatalf("fresh profile should not be marked due by older feed row: %+v", got)
+	}
+	if got.DisplayName != "Fresh Label" || got.AvatarURL != "https://pbs.twimg.com/profile_images/111/fresh_normal.jpg" {
+		t.Fatalf("older feed row should not replace fresh profile identity: %+v", got)
+	}
+}
+
+func TestSeedChannelProfileRowsForFeedItemsSuppressesKnownForeignAvatar(t *testing.T) {
+	d := openWritableTestDB(t)
+
+	avatarURL := "https://pbs.twimg.com/profile_images/333/known_normal.jpg"
+	if err := d.UpsertChannelProfile(model.ChannelProfile{
+		ChannelID:   "twitter_sample_a",
+		Platform:    "twitter",
+		Handle:      "sample_a",
+		DisplayName: "Known Author",
+		AvatarURL:   avatarURL,
+	}); err != nil {
+		t.Fatalf("seed profile: %v", err)
+	}
+
+	if _, err := d.SeedChannelProfileRowsForFeedItems([]model.FeedItem{{
+		AuthorHandle:      "sample_b",
+		AuthorDisplayName: "Known Author",
+		AuthorAvatarURL:   avatarURL,
+		FetchedAt:         time.UnixMilli(30_000).UTC(),
+	}}); err != nil {
+		t.Fatalf("SeedChannelProfileRowsForFeedItems: %v", err)
+	}
+
+	got, err := d.GetChannelProfile("twitter_sample_b")
+	if err != nil {
+		t.Fatalf("GetChannelProfile: %v", err)
+	}
+	if got == nil || got.Handle != "sample_b" {
+		t.Fatalf("handle-only row was not seeded: %+v", got)
+	}
+	if got.DisplayName != "" || got.AvatarURL != "" {
+		t.Fatalf("foreign avatar tuple should not be copied: %+v", got)
+	}
+}
+
+func TestMarkTwitterProfileDriftDueFromFeedRowsUsesPersistedFeedEvidence(t *testing.T) {
+	d := openWritableTestDB(t)
+
+	profileFetched := time.UnixMilli(10_000).UTC()
+	if err := d.UpsertChannelProfile(model.ChannelProfile{
+		ChannelID:   "twitter_sample_a",
+		Platform:    "twitter",
+		Handle:      "sample_a",
+		DisplayName: "Old Label",
+		AvatarURL:   "https://pbs.twimg.com/profile_images/111/old_normal.jpg",
+		FetchedAt:   &profileFetched,
+		FailCount:   1,
+	}); err != nil {
+		t.Fatalf("seed profile: %v", err)
+	}
+	feedFetched := time.UnixMilli(20_000).UTC()
+	if _, err := d.UpsertFeedItems([]model.FeedItem{{
+		TweetID:           "sample_post",
+		SourceHandle:      "sample_a",
+		AuthorHandle:      "sample_a",
+		AuthorDisplayName: "New Label",
+		AuthorAvatarURL:   "https://pbs.twimg.com/profile_images/222/new_normal.jpg",
+		BodyText:          "sample text",
+		CanonicalURL:      "https://x.com/sample_a/status/sample_post",
+		PublishedAt:       &feedFetched,
+		FetchedAt:         feedFetched,
+	}}); err != nil {
+		t.Fatalf("UpsertFeedItems: %v", err)
+	}
+
+	n, err := d.MarkTwitterProfileDriftDueFromFeedRows(10)
+	if err != nil {
+		t.Fatalf("MarkTwitterProfileDriftDueFromFeedRows: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("marked rows = %d, want 1", n)
+	}
+
+	got, err := d.GetChannelProfile("twitter_sample_a")
+	if err != nil {
+		t.Fatalf("GetChannelProfile: %v", err)
+	}
+	if got == nil || got.FetchedAt != nil || got.FailCount != 0 {
+		t.Fatalf("profile was not marked refresh-due: %+v", got)
+	}
+	if got.DisplayName != "New Label" || got.AvatarURL != "https://pbs.twimg.com/profile_images/222/new_normal.jpg" {
+		t.Fatalf("profile did not adopt newer visible feed identity: %+v", got)
+	}
+}
+
+func TestMarkTwitterProfileDriftDueFromFeedRowsUpdatesAlreadyDueIdentity(t *testing.T) {
+	d := openWritableTestDB(t)
+
+	if err := d.UpsertChannelProfile(model.ChannelProfile{
+		ChannelID:   "twitter_sample_a",
+		Platform:    "twitter",
+		Handle:      "sample_a",
+		DisplayName: "Old Label",
+		AvatarURL:   "https://pbs.twimg.com/profile_images/111/old_normal.jpg",
+	}); err != nil {
+		t.Fatalf("seed profile: %v", err)
+	}
+	feedFetched := time.UnixMilli(20_000).UTC()
+	if _, err := d.UpsertFeedItems([]model.FeedItem{{
+		TweetID:           "sample_post",
+		SourceHandle:      "sample_a",
+		AuthorHandle:      "sample_a",
+		AuthorDisplayName: "New Label",
+		AuthorAvatarURL:   "https://pbs.twimg.com/profile_images/222/new_normal.jpg",
+		BodyText:          "sample text",
+		CanonicalURL:      "https://x.com/sample_a/status/sample_post",
+		PublishedAt:       &feedFetched,
+		FetchedAt:         feedFetched,
+	}}); err != nil {
+		t.Fatalf("UpsertFeedItems: %v", err)
+	}
+
+	n, err := d.MarkTwitterProfileDriftDueFromFeedRows(10)
+	if err != nil {
+		t.Fatalf("MarkTwitterProfileDriftDueFromFeedRows: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("marked rows = %d, want 1", n)
+	}
+
+	got, err := d.GetChannelProfile("twitter_sample_a")
+	if err != nil {
+		t.Fatalf("GetChannelProfile: %v", err)
+	}
+	if got == nil || got.DisplayName != "New Label" || got.AvatarURL != "https://pbs.twimg.com/profile_images/222/new_normal.jpg" {
+		t.Fatalf("already-due profile did not adopt newer visible feed identity: %+v", got)
+	}
+}
+
 func TestSeedChannelProfileRowsForFeedItemsPreservesTwitterDefaultAvatarFreshness(t *testing.T) {
 	d := openWritableTestDB(t)
 
