@@ -51,6 +51,8 @@
     xDownloads: "igloo_sync_x_downloads",
     xKeyboardShortcuts: "igloo_sync_x_keyboard_shortcuts",
     xCleanup: "igloo_sync_x_cleanup",
+    themeCache: "igloo_sync_theme_cache",
+    followCache: "igloo_sync_follow_cache",
   };
   const LEGACY_AUTH_PASSWORD_KEY = "xsync_auth_pass";
 
@@ -147,6 +149,7 @@
   let _iglooThemeFetch = null;
   let _iglooThemeFetchedAt = 0;
   const IGLOO_THEME_CACHE_MS = 30000;
+  const FOLLOW_CACHE_VERSION = 1;
 
   function prefersLightColorScheme() {
     try {
@@ -223,15 +226,28 @@
     };
   }
 
-  function setIglooThemeSnapshot(snapshot) {
+  function setIglooThemeSnapshot(snapshot, persist = true) {
     const palette = paletteFromIglooTheme(snapshot);
     if (!palette) return false;
     _iglooThemePalette = palette;
     _iglooThemeFetchedAt = Date.now();
+    if (persist) {
+      GM_setValue(SETTINGS.themeCache, {
+        cached_at: new Date().toISOString(),
+        snapshot,
+      });
+    }
     return true;
   }
 
+  function loadCachedIglooThemeSnapshot() {
+    const cached = GM_getValue(SETTINGS.themeCache, null);
+    const snapshot = cached && cached.snapshot ? cached.snapshot : null;
+    return !!snapshot && setIglooThemeSnapshot(snapshot, false);
+  }
+
   async function fetchIglooThemePalette(force = false) {
+    if (!_iglooThemePalette) loadCachedIglooThemeSnapshot();
     if (
       !force &&
       _iglooThemePalette &&
@@ -239,10 +255,11 @@
     ) {
       return true;
     }
+    const hadPalette = !!_iglooThemePalette;
     if (_iglooThemeFetch) return _iglooThemeFetch;
     _iglooThemeFetch = apiRequest("GET", "/api/theme.json", null, true)
       .then((resp) => {
-        if (!resp.ok || !setIglooThemeSnapshot(resp.json)) return false;
+        if (!resp.ok || !setIglooThemeSnapshot(resp.json)) return hadPalette;
         return true;
       })
       .finally(() => {
@@ -922,6 +939,133 @@
   }
 
   // ── Local list helpers ──────────────────────────────────────────────────────
+  function normalizeFollowKey(key) {
+    return String(key || "")
+      .trim()
+      .replace(/^@+/, "")
+      .toLowerCase();
+  }
+
+  function readFollowCache() {
+    const cached = GM_getValue(SETTINGS.followCache, null);
+    if (!cached || typeof cached !== "object") {
+      return { version: FOLLOW_CACHE_VERSION, entries: {} };
+    }
+    const entries =
+      cached.entries && typeof cached.entries === "object"
+        ? cached.entries
+        : {};
+    return { version: FOLLOW_CACHE_VERSION, entries };
+  }
+
+  function writeFollowCache(cache) {
+    GM_setValue(SETTINGS.followCache, {
+      version: FOLLOW_CACHE_VERSION,
+      entries: cache.entries || {},
+    });
+  }
+
+  function followCacheID(platform, key) {
+    const normalized = normalizeFollowKey(key);
+    return platform && normalized ? `${platform}:${normalized}` : "";
+  }
+
+  function cachedFollow(platform, key) {
+    const id = followCacheID(platform, key);
+    if (!id) return null;
+    return readFollowCache().entries[id] || null;
+  }
+
+  function cachedFollowsForPlatform(platform) {
+    const cache = readFollowCache();
+    return Object.values(cache.entries).filter(
+      (entry) => entry && entry.platform === platform && entry.key,
+    );
+  }
+
+  function setCachedFollow(platform, key, fields = {}) {
+    const normalized = normalizeFollowKey(key);
+    const id = followCacheID(platform, normalized);
+    if (!id) return null;
+    const cache = readFollowCache();
+    const existing = cache.entries[id] || {};
+    const next = {
+      ...existing,
+      platform,
+      key: normalized,
+      url: fields.url || existing.url || "",
+      channel_id:
+        fields.channel_id !== undefined
+          ? String(fields.channel_id || "")
+          : String(existing.channel_id || ""),
+      pending:
+        fields.pending !== undefined ? !!fields.pending : !!existing.pending,
+      cached_at: new Date().toISOString(),
+    };
+    cache.entries[id] = next;
+    writeFollowCache(cache);
+    return next;
+  }
+
+  function removeCachedFollow(platform, key) {
+    const id = followCacheID(platform, key);
+    if (!id) return false;
+    const cache = readFollowCache();
+    if (!cache.entries[id]) return false;
+    delete cache.entries[id];
+    writeFollowCache(cache);
+    return true;
+  }
+
+  function replaceCachedPlatformFollows(platform, entries) {
+    const cache = readFollowCache();
+    const nextIDs = new Set();
+    for (const entry of entries) {
+      const key = normalizeFollowKey(entry.key);
+      const id = followCacheID(platform, key);
+      if (!id) continue;
+      nextIDs.add(id);
+      const existing = cache.entries[id] || {};
+      cache.entries[id] = {
+        ...existing,
+        platform,
+        key,
+        url: entry.url || existing.url || "",
+        channel_id: String(entry.channel_id || existing.channel_id || ""),
+        pending: false,
+        cached_at: new Date().toISOString(),
+      };
+    }
+    for (const [id, entry] of Object.entries(cache.entries)) {
+      if (
+        entry &&
+        entry.platform === platform &&
+        !entry.pending &&
+        !nextIDs.has(id)
+      ) {
+        delete cache.entries[id];
+      }
+    }
+    writeFollowCache(cache);
+  }
+
+  function isRetryableFollowFailure(resp) {
+    if (!resp || resp.ok || resp.skipped) return false;
+    return (
+      resp.error === "network_error" ||
+      resp.error === "timeout" ||
+      resp.error === "no_api_base" ||
+      resp.status === 0 ||
+      resp.status === 401 ||
+      resp.status === 403 ||
+      resp.status >= 500
+    );
+  }
+
+  function queuedFollowToast() {
+    showToast("Follow queued. Will sync when the server is reachable.");
+  }
+
   function isInLocalList(handle) {
     const list = GM_getValue(SETTINGS.localList, []);
     return list.some(
@@ -951,6 +1095,20 @@
         (item) => String(item.handle).toLowerCase() !== handle.toLowerCase(),
       ),
     );
+    removeCachedFollow("twitter", handle);
+  }
+
+  function migrateLocalListToFollowCache() {
+    const list = GM_getValue(SETTINGS.localList, []);
+    if (!Array.isArray(list)) return;
+    for (const item of list) {
+      const handle = normalizeFollowKey(item && item.handle);
+      if (!handle || cachedFollow("twitter", handle)) continue;
+      setCachedFollow("twitter", handle, {
+        url: item.url || `https://x.com/${handle}`,
+        pending: true,
+      });
+    }
   }
 
   // ── API request helper ──────────────────────────────────────────────────────
@@ -1077,14 +1235,29 @@
   }
 
   // ── Server handles (for Follow button) ─────────────────────────────────────
+  function seedTwitterFollowsFromCache() {
+    migrateLocalListToFollowCache();
+    if (!serverHandleSet) serverHandleSet = new Set();
+    for (const entry of cachedFollowsForPlatform("twitter")) {
+      serverHandleSet.add(entry.key);
+      if (entry.channel_id) {
+        serverHandleToChannelId[entry.key] = entry.channel_id;
+      }
+    }
+  }
+
   async function fetchServerHandles() {
+    seedTwitterFollowsFromCache();
     const resp = await apiRequest(
       "GET",
       "/api/channels?platform=twitter",
       null,
       true,
     );
-    if (!resp.ok) return;
+    if (!resp.ok) {
+      refreshButtonStates();
+      return;
+    }
     // Server-side-changes #10: list now wrapped as {channels:[...]}. Fall back
     // to the bare array for older deployments.
     const channels =
@@ -1097,13 +1270,20 @@
     if (!channels) return;
     const set = new Set();
     const map = {};
+    const cachedEntries = [];
     for (const ch of channels) {
       const channelId = String(ch.channel_id || ch.id || "");
       for (const h of twitterChannelHandleKeys(ch)) {
         set.add(h);
         map[h] = channelId;
+        cachedEntries.push({
+          key: h,
+          channel_id: channelId,
+          url: ch.url || `https://x.com/${h}`,
+        });
       }
     }
+    replaceCachedPlatformFollows("twitter", cachedEntries);
     serverHandleSet = set;
     serverHandleToChannelId = map;
     console.log(`[XSync] loaded ${set.size} server handles`);
@@ -1112,11 +1292,9 @@
     // These happen when syncToServer() failed (e.g. expired token) during a
     // previous session. Safe to retry — server returns 409 if already present.
     if (syncToDashboardEnabled()) {
-      const localList = GM_getValue(SETTINGS.localList, []);
-      const ghosts = localList.filter((item) => {
-        const h = String(item.handle || "").toLowerCase();
-        return h && !set.has(h);
-      });
+      const ghosts = cachedFollowsForPlatform("twitter").filter(
+        (item) => item.pending || (item.key && !set.has(item.key)),
+      );
       if (ghosts.length) {
         console.log(
           `[XSync] re-subscribing ${ghosts.length} ghost-followed handle(s)`,
@@ -1125,18 +1303,23 @@
           const r = await apiRequest(
             "POST",
             "/api/subscribe",
-            { url: `https://x.com/${item.handle}` },
+            { url: item.url || `https://x.com/${item.key}` },
             true,
           );
           if (r.ok || r.status === 409) {
-            const handle = item.handle.toLowerCase();
+            const handle = item.key.toLowerCase();
             const channelId = String(r.json?.channel_id || r.json?.id || "");
             serverHandleSet.add(handle);
             if (channelId) serverHandleToChannelId[handle] = channelId;
-            console.log(`[XSync] ghost synced: ${item.handle}`);
+            setCachedFollow("twitter", handle, {
+              channel_id: channelId,
+              url: item.url || `https://x.com/${handle}`,
+              pending: false,
+            });
+            console.log(`[XSync] ghost synced: ${handle}`);
           } else {
             console.warn(
-              `[XSync] ghost sync failed: ${item.handle} (${r.status})`,
+              `[XSync] ghost sync failed: ${item.key} (${r.status})`,
             );
           }
         }
@@ -1149,7 +1332,8 @@
   function isSaved(handle) {
     return (
       (serverHandleSet && serverHandleSet.has(handle.toLowerCase())) ||
-      isInLocalList(handle)
+      isInLocalList(handle) ||
+      !!cachedFollow("twitter", handle)
     );
   }
 
@@ -2995,7 +3179,7 @@
       { url: `https://x.com/${handle}` },
       true,
     );
-    if (resp.ok) return { ok: true, body: resp.json };
+    if (resp.ok || resp.status === 409) return { ok: true, body: resp.json };
     return { ok: false, ...resp };
   }
 
@@ -3019,6 +3203,7 @@
     if (serverHandleSet) serverHandleSet.delete(handle.toLowerCase());
     delete serverHandleToChannelId[handle.toLowerCase()];
     removeLocal(handle);
+    removeCachedFollow("twitter", handle);
 
     if (triggerBtn) {
       triggerBtn.disabled = false;
@@ -3038,17 +3223,48 @@
       triggerBtn.textContent = "Following...";
     }
 
-    if (serverHandleSet) serverHandleSet.add(handle.toLowerCase());
+    const key = handle.toLowerCase();
+    if (serverHandleSet) serverHandleSet.add(key);
+    setCachedFollow("twitter", key, {
+      url: `https://x.com/${handle}`,
+      pending: true,
+    });
     saveLocal(handle);
-    syncToServer(handle).then((save) => {
-      if (!save.ok && !save.skipped)
-        console.warn(`[XSync] server follow failed handle=${handle}`);
+    showToast("Follow queued. Syncing to server...", "Undo", () => {
+      if (serverHandleSet) serverHandleSet.delete(key);
+      removeLocal(handle);
+      removeCachedFollow("twitter", key);
+      if (triggerBtn) setCustomButtonState(triggerBtn, false);
     });
 
-    showSaveToast(handle, () => {
-      if (serverHandleSet) serverHandleSet.delete(handle.toLowerCase());
+    syncToServer(handle).then((save) => {
+      if (!cachedFollow("twitter", key)) return;
+      if (save.ok || save.skipped) {
+        const channelId = String(save.body?.channel_id || save.body?.id || "");
+        if (channelId) serverHandleToChannelId[key] = channelId;
+        setCachedFollow("twitter", key, {
+          url: `https://x.com/${handle}`,
+          channel_id: channelId,
+          pending: !!save.skipped,
+        });
+        if (save.skipped) {
+          showToast("Follow saved locally.");
+        } else {
+          showSaveToast(handle, () => handleUnsave(handle, triggerBtn));
+        }
+        return;
+      }
+      if (isRetryableFollowFailure(save)) {
+        queuedFollowToast();
+        console.warn(`[XSync] server follow queued handle=${handle}`);
+        return;
+      }
+      if (serverHandleSet) serverHandleSet.delete(key);
       removeLocal(handle);
+      removeCachedFollow("twitter", key);
       if (triggerBtn) setCustomButtonState(triggerBtn, false);
+      showToast(`Follow failed (${save.status || save.error || "error"})`);
+      console.warn(`[XSync] server follow failed handle=${handle}`);
     });
 
     if (triggerBtn) {
@@ -3761,14 +3977,56 @@
     return Array.from(new Set(keys.filter(Boolean)));
   }
 
+  function seedPlatformFollowsFromCache(platform) {
+    const map = platformChannelMaps[platform];
+    if (!map) return;
+    for (const entry of cachedFollowsForPlatform(platform)) {
+      map.set(entry.key, String(entry.channel_id || ""));
+    }
+  }
+
+  async function syncPendingPlatformFollows(platform) {
+    if (!syncToDashboardEnabled()) return;
+    const pending = cachedFollowsForPlatform(platform).filter(
+      (entry) => entry.pending && entry.url,
+    );
+    for (const entry of pending) {
+      const resp = await apiRequest(
+        "POST",
+        "/api/subscribe",
+        { url: entry.url, platform },
+        true,
+      );
+      if (resp.ok || resp.status === 409) {
+        const channelID =
+          (resp.json && (resp.json.channel_id || resp.json.id)) ||
+          platformChannelID(platform, entry.key) ||
+          "";
+        setCachedFollow(platform, entry.key, {
+          url: entry.url,
+          channel_id: channelID,
+          pending: false,
+        });
+        platformChannelMaps[platform].set(entry.key, String(channelID || ""));
+      } else if (!isRetryableFollowFailure(resp)) {
+        removeCachedFollow(platform, entry.key);
+        platformChannelMaps[platform].delete(entry.key);
+      }
+    }
+  }
+
   async function fetchPlatformChannels(platform) {
+    seedPlatformFollowsFromCache(platform);
     const resp = await apiRequest(
       "GET",
       `/api/channels?platform=${encodeURIComponent(platform)}`,
       null,
       true,
     );
-    if (!resp.ok) return;
+    if (!resp.ok) {
+      refreshCrossSiteButtons();
+      return;
+    }
     const channels =
       resp.json &&
       (Array.isArray(resp.json.channels)
@@ -3778,20 +4036,29 @@
           : null);
     if (!channels) return;
     const map = new Map();
+    const cachedEntries = [];
     for (const ch of channels) {
       for (const key of platformChannelKeys(ch, platform)) {
         map.set(key, String(ch.channel_id || ch.id || ""));
+        cachedEntries.push({
+          key,
+          channel_id: String(ch.channel_id || ch.id || ""),
+          url: ch.url || "",
+        });
       }
     }
+    replaceCachedPlatformFollows(platform, cachedEntries);
     platformChannelMaps[platform] = map;
+    await syncPendingPlatformFollows(platform);
     refreshCrossSiteButtons();
   }
 
   function isPlatformSaved(platform, key) {
     return !!(
       key &&
-      platformChannelMaps[platform] &&
-      platformChannelMaps[platform].has(String(key).toLowerCase())
+      ((platformChannelMaps[platform] &&
+        platformChannelMaps[platform].has(String(key).toLowerCase())) ||
+        cachedFollow(platform, key))
     );
   }
 
@@ -3846,12 +4113,20 @@
   }
 
   async function saveCrossChannel(platform, key, url, btn) {
-    if (!syncToDashboardEnabled()) {
-      showToast("Server sync is disabled");
-      return;
-    }
+    const normalized = normalizeFollowKey(key);
     btn.disabled = true;
     btn.textContent = "Following...";
+    setCachedFollow(platform, normalized, { url, pending: true });
+    platformChannelMaps[platform].set(normalized, "");
+    btn.disabled = false;
+    setCrossButtonState(btn, true);
+    if (!syncToDashboardEnabled()) {
+      showToast("Follow saved locally.");
+      return;
+    }
+    showToast("Follow queued. Syncing to server...", "Undo", () =>
+      unsaveCrossChannel(platform, normalized, btn),
+    );
     const resp = await apiRequest(
       "POST",
       "/api/subscribe",
@@ -3861,22 +4136,32 @@
     if (resp.ok || resp.status === 409) {
       const channelID =
         (resp.json && resp.json.channel_id) ||
-        platformChannelID(platform, key) ||
+        platformChannelID(platform, normalized) ||
         "";
       if (channelID)
-        platformChannelMaps[platform].set(String(key).toLowerCase(), channelID);
-      btn.disabled = false;
+        platformChannelMaps[platform].set(normalized, channelID);
+      setCachedFollow(platform, normalized, {
+        url,
+        channel_id: channelID,
+        pending: false,
+      });
       setCrossButtonState(btn, true);
       showToast(
         "Followed in Igloo",
         "Undo",
-        () => unsaveCrossChannel(platform, key, btn),
+        () => unsaveCrossChannel(platform, normalized, btn),
         4000,
       );
       fetchPlatformChannels(platform);
       return;
     }
-    btn.disabled = false;
+    if (isRetryableFollowFailure(resp)) {
+      queuedFollowToast();
+      console.warn("[IglooSync] follow queued", resp);
+      return;
+    }
+    removeCachedFollow(platform, normalized);
+    platformChannelMaps[platform].delete(normalized);
     setCrossButtonState(btn, false);
     showToast(`Follow failed (${resp.status || resp.error || "error"})`);
     console.warn("[IglooSync] follow failed", resp);
@@ -3885,7 +4170,10 @@
   async function unsaveCrossChannel(platform, key, btn) {
     const channelID = platformChannelID(platform, key);
     if (!channelID) {
-      showToast("Channel id not known yet");
+      removeCachedFollow(platform, key);
+      platformChannelMaps[platform].delete(normalizeFollowKey(key));
+      if (btn) setCrossButtonState(btn, false);
+      showToast("Removed locally");
       return;
     }
     if (btn) {
@@ -3900,6 +4188,7 @@
     );
     if (resp.ok) {
       platformChannelMaps[platform].delete(String(key).toLowerCase());
+      removeCachedFollow(platform, key);
       if (btn) {
         btn.disabled = false;
         setCrossButtonState(btn, false);
@@ -4382,6 +4671,11 @@
       console.log(`[IglooSync] loaded v${SCRIPT_VERSION} (auth route idle)`);
       return;
     }
+    migrateLocalListToFollowCache();
+    seedTwitterFollowsFromCache();
+    seedPlatformFollowsFromCache("tiktok");
+    seedPlatformFollowsFromCache("instagram");
+    seedPlatformFollowsFromCache("youtube");
     runCurrentPlatformScan();
     if (isXSite()) {
       fetchServerHandles();

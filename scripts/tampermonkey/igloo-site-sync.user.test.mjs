@@ -665,6 +665,8 @@ function runScript(harness, { exposeDebug = false } = {}) {
         /\}\)\(\);\s*$/,
         `globalThis.__iglooTest = {
   handleUnsave,
+  handleFollowClick,
+  saveCrossChannel,
   collectTweetMediaItems: typeof collectTweetMediaItems === "function" ? collectTweetMediaItems : undefined,
   downloadMediaItems: typeof downloadMediaItems === "function" ? downloadMediaItems : undefined,
   cacheTweetMediaFromApiResponse: typeof cacheTweetMediaFromApiResponse === "function" ? cacheTweetMediaFromApiResponse : undefined,
@@ -1184,6 +1186,60 @@ test("X theme fetch sends stored auth token when available", async () => {
   );
 });
 
+test("enabled X theme falls back to cached Igloo colors offline", async () => {
+  const harness = buildHarness({
+    initialValues: {
+      igloo_sync_x_cleanup: true,
+      igloo_sync_theme_cache: {
+        cached_at: "2026-01-01T00:00:00.000Z",
+        snapshot: {
+          theme_id: "cached",
+          color_scheme: "dark",
+          tokens: {
+            theme_id: "cached",
+            color_scheme: "dark",
+            dark: true,
+            accent: "#88c0d0",
+            on_accent: "#111111",
+            text: "#eceff4",
+            subtext1: "#d8dee9",
+            subtext0: "#c8ced8",
+            overlay2: "#b8bec8",
+            overlay1: "#a8aeb8",
+            overlay0: "#989ea8",
+            surface2: "#4c566a",
+            surface1: "#434c5e",
+            surface0: "#3b4252",
+            base: "#2e3440",
+            mantle: "#242933",
+            crust: "#1f242d",
+          },
+        },
+      },
+    },
+    responseOverrides: {
+      "https://localhost:5001/api/theme.json": { status: 0, text: "" },
+    },
+  });
+  runScript(harness);
+  await drainMicrotasks();
+
+  assert.equal(
+    harness.context.document.documentElement.style["--igloo-x-accent"],
+    "#88c0d0",
+  );
+  assert.equal(
+    harness.context.document.documentElement.style["--igloo-x-base"],
+    "#2e3440",
+  );
+  assert.equal(
+    harness.context.document.documentElement.getAttribute(
+      "data-igloo-x-theme-source",
+    ),
+    "igloo",
+  );
+});
+
 test("disabled X theme does not fetch or apply theme overrides", async () => {
   const harness = buildHarness({
     initialValues: {
@@ -1284,6 +1340,73 @@ test("custom X controls use control theme variables instead of page theme variab
   assert.match(script, /body\.igloo-theme-overrides \[aria-label\^="Timeline:"\]/);
   assert.match(script, /body\.igloo-theme-overrides header\[role="banner"\]/);
   assert.match(script, /body\.igloo-theme-overrides \[data-testid="sidebarColumn"\]/);
+});
+
+test("offline X follows are queued without confirmed follow wording", async () => {
+  const harness = buildHarness({
+    responseOverrides: {
+      "https://localhost:5001/api/subscribe": { status: 0, text: "" },
+    },
+  });
+  runScript(harness, { exposeDebug: true });
+  await drainMicrotasks();
+
+  const btn = fakeElement();
+  await harness.context.__iglooTest.handleFollowClick("sample_user", btn);
+  await drainMicrotasks();
+
+  assert.equal(btn.textContent, "Following");
+  assert.equal(btn.dataset.saved, "1");
+  const cache = harness.values.get("igloo_sync_follow_cache");
+  assert.equal(cache.entries["twitter:sample_user"].pending, true);
+  assert.equal(
+    cache.entries["twitter:sample_user"].url,
+    "https://x.com/sample_user",
+  );
+  assert.equal(
+    harness.toasts.some((message) => message.includes("You followed")),
+    false,
+  );
+  assert.ok(
+    harness.toasts.some((message) =>
+      message.includes("Follow queued. Will sync when the server is reachable."),
+    ),
+    `expected queued follow toast, got ${harness.toasts.join(", ")}`,
+  );
+});
+
+test("offline cross-site follows are cached for button state", async () => {
+  const harness = buildHarness({
+    responseOverrides: {
+      "https://localhost:5001/api/subscribe": { status: 0, text: "" },
+    },
+  });
+  runScript(harness, { exposeDebug: true });
+  await drainMicrotasks();
+
+  const btn = fakeElement();
+  await harness.context.__iglooTest.saveCrossChannel(
+    "tiktok",
+    "sample_creator",
+    "https://www.tiktok.com/@sample_creator",
+    btn,
+  );
+  await drainMicrotasks();
+
+  assert.equal(btn.textContent, "Following");
+  assert.equal(btn.dataset.saved, "1");
+  const cache = harness.values.get("igloo_sync_follow_cache");
+  assert.equal(cache.entries["tiktok:sample_creator"].pending, true);
+  assert.equal(
+    cache.entries["tiktok:sample_creator"].url,
+    "https://www.tiktok.com/@sample_creator",
+  );
+  assert.ok(
+    harness.toasts.some((message) =>
+      message.includes("Follow queued. Will sync when the server is reachable."),
+    ),
+    `expected queued follow toast, got ${harness.toasts.join(", ")}`,
+  );
 });
 
 test("ghost-resubscribed X handles can be unfollowed immediately", async () => {
