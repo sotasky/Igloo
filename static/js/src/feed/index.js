@@ -1161,17 +1161,6 @@ function currentFeedEntryScope() {
   return feedList
 }
 
-function feedEntryCard(entry) {
-  if (!entry) return null
-  if (entry.matches && entry.matches('[data-feed-item]')) return entry
-  if (entry.matches && entry.matches('[data-feed-thread]')) {
-    return entry.querySelector('.feed-thread-leaf[data-feed-item]') ||
-      entry.querySelector('[data-feed-item]:not([data-feed-thread-row])') ||
-      entry.querySelector('[data-feed-item]')
-  }
-  return entry.querySelector ? entry.querySelector('[data-feed-item]') : null
-}
-
 function feedEntryVisible(entry) {
   if (!entry) return false
   var style = window.getComputedStyle ? window.getComputedStyle(entry) : null
@@ -1183,20 +1172,10 @@ function feedEntryVisible(entry) {
 function visibleFeedEntries() {
   var scope = currentFeedEntryScope()
   if (!scope) return []
-  var entries = []
-  for (var i = 0; i < scope.children.length; i++) {
-    var child = scope.children[i]
-    if (child.matches && (child.matches('[data-feed-thread]') || child.matches('[data-feed-item]'))) entries.push(child)
-  }
-  if (!entries.length) {
-    var cards = scope.querySelectorAll('[data-feed-item]')
-    for (var c = 0; c < cards.length; c++) {
-      if (!cards[c].closest('[data-feed-thread]')) entries.push(cards[c])
-    }
-  }
+  var entries = scope.querySelectorAll('[data-feed-item]')
   var visible = []
-  for (var e = 0; e < entries.length; e++) {
-    if (feedEntryVisible(entries[e])) visible.push(entries[e])
+  for (var i = 0; i < entries.length; i++) {
+    if (feedEntryVisible(entries[i])) visible.push(entries[i])
   }
   return visible
 }
@@ -1216,13 +1195,13 @@ function getFocusedFeedEntry() {
   var entries = visibleFeedEntries()
   var best = null
   var bestScore = -Infinity
-  var anchorY = Math.min(160, Math.max(72, window.innerHeight * 0.22))
+  var anchorY = window.innerHeight / 2
   for (var i = 0; i < entries.length; i++) {
     var score = focusedEntryScore(entries[i], anchorY)
     if (score > bestScore) { bestScore = score; best = entries[i] }
   }
   _focusedFeedEntry = best
-  _focusedFeedCard = feedEntryCard(best)
+  _focusedFeedCard = best
   _feedFocusDirty = false
   return best
 }
@@ -1230,7 +1209,7 @@ function getFocusedFeedEntry() {
 function getFocusedFeedCard() {
   var entry = getFocusedFeedEntry()
   if (!_feedFocusDirty && _focusedFeedCard && document.contains(_focusedFeedCard)) return _focusedFeedCard
-  _focusedFeedCard = feedEntryCard(entry)
+  _focusedFeedCard = entry
   return _focusedFeedCard
 }
 
@@ -1246,11 +1225,11 @@ function scrollFeedCardBy(delta) {
   var next = entries[nextIndex]
   if (!next || next === current) return false
   _focusedFeedEntry = next
-  _focusedFeedCard = feedEntryCard(next)
+  _focusedFeedCard = next
   _feedFocusDirty = false
   _feedNavAt = Date.now()
   try {
-    next.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    next.scrollIntoView({ behavior: 'smooth', block: 'center' })
   } catch (_) {
     next.scrollIntoView()
   }

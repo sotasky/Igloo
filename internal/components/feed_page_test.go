@@ -30,11 +30,11 @@ func TestFeedKeyboardNavigationShortcuts(t *testing.T) {
 	for _, want := range []string{
 		"function scrollFeedCardBy(delta)",
 		"function visibleFeedEntries()",
-		"child.matches('[data-feed-thread]')",
-		"return entry.querySelector('.feed-thread-leaf[data-feed-item]')",
+		"scope.querySelectorAll('[data-feed-item]')",
+		"if (feedEntryVisible(entries[i])) visible.push(entries[i])",
 		"if (event.key === 'j' || event.key === 'J')",
 		"if (event.key === 'k' || event.key === 'K')",
-		"next.scrollIntoView({ behavior: 'smooth', block: 'start' })",
+		"next.scrollIntoView({ behavior: 'smooth', block: 'center' })",
 	} {
 		if !strings.Contains(src, want) {
 			t.Fatalf("feed keyboard navigation missing %q", want)
