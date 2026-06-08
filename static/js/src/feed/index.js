@@ -155,6 +155,7 @@ function insertThreadRoute(route, returnState) {
   activeThreadRoute = route
   lastFeedThreadRouteState = returnState || lastFeedThreadRouteState
   _feedFocusDirty = true
+  _focusedFeedEntry = null
   _focusedFeedCard = null
   initFeedCards(route)
   initThreadBackLink(route)
@@ -192,6 +193,7 @@ function closeThreadRoute(returnState) {
   removeActiveThreadRoute()
   setFeedRouteHidden(false)
   _feedFocusDirty = true
+  _focusedFeedEntry = null
   _focusedFeedCard = null
   var tweetId = String(state.tweetId || '').trim()
   var target = tweetId && feedList ? feedList.querySelector('[data-feed-item][data-tweet-id="' + cssEscape(tweetId) + '"]') : null
@@ -1147,60 +1149,106 @@ document.addEventListener('keydown', function (event) {
 
 // ── Keyboard shortcuts (l=like, b=bookmark, s=share, t=translate) ──
 
+var _focusedFeedEntry = null
 var _focusedFeedCard = null
 var _feedFocusDirty = true
+var _feedNavAt = 0
 
-function currentFeedCardScope() {
-  return activeThreadRoute || feedList
-}
-
-function getFocusedFeedCard() {
-  var scope = currentFeedCardScope()
-  if (!scope) return null
-  if (!_feedFocusDirty && _focusedFeedCard && document.contains(_focusedFeedCard)) return _focusedFeedCard
-  var cards = scope.querySelectorAll('[data-feed-item]')
-  var best = null, bestScore = -Infinity
-  var midY = window.innerHeight / 2
-  for (var i = 0; i < cards.length; i++) {
-    var r = cards[i].getBoundingClientRect()
-    if (r.bottom < 0 || r.top > window.innerHeight) continue
-    var center = (r.top + r.bottom) / 2
-    var score = -Math.abs(center - midY)
-    if (score > bestScore) { bestScore = score; best = cards[i] }
+function currentFeedEntryScope() {
+  if (activeThreadRoute) {
+    return activeThreadRoute.querySelector('[data-thread-page]') || activeThreadRoute
   }
-  _focusedFeedCard = best; _feedFocusDirty = false
-  return best
+  return feedList
 }
 
-function visibleFeedCards() {
-  var scope = currentFeedCardScope()
+function feedEntryCard(entry) {
+  if (!entry) return null
+  if (entry.matches && entry.matches('[data-feed-item]')) return entry
+  if (entry.matches && entry.matches('[data-feed-thread]')) {
+    return entry.querySelector('.feed-thread-leaf[data-feed-item]') ||
+      entry.querySelector('[data-feed-item]:not([data-feed-thread-row])') ||
+      entry.querySelector('[data-feed-item]')
+  }
+  return entry.querySelector ? entry.querySelector('[data-feed-item]') : null
+}
+
+function feedEntryVisible(entry) {
+  if (!entry) return false
+  var style = window.getComputedStyle ? window.getComputedStyle(entry) : null
+  if (style && (style.display === 'none' || style.visibility === 'hidden')) return false
+  var r = entry.getBoundingClientRect()
+  return r.width > 0 && r.height > 0
+}
+
+function visibleFeedEntries() {
+  var scope = currentFeedEntryScope()
   if (!scope) return []
-  var cards = scope.querySelectorAll('[data-feed-item]')
+  var entries = []
+  for (var i = 0; i < scope.children.length; i++) {
+    var child = scope.children[i]
+    if (child.matches && (child.matches('[data-feed-thread]') || child.matches('[data-feed-item]'))) entries.push(child)
+  }
+  if (!entries.length) {
+    var cards = scope.querySelectorAll('[data-feed-item]')
+    for (var c = 0; c < cards.length; c++) {
+      if (!cards[c].closest('[data-feed-thread]')) entries.push(cards[c])
+    }
+  }
   var visible = []
-  for (var i = 0; i < cards.length; i++) {
-    var card = cards[i]
-    var style = window.getComputedStyle ? window.getComputedStyle(card) : null
-    if (style && (style.display === 'none' || style.visibility === 'hidden')) continue
-    var r = card.getBoundingClientRect()
-    if (r.width <= 0 || r.height <= 0) continue
-    visible.push(card)
+  for (var e = 0; e < entries.length; e++) {
+    if (feedEntryVisible(entries[e])) visible.push(entries[e])
   }
   return visible
 }
 
-function scrollFeedCardBy(delta) {
-  var cards = visibleFeedCards()
-  if (!cards.length) return false
-  var current = getFocusedFeedCard()
-  var index = current ? cards.indexOf(current) : -1
-  if (index < 0) {
-    index = delta > 0 ? -1 : cards.length
+function focusedEntryScore(entry, anchorY) {
+  var r = entry.getBoundingClientRect()
+  if (r.bottom < 0 || r.top > window.innerHeight) return -Infinity
+  if (r.top <= anchorY && r.bottom > anchorY) return 100000 - Math.abs(r.top - anchorY)
+  if (r.top > anchorY) return -Math.abs(r.top - anchorY)
+  return -50000 - Math.abs(r.bottom - anchorY)
+}
+
+function getFocusedFeedEntry() {
+  var scope = currentFeedEntryScope()
+  if (!scope) return null
+  if (!_feedFocusDirty && _focusedFeedEntry && document.contains(_focusedFeedEntry)) return _focusedFeedEntry
+  var entries = visibleFeedEntries()
+  var best = null
+  var bestScore = -Infinity
+  var anchorY = Math.min(160, Math.max(72, window.innerHeight * 0.22))
+  for (var i = 0; i < entries.length; i++) {
+    var score = focusedEntryScore(entries[i], anchorY)
+    if (score > bestScore) { bestScore = score; best = entries[i] }
   }
-  var nextIndex = Math.max(0, Math.min(cards.length - 1, index + delta))
-  var next = cards[nextIndex]
-  if (!next || next === current) return false
-  _focusedFeedCard = next
+  _focusedFeedEntry = best
+  _focusedFeedCard = feedEntryCard(best)
   _feedFocusDirty = false
+  return best
+}
+
+function getFocusedFeedCard() {
+  var entry = getFocusedFeedEntry()
+  if (!_feedFocusDirty && _focusedFeedCard && document.contains(_focusedFeedCard)) return _focusedFeedCard
+  _focusedFeedCard = feedEntryCard(entry)
+  return _focusedFeedCard
+}
+
+function scrollFeedCardBy(delta) {
+  var entries = visibleFeedEntries()
+  if (!entries.length) return false
+  var current = getFocusedFeedEntry()
+  var index = current ? entries.indexOf(current) : -1
+  if (index < 0) {
+    index = delta > 0 ? -1 : entries.length
+  }
+  var nextIndex = Math.max(0, Math.min(entries.length - 1, index + delta))
+  var next = entries[nextIndex]
+  if (!next || next === current) return false
+  _focusedFeedEntry = next
+  _focusedFeedCard = feedEntryCard(next)
+  _feedFocusDirty = false
+  _feedNavAt = Date.now()
   try {
     next.scrollIntoView({ behavior: 'smooth', block: 'start' })
   } catch (_) {
@@ -1209,7 +1257,12 @@ function scrollFeedCardBy(delta) {
   return true
 }
 
-document.addEventListener('scroll', function () { _feedFocusDirty = true; _focusedFeedCard = null }, { passive: true, capture: true })
+document.addEventListener('scroll', function () {
+  if (Date.now() - _feedNavAt < 700) return
+  _feedFocusDirty = true
+  _focusedFeedEntry = null
+  _focusedFeedCard = null
+}, { passive: true, capture: true })
 
 document.addEventListener('keydown', function (event) {
   var tag = (event.target.tagName || '').toLowerCase()

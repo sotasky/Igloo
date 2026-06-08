@@ -29,6 +29,9 @@ func TestFeedKeyboardNavigationShortcuts(t *testing.T) {
 	src := string(srcBytes)
 	for _, want := range []string{
 		"function scrollFeedCardBy(delta)",
+		"function visibleFeedEntries()",
+		"child.matches('[data-feed-thread]')",
+		"return entry.querySelector('.feed-thread-leaf[data-feed-item]')",
 		"if (event.key === 'j' || event.key === 'J')",
 		"if (event.key === 'k' || event.key === 'K')",
 		"next.scrollIntoView({ behavior: 'smooth', block: 'start' })",
