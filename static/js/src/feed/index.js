@@ -1172,6 +1172,43 @@ function getFocusedFeedCard() {
   return best
 }
 
+function visibleFeedCards() {
+  var scope = currentFeedCardScope()
+  if (!scope) return []
+  var cards = scope.querySelectorAll('[data-feed-item]')
+  var visible = []
+  for (var i = 0; i < cards.length; i++) {
+    var card = cards[i]
+    var style = window.getComputedStyle ? window.getComputedStyle(card) : null
+    if (style && (style.display === 'none' || style.visibility === 'hidden')) continue
+    var r = card.getBoundingClientRect()
+    if (r.width <= 0 || r.height <= 0) continue
+    visible.push(card)
+  }
+  return visible
+}
+
+function scrollFeedCardBy(delta) {
+  var cards = visibleFeedCards()
+  if (!cards.length) return false
+  var current = getFocusedFeedCard()
+  var index = current ? cards.indexOf(current) : -1
+  if (index < 0) {
+    index = delta > 0 ? -1 : cards.length
+  }
+  var nextIndex = Math.max(0, Math.min(cards.length - 1, index + delta))
+  var next = cards[nextIndex]
+  if (!next || next === current) return false
+  _focusedFeedCard = next
+  _feedFocusDirty = false
+  try {
+    next.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  } catch (_) {
+    next.scrollIntoView()
+  }
+  return true
+}
+
 document.addEventListener('scroll', function () { _feedFocusDirty = true; _focusedFeedCard = null }, { passive: true, capture: true })
 
 document.addEventListener('keydown', function (event) {
@@ -1205,6 +1242,14 @@ document.addEventListener('keydown', function (event) {
     return
   }
   if (isBookmarkMenuOpen()) return
+
+  if (event.key === 'j' || event.key === 'J') {
+    if (scrollFeedCardBy(1)) { event.preventDefault(); event.stopPropagation() }
+    return
+  } else if (event.key === 'k' || event.key === 'K') {
+    if (scrollFeedCardBy(-1)) { event.preventDefault(); event.stopPropagation() }
+    return
+  }
 
   var card = getFocusedFeedCard()
   if (!card) return
