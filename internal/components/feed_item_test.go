@@ -481,7 +481,7 @@ func TestFeedItemSeenTrackingIsPageGatedHTMX(t *testing.T) {
 	if !strings.Contains(html, `hx-post="/api/feed/seen?tweet_id=seen_1"`) {
 		t.Fatalf("missing seen HTMX post: %s", html)
 	}
-	if !strings.Contains(html, `hx-trigger="intersect once threshold:0.4"`) {
+	if !strings.Contains(html, `hx-trigger="intersect once threshold:0.15"`) {
 		t.Fatalf("missing valid intersect trigger: %s", html)
 	}
 	if strings.Contains(html, `data-feed-seen-url`) {

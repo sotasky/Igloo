@@ -47,6 +47,43 @@ func TestListFeedItemsPageExcludesGhostRows(t *testing.T) {
 	}
 }
 
+func TestGetLatestFetchedFeedItemExcludesGhostRows(t *testing.T) {
+	d := openWritableTestDB(t)
+	base := time.Now().UTC()
+	visibleFetched := base.Add(-time.Minute)
+	ghostFetched := base
+	if _, err := d.UpsertFeedItems([]model.FeedItem{
+		{
+			TweetID:      "visible_head",
+			AuthorHandle: "sample_author",
+			SourceHandle: "sample_author",
+			BodyText:     "visible",
+			PublishedAt:  &visibleFetched,
+			FetchedAt:    visibleFetched,
+			ContentHash:  "hash_visible_head",
+		},
+		{
+			TweetID:      "context_head",
+			AuthorHandle: "sample_author_b",
+			BodyText:     "context",
+			IsGhost:      true,
+			PublishedAt:  &ghostFetched,
+			FetchedAt:    ghostFetched,
+			ContentHash:  "hash_context_head",
+		},
+	}); err != nil {
+		t.Fatalf("seed feed items: %v", err)
+	}
+
+	item, err := d.GetLatestFetchedFeedItem()
+	if err != nil {
+		t.Fatalf("GetLatestFetchedFeedItem: %v", err)
+	}
+	if item == nil || item.TweetID != "visible_head" {
+		t.Fatalf("latest fetched item = %+v, want visible_head", item)
+	}
+}
+
 func TestGetFeedItemsForTweetIDs(t *testing.T) {
 	d := openTestDB(t)
 	var tweetID string

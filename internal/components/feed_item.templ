@@ -157,7 +157,7 @@ templ feedLeafCard(p PageProps, item model.FeedItem) {
 		}
 		if p.TrackFeedSeen && !item.IsSeen {
 			hx-post={ "/api/feed/seen?tweet_id=" + item.TweetID }
-			hx-trigger="intersect once threshold:0.4"
+			hx-trigger="intersect once threshold:0.15"
 			hx-swap="none"
 			hx-on::after-request="if (event.detail.successful) { this.setAttribute('data-feed-seen', '1'); this.classList.add('feed-card-seen') }"
 		}

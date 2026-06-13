@@ -1406,6 +1406,9 @@ func (db *DB) GetLatestFetchedFeedItem() (*model.FeedItem, error) {
 		       published_at, fetched_at,
 		       COALESCE(content_hash,''), COALESCE(canonical_tweet_id,'')
 		FROM feed_items
+		WHERE ` + feedPrimaryItemPredicate("feed_items") + `
+		  AND (canonical_tweet_id IS NULL OR canonical_tweet_id = '' OR canonical_tweet_id = tweet_id)
+		  AND ` + retweetFilterClause("feed_items") + `
 		ORDER BY fetched_at DESC, tweet_id DESC
 		LIMIT 1
 	`)

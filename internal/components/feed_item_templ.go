@@ -939,7 +939,7 @@ func feedLeafCard(p PageProps, item model.FeedItem) templ.Component {
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 69, "\" hx-trigger=\"intersect once threshold:0.4\" hx-swap=\"none\" hx-on::after-request=\"if (event.detail.successful) { this.setAttribute('data-feed-seen', '1'); this.classList.add('feed-card-seen') }\"")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 69, "\" hx-trigger=\"intersect once threshold:0.15\" hx-swap=\"none\" hx-on::after-request=\"if (event.detail.successful) { this.setAttribute('data-feed-seen', '1'); this.classList.add('feed-card-seen') }\"")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
