@@ -253,3 +253,49 @@ func TestHandleFeedSeenDoesNotInvalidateFeedRanking(t *testing.T) {
 		t.Fatalf("algo_scored_at after seen = %d, want unchanged 12345", scoredAt)
 	}
 }
+
+func TestHandleFeedSeenMarksConversationBranch(t *testing.T) {
+	srv := newTestServer(t)
+	if err := srv.db.ExecRaw(`INSERT INTO feed_items
+		(tweet_id, author_handle, body_text, is_reply, reply_to_status, published_at)
+		VALUES
+			('sample_thread_root', 'sample_author', 'root body', 0, '', 1000),
+			('sample_thread_reply_a', 'sample_reply_a', 'reply a', 1, 'sample_thread_root', 1001),
+			('sample_thread_reply_b', 'sample_reply_b', 'reply b', 1, 'sample_thread_root', 1002),
+			('sample_other_item', 'sample_other', 'other body', 0, '', 1003)`); err != nil {
+		t.Fatal(err)
+	}
+
+	seenReq := httptest.NewRequest("POST", "/api/feed/seen?tweet_id=sample_thread_reply_a", nil)
+	seenReq = attachTestAuth(seenReq, "alice")
+	seenRec := httptest.NewRecorder()
+	srv.mux.ServeHTTP(seenRec, seenReq)
+	if seenRec.Code != http.StatusOK {
+		t.Fatalf("seen status: got %d - %s", seenRec.Code, seenRec.Body.String())
+	}
+
+	var seenRows int
+	if err := srv.db.QueryRow(`
+		SELECT COUNT(*)
+		FROM feed_seen
+		WHERE username = 'alice'
+		  AND tweet_id IN ('sample_thread_root', 'sample_thread_reply_a', 'sample_thread_reply_b')
+	`).Scan(&seenRows); err != nil {
+		t.Fatal(err)
+	}
+	if seenRows != 3 {
+		t.Fatalf("conversation seen rows = %d, want 3", seenRows)
+	}
+	var otherRows int
+	if err := srv.db.QueryRow(`
+		SELECT COUNT(*)
+		FROM feed_seen
+		WHERE username = 'alice'
+		  AND tweet_id = 'sample_other_item'
+	`).Scan(&otherRows); err != nil {
+		t.Fatal(err)
+	}
+	if otherRows != 0 {
+		t.Fatalf("unrelated seen rows = %d, want 0", otherRows)
+	}
+}

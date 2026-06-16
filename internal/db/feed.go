@@ -976,11 +976,23 @@ func (db *DB) MarkSeen(username string, tweetIDs []string) (int, error) {
 	err := db.WithWrite(func(tx *sql.Tx) error {
 		nowMs := time.Now().UnixMilli()
 		cleanIDs := make([]string, 0, len(tweetIDs))
+		seenIDs := make(map[string]bool, len(tweetIDs))
 		for _, id := range tweetIDs {
-			if strings.TrimSpace(id) == "" {
+			id = strings.TrimSpace(id)
+			if id == "" || seenIDs[id] {
 				continue
 			}
+			seenIDs[id] = true
 			cleanIDs = append(cleanIDs, id)
+		}
+		if len(cleanIDs) == 0 {
+			return nil
+		}
+		expandedIDs, err := expandSeenConversationIDsTx(tx, cleanIDs)
+		if err != nil {
+			return err
+		}
+		for _, id := range expandedIDs {
 			res, err := tx.Exec(`
 				INSERT INTO feed_seen (username, tweet_id, seen_at)
 				VALUES (?, ?, ?)
@@ -992,16 +1004,93 @@ func (db *DB) MarkSeen(username string, tweetIDs []string) (int, error) {
 			n, _ := res.RowsAffected()
 			total += int(n)
 		}
-		if len(cleanIDs) == 0 {
-			return nil
-		}
 		valueJSON, _ := json.Marshal(map[string]any{
-			"tweet_ids":     cleanIDs,
+			"tweet_ids":     expandedIDs,
 			"updated_at_ms": nowMs,
 		})
-		return db.recordSyncChangeTx(tx, "seen", cleanIDs[0], string(valueJSON))
+		return db.recordSyncChangeTx(tx, "seen", expandedIDs[0], string(valueJSON))
 	})
 	return total, err
+}
+
+func expandSeenConversationIDsTx(tx *sql.Tx, tweetIDs []string) ([]string, error) {
+	if len(tweetIDs) == 0 {
+		return nil, nil
+	}
+	placeholders := strings.TrimRight(strings.Repeat("(?),", len(tweetIDs)), ",")
+	args := make([]any, 0, len(tweetIDs))
+	for _, id := range tweetIDs {
+		args = append(args, id)
+	}
+	rows, err := tx.Query(`
+		WITH RECURSIVE
+		seed(tweet_id) AS (VALUES `+placeholders+`),
+		up(seed_id, tweet_id, reply_to_status, depth) AS (
+			SELECT fi.tweet_id, fi.tweet_id, COALESCE(fi.reply_to_status, ''), 0
+			FROM feed_items fi
+			JOIN seed ON seed.tweet_id = fi.tweet_id
+			UNION
+			SELECT up.seed_id, parent.tweet_id, COALESCE(parent.reply_to_status, ''), up.depth + 1
+			FROM up
+			JOIN feed_items parent ON parent.tweet_id = up.reply_to_status
+			WHERE up.reply_to_status != ''
+			  AND up.depth < 50
+		),
+		root_depth AS (
+			SELECT seed_id, MAX(depth) AS max_depth
+			FROM up
+			GROUP BY seed_id
+		),
+		roots(root_id) AS (
+			SELECT DISTINCT up.tweet_id
+			FROM up
+			JOIN root_depth
+			  ON root_depth.seed_id = up.seed_id
+			 AND root_depth.max_depth = up.depth
+		),
+		down(tweet_id, depth) AS (
+			SELECT root_id, 0 FROM roots
+			UNION
+			SELECT child.tweet_id, down.depth + 1
+			FROM down
+			JOIN feed_items child ON child.reply_to_status = down.tweet_id
+			WHERE down.depth < 50
+		)
+		SELECT tweet_id FROM seed
+		UNION
+		SELECT tweet_id FROM down
+	`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		_ = rows.Close()
+	}()
+
+	out := make([]string, 0, len(tweetIDs))
+	seen := make(map[string]bool, len(tweetIDs))
+	for _, id := range tweetIDs {
+		if strings.TrimSpace(id) == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		if strings.TrimSpace(id) == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // MuteAccount adds a handle to the muted list.
