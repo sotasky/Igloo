@@ -11,11 +11,11 @@ import (
 )
 
 // #16 — paired access + refresh tokens with session tracking.
-// Access TTL: 24 hours. Refresh TTL: 90 days. Single-use refresh with
+// Access TTL: 7 days. Refresh TTL: 90 days. Single-use refresh with
 // server-side replay detection (see internal/db/auth_sessions.go).
 
 const (
-	AccessTokenTTL  = 24 * time.Hour
+	AccessTokenTTL  = 7 * 24 * time.Hour
 	RefreshTokenTTL = 90 * 24 * time.Hour
 )
 
@@ -31,17 +31,17 @@ const (
 // which auth_sessions row this token belongs to; the server looks up
 // revoked state on every request. ExpiresAtMs is unix-millis per #14.
 type TokenClaims struct {
-	Username     string   `json:"username"`
-	Role         string   `json:"role"`
-	Platforms    []string `json:"platforms"`
-	SessionID    string   `json:"session_id"`
-	TokenType    string   `json:"token_type"`
-	TokenID      string   `json:"token_id,omitempty"` // refresh only
-	IssuedAtMs   int64    `json:"issued_at_ms"`
-	ExpiresAtMs  int64    `json:"expires_at_ms"`
+	Username    string   `json:"username"`
+	Role        string   `json:"role"`
+	Platforms   []string `json:"platforms"`
+	SessionID   string   `json:"session_id"`
+	TokenType   string   `json:"token_type"`
+	TokenID     string   `json:"token_id,omitempty"` // refresh only
+	IssuedAtMs  int64    `json:"issued_at_ms"`
+	ExpiresAtMs int64    `json:"expires_at_ms"`
 }
 
-// SignAccessToken produces a 24-hour access token tied to a session.
+// SignAccessToken produces a 7-day access token tied to a session.
 func SignAccessToken(secret, username, role string, platforms []string, sessionID string, issuedAtMs int64) string {
 	claims := TokenClaims{
 		Username:    username,

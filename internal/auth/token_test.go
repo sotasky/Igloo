@@ -48,7 +48,7 @@ func TestSignAndVerifyRefreshToken(t *testing.T) {
 }
 
 func TestExpiredAccessToken(t *testing.T) {
-	past := time.Now().Add(-25 * time.Hour).UnixMilli()
+	past := time.Now().Add(-8 * 24 * time.Hour).UnixMilli()
 	token := SignAccessToken(testSecret, "user_a", "admin", nil, "sess_x", past)
 	_, err := VerifyAccessToken(testSecret, token)
 	if !errors.Is(err, ErrTokenExpired) {

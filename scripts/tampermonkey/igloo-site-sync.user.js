@@ -40,7 +40,7 @@
 
   const SETTINGS = {
     apiBase: "xsync_api_base",
-    authToken: "xsync_auth_token", // access token (24h)
+    authToken: "xsync_auth_token", // access token (7d)
     authRefresh: "xsync_auth_refresh", // refresh token (90d, rotated on use)
     authUser: "xsync_auth_user",
     syncToDashboard: "xsync_sync_to_dashboard",

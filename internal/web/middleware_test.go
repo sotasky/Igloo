@@ -63,7 +63,7 @@ func TestAuthRefreshBypassesExpiredBearerAndCSRF(t *testing.T) {
 		t.Fatalf("CreateRefreshToken: %v", err)
 	}
 	refreshToken := auth.SignRefreshToken(srv.cfg.SecretKey, "alice", "admin", nil, sessionID, tokenID, issuedAtMs, expiresAtMs)
-	expiredIssuedAtMs := time.Now().Add(-25 * time.Hour).UnixMilli()
+	expiredIssuedAtMs := time.Now().Add(-8 * 24 * time.Hour).UnixMilli()
 	expiredAccessToken := auth.SignAccessToken(srv.cfg.SecretKey, "alice", "admin", nil, sessionID, expiredIssuedAtMs)
 
 	mux := http.NewServeMux()
