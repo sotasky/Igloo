@@ -511,8 +511,8 @@ class AndroidSyncMirror(
             val channelProfiles = timedPruneStep("delete_channel_profiles_without_channel") {
                 dao.deleteChannelProfilesWithoutChannel(generationId)
             }
-            val legacyAssets = timedPruneStep("delete_legacy_assets_without_owner") {
-                dao.deleteLegacyAssetsWithoutOwner()
+            val legacyAssets = timedPruneStep("delete_legacy_assets_outside_generation") {
+                dao.deleteLegacyAssetsOutsideGeneration(generationId)
             }
             AndroidSyncContentPruneCounts(
                 videos = videos,

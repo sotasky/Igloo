@@ -556,7 +556,7 @@ interface AndroidSyncDao {
             deleteChannelSettingsOutsideGeneration(generationId)
         val channels = deleteChannelsOutsideGeneration(generationId)
         val channelProfiles = deleteChannelProfilesWithoutChannel(generationId)
-        val legacyAssets = deleteLegacyAssetsWithoutOwner()
+        val legacyAssets = deleteLegacyAssetsOutsideGeneration(generationId)
         return AndroidSyncContentPruneCounts(
             videos = videos,
             feedItems = feedItems,
@@ -787,12 +787,24 @@ interface AndroidSyncDao {
         """
         DELETE FROM media_inventory
         WHERE COALESCE(owner_id, '') != ''
-          AND NOT EXISTS (SELECT 1 FROM videos WHERE videos.video_id = media_inventory.owner_id)
-          AND NOT EXISTS (SELECT 1 FROM feed_items WHERE feed_items.tweet_id = media_inventory.owner_id)
-          AND NOT EXISTS (SELECT 1 FROM channels WHERE channels.channel_id = media_inventory.owner_id)
+          AND (
+              (
+                  NOT EXISTS (SELECT 1 FROM videos WHERE videos.video_id = media_inventory.owner_id)
+                  AND NOT EXISTS (SELECT 1 FROM feed_items WHERE feed_items.tweet_id = media_inventory.owner_id)
+                  AND NOT EXISTS (SELECT 1 FROM channels WHERE channels.channel_id = media_inventory.owner_id)
+              )
+              OR NOT EXISTS (
+                  SELECT 1
+                  FROM android_sync_assets cur
+                  WHERE cur.generation_id = :generationId
+                    AND cur.asset_id = media_inventory.asset_id
+                    AND cur.asset_kind = media_inventory.asset_kind
+                    AND cur.server_state = 'ready'
+              )
+          )
         """
     )
-    suspend fun deleteLegacyAssetsWithoutOwner(): Int
+    suspend fun deleteLegacyAssetsOutsideGeneration(generationId: String): Int
 
     @Query(
         """

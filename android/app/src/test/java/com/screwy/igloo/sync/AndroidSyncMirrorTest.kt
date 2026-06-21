@@ -16,7 +16,10 @@ import com.screwy.igloo.data.entity.ChannelSettingEntity
 import com.screwy.igloo.data.entity.ChannelStarEntity
 import com.screwy.igloo.data.entity.FeedItemEntity
 import com.screwy.igloo.data.entity.FeedLikeEntity
+import com.screwy.igloo.data.entity.FeedThreadContextEntity
+import com.screwy.igloo.data.entity.MediaInventoryEntity
 import com.screwy.igloo.data.entity.OutboxEntity
+import com.screwy.igloo.data.entity.RetweetSourceEntity
 import com.screwy.igloo.data.entity.VideoEntity
 import com.screwy.igloo.log.InMemoryLogSink
 import com.screwy.igloo.log.LogEntry
@@ -2481,10 +2484,48 @@ class AndroidSyncMirrorTest {
         db.videoDao().upsert(VideoEntity("saved_short", "tiktok_saved", publishedAt = 10))
         db.bookmarkDao().upsert(BookmarkEntity(videoId = "saved_short", categoryId = 0, bookmarkedAt = 20))
 
-        db.feedItemDao().upsert(FeedItemEntity("kept_tweet", authorHandle = "alice", publishedAt = 10, channelId = "twitter_alice"))
-        db.feedItemDao().upsert(FeedItemEntity("dropped_tweet", authorHandle = "bob", publishedAt = 10, channelId = "twitter_bob"))
+        db.feedItemDao().upsert(FeedItemEntity("kept_tweet", authorHandle = "alice", publishedAt = 10, channelId = "twitter_alice", contentHash = "kept_hash"))
+        db.feedItemDao().upsert(FeedItemEntity("dropped_tweet", authorHandle = "bob", publishedAt = 10, channelId = "twitter_bob", contentHash = "drop_hash"))
         db.feedItemDao().upsert(FeedItemEntity("liked_tweet", authorHandle = "cara", publishedAt = 10, channelId = "twitter_cara"))
+        db.feedItemDao().upsert(FeedItemEntity("stale_parent", authorHandle = "drew", publishedAt = 5, channelId = "twitter_drew"))
         db.feedLikeDao().upsert(FeedLikeEntity("liked_tweet", likedAt = 20))
+        db.feedThreadContextDao().replaceForLeaf(
+            "kept_tweet",
+            listOf(FeedThreadContextEntity("kept_tweet", "stale_parent", "stale_parent", 0)),
+        )
+        db.retweetSourceDao().upsert(
+            listOf(
+                RetweetSourceEntity(contentHash = "kept_hash", retweeterHandle = "alice_rt", tweetId = "kept_tweet", publishedAt = 20),
+                RetweetSourceEntity(contentHash = "drop_hash", retweeterHandle = "bob_rt", tweetId = "dropped_tweet", publishedAt = 20),
+            ),
+        )
+        dao.importAssets(
+            listOf(
+                AndroidSyncAssetEntity(
+                    generationId = generation.generationId,
+                    seq = 1,
+                    assetId = "kept_media",
+                    assetKind = "post_media",
+                    ownerId = "kept_tweet",
+                    ownerKind = "feed_item",
+                    bucket = "twitter_media",
+                    serverUrl = "/api/android/sync/generation/${generation.generationId}/assets/kept_media",
+                    contentType = "image/jpeg",
+                    sizeBytes = 1,
+                    serverState = "ready",
+                    effectiveRecencyMs = nowMs,
+                ),
+            ),
+            nowMs,
+        )
+        db.mediaInventoryDao().upsert(
+            listOf(
+                legacyMedia("kept_media", ownerId = "kept_tweet"),
+                legacyMedia("stale_media", ownerId = "kept_tweet"),
+                legacyMedia("orphan_media", ownerId = "missing_tweet"),
+                legacyMedia("unowned_media", ownerId = null),
+            ),
+        )
 
         dao.upsertItems(
             listOf(
@@ -2502,14 +2543,20 @@ class AndroidSyncMirrorTest {
         val counts = dao.pruneContentOutsideGeneration(generation.generationId)
 
         assertEquals(1, counts.videos)
-        assertEquals(1, counts.feedItems)
+        assertEquals(2, counts.feedItems)
         assertEquals(1, counts.channels)
+        assertEquals(2, counts.legacyAssets)
+        assertEquals(4, counts.sideRows)
         assertNotNull(db.videoDao().getById("kept_short"))
         assertNull(db.videoDao().getById("dropped_short"))
         assertNotNull(db.videoDao().getById("saved_short"))
         assertNotNull(db.feedItemDao().getById("kept_tweet"))
         assertNull(db.feedItemDao().getById("dropped_tweet"))
         assertNotNull(db.feedItemDao().getById("liked_tweet"))
+        assertNull(db.feedItemDao().getById("stale_parent"))
+        assertEquals(0, tableCount("feed_thread_context"))
+        assertEquals(1, db.retweetSourceDao().countForContentHash("kept_hash"))
+        assertEquals(0, db.retweetSourceDao().countForContentHash("drop_hash"))
         assertNull(db.channelDao().getById("tiktok_drop"))
         assertNotNull(db.channelDao().getById("tiktok_saved"))
         assertNull(db.channelProfileDao().getById("tiktok_drop"))
@@ -2518,6 +2565,9 @@ class AndroidSyncMirrorTest {
         assertNull(db.channelProfileDao().getById("tiktok_stale_profile"))
         assertFalse(db.channelStarDao().exists("tiktok_drop"))
         assertNull(db.channelSettingDao().getById("tiktok_drop"))
+        assertEquals(listOf("kept_media"), db.mediaInventoryDao().forOwner("kept_tweet").map { it.assetId })
+        assertEquals(emptyList<MediaInventoryEntity>(), db.mediaInventoryDao().forOwner("missing_tweet"))
+        assertEquals(2, tableCount("media_inventory"))
     }
 
     @Test fun pruneContentOutsideGenerationPreservesPendingChannelSideRows() = runBlocking {
@@ -2546,6 +2596,27 @@ class AndroidSyncMirrorTest {
         assertNotNull(db.channelSettingDao().getById("tiktok_pending"))
         assertNotNull(db.channelDao().getById("tiktok_pending"))
     }
+
+    private fun tableCount(table: String): Int {
+        db.openHelper.readableDatabase.query("SELECT COUNT(*) FROM $table").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            return cursor.getInt(0)
+        }
+    }
+
+    private fun legacyMedia(
+        assetId: String,
+        ownerId: String?,
+    ) = MediaInventoryEntity(
+        assetId = assetId,
+        assetKind = "post_media",
+        scope = "sync_compat",
+        ownerId = ownerId,
+        bucket = "twitter_media",
+        serverUrl = "/api/media/$assetId",
+        state = "cached",
+        addedAtMs = nowMs,
+    )
 
     private fun buildMirror(
         engine: MockEngine,
