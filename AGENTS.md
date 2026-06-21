@@ -64,6 +64,10 @@ For Go code, protect the success path. Do not allocate rollback journals, diagno
 - Treat new or high-signal production `errcheck` findings as blockers. If
   existing findings remain, report them plainly with the reason they were not
   fixed.
+- For CI-fix work, commit and push the verified fix unless the user explicitly
+  asks not to, publishing is unavailable, or the repository state makes a safe
+  push impossible. Report the exact blocker when a verified fix cannot be
+  published.
 
 ## Releases
 

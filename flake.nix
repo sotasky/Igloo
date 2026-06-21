@@ -82,8 +82,8 @@
             # renovate: packageName=yt-dlp depName=yt-dlp versioning=pep440
             "yt-dlp" = {
               pypiName = "yt_dlp";
-              version = "2026.3.17";
-              sha256 = "ba7aa31d533f1ffccfe70e421596d7ca8ff0bf1398dc6bb658b7d9dec057d2c9";
+              version = "2026.6.9";
+              sha256 = "d50fcb95f48d61bedde33e408c1881d4c279e51c31354a599ce09e96ba0f4b86";
             };
             # renovate: packageName=gallery-dl depName=gallery-dl versioning=pep440
             "gallery-dl" = {
