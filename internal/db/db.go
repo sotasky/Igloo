@@ -94,13 +94,6 @@ func OpenWithOptions(path, dataDir string, opts OpenOptions) (*DB, error) {
 	}
 	reportPhase(opts.Phase, "db.repair_video_media_shapes", phaseStart)
 
-	phaseStart = time.Now()
-	if err := d.PruneDownloaderOperations(DownloaderOperationMaxRows, DownloaderOperationMaxAge); err != nil {
-		_ = conn.Close()
-		reportPhase(opts.Phase, "db.prune_downloader_operations", phaseStart)
-		return nil, fmt.Errorf("prune downloader operations: %w", err)
-	}
-	reportPhase(opts.Phase, "db.prune_downloader_operations", phaseStart)
 	reportPhase(opts.Phase, "db.open_total", totalStart)
 	return d, nil
 }

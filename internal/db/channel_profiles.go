@@ -878,50 +878,50 @@ func (db *DB) MarkTwitterProfileDriftDueFromFeedRows(limit int) (int, error) {
 	if scanLimit < limit {
 		scanLimit = limit
 	}
+	rows, err := db.conn.Query(`
+		SELECT
+			LOWER(author_handle) AS handle,
+			COALESCE(author_display_name, '') AS display_name,
+			CASE
+				WHEN LOWER(COALESCE(author_avatar_url, '')) LIKE '%pbs.twimg.com/profile_images/%'
+				THEN author_avatar_url
+				ELSE ''
+			END AS avatar_url,
+			MAX(fetched_at, COALESCE(published_at, 0)) AS seen_at
+		FROM feed_items INDEXED BY idx_feed_items_author_fetched
+		WHERE author_handle IS NOT NULL
+		  AND author_handle != ''
+		ORDER BY fetched_at DESC, published_at DESC, tweet_id DESC
+		LIMIT ?
+	`, scanLimit)
+	if err != nil {
+		return 0, err
+	}
+	rowsByChannel := make(map[string]twitterProfileSeedRow)
+	for rows.Next() {
+		var row twitterProfileSeedRow
+		if err := rows.Scan(&row.handle, &row.displayName, &row.avatarURL, &row.seenAtMs); err != nil {
+			_ = rows.Close()
+			return 0, err
+		}
+		row.handle = model.NormalizeTwitterHandle(row.handle)
+		if row.handle == "" {
+			continue
+		}
+		channelID := "twitter_" + row.handle
+		if _, ok := rowsByChannel[channelID]; ok {
+			continue
+		}
+		rowsByChannel[channelID] = row
+	}
+	if err := rows.Close(); err != nil {
+		return 0, err
+	}
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
 	var changed int
-	err := db.WithWrite(func(tx *sql.Tx) error {
-		rows, err := tx.Query(`
-			SELECT
-				LOWER(author_handle) AS handle,
-				COALESCE(author_display_name, '') AS display_name,
-				CASE
-					WHEN LOWER(COALESCE(author_avatar_url, '')) LIKE '%pbs.twimg.com/profile_images/%'
-					THEN author_avatar_url
-					ELSE ''
-				END AS avatar_url,
-				MAX(fetched_at, COALESCE(published_at, 0)) AS seen_at
-			FROM feed_items INDEXED BY idx_feed_items_author_fetched
-			WHERE author_handle IS NOT NULL
-			  AND author_handle != ''
-			ORDER BY fetched_at DESC, published_at DESC, tweet_id DESC
-			LIMIT ?
-		`, scanLimit)
-		if err != nil {
-			return err
-		}
-		rowsByChannel := make(map[string]twitterProfileSeedRow)
-		for rows.Next() {
-			var row twitterProfileSeedRow
-			if err := rows.Scan(&row.handle, &row.displayName, &row.avatarURL, &row.seenAtMs); err != nil {
-				_ = rows.Close()
-				return err
-			}
-			row.handle = model.NormalizeTwitterHandle(row.handle)
-			if row.handle == "" {
-				continue
-			}
-			channelID := "twitter_" + row.handle
-			if _, ok := rowsByChannel[channelID]; ok {
-				continue
-			}
-			rowsByChannel[channelID] = row
-		}
-		if err := rows.Close(); err != nil {
-			return err
-		}
-		if err := rows.Err(); err != nil {
-			return err
-		}
+	err = db.WithWrite(func(tx *sql.Tx) error {
 		n, err := markTwitterProfileDriftDueTx(tx, rowsByChannel)
 		if err != nil {
 			return err

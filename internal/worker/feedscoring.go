@@ -14,8 +14,6 @@ import (
 func (m *Manager) runFeedScoringWorker(ctx context.Context) {
 	log.Printf("[feed_scoring] worker started")
 
-	// Immediate first run on startup
-	m.scoreFeedItems(ctx)
 	lastRun := time.Now()
 
 	ticker := time.NewTicker(5 * time.Minute)

@@ -1,12 +1,16 @@
 package db
 
 import (
+	"context"
 	"database/sql"
 	"log"
 	"strings"
+	"time"
 
 	"github.com/screwys/igloo/internal/model"
 )
+
+const migrationWarningTimeout = 2 * time.Second
 
 func runFeedMediaLegacyFixes(conn *sql.DB) error {
 	ran, err := runSchemaMigrationOnce(conn, "python_feed_media_legacy_fixes", func(tx *sql.Tx) error {
@@ -433,8 +437,17 @@ func warnIfColumnExists(conn *sql.DB, migrationName, tableName, columnName strin
 }
 
 func warnIfRows(conn *sql.DB, migrationName, countQuery string) {
+	ctx, cancel := context.WithTimeout(context.Background(), migrationWarningTimeout)
+	defer cancel()
+
 	var count int
-	if err := conn.QueryRow(countQuery).Scan(&count); err != nil || count == 0 {
+	if err := conn.QueryRowContext(ctx, countQuery).Scan(&count); err != nil {
+		if ctx.Err() != nil {
+			log.Printf("schema migration %s already applied, but its repair-condition warning query exceeded %s; skipping startup diagnostic", migrationName, migrationWarningTimeout)
+		}
+		return
+	}
+	if count == 0 {
 		return
 	}
 	log.Printf("schema migration %s already applied, but %d legacy rows match its repair condition; leaving them for investigation", migrationName, count)

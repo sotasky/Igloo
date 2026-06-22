@@ -20,6 +20,7 @@ const (
 	discoveryMaintenanceInterval   = 10 * time.Minute
 	discoveryFallbackWakeDelay     = time.Minute
 	discoveryMaxScheduledWakeDelay = 30 * time.Minute
+	discoveryChannelCheckTimeout   = 2 * time.Minute
 )
 
 type platformDiscoveryGate struct {
@@ -136,13 +137,16 @@ func (m *Manager) runScheduler(ctx context.Context) {
 
 	log.Printf("[scheduler] discovery dispatcher started")
 	m.setStatus("scheduler", workerStatus("scheduler", true, "discovery dispatcher running", ""))
-	nextMaintenance := time.Now()
+	nextMaintenance := time.Now().Add(discoveryMaintenanceInterval)
 
 	for {
 		if ctx.Err() != nil {
 			return
 		}
 		now := time.Now()
+		if dispatched := m.dispatchReadyDiscoveryJobs(ctx); dispatched > 0 {
+			continue
+		}
 		if !now.Before(nextMaintenance) {
 			m.runDiscoveryMaintenance()
 			nextMaintenance = now.Add(discoveryMaintenanceInterval)
@@ -291,7 +295,10 @@ func (m *Manager) processDiscoveryJob(ctx context.Context, workerID int, job db.
 	log.Printf("[scheduler] worker %d checking %s (%s)", workerID, ch.Name, ch.ChannelID)
 	m.emitSchedulerEvent(fmt.Sprintf("Checking: %s", ch.Name), "start", ch.ChannelID, ch.Platform)
 
-	refs, err := m.checkChannel(ctx, *ch)
+	checkCtx, cancel := context.WithTimeout(ctx, discoveryChannelCheckTimeout)
+	defer cancel()
+
+	refs, err := m.checkChannel(checkCtx, *ch)
 	if err != nil {
 		if ctx.Err() != nil {
 			return

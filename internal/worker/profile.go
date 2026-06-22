@@ -68,7 +68,7 @@ func (m *Manager) runProfileRefreshLoop(ctx context.Context) {
 	defer requestWG.Wait()
 
 	interval := profileActiveTick
-	lastFeedAvatarSeed := time.Time{}
+	lastFeedAvatarSeed := time.Now()
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {

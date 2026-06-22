@@ -140,74 +140,35 @@ func NewManager(database *db.DB, cfg *config.Config) *Manager {
 	return m
 }
 
-// StartAll runs sync startup tasks then launches all long-running goroutines.
-// Sequence:
-//  1. [sync]  migrateMediaPaths — backfill media_files from disk
-//  2. [async] buildSearchIndex  — FTS5 rebuild
-//  3. [async] runFeedBootstrap  — immediate ingest if sparse
-//  4. [async] runRankedQueueWarmup — pre-score feed
-//  5. [async] runXIngestLoop       — long-running X ingest
-//  6. [async] runFeedMediaWorker   — long-running download
-//  7. [async] runProfileRefreshLoop — unified profile/avatar/banner refresh for all platforms
+// StartAll clears stale in-flight queue state, launches long-running workers,
+// then runs heavier startup maintenance in the background.
 func (m *Manager) StartAll() {
 	startupStarted := time.Now()
-	log.Printf("[worker] startup maintenance started")
-	defer func() {
-		log.Printf("[worker] startup maintenance completed in %s", time.Since(startupStarted).Round(time.Millisecond))
-	}()
+	log.Printf("[worker] startup recovery started")
 
-	if n, err := m.db.MarkTwitterProfileDriftDueFromFeedRows(200); err != nil {
-		log.Printf("[worker] MarkTwitterProfileDriftDueFromFeedRows: %v", err)
-	} else if n > 0 {
-		log.Printf("[worker] marked %d twitter profile rows refresh-due after feed identity drift", n)
-	}
 	if err := m.db.ResetExpiredIngestBackoff(); err != nil {
 		log.Printf("[worker] ResetExpiredIngestBackoff: %v", err)
 	}
-
-	// Reset jobs left in processing state from a previous run.
+	if n, err := m.db.ResetProcessingChannelQueueItems(); err != nil {
+		log.Printf("[worker] ResetProcessingChannelQueueItems: %v", err)
+	} else if n > 0 {
+		log.Printf("[worker] reset %d in-flight channel checks on startup", n)
+	}
 	if n, err := m.db.ResetStaleDownloadQueueItems(); err != nil {
 		log.Printf("[worker] ResetStaleDownloadQueueItems: %v", err)
 	} else if n > 0 {
 		log.Printf("[worker] reset %d stale download jobs to pending", n)
-	}
-	if n, err := m.db.SeedChannelProfileRows(); err != nil {
-		log.Printf("[worker] SeedChannelProfileRows: %v", err)
-	} else if n > 0 {
-		log.Printf("[worker] seeded/updated %d channel profile rows", n)
-	}
-	if n, err := m.db.SeedSyntheticTwitterAvatarProfiles(); err != nil {
-		log.Printf("[worker] SeedSyntheticTwitterAvatarProfiles: %v", err)
-	} else if n > 0 {
-		log.Printf("[worker] seeded %d synthetic twitter avatar profile rows", n)
 	}
 	if n, err := m.db.ResetStaleFeedMediaJobs(); err != nil {
 		log.Printf("[worker] ResetStaleFeedMediaJobs: %v", err)
 	} else if n > 0 {
 		log.Printf("[worker] reset %d stale feed media jobs to queued", n)
 	}
-	if n, err := m.db.EnsureBookmarkVideoStubs(); err != nil {
-		log.Printf("[worker] EnsureBookmarkVideoStubs: %v", err)
-	} else if n > 0 {
-		log.Printf("[worker] created %d video stubs for bookmarked feed items", n)
-	}
-	if n, err := m.db.EnsureProtectedFeedItemStubs(); err != nil {
-		log.Printf("[worker] EnsureProtectedFeedItemStubs: %v", err)
-	} else if n > 0 {
-		log.Printf("[worker] created %d protected feed-item stubs", n)
-	}
-	if n, err := m.db.EnqueueMissingBookmarkLikeMedia(); err != nil {
-		log.Printf("[worker] EnqueueMissingBookmarkLikeMedia: %v", err)
-	} else if n > 0 {
-		log.Printf("[worker] enqueued %d feed media jobs for bookmarked/liked items", n)
-	}
-
-	m.migrateMediaPaths()
+	log.Printf("[worker] startup recovery completed in %s", time.Since(startupStarted).Round(time.Millisecond))
 
 	// One-shot startup tasks — not tracked in status map.
-	m.startOnce("search_index", m.buildSearchIndex)
+	m.startOnceDelayed("startup_maintenance", 2*time.Minute, m.runStartupMaintenance)
 	m.startOnce("feed_bootstrap", m.runFeedBootstrap)
-	m.startOnce("ranked_queue_warmup", m.runRankedQueueWarmup)
 	m.launch(xIngestWorkerName, m.runXIngestLoop)
 	m.launch("x_status_enrichment", m.runXStatusEnrichmentLoop)
 	m.launch("feed_media", m.runFeedMediaWorker)
@@ -216,14 +177,76 @@ func (m *Manager) StartAll() {
 	m.launch("scheduler", m.runScheduler)
 	m.launch("download_pool", m.runDownloadPool)
 	m.launch("preview", m.runPreviewWorker)
-	m.launch("downloader_operation_prune", m.runDownloaderOperationPruner)
 	m.launch("channel_metadata_prune", m.runChannelMetadataPruner)
 	m.launch("android_sync_maintenance", m.runAndroidSyncMaintenanceWorker)
-	m.startOnce("preview_backfill", m.backfillPreviews)
-	m.startOnce("thumbnail_backfill", m.backfillThumbnails)
-	m.launch("feed_scoring", m.runFeedScoringWorker)
-	m.launch("backup", m.runBackupWorker)
+	m.startOnceDelayed("search_index", 3*time.Minute, m.buildSearchIndex)
+	m.startOnceDelayed("ranked_queue_warmup", 3*time.Minute, m.runRankedQueueWarmup)
+	m.startOnceDelayed("preview_backfill", 4*time.Minute, m.backfillPreviews)
+	m.startOnceDelayed("thumbnail_backfill", 4*time.Minute, m.backfillThumbnails)
+	m.launchDelayed("feed_scoring", 3*time.Minute, m.runFeedScoringWorker)
+	m.launchDelayed("downloader_operation_prune", 5*time.Minute, m.runDownloaderOperationPruner)
+	m.launchDelayed("backup", 5*time.Minute, m.runBackupWorker)
 
+}
+
+func (m *Manager) runStartupMaintenance(ctx context.Context) {
+	started := time.Now()
+	log.Printf("[worker] startup maintenance started")
+	defer func() {
+		log.Printf("[worker] startup maintenance completed in %s", time.Since(started).Round(time.Millisecond))
+	}()
+	if ctx.Err() != nil {
+		return
+	}
+	if n, err := m.db.MarkTwitterProfileDriftDueFromFeedRows(200); err != nil {
+		log.Printf("[worker] MarkTwitterProfileDriftDueFromFeedRows: %v", err)
+	} else if n > 0 {
+		log.Printf("[worker] marked %d twitter profile rows refresh-due after feed identity drift", n)
+	}
+	if ctx.Err() != nil {
+		return
+	}
+	if n, err := m.db.SeedChannelProfileRows(); err != nil {
+		log.Printf("[worker] SeedChannelProfileRows: %v", err)
+	} else if n > 0 {
+		log.Printf("[worker] seeded/updated %d channel profile rows", n)
+	}
+	if ctx.Err() != nil {
+		return
+	}
+	if n, err := m.db.SeedSyntheticTwitterAvatarProfiles(); err != nil {
+		log.Printf("[worker] SeedSyntheticTwitterAvatarProfiles: %v", err)
+	} else if n > 0 {
+		log.Printf("[worker] seeded %d synthetic twitter avatar profile rows", n)
+	}
+	if ctx.Err() != nil {
+		return
+	}
+	if n, err := m.db.EnsureBookmarkVideoStubs(); err != nil {
+		log.Printf("[worker] EnsureBookmarkVideoStubs: %v", err)
+	} else if n > 0 {
+		log.Printf("[worker] created %d video stubs for bookmarked feed items", n)
+	}
+	if ctx.Err() != nil {
+		return
+	}
+	if n, err := m.db.EnsureProtectedFeedItemStubs(); err != nil {
+		log.Printf("[worker] EnsureProtectedFeedItemStubs: %v", err)
+	} else if n > 0 {
+		log.Printf("[worker] created %d protected feed-item stubs", n)
+	}
+	if ctx.Err() != nil {
+		return
+	}
+	if n, err := m.db.EnqueueMissingBookmarkLikeMedia(); err != nil {
+		log.Printf("[worker] EnqueueMissingBookmarkLikeMedia: %v", err)
+	} else if n > 0 {
+		log.Printf("[worker] enqueued %d feed media jobs for bookmarked/liked items", n)
+	}
+	if ctx.Err() != nil {
+		return
+	}
+	m.migrateMediaPaths()
 }
 
 // Shutdown cancels the context and waits for all goroutines to stop.
@@ -235,6 +258,9 @@ func (m *Manager) Shutdown() {
 func (m *Manager) runDownloaderOperationPruner(ctx context.Context) {
 	if m == nil || m.db == nil {
 		return
+	}
+	if err := m.db.PruneDownloaderOperations(db.DownloaderOperationMaxRows, db.DownloaderOperationMaxAge); err != nil {
+		log.Printf("[worker] PruneDownloaderOperations: %v", err)
 	}
 	ticker := time.NewTicker(6 * time.Hour)
 	defer ticker.Stop()
@@ -730,6 +756,23 @@ func (m *Manager) launch(name string, fn func(context.Context)) {
 	}()
 }
 
+func (m *Manager) launchDelayed(name string, delay time.Duration, fn func(context.Context)) {
+	m.setStatus(name, WorkerStatus{Name: name, Running: true, Detail: "delayed start"})
+	m.wg.Add(1)
+	go func() {
+		defer m.wg.Done()
+		timer := time.NewTimer(delay)
+		select {
+		case <-m.ctx.Done():
+			timer.Stop()
+			m.setStatus(name, WorkerStatus{Name: name, Running: false, LastRunAt: time.Now()})
+			return
+		case <-timer.C:
+		}
+		m.launch(name, fn)
+	}()
+}
+
 // startOnce runs fn in a background goroutine without registering it in the
 // worker status map. Use for one-shot startup tasks that exit quickly.
 func (m *Manager) startOnce(name string, fn func(context.Context)) {
@@ -742,6 +785,21 @@ func (m *Manager) startOnce(name string, fn func(context.Context)) {
 			}
 		}()
 		fn(m.ctx)
+	}()
+}
+
+func (m *Manager) startOnceDelayed(name string, delay time.Duration, fn func(context.Context)) {
+	m.wg.Add(1)
+	go func() {
+		defer m.wg.Done()
+		timer := time.NewTimer(delay)
+		select {
+		case <-m.ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
+		m.startOnce(name, fn)
 	}()
 }
 
