@@ -166,7 +166,7 @@ func (s *Server) handleUnsubscribe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for _, v := range videos {
-		deleteVideoFiles(s.cfg.DataDir, v)
+		s.deleteVideoFiles(v)
 	}
 
 	s.workers.Emit("system", fmt.Sprintf("Unsubscribed: %s", channelID), "info")

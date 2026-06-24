@@ -40,11 +40,26 @@ func atomicWrite(dest string, data []byte, perm os.FileMode) error {
 	return os.Rename(tmpPath, dest)
 }
 
-// deleteVideoFiles removes video file and sibling thumbnails from disk.
-func deleteVideoFiles(dataDir string, v model.Video) {
+// deleteVideoFiles removes video file and sibling thumbnails from disk when no
+// remaining DB row references the same data path.
+func (s *Server) deleteVideoFiles(v model.Video) {
+	dataDir := ""
+	if s != nil && s.cfg != nil {
+		dataDir = s.cfg.DataDir
+	}
 	removePath := func(p string) {
 		if p == "" {
 			return
+		}
+		if s != nil && s.db != nil {
+			refs, err := s.db.DataFileReferenceCount(p)
+			if err != nil {
+				slog.Warn("check file references before delete", "path", p, "err", err)
+				return
+			}
+			if refs > 0 {
+				return
+			}
 		}
 		if !filepath.IsAbs(p) {
 			p = filepath.Join(dataDir, p)
@@ -67,9 +82,7 @@ func deleteVideoFiles(dataDir string, v model.Video) {
 		for _, ext := range []string{".jpg", ".jpeg", ".png", ".webp", ".avif"} {
 			sibling := base + ext
 			if sibling != absPath {
-				if err := os.Remove(sibling); err != nil && !os.IsNotExist(err) {
-					slog.Warn("delete sibling thumbnail", "path", sibling, "err", err)
-				}
+				removePath(sibling)
 			}
 		}
 	}

@@ -234,13 +234,14 @@ func (m *Manager) runIngestCycle(ctx context.Context) {
 
 		// Periodic batch upsert to avoid holding too much in memory.
 		if len(pendingItems) >= batchSize {
-			n, upsertErr := m.upsertFeedItemsBatch(ctx, pendingItems, "batch")
+			flushedItems := pendingItems
+			n, upsertErr := m.upsertFeedItemsBatch(ctx, flushedItems, "batch")
 			if upsertErr != nil {
 				log.Printf("[x_ingest] UpsertFeedItems (batch): %v", upsertErr)
 			} else {
 				totalUpserted += n
+				m.enforceXMediaLimitsForItems(flushedItems)
 			}
-			pendingItems = pendingItems[:0]
 
 			if len(pendingJobs) > 0 && upsertErr == nil {
 				if jErr := m.db.EnqueueFeedMediaJobs(pendingJobs); jErr != nil {
@@ -252,6 +253,7 @@ func (m *Manager) runIngestCycle(ctx context.Context) {
 			} else if len(pendingJobs) > 0 {
 				log.Printf("[x_ingest] skipping %d media jobs after failed batch upsert", len(pendingJobs))
 			}
+			pendingItems = pendingItems[:0]
 			if len(pendingJobs) > 0 {
 				pendingJobs = pendingJobs[:0]
 			}
@@ -281,6 +283,7 @@ func (m *Manager) runIngestCycle(ctx context.Context) {
 			finalUpsertOK = false
 		} else {
 			totalUpserted += n
+			m.enforceXMediaLimitsForItems(pendingItems)
 		}
 	}
 
@@ -393,6 +396,7 @@ func (m *Manager) FetchOneChannel(ctx context.Context, channelID string) (int, e
 	items = filterTimelineItemsForSource(strings.TrimPrefix(channelID, "twitter_"), items)
 	filtered := applyChannelFiltersFromSettings(items, settings)
 	if len(filtered) == 0 {
+		m.enforceXMediaLimit(channelID)
 		return 0, nil
 	}
 
@@ -404,6 +408,7 @@ func (m *Manager) FetchOneChannel(ctx context.Context, channelID string) (int, e
 	if err != nil {
 		return 0, fmt.Errorf("upsert: %w", err)
 	}
+	m.enforceXMediaLimit(channelID)
 
 	jobs := feedMediaJobRowsForItems(filtered, settings)
 	if len(jobs) > 0 {
@@ -468,6 +473,47 @@ func (m *Manager) upsertFeedSourceItems(ctx context.Context, source model.FeedSo
 	}
 	m.KickFeedScoring()
 	return n, nil
+}
+
+func (m *Manager) enforceXMediaLimitsForItems(items []model.FeedItem) {
+	seen := map[string]struct{}{}
+	for _, item := range items {
+		handle := strings.TrimSpace(item.SourceHandle)
+		if handle == "" {
+			handle = item.AuthorHandle
+		}
+		handle = xfeed.NormalizeHandle(handle)
+		if handle == "" {
+			continue
+		}
+		channelID := "twitter_" + strings.ToLower(handle)
+		if _, ok := seen[channelID]; ok {
+			continue
+		}
+		seen[channelID] = struct{}{}
+		m.enforceXMediaLimit(channelID)
+	}
+}
+
+func (m *Manager) enforceXMediaLimit(channelID string) {
+	if m == nil || m.db == nil {
+		return
+	}
+	result, err := m.db.PruneXMediaRetentionForChannel(channelID, db.XMediaRetentionOptions{})
+	if err != nil {
+		log.Printf("[x_ingest] prune X media retention %s: %v", channelID, err)
+		return
+	}
+	if result.PrunedItems == 0 && result.MediaRowsDeleted == 0 && result.JobsMarkedPruned == 0 && result.FileRemoval.Removed == 0 {
+		return
+	}
+	log.Printf("[x_ingest] pruned X media retention for %s: items=%d media_rows=%d jobs=%d files=%d bytes=%d",
+		channelID,
+		result.PrunedItems,
+		result.MediaRowsDeleted,
+		result.JobsMarkedPruned,
+		result.FileRemoval.Removed,
+		result.FileRemoval.RemovedBytes)
 }
 
 // applyChannelFiltersFromSettings filters items using ChannelSettings

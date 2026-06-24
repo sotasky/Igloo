@@ -12,6 +12,7 @@ import (
 	"github.com/screwys/igloo/internal/devtools/persistenceaudit"
 	"github.com/screwys/igloo/internal/devtools/queryaudit"
 	"github.com/screwys/igloo/internal/devtools/sqliterepack"
+	"github.com/screwys/igloo/internal/devtools/storagemaintenance"
 )
 
 func main() {
@@ -38,6 +39,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return queryaudit.Run(rest, stdout, stderr)
 	case "sqlite-repack":
 		return sqliterepack.Run(rest, stdout, stderr)
+	case "storage-maintenance":
+		return storagemaintenance.Run(rest, stdout, stderr)
 	case "help", "-h", "--help":
 		printUsage(stdout)
 		return 0
@@ -58,5 +61,6 @@ Commands:
   persistence-audit           Group database size and rows by schema lifecycle
   query-audit                 Time and explain SQLite hot-path reads
   sqlite-repack               Report or create a compact SQLite database copy
+  storage-maintenance         Audit or apply storage dedupe, retention, and asset-state repairs
 `)+"\n")
 }

@@ -281,7 +281,7 @@ func (s *Server) handleMutationFollow(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		for _, v := range deletedVideos {
-			deleteVideoFiles(s.cfg.DataDir, v)
+			s.deleteVideoFiles(v)
 		}
 	}
 	s.kickFeedOrderForChannelID(channelID)
