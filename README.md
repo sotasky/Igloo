@@ -119,7 +119,7 @@ bookmark archives elsewhere, add `-v "YOUR_BOOKMARKS_DIRECTORY:/bookmarks"` and
 use `/bookmarks/<folder>`; make that folder writable by your user with
 `sudo chown -R "$(id -u):$(id -g)" YOUR_BOOKMARKS_DIRECTORY`.
 
-If you omit `--user`, the image runs as the unprivileged user
+Without `--user`, the image runs as the unprivileged user
 `10001:10001`; so you would need to make mounted folders writable too.
 
 To build the image locally instead:
@@ -137,7 +137,7 @@ Then open Igloo and create the first admin account in the setup screen:
 http://<server-ip>:5001
 ```
 
-By default, Compose stores data under:
+By default, data is at:
 
 ```text
 ./igloo/data
@@ -173,18 +173,6 @@ Currently there are only English and Turkish language options. To add a new lang
 
 See [PRIVACY.md](PRIVACY.md).
 
-## Tech Stack
-
-- Server: Go and SQLite.
-- Web: templ, HTMX, CSS, and bundled ES modules.
-- Android: Kotlin, Jetpack Compose, Room, WorkManager, ExoPlayer, and Ktor.
-- Media downloaders:
-  [yt-dlp](https://github.com/yt-dlp/yt-dlp) and
-  [gallery-dl](https://github.com/mikf/gallery-dl).
-
-## AI Usage
-
-This project is developed heavily with AI. I don't and won't use AI for any kind of communication or documentation.
 
 ## License
 
