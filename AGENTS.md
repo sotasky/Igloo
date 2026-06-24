@@ -69,6 +69,19 @@ For Go code, protect the success path. Do not allocate rollback journals, diagno
   push impossible. Report the exact blocker when a verified fix cannot be
   published.
 
+## Git Workflow
+
+- Igloo normally publishes directly from the current branch. For "push",
+  "lets push", "ship it", or similar requests, commit the intended changes on
+  the current branch and push that branch. If the current branch is `main`,
+  push directly to `origin/main`.
+- Do not create a feature branch, PR, or review branch for Igloo unless the
+  user explicitly asks for one, the current branch is not the intended target,
+  or repository state makes a direct push unsafe.
+- If `origin/main` moved before a direct-main push, fetch and rebase or
+  fast-forward the current work onto `origin/main`, then push.
+- These Igloo rules override generic GitHub branch/PR publishing defaults.
+
 ## Releases
 
 - Releases are manually dispatched from the release workflow with an explicit patch, minor, or major bump.
