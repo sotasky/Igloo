@@ -330,6 +330,68 @@ func TestShortsStoryClicksNavigateWithoutVisualArrowButtons(t *testing.T) {
 	}
 }
 
+func TestShortsArrowKeysPreferSlideshowSlidesBeforeStoryNavigation(t *testing.T) {
+	indexBytes, err := os.ReadFile("../../static/js/src/shorts/index.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	playbackBytes, err := os.ReadFile("../../static/js/src/shorts/playback.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	itemsBytes, err := os.ReadFile("../../static/js/src/shorts/items.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	indexSrc := string(indexBytes)
+	playbackSrc := string(playbackBytes)
+	itemsSrc := string(itemsBytes)
+
+	if !strings.Contains(playbackSrc, "export function stepSlideshow(entry, delta)") {
+		t.Fatal("shorts playback should expose a shared manual slideshow step helper")
+	}
+	for _, check := range []string{
+		"if (!slideshow || slideshow.count <= 1) return false",
+		"if (next < 0 || next >= slideshow.count) return false",
+		"setSlideshowIndex(entry, next)",
+		"return true",
+	} {
+		if !strings.Contains(playbackSrc, check) {
+			t.Errorf("manual slideshow step helper missing %q", check)
+		}
+	}
+	if !strings.Contains(itemsSrc, "stepSlideshow({ refs: { slideshow: slideshow } }, -1)") ||
+		!strings.Contains(itemsSrc, "stepSlideshow({ refs: { slideshow: slideshow } }, 1)") {
+		t.Fatal("slide buttons should use the same manual slideshow step helper as keyboard navigation")
+	}
+	slideStart := strings.Index(indexSrc, "if (event.key === 'ArrowLeft' || event.key === 'ArrowRight')")
+	storyStart := strings.Index(indexSrc, "if (state.storyMode && event.key === 'ArrowRight')")
+	if slideStart < 0 {
+		t.Fatal("shorts keyboard handler should intercept left/right arrows for slideshow slides")
+	}
+	if storyStart < 0 {
+		t.Fatal("story right-arrow navigation missing")
+	}
+	if slideStart > storyStart {
+		t.Fatal("slideshow arrow handling must run before story navigation")
+	}
+	slideBlockEnd := strings.Index(indexSrc[slideStart:], "if (state.storyMode && event.key === 'ArrowRight')")
+	if slideBlockEnd < 0 {
+		t.Fatal("story right-arrow navigation should follow slideshow arrow handling")
+	}
+	slideBlock := indexSrc[slideStart : slideStart+slideBlockEnd]
+	for _, check := range []string{
+		"var slideDelta = event.key === 'ArrowRight' ? 1 : -1",
+		"if (entry && stepSlideshow(entry, slideDelta))",
+		"event.preventDefault()",
+		"return",
+	} {
+		if !strings.Contains(slideBlock, check) {
+			t.Errorf("shorts keyboard slideshow handling missing %q", check)
+		}
+	}
+}
+
 func TestShortsMomentViewSyncRefreshesStorySurfaces(t *testing.T) {
 	srcBytes, err := os.ReadFile("../../static/js/src/shorts/index.js")
 	if err != nil {

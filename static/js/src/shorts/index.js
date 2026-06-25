@@ -1,7 +1,7 @@
 // Shorts page ES module entry point.
 
 import { apiFetch, cssEscape, escapeHtml, showToast, t, tf } from '../utils.js'
-import { initPlayback, toggleShortPlayback, syncRenderedShortVideoLoop } from './playback.js'
+import { initPlayback, toggleShortPlayback, stepSlideshow, syncRenderedShortVideoLoop } from './playback.js'
 import {
   initOverlay,
   goNext,
@@ -1283,6 +1283,13 @@ if (layout) {
         event.preventDefault()
         if (entry) toggleShortPlayback(entry)
         return
+      }
+      if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+        var slideDelta = event.key === 'ArrowRight' ? 1 : -1
+        if (entry && stepSlideshow(entry, slideDelta)) {
+          event.preventDefault()
+          return
+        }
       }
       if (state.storyMode && event.key === 'ArrowRight') {
         event.preventDefault()

@@ -2,7 +2,7 @@
 
 import { apiFetch, askConfirm, cssEscape, escapeHtml, showToast, copyText, makeDraggableSeekbar, attachSeekTooltip, formatRelative, t, tf, toFxTwitterUrl } from '../utils.js'
 import { openBookmarkMenu } from '../bookmark-menu.js'
-import { maybeMarkAspect, handleVideoTimeUpdate, toggleShortPlayback, setSlideshowIndex, syncRenderedShortVideoLoop } from './playback.js'
+import { maybeMarkAspect, handleVideoTimeUpdate, toggleShortPlayback, setSlideshowIndex, stepSlideshow, syncRenderedShortVideoLoop } from './playback.js'
 import { attachShortVideoDebug } from './debug.js'
 
 var _state = null
@@ -476,9 +476,7 @@ export function makeShortItem(entryData, existingEl) {
     prevSlideBtn.addEventListener('click', function (e) {
       e.preventDefault()
       e.stopPropagation()
-      if (slideshow.timer) { try { clearTimeout(slideshow.timer) } catch (_) { } slideshow.timer = 0 }
-      var currentIdx = slideshow.index || 0
-      if (currentIdx > 0) setSlideshowIndex({ refs: { slideshow: slideshow } }, currentIdx - 1)
+      stepSlideshow({ refs: { slideshow: slideshow } }, -1)
     })
 
     var dotsEl = doc.createElement('div')
@@ -498,9 +496,7 @@ export function makeShortItem(entryData, existingEl) {
     nextSlideBtn.addEventListener('click', function (e) {
       e.preventDefault()
       e.stopPropagation()
-      if (slideshow.timer) { try { clearTimeout(slideshow.timer) } catch (_) { } slideshow.timer = 0 }
-      var currentIdx = slideshow.index || 0
-      if (currentIdx < slideshow.count - 1) setSlideshowIndex({ refs: { slideshow: slideshow } }, currentIdx + 1)
+      stepSlideshow({ refs: { slideshow: slideshow } }, 1)
     })
 
     slideControls.appendChild(prevSlideBtn)

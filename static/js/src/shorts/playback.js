@@ -108,6 +108,20 @@ export function setSlideshowIndex(entry, index) {
   }
 }
 
+export function stepSlideshow(entry, delta) {
+  var slideshow = entry && entry.refs && entry.refs.slideshow
+  if (!slideshow || slideshow.count <= 1) return false
+  var currentIdx = slideshow.index || 0
+  var next = currentIdx + (delta > 0 ? 1 : -1)
+  if (next < 0 || next >= slideshow.count) return false
+  if (slideshow.timer) {
+    try { clearTimeout(slideshow.timer) } catch (_) { }
+    slideshow.timer = 0
+  }
+  setSlideshowIndex(entry, next)
+  return true
+}
+
 export function startSlideshowPlayback(entry) {
   var slideshow = entry && entry.refs && entry.refs.slideshow
   if (!slideshow || !slideshow.count) return
