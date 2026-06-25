@@ -156,19 +156,15 @@ func (db *DB) GetBookmarks(opts GetBookmarksOpts) ([]model.Video, error) {
 		       ), ''),
 		       COALESCE((
 		           SELECT COUNT(DISTINCT mf.media_index)
-		           FROM feed_items fi2
-		           JOIN media_files mf ON mf.owner_type = 'quote_media' AND mf.owner_id = fi2.quote_tweet_id
-		           WHERE fi2.tweet_id = v.video_id
-		             AND fi2.quote_tweet_id IS NOT NULL
-		             AND fi2.quote_tweet_id != ''
+		           FROM media_files mf
+		           WHERE mf.owner_type = 'quote_media'
+		             AND mf.owner_id = COALESCE(NULLIF(fi.quote_tweet_id, ''), v.video_id)
 		       ), 0),
 		       COALESCE((
 		           SELECT mf.media_type
-		           FROM feed_items fi2
-		           JOIN media_files mf ON mf.owner_type = 'quote_media' AND mf.owner_id = fi2.quote_tweet_id
-		           WHERE fi2.tweet_id = v.video_id
-		             AND fi2.quote_tweet_id IS NOT NULL
-		             AND fi2.quote_tweet_id != ''
+		           FROM media_files mf
+		           WHERE mf.owner_type = 'quote_media'
+		             AND mf.owner_id = COALESCE(NULLIF(fi.quote_tweet_id, ''), v.video_id)
 		           ORDER BY mf.media_index
 		           LIMIT 1
 		       ), '')

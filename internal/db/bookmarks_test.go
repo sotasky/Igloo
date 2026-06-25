@@ -518,3 +518,54 @@ func TestGetBookmarksDerivesMixedTweetSlideshowFromFeedMediaFiles(t *testing.T) 
 		t.Fatalf("MediaTypes = %#v, want %#v", got, wantTypes)
 	}
 }
+
+func TestGetBookmarksDerivesImageFromDirectQuoteMediaFiles(t *testing.T) {
+	d := openFreshTestDB(t)
+
+	const (
+		videoID   = "sample_direct_quote_media"
+		channelID = "twitter_sample_author"
+	)
+
+	if err := d.ExecRaw(`
+		INSERT INTO videos (video_id, channel_id, title, duration, file_path, published_at)
+		VALUES (?, ?, 'X post sample_direct_quote_media', 0, '', 1)
+	`, videoID, channelID); err != nil {
+		t.Fatalf("insert video stub: %v", err)
+	}
+	if err := d.ExecRaw(`
+		INSERT INTO feed_items (tweet_id, source_handle, author_handle, published_at, fetched_at)
+		VALUES (?, 'sample_source', 'sample_author', 1, 1)
+	`, videoID); err != nil {
+		t.Fatalf("insert feed item: %v", err)
+	}
+	if err := d.ExecRaw(`
+		INSERT INTO bookmarks (user_id, video_id, category_id, bookmarked_at)
+		VALUES ('admin', ?, 0, 2)
+	`, videoID); err != nil {
+		t.Fatalf("insert bookmark: %v", err)
+	}
+	if err := d.InsertMediaFileBatch([]model.MediaFile{
+		{OwnerType: "quote_media", OwnerID: videoID, MediaIndex: 0, FilePath: "media/twitter/sample_source/sample_direct_quote_media_0.jpg", MediaType: "photo"},
+	}); err != nil {
+		t.Fatalf("insert media files: %v", err)
+	}
+
+	bookmarks, err := d.GetBookmarks(GetBookmarksOpts{UserID: "admin", Limit: 10})
+	if err != nil {
+		t.Fatalf("GetBookmarks: %v", err)
+	}
+	if len(bookmarks) != 1 {
+		t.Fatalf("expected 1 bookmark, got %d", len(bookmarks))
+	}
+	if got := bookmarks[0].MediaKind; got != "image" {
+		t.Fatalf("MediaKind = %q, want image", got)
+	}
+	if got := bookmarks[0].MediaSlideCount; got != 1 {
+		t.Fatalf("MediaSlideCount = %d, want 1", got)
+	}
+	wantTypes := []string{"image"}
+	if got := bookmarks[0].MediaTypes; strings.Join(got, ",") != strings.Join(wantTypes, ",") {
+		t.Fatalf("MediaTypes = %#v, want %#v", got, wantTypes)
+	}
+}

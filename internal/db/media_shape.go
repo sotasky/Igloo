@@ -94,6 +94,14 @@ func (db *DB) deriveBookmarkMediaShape(videoID string) (derivedMediaShape, error
 		return shape, nil
 	}
 
+	shape, err = db.deriveFeedMediaShape("quote_media", videoID)
+	if err != nil {
+		return derivedMediaShape{}, err
+	}
+	if shape.Kind != "" {
+		return shape, nil
+	}
+
 	var quoteTweetID string
 	err = db.conn.QueryRow(`
 		SELECT COALESCE(quote_tweet_id, '')
