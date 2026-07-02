@@ -53,6 +53,11 @@ func (db *DB) applyMutation(kind, itemID string, value any, writes func(tx *sql.
 // ── like (toggle) ────────────────────────────────────────────────────
 
 func (db *DB) ApplyLikeMutation(username, tweetID, action string, updatedAtMs int64) (MutationResult, error) {
+	var err error
+	tweetID, err = db.ResolveFeedStateID(tweetID)
+	if err != nil {
+		return MutationResult{}, err
+	}
 	if updatedAtMs == 0 {
 		updatedAtMs = time.Now().UnixMilli()
 	}
@@ -62,7 +67,7 @@ func (db *DB) ApplyLikeMutation(username, tweetID, action string, updatedAtMs in
 
 	value := map[string]any{"action": action, "liked": action == "set", "updated_at_ms": updatedAtMs}
 	var version int64
-	err := db.WithWrite(func(tx *sql.Tx) error {
+	err = db.WithWrite(func(tx *sql.Tx) error {
 		switch action {
 		case "set":
 			if _, err := tx.Exec(
@@ -127,6 +132,11 @@ type BookmarkMutation struct {
 }
 
 func (db *DB) ApplyBookmarkMutation(userID string, m BookmarkMutation) (MutationResult, error) {
+	resolvedID, err := db.ResolveFeedStateID(m.VideoID)
+	if err != nil {
+		return MutationResult{}, err
+	}
+	m.VideoID = resolvedID
 	bookmarkedAt := m.UpdatedAtMs
 	if bookmarkedAt <= 0 {
 		bookmarkedAt = time.Now().UnixMilli()

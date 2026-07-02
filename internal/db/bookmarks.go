@@ -13,8 +13,13 @@ import (
 // IsBookmarked checks if a video is bookmarked by a user.
 // Returns (bookmarked, categoryID, error).
 func (db *DB) IsBookmarked(videoID, userID string) (bool, int64, error) {
+	var err error
+	videoID, err = db.ResolveFeedStateID(videoID)
+	if err != nil {
+		return false, 0, err
+	}
 	var categoryID int64
-	err := db.conn.QueryRow(
+	err = db.conn.QueryRow(
 		"SELECT category_id FROM bookmarks WHERE video_id = ? AND user_id = ?",
 		videoID, userID,
 	).Scan(&categoryID)
@@ -348,6 +353,11 @@ func (db *DB) GetBookmarkLabelCounts(userID string) ([]BookmarkLabelCountRow, er
 // AddBookmark creates or updates a bookmark.
 func (db *DB) AddBookmark(userID, videoID string, categoryID int64, customTitle, accountHandles, mediaIndices string) error {
 	return db.WithWrite(func(tx *sql.Tx) error {
+		var err error
+		videoID, err = resolveFeedStateIDTx(tx, videoID)
+		if err != nil {
+			return err
+		}
 		// Ensure a videos row exists for this bookmark. GetBookmarks inner-joins
 		// videos, so mobile and web bookmark writes share the same scoped stub
 		// materialization as the startup repair.
@@ -355,7 +365,7 @@ func (db *DB) AddBookmark(userID, videoID string, categoryID int64, customTitle,
 			return err
 		}
 
-		_, err := tx.Exec(`
+		_, err = tx.Exec(`
 			INSERT INTO bookmarks (user_id, video_id, category_id, custom_title, account_handles, media_indices, bookmarked_at)
 			VALUES (?, ?, ?, ?, ?, ?, CAST(strftime('%s','now') AS INTEGER) * 1000)
 			ON CONFLICT(user_id, video_id) DO UPDATE SET
@@ -378,7 +388,12 @@ func (db *DB) AddBookmark(userID, videoID string, categoryID int64, customTitle,
 // RemoveBookmark deletes a bookmark.
 func (db *DB) RemoveBookmark(userID, videoID string) error {
 	return db.WithWrite(func(tx *sql.Tx) error {
-		_, err := tx.Exec("DELETE FROM bookmarks WHERE user_id = ? AND video_id = ?", userID, videoID)
+		var err error
+		videoID, err = resolveFeedStateIDTx(tx, videoID)
+		if err != nil {
+			return err
+		}
+		_, err = tx.Exec("DELETE FROM bookmarks WHERE user_id = ? AND video_id = ?", userID, videoID)
 		if err != nil {
 			return err
 		}

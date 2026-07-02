@@ -204,6 +204,49 @@ func TestInsertAndDeleteFeedLike(t *testing.T) {
 	}
 }
 
+func TestInsertAndDeleteFeedLikeResolveCanonicalStatusURL(t *testing.T) {
+	d := openWritableTestDB(t)
+	const (
+		userID     = "sample_user"
+		originalID = "1000000000000000101"
+		repostID   = "1000000000000000102"
+	)
+	if err := d.ExecRaw(`
+		INSERT INTO feed_items (tweet_id, source_handle, author_handle, body_text, canonical_url)
+		VALUES (?, 'sample_reposter', 'sample_author', 'body', ?)`,
+		repostID, "https://x.com/sample_author/status/"+originalID,
+	); err != nil {
+		t.Fatalf("seed repost row: %v", err)
+	}
+
+	if err := d.InsertFeedLike(userID, repostID, map[string]string{
+		"source_handle": "sample_reposter",
+		"author_handle": "sample_author",
+		"body_text":     "body",
+		"platform":      "twitter",
+	}); err != nil {
+		t.Fatalf("InsertFeedLike: %v", err)
+	}
+	likes, err := d.GetFeedLikesForTweetIDs(userID, []string{originalID, repostID})
+	if err != nil {
+		t.Fatalf("GetFeedLikesForTweetIDs: %v", err)
+	}
+	if !likes[originalID] || likes[repostID] {
+		t.Fatalf("likes after repost like = original:%v repost:%v, want original only", likes[originalID], likes[repostID])
+	}
+
+	if err := d.DeleteFeedLike(userID, repostID); err != nil {
+		t.Fatalf("DeleteFeedLike: %v", err)
+	}
+	likes, err = d.GetFeedLikesForTweetIDs(userID, []string{originalID, repostID})
+	if err != nil {
+		t.Fatalf("GetFeedLikesForTweetIDs after delete: %v", err)
+	}
+	if likes[originalID] || likes[repostID] {
+		t.Fatalf("likes after repost unlike = original:%v repost:%v, want neither", likes[originalID], likes[repostID])
+	}
+}
+
 func TestMarkSeen(t *testing.T) {
 	d := openWritableTestDB(t)
 	count, err := d.MarkSeen("test_user", []string{"tweet_a", "tweet_b"})

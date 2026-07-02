@@ -40,7 +40,10 @@ func (s *Server) handleBookmarkAdd(w http.ResponseWriter, r *http.Request) {
 	if user != nil {
 		userID = user.Username
 	}
-	videoID := r.PathValue("videoID")
+	videoID, ok := s.resolveFeedStateIDForJSON(w, r.PathValue("videoID"))
+	if !ok {
+		return
+	}
 
 	var body struct {
 		CategoryID     int64    `json:"category_id"`
@@ -91,6 +94,7 @@ func (s *Server) handleBookmarkAdd(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 500, map[string]any{"success": false, "error": "db error"})
 		return
 	}
+	s.requestXStatusRecovery(videoID, true)
 
 	categoryName := category.Name
 	archivePath := ""
@@ -185,7 +189,10 @@ func (s *Server) handleBookmarkRemove(w http.ResponseWriter, r *http.Request) {
 	if user != nil {
 		userID = user.Username
 	}
-	videoID := r.PathValue("videoID")
+	videoID, ok := s.resolveFeedStateIDForJSON(w, r.PathValue("videoID"))
+	if !ok {
+		return
+	}
 
 	err := s.db.RemoveBookmark(userID, videoID)
 	if err != nil {
@@ -211,7 +218,10 @@ func (s *Server) handleBookmarkGet(w http.ResponseWriter, r *http.Request) {
 	if user != nil {
 		userID = user.Username
 	}
-	videoID := r.PathValue("videoID")
+	videoID, ok := s.resolveFeedStateIDForJSON(w, r.PathValue("videoID"))
+	if !ok {
+		return
+	}
 
 	bookmarked, catID, err := s.db.IsBookmarked(videoID, userID)
 	if err != nil {

@@ -158,11 +158,21 @@ func (s *Server) handleMutationLike(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, 400, "invalid_body", err.Error())
 		return
 	}
+	tweetID, err := s.db.ResolveFeedStateID(body.TweetID)
+	if err != nil {
+		slog.Error("ResolveFeedStateID", "tweet", body.TweetID, "err", err)
+		writeJSONError(w, 500, "db_error", "database error")
+		return
+	}
+	body.TweetID = tweetID
 	res, err := s.db.ApplyLikeMutation(user.Username, body.TweetID, body.Action, body.UpdatedAtMs)
 	if err != nil {
 		slog.Error("ApplyLikeMutation", "err", err)
 		writeJSONError(w, 400, "invalid_body", err.Error())
 		return
+	}
+	if body.Action == "set" {
+		s.requestXStatusRecovery(body.TweetID, false)
 	}
 	s.kickFeedOrderForTweetIDs(body.TweetID)
 	writeMutation(w, 200, "like", res.SyncVersion, nil)
@@ -187,6 +197,13 @@ func (s *Server) handleMutationBookmark(w http.ResponseWriter, r *http.Request) 
 		writeJSONError(w, 400, "invalid_body", err.Error())
 		return
 	}
+	videoID, err := s.db.ResolveFeedStateID(body.VideoID)
+	if err != nil {
+		slog.Error("ResolveFeedStateID", "video", body.VideoID, "err", err)
+		writeJSONError(w, 500, "db_error", "database error")
+		return
+	}
+	body.VideoID = videoID
 	var archivePath string
 	if body.Action == "set" {
 		requestedCategoryID := int64(0)
@@ -236,6 +253,9 @@ func (s *Server) handleMutationBookmark(w http.ResponseWriter, r *http.Request) 
 	if err != nil {
 		writeJSONError(w, 400, "invalid_body", err.Error())
 		return
+	}
+	if body.Action == "set" {
+		s.requestXStatusRecovery(body.VideoID, true)
 	}
 	s.kickFeedOrderForTweetIDs(body.VideoID)
 	if body.Action == "set" && body.CategoryID != nil && !alreadyCurrent {

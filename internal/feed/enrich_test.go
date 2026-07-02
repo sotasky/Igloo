@@ -206,6 +206,45 @@ func TestEnrichFeedItemsBackfillsDisplayNamesFromChannelProfiles(t *testing.T) {
 	}
 }
 
+func TestEnrichFeedItemsUsesCanonicalStatusURLForRepostUserState(t *testing.T) {
+	d := openWritableFeedTestDB(t)
+	const (
+		userID       = "sample_user"
+		originalID   = "1000000000000000001"
+		repostID     = "1000000000000000002"
+		canonicalURL = "https://x.com/sample_author/status/" + originalID
+	)
+	if err := d.ExecRaw(
+		`INSERT INTO feed_likes (username, tweet_id, liked_at) VALUES (?, ?, ?)`,
+		userID, originalID, int64(1),
+	); err != nil {
+		t.Fatalf("insert feed like: %v", err)
+	}
+	if err := d.ExecRaw(
+		`INSERT INTO bookmarks (user_id, video_id, bookmarked_at) VALUES (?, ?, ?)`,
+		userID, originalID, int64(1),
+	); err != nil {
+		t.Fatalf("insert bookmark: %v", err)
+	}
+
+	got := EnrichFeedItemsPreserveRows(d, []model.FeedItem{{
+		TweetID:          repostID,
+		AuthorHandle:     "sample_author",
+		SourceHandle:     "sample_reposter",
+		IsRetweet:        true,
+		ContentHash:      "sample_repost_hash",
+		CanonicalURL:     canonicalURL,
+		PublishedAt:      nil,
+		CanonicalTweetID: "1000000000000000003",
+	}}, userID)
+	if len(got) != 1 {
+		t.Fatalf("enriched rows = %d, want 1", len(got))
+	}
+	if !got[0].IsLiked || !got[0].IsBookmarked {
+		t.Fatalf("repost state liked=%v bookmarked=%v, want both true", got[0].IsLiked, got[0].IsBookmarked)
+	}
+}
+
 func TestEnrichFeedItemsCollapsesSiblingReplyBranchesToFirstRankedLeaf(t *testing.T) {
 	d := openWritableFeedTestDB(t)
 	rootAt := time.Unix(100, 0).UTC()

@@ -33,6 +33,11 @@ If profile media only becomes ready after hover/page render, treat that as a pip
 ## Coding Rules
 
 - Keep changes scoped. Do not mix unrelated cleanup, formatting, generated churn, or private workflow notes into product work.
+- For narrow behavioral fixes, change the owner path directly. Do not preserve
+  questionable code by adding parallel recovery layers, compatibility paths,
+  startup sweeps, broad backfills, or extra abstractions around it. When the
+  diff grows beyond the shape of the bug, stop and reduce the concept count
+  before continuing.
 - Use generic names in tests, docs, examples, comments, and commits.
   Do not commit real handles, usernames, channel IDs, post IDs, or local data
   values from bug reports or runtime state. Preserve the shape of the case with

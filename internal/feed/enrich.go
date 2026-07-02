@@ -261,33 +261,39 @@ func enrichFeedItems(database *db.DB, items []model.FeedItem, username string, d
 		}
 	}
 
-	// Bidirectional sibling like/bookmark propagation across content_hash groups.
-	// If any sibling (original or retweet) is liked/bookmarked, all siblings inherit it.
+	// Bidirectional sibling like/bookmark propagation across content_hash groups
+	// and canonical status links. If any sibling (original or retweet) is
+	// liked/bookmarked, all siblings inherit it.
 	var hashIDs []string
+	siblings := make(map[string][]string)
 	for _, item := range items {
 		if item.ContentHash != "" {
 			hashIDs = append(hashIDs, item.TweetID)
 		}
+		if id := model.TwitterStatusIDFromURL(item.CanonicalURL); id != "" && id != item.TweetID {
+			siblings[item.TweetID] = append(siblings[item.TweetID], id)
+		}
 	}
 	if len(hashIDs) > 0 {
-		siblings, _ := database.FindSiblingTweetIDsForLikes(hashIDs)
-		if len(siblings) > 0 {
-			var sibIDs []string
-			for _, sibs := range siblings {
-				sibIDs = append(sibIDs, sibs...)
-			}
-			sibLiked, _ := database.GetFeedLikesForTweetIDs(username, sibIDs)
-			sibBookmarked, _ := database.GetBookmarksForVideoIDs(sibIDs)
-			for i := range items {
-				if sibs, ok := siblings[items[i].TweetID]; ok {
-					for _, sib := range sibs {
-						if sibLiked[sib] {
-							items[i].IsLiked = true
-						}
-						if sibBookmarked[sib] {
-							items[i].IsBookmarked = true
-						}
-					}
+		contentSiblings, _ := database.FindSiblingTweetIDsForLikes(hashIDs)
+		for tweetID, sibs := range contentSiblings {
+			siblings[tweetID] = append(siblings[tweetID], sibs...)
+		}
+	}
+	if len(siblings) > 0 {
+		var sibIDs []string
+		for _, sibs := range siblings {
+			sibIDs = append(sibIDs, sibs...)
+		}
+		sibLiked, _ := database.GetFeedLikesForTweetIDs(username, sibIDs)
+		sibBookmarked, _ := database.GetBookmarksForVideoIDs(sibIDs)
+		for i := range items {
+			for _, sib := range siblings[items[i].TweetID] {
+				if sibLiked[sib] {
+					items[i].IsLiked = true
+				}
+				if sibBookmarked[sib] {
+					items[i].IsBookmarked = true
 				}
 			}
 		}

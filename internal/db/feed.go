@@ -225,6 +225,53 @@ func (db *DB) GetFeedItemsForTweetIDs(tweetIDs []string) (map[string]model.FeedI
 	return result, nil
 }
 
+// ResolveFeedStateID maps a stored feed row to the status ID that should own
+// user state such as likes and bookmarks. Plain videos and unknown feed IDs
+// resolve to themselves.
+func (db *DB) ResolveFeedStateID(id string) (string, error) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return "", nil
+	}
+	var canonicalURL string
+	err := db.conn.QueryRow(
+		`SELECT COALESCE(canonical_url, '') FROM feed_items WHERE tweet_id = ?`,
+		id,
+	).Scan(&canonicalURL)
+	if err == sql.ErrNoRows {
+		return id, nil
+	}
+	if err != nil {
+		return "", err
+	}
+	if stateID := model.TwitterStatusIDFromURL(canonicalURL); stateID != "" {
+		return stateID, nil
+	}
+	return id, nil
+}
+
+func resolveFeedStateIDTx(tx *sql.Tx, id string) (string, error) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return "", nil
+	}
+	var canonicalURL string
+	err := tx.QueryRow(
+		`SELECT COALESCE(canonical_url, '') FROM feed_items WHERE tweet_id = ?`,
+		id,
+	).Scan(&canonicalURL)
+	if err == sql.ErrNoRows {
+		return id, nil
+	}
+	if err != nil {
+		return "", err
+	}
+	if stateID := model.TwitterStatusIDFromURL(canonicalURL); stateID != "" {
+		return stateID, nil
+	}
+	return id, nil
+}
+
 // GetSeenTweetIDs returns which tweet IDs have been seen by username.
 func (db *DB) GetSeenTweetIDs(username string, tweetIDs []string) (map[string]bool, error) {
 	if len(tweetIDs) == 0 || username == "" {
@@ -900,12 +947,17 @@ func scanFeedItems(rows *sql.Rows) ([]model.FeedItem, error) {
 // media_json, platform, quote_payload_json.
 func (db *DB) InsertFeedLike(username, tweetID string, fields map[string]string) error {
 	return db.WithWrite(func(tx *sql.Tx) error {
+		var err error
+		tweetID, err = resolveFeedStateIDTx(tx, tweetID)
+		if err != nil {
+			return err
+		}
 		nowMs := time.Now().UnixMilli()
 		if err := db.ensureFeedItemStubFromLikeTx(tx, tweetID, fields); err != nil {
 			return err
 		}
 		publishedAtMs := parseTimestampString(fields["published_at"])
-		_, err := tx.Exec(`
+		_, err = tx.Exec(`
 			INSERT INTO feed_likes (
 				username, tweet_id, source_handle, author_handle, author_display_name,
 				body_text, link, canonical_x_link, published_at, media_url, avatar_url,
@@ -956,7 +1008,12 @@ func (db *DB) InsertFeedLike(username, tweetID string, fields map[string]string)
 // DeleteFeedLike removes a feed like record.
 func (db *DB) DeleteFeedLike(username, tweetID string) error {
 	return db.WithWrite(func(tx *sql.Tx) error {
-		_, err := tx.Exec("DELETE FROM feed_likes WHERE username = ? AND tweet_id = ?", username, tweetID)
+		var err error
+		tweetID, err = resolveFeedStateIDTx(tx, tweetID)
+		if err != nil {
+			return err
+		}
+		_, err = tx.Exec("DELETE FROM feed_likes WHERE username = ? AND tweet_id = ?", username, tweetID)
 		if err != nil {
 			return err
 		}

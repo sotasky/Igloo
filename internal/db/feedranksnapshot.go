@@ -438,7 +438,7 @@ func (db *DB) ListPreDiversityRankedContext(ctx context.Context, username string
 		r.IsRetweet = isRetweet != 0
 		r.IsReply = isReply != 0
 		if r.IsRetweet && r.QuoteTweetID == "" {
-			if targetID := tweetIDFromStatusURL(canonicalURL); targetID != "" && targetID != r.TweetID {
+			if targetID := model.TwitterStatusIDFromURL(canonicalURL); targetID != "" && targetID != r.TweetID {
 				repostTargetByTweetID[r.TweetID] = targetID
 			}
 		}
@@ -474,28 +474,6 @@ func (db *DB) ListPreDiversityRankedContext(ctx context.Context, username string
 		}
 	}
 	return out, nil
-}
-
-func tweetIDFromStatusURL(raw string) string {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return ""
-	}
-	lower := strings.ToLower(raw)
-	const marker = "/status/"
-	idx := strings.Index(lower, marker)
-	if idx < 0 {
-		return ""
-	}
-	rest := raw[idx+len(marker):]
-	end := 0
-	for end < len(rest) && rest[end] >= '0' && rest[end] <= '9' {
-		end++
-	}
-	if end == 0 {
-		return ""
-	}
-	return rest[:end]
 }
 
 func (db *DB) threadRootIDsForTweetIDsContext(ctx context.Context, tweetIDs []string) (map[string]string, error) {

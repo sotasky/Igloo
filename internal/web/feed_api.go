@@ -12,6 +12,7 @@ import (
 	"github.com/screwys/igloo/internal/db"
 	"github.com/screwys/igloo/internal/feed"
 	"github.com/screwys/igloo/internal/model"
+	"github.com/screwys/igloo/internal/xfeed"
 )
 
 // registerFeedAPIRoutes registers feed interaction API routes.
@@ -33,13 +34,51 @@ func (s *Server) registerFeedAPIRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/feed/shorts", s.handleFeedShorts)
 }
 
+func (s *Server) resolveFeedStateIDForJSON(w http.ResponseWriter, id string) (string, bool) {
+	stateID, err := s.db.ResolveFeedStateID(id)
+	if err != nil {
+		slog.Error("ResolveFeedStateID", "id", id, "err", err)
+		writeJSON(w, 500, map[string]any{"success": false, "error": "db error"})
+		return "", false
+	}
+	return stateID, true
+}
+
+func (s *Server) requestXStatusRecovery(tweetID string, requireFeedRow bool) {
+	if s == nil || s.workers == nil {
+		return
+	}
+	tweetID = strings.TrimSpace(tweetID)
+	if !xfeed.ValidTweetID(tweetID) {
+		return
+	}
+	if requireFeedRow {
+		item, err := s.db.GetFeedItemByTweetID(tweetID)
+		if err != nil {
+			slog.Warn("load X status recovery candidate", "tweet", tweetID, "err", err)
+			return
+		}
+		if item == nil {
+			return
+		}
+	}
+	s.workers.RequestXStatusEnrichment(xfeed.StatusEnrichmentRequest{
+		Kind: xfeed.StatusEnrichmentMissingQuoteParent,
+		Ref:  xfeed.StatusRef{Handle: "i", TweetID: tweetID},
+	})
+}
+
 func (s *Server) handleFeedLike(w http.ResponseWriter, r *http.Request) {
 	user := userFromContext(r.Context())
 	if user == nil {
 		writeJSON(w, 401, map[string]any{"success": false, "error": "unauthorized"})
 		return
 	}
-	tweetID := r.PathValue("tweetID")
+	displayTweetID := r.PathValue("tweetID")
+	tweetID, ok := s.resolveFeedStateIDForJSON(w, displayTweetID)
+	if !ok {
+		return
+	}
 
 	var body struct {
 		Item map[string]string `json:"item"`
@@ -60,13 +99,14 @@ func (s *Server) handleFeedLike(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 500, map[string]any{"success": false, "error": "db error"})
 		return
 	}
+	s.requestXStatusRecovery(tweetID, false)
 
 	_ = s.db.InvalidateAlgoScore(tweetID)
 	s.workers.KickFeedScoring()
 
 	if r.Header.Get("HX-Request") != "" {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_ = components.LikeButton(s.pageProps(w, r), tweetID, true).Render(r.Context(), w)
+		_ = components.LikeButton(s.pageProps(w, r), displayTweetID, true).Render(r.Context(), w)
 		return
 	}
 
@@ -84,7 +124,11 @@ func (s *Server) handleFeedUnlike(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 401, map[string]any{"success": false, "error": "unauthorized"})
 		return
 	}
-	tweetID := r.PathValue("tweetID")
+	displayTweetID := r.PathValue("tweetID")
+	tweetID, ok := s.resolveFeedStateIDForJSON(w, displayTweetID)
+	if !ok {
+		return
+	}
 
 	err := s.db.DeleteFeedLike(user.Username, tweetID)
 	if err != nil {
@@ -98,7 +142,7 @@ func (s *Server) handleFeedUnlike(w http.ResponseWriter, r *http.Request) {
 
 	if r.Header.Get("HX-Request") != "" {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_ = components.LikeButton(s.pageProps(w, r), tweetID, false).Render(r.Context(), w)
+		_ = components.LikeButton(s.pageProps(w, r), displayTweetID, false).Render(r.Context(), w)
 		return
 	}
 
@@ -330,15 +374,21 @@ func (s *Server) handleFeedInteraction(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]any{"success": true, "action": "mute"})
 	case "like":
 		if body.TweetID != "" {
+			tweetID, err := s.db.ResolveFeedStateID(body.TweetID)
+			if err != nil {
+				slog.Error("ResolveFeedStateID", "tweet", body.TweetID, "err", err)
+				break
+			}
 			fields := make(map[string]string)
 			for k, v := range body.Item {
 				if s, ok := v.(string); ok {
 					fields[k] = s
 				}
 			}
-			if err := s.db.InsertFeedLike(username, body.TweetID, fields); err != nil {
-				slog.Error("InsertFeedLike", "tweet", body.TweetID, "err", err)
+			if err := s.db.InsertFeedLike(username, tweetID, fields); err != nil {
+				slog.Error("InsertFeedLike", "tweet", tweetID, "err", err)
 			}
+			s.requestXStatusRecovery(tweetID, false)
 		}
 		writeJSON(w, 200, map[string]any{"success": true, "action": "like"})
 	default:

@@ -264,6 +264,54 @@ func TestAddAndRemoveBookmark(t *testing.T) {
 	}
 }
 
+func TestAddAndRemoveBookmarkResolveCanonicalStatusURL(t *testing.T) {
+	d := openWritableTestDB(t)
+	const (
+		userID     = "sample_user"
+		originalID = "1000000000000000201"
+		repostID   = "1000000000000000202"
+	)
+	if err := d.ExecRaw(`
+		INSERT INTO feed_items (tweet_id, source_handle, author_handle, body_text, canonical_url)
+		VALUES (?, 'sample_reposter', 'sample_author', 'body', ?)`,
+		repostID, "https://x.com/sample_author/status/"+originalID,
+	); err != nil {
+		t.Fatalf("seed repost row: %v", err)
+	}
+
+	if err := d.AddBookmark(userID, repostID, 0, "", "", ""); err != nil {
+		t.Fatalf("AddBookmark: %v", err)
+	}
+	bookmarked, _, err := d.IsBookmarked(repostID, userID)
+	if err != nil {
+		t.Fatalf("IsBookmarked: %v", err)
+	}
+	if !bookmarked {
+		t.Fatalf("repost bookmark state should resolve through canonical status URL")
+	}
+	var originalRows, repostRows int
+	if err := d.QueryRow(`SELECT COUNT(*) FROM bookmarks WHERE user_id = ? AND video_id = ?`, userID, originalID).Scan(&originalRows); err != nil {
+		t.Fatalf("count original bookmark: %v", err)
+	}
+	if err := d.QueryRow(`SELECT COUNT(*) FROM bookmarks WHERE user_id = ? AND video_id = ?`, userID, repostID).Scan(&repostRows); err != nil {
+		t.Fatalf("count repost bookmark: %v", err)
+	}
+	if originalRows != 1 || repostRows != 0 {
+		t.Fatalf("bookmark rows original=%d repost=%d, want original only", originalRows, repostRows)
+	}
+
+	if err := d.RemoveBookmark(userID, repostID); err != nil {
+		t.Fatalf("RemoveBookmark: %v", err)
+	}
+	bookmarked, _, err = d.IsBookmarked(repostID, userID)
+	if err != nil {
+		t.Fatalf("IsBookmarked after remove: %v", err)
+	}
+	if bookmarked {
+		t.Fatalf("repost bookmark state should clear canonical bookmark")
+	}
+}
+
 func TestAddBookmarkSyncChangeCarriesFullMetadata(t *testing.T) {
 	d := openWritableTestDB(t)
 

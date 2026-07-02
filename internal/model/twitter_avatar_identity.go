@@ -86,3 +86,29 @@ func TwitterAvatarChannelID(handle, avatarURL string) string {
 	}
 	return SyntheticTwitterAvatarChannelID(avatarURL)
 }
+
+func TwitterStatusIDFromURL(raw string) string {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return ""
+	}
+	host := strings.TrimPrefix(strings.ToLower(u.Hostname()), "www.")
+	switch host {
+	case "x.com", "twitter.com", "fxtwitter.com", "vxtwitter.com":
+	default:
+		return ""
+	}
+	parts := strings.Split(strings.Trim(u.Path, "/"), "/")
+	for i := 0; i+1 < len(parts); i++ {
+		if !strings.EqualFold(parts[i], "status") {
+			continue
+		}
+		id := strings.TrimSpace(parts[i+1])
+		end := 0
+		for end < len(id) && id[end] >= '0' && id[end] <= '9' {
+			end++
+		}
+		return id[:end]
+	}
+	return ""
+}
