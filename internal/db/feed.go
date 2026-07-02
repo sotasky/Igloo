@@ -272,6 +272,129 @@ func resolveFeedStateIDTx(tx *sql.Tx, id string) (string, error) {
 	return id, nil
 }
 
+func (db *DB) resolveFeedStateIDForWriteTx(tx *sql.Tx, id string) (string, error) {
+	sourceID := strings.TrimSpace(id)
+	stateID, err := resolveFeedStateIDTx(tx, sourceID)
+	if err != nil || sourceID == "" || stateID == "" || stateID == sourceID {
+		return stateID, err
+	}
+	if err := db.materializeResolvedFeedStateTx(tx, sourceID, stateID); err != nil {
+		return "", err
+	}
+	return stateID, nil
+}
+
+// ResolveFeedStateIDForWrite maps a feed row to its user-state owner and copies
+// the stored feed/media shape to that owner. This keeps canonicalized likes and
+// bookmarks attached to the media the user actually acted on.
+func (db *DB) ResolveFeedStateIDForWrite(id string) (string, error) {
+	var stateID string
+	err := db.WithWrite(func(tx *sql.Tx) error {
+		var err error
+		stateID, err = db.resolveFeedStateIDForWriteTx(tx, id)
+		return err
+	})
+	return stateID, err
+}
+
+func (db *DB) materializeResolvedFeedStateTx(tx *sql.Tx, sourceID, stateID string) error {
+	if strings.TrimSpace(sourceID) == "" || strings.TrimSpace(stateID) == "" || sourceID == stateID {
+		return nil
+	}
+	seq := db.NextSyncSeq()
+	if _, err := tx.Exec(`
+		INSERT INTO feed_items (
+			tweet_id, source_handle, author_handle, author_display_name,
+			author_avatar_url, body_text, media_json, canonical_url,
+			published_at, fetched_at,
+			content_hash, canonical_tweet_id,
+			sync_seq
+		)
+		SELECT
+			?,
+			source_handle,
+			COALESCE(NULLIF(TRIM(author_handle), ''), 'unknown'),
+			author_display_name,
+			author_avatar_url,
+			body_text,
+			media_json,
+			canonical_url,
+			published_at,
+			fetched_at,
+			content_hash, ?,
+			?
+		FROM feed_items
+		WHERE tweet_id = ?
+		ON CONFLICT(tweet_id) DO UPDATE SET
+			source_handle = CASE WHEN COALESCE(feed_items.source_handle, '') = '' THEN excluded.source_handle ELSE feed_items.source_handle END,
+			author_handle = CASE
+				WHEN LOWER(TRIM(COALESCE(feed_items.author_handle, ''))) IN ('', 'unknown', 'undefined')
+				 AND LOWER(TRIM(COALESCE(excluded.author_handle, ''))) NOT IN ('', 'unknown', 'undefined')
+				THEN excluded.author_handle
+				ELSE feed_items.author_handle
+			END,
+			author_display_name = CASE WHEN COALESCE(feed_items.author_display_name, '') = '' THEN excluded.author_display_name ELSE feed_items.author_display_name END,
+			author_avatar_url = CASE WHEN COALESCE(feed_items.author_avatar_url, '') = '' THEN excluded.author_avatar_url ELSE feed_items.author_avatar_url END,
+			body_text = CASE WHEN COALESCE(feed_items.body_text, '') = '' THEN excluded.body_text ELSE feed_items.body_text END,
+			media_json = CASE WHEN COALESCE(feed_items.media_json, '') IN ('', '[]') THEN excluded.media_json ELSE feed_items.media_json END,
+			canonical_url = CASE WHEN COALESCE(feed_items.canonical_url, '') = '' THEN excluded.canonical_url ELSE feed_items.canonical_url END,
+			published_at = CASE WHEN COALESCE(feed_items.published_at, 0) = 0 THEN excluded.published_at ELSE feed_items.published_at END,
+			fetched_at = CASE WHEN COALESCE(feed_items.fetched_at, 0) = 0 THEN excluded.fetched_at ELSE feed_items.fetched_at END,
+			content_hash = CASE WHEN COALESCE(feed_items.content_hash, '') = '' THEN excluded.content_hash ELSE feed_items.content_hash END,
+			canonical_tweet_id = CASE WHEN COALESCE(feed_items.canonical_tweet_id, '') = '' THEN excluded.canonical_tweet_id ELSE feed_items.canonical_tweet_id END,
+			sync_seq = excluded.sync_seq
+	`, stateID, stateID, seq, sourceID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`
+		INSERT INTO media_files
+			(owner_type, owner_id, media_index, file_path, media_type, source_url, file_size)
+		SELECT owner_type, ?, media_index, file_path, media_type, source_url, file_size
+		FROM media_files
+		WHERE owner_type = 'feed_media'
+		  AND owner_id = ?
+		ON CONFLICT(owner_type, owner_id, media_index) DO UPDATE SET
+			file_path = excluded.file_path,
+			media_type = excluded.media_type,
+			source_url = excluded.source_url,
+			file_size = excluded.file_size
+	`, stateID, sourceID); err != nil {
+		return err
+	}
+	nowMs := time.Now().UnixMilli()
+	if _, err := tx.Exec(`
+		INSERT INTO assets (
+			asset_id, asset_kind, owner_kind, owner_id, media_index,
+			source_url, file_path, content_type, size_bytes, sha256, state,
+			required_reason, last_error_kind, last_error, attempts,
+			next_attempt_at_ms, lease_owner, lease_until_ms, created_at_ms, updated_at_ms
+		)
+		SELECT
+			'twitter_tweet_' || ? || '_post_media' ||
+				CASE WHEN media_index > 0 THEN '_' || CAST(media_index AS TEXT) ELSE '' END,
+			asset_kind, owner_kind, ?, media_index,
+			source_url, file_path, content_type, size_bytes, sha256, state,
+			required_reason, last_error_kind, last_error, attempts,
+			next_attempt_at_ms, lease_owner, lease_until_ms, ?, ?
+		FROM assets
+		WHERE asset_kind = 'post_media'
+		  AND owner_kind = 'tweet'
+		  AND owner_id = ?
+		ON CONFLICT(asset_kind, owner_kind, owner_id, media_index) DO UPDATE SET
+			asset_id = excluded.asset_id,
+			source_url = excluded.source_url,
+			file_path = excluded.file_path,
+			content_type = excluded.content_type,
+			size_bytes = excluded.size_bytes,
+			sha256 = excluded.sha256,
+			state = excluded.state,
+			updated_at_ms = excluded.updated_at_ms
+	`, stateID, stateID, nowMs, nowMs, sourceID); err != nil {
+		return err
+	}
+	return nil
+}
+
 // GetSeenTweetIDs returns which tweet IDs have been seen by username.
 func (db *DB) GetSeenTweetIDs(username string, tweetIDs []string) (map[string]bool, error) {
 	if len(tweetIDs) == 0 || username == "" {
@@ -948,7 +1071,7 @@ func scanFeedItems(rows *sql.Rows) ([]model.FeedItem, error) {
 func (db *DB) InsertFeedLike(username, tweetID string, fields map[string]string) error {
 	return db.WithWrite(func(tx *sql.Tx) error {
 		var err error
-		tweetID, err = resolveFeedStateIDTx(tx, tweetID)
+		tweetID, err = db.resolveFeedStateIDForWriteTx(tx, tweetID)
 		if err != nil {
 			return err
 		}

@@ -75,8 +75,10 @@ func (s *Server) handleFeedLike(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	displayTweetID := r.PathValue("tweetID")
-	tweetID, ok := s.resolveFeedStateIDForJSON(w, displayTweetID)
-	if !ok {
+	tweetID, err := s.db.ResolveFeedStateIDForWrite(displayTweetID)
+	if err != nil {
+		slog.Error("ResolveFeedStateIDForWrite", "tweet", displayTweetID, "err", err)
+		writeJSON(w, 500, map[string]any{"success": false, "error": "db error"})
 		return
 	}
 
@@ -93,7 +95,7 @@ func (s *Server) handleFeedLike(w http.ResponseWriter, r *http.Request) {
 		fields = make(map[string]string)
 	}
 
-	err := s.db.InsertFeedLike(user.Username, tweetID, fields)
+	err = s.db.InsertFeedLike(user.Username, tweetID, fields)
 	if err != nil {
 		slog.Error("InsertFeedLike", "tweet", tweetID, "err", err)
 		writeJSON(w, 500, map[string]any{"success": false, "error": "db error"})
@@ -374,9 +376,9 @@ func (s *Server) handleFeedInteraction(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]any{"success": true, "action": "mute"})
 	case "like":
 		if body.TweetID != "" {
-			tweetID, err := s.db.ResolveFeedStateID(body.TweetID)
+			tweetID, err := s.db.ResolveFeedStateIDForWrite(body.TweetID)
 			if err != nil {
-				slog.Error("ResolveFeedStateID", "tweet", body.TweetID, "err", err)
+				slog.Error("ResolveFeedStateIDForWrite", "tweet", body.TweetID, "err", err)
 				break
 			}
 			fields := make(map[string]string)

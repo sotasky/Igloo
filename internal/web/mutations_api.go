@@ -158,7 +158,13 @@ func (s *Server) handleMutationLike(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, 400, "invalid_body", err.Error())
 		return
 	}
-	tweetID, err := s.db.ResolveFeedStateID(body.TweetID)
+	var tweetID string
+	var err error
+	if body.Action == "set" {
+		tweetID, err = s.db.ResolveFeedStateIDForWrite(body.TweetID)
+	} else {
+		tweetID, err = s.db.ResolveFeedStateID(body.TweetID)
+	}
 	if err != nil {
 		slog.Error("ResolveFeedStateID", "tweet", body.TweetID, "err", err)
 		writeJSONError(w, 500, "db_error", "database error")
@@ -197,7 +203,13 @@ func (s *Server) handleMutationBookmark(w http.ResponseWriter, r *http.Request) 
 		writeJSONError(w, 400, "invalid_body", err.Error())
 		return
 	}
-	videoID, err := s.db.ResolveFeedStateID(body.VideoID)
+	var videoID string
+	var err error
+	if body.Action == "set" {
+		videoID, err = s.db.ResolveFeedStateIDForWrite(body.VideoID)
+	} else {
+		videoID, err = s.db.ResolveFeedStateID(body.VideoID)
+	}
 	if err != nil {
 		slog.Error("ResolveFeedStateID", "video", body.VideoID, "err", err)
 		writeJSONError(w, 500, "db_error", "database error")

@@ -278,6 +278,24 @@ func TestAddAndRemoveBookmarkResolveCanonicalStatusURL(t *testing.T) {
 	); err != nil {
 		t.Fatalf("seed repost row: %v", err)
 	}
+	if err := d.ExecRaw(`
+		INSERT INTO feed_items (tweet_id, author_handle, fetched_at)
+		VALUES (?, 'unknown', 1)`,
+		originalID,
+	); err != nil {
+		t.Fatalf("seed hollow canonical row: %v", err)
+	}
+	if err := d.InsertMediaFileBatch([]model.MediaFile{{
+		OwnerType:  "feed_media",
+		OwnerID:    repostID,
+		MediaIndex: 0,
+		FilePath:   "media/twitter/sample_author/repost_0.jpg",
+		MediaType:  "photo",
+		SourceURL:  "https://pbs.twimg.com/media/sample_repost_0.jpg",
+		FileSize:   123,
+	}}); err != nil {
+		t.Fatalf("seed repost media: %v", err)
+	}
 
 	if err := d.AddBookmark(userID, repostID, 0, "", "", ""); err != nil {
 		t.Fatalf("AddBookmark: %v", err)
@@ -298,6 +316,28 @@ func TestAddAndRemoveBookmarkResolveCanonicalStatusURL(t *testing.T) {
 	}
 	if originalRows != 1 || repostRows != 0 {
 		t.Fatalf("bookmark rows original=%d repost=%d, want original only", originalRows, repostRows)
+	}
+	if _, err := d.GetMediaFilePath("feed_media", originalID, 0); err != nil {
+		t.Fatalf("canonical bookmark lost media: %v", err)
+	}
+	asset, err := d.GetAsset(BuildManifestAssetID("twitter", "tweet", originalID, "post_media", 0), "post_media")
+	if err != nil {
+		t.Fatalf("GetAsset canonical media: %v", err)
+	}
+	if asset == nil || asset.OwnerID != originalID || asset.FilePath == "" {
+		t.Fatalf("canonical asset not materialized: %+v", asset)
+	}
+	var channelID, body string
+	if err := d.QueryRow(`
+		SELECT v.channel_id, COALESCE(fi.body_text, '')
+		FROM videos v
+		JOIN feed_items fi ON fi.tweet_id = v.video_id
+		WHERE v.video_id = ?
+	`, originalID).Scan(&channelID, &body); err != nil {
+		t.Fatalf("query canonical bookmark shape: %v", err)
+	}
+	if channelID != "twitter_sample_author" || body != "body" {
+		t.Fatalf("canonical shape channel=%q body=%q, want twitter_sample_author/body", channelID, body)
 	}
 
 	if err := d.RemoveBookmark(userID, repostID); err != nil {

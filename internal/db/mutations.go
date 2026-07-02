@@ -54,7 +54,11 @@ func (db *DB) applyMutation(kind, itemID string, value any, writes func(tx *sql.
 
 func (db *DB) ApplyLikeMutation(username, tweetID, action string, updatedAtMs int64) (MutationResult, error) {
 	var err error
-	tweetID, err = db.ResolveFeedStateID(tweetID)
+	if action == "set" {
+		tweetID, err = db.ResolveFeedStateIDForWrite(tweetID)
+	} else {
+		tweetID, err = db.ResolveFeedStateID(tweetID)
+	}
 	if err != nil {
 		return MutationResult{}, err
 	}
@@ -133,6 +137,9 @@ type BookmarkMutation struct {
 
 func (db *DB) ApplyBookmarkMutation(userID string, m BookmarkMutation) (MutationResult, error) {
 	resolvedID, err := db.ResolveFeedStateID(m.VideoID)
+	if m.Action == "set" {
+		resolvedID, err = db.ResolveFeedStateIDForWrite(m.VideoID)
+	}
 	if err != nil {
 		return MutationResult{}, err
 	}

@@ -354,7 +354,7 @@ func (db *DB) GetBookmarkLabelCounts(userID string) ([]BookmarkLabelCountRow, er
 func (db *DB) AddBookmark(userID, videoID string, categoryID int64, customTitle, accountHandles, mediaIndices string) error {
 	return db.WithWrite(func(tx *sql.Tx) error {
 		var err error
-		videoID, err = resolveFeedStateIDTx(tx, videoID)
+		videoID, err = db.resolveFeedStateIDForWriteTx(tx, videoID)
 		if err != nil {
 			return err
 		}

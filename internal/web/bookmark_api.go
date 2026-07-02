@@ -40,8 +40,11 @@ func (s *Server) handleBookmarkAdd(w http.ResponseWriter, r *http.Request) {
 	if user != nil {
 		userID = user.Username
 	}
-	videoID, ok := s.resolveFeedStateIDForJSON(w, r.PathValue("videoID"))
-	if !ok {
+	rawVideoID := r.PathValue("videoID")
+	videoID, err := s.db.ResolveFeedStateIDForWrite(rawVideoID)
+	if err != nil {
+		slog.Error("ResolveFeedStateIDForWrite", "video", rawVideoID, "err", err)
+		writeJSON(w, 500, map[string]any{"success": false, "error": "db error"})
 		return
 	}
 

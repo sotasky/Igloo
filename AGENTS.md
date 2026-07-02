@@ -33,17 +33,26 @@ If profile media only becomes ready after hover/page render, treat that as a pip
 ## Coding Rules
 
 - Keep changes scoped. Do not mix unrelated cleanup, formatting, generated churn, or private workflow notes into product work.
-- For narrow behavioral fixes, change the owner path directly. Do not preserve
-  questionable code by adding parallel recovery layers, compatibility paths,
-  startup sweeps, broad backfills, or extra abstractions around it. When the
-  diff grows beyond the shape of the bug, stop and reduce the concept count
-  before continuing.
+- Maintainability is part of the fix. Existing code is evidence, not something
+  to preserve at all costs; when the owner model or owner function is wrong,
+  change or delete that mechanism instead of building layers around it.
+- Do not make "avoid disturbing code" the goal. Preserve user-visible behavior,
+  stored data, and API contracts while reducing concept count. Parallel recovery
+  paths, compatibility paths, startup sweeps, broad backfills, and new
+  abstractions need a concrete reason the owner path cannot be corrected.
+- When a diff grows beyond the shape of the bug, stop and shrink it before
+  continuing.
 - Use generic names in tests, docs, examples, comments, and commits.
   Do not commit real handles, usernames, channel IDs, post IDs, or local data
   values from bug reports or runtime state. Preserve the shape of the case with
   generic equivalents instead, such as `_sample_handle` for a leading-underscore
   X handle.
 - Do not clear local state before a network call succeeds.
+- A successful like/bookmark means the app presented real content to the user.
+  Treat missing persisted body, identity, media JSON, media files, assets, or
+  video file paths after that action as a capture/persistence bug, not evidence
+  that the saved item was empty. Empty client action payloads are a client/server
+  contract failure when rendered content existed.
 - Destructive UI actions need product confirmation: Igloo modal on web, Compose `AlertDialog` on Android.
 - One-off repair/backfill utilities must not become normal startup behavior.
 - Fix root causes, not display-only symptoms.
