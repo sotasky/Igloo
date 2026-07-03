@@ -19,7 +19,7 @@ const (
 	jitterRangePerTweet = 0.38 // total spread; per-tweet jitter is centered in ±half
 
 	nearbyRepostMergeRankDistance = 150
-	nearbyRepostMergeWindow       = 4 * time.Hour
+	nearbyRepostMergeWindow       = 12 * time.Hour
 )
 
 // BuildSnapshot turns a pre-diversity ranked list into the final snapshot rows

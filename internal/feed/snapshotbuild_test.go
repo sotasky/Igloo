@@ -82,6 +82,20 @@ func TestBuildSnapshot_HidesNearbyOriginalWhenPureRepostIsClose(t *testing.T) {
 	}
 }
 
+func TestBuildSnapshot_HidesOriginalWhenPureRepostIsFourAndHalfHoursLater(t *testing.T) {
+	now := time.Unix(1700000000, 0)
+	publishedAt := now.Add(-6 * time.Hour).UnixMilli()
+	in := []db.PreDiversitySnapshotRow{
+		{TweetID: "original", AuthorHandle: "sample_author", SourceHandle: "sample_author", ContentHash: "same_content", PublishedAtMs: publishedAt, BaseScore: 100, DecayFactor: 1},
+		{TweetID: "sample_repost", AuthorHandle: "sample_author", SourceHandle: "sample_reposter", ContentHash: "same_content", IsRetweet: true, PublishedAtMs: publishedAt + int64((4*time.Hour+30*time.Minute)/time.Millisecond), BaseScore: 99, DecayFactor: 1},
+	}
+
+	out := BuildSnapshot(in, now)
+	if got, want := snapshotIDs(out), []string{"sample_repost"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("snapshot IDs = %v, want %v", got, want)
+	}
+}
+
 func TestBuildSnapshot_KeepsOriginalWhenPureRepostIsOutsideTimeWindow(t *testing.T) {
 	now := time.Unix(1700000000, 0)
 	publishedAt := now.Add(-12 * time.Hour).UnixMilli()
