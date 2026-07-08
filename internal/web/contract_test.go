@@ -494,6 +494,10 @@ func buildAndroidSyncLatestGenerationContract(t *testing.T) any {
 	seedAndroidContractRows(t, srv)
 
 	body := requestJSON(t, srv, "GET", "/api/android/sync/generation/latest?feed_days=7&youtube_days=7&moments_days=7&story_hours=48", "alice", nil)
+	dearrowMode, err := contractStringField(body, "dearrow_mode")
+	if err != nil {
+		t.Fatalf("generation contract: %v", err)
+	}
 	gen, err := contractObjectField(body, "generation")
 	if err != nil {
 		t.Fatalf("generation contract: %v", err)
@@ -501,7 +505,10 @@ func buildAndroidSyncLatestGenerationContract(t *testing.T) any {
 	if err := normalizeAndroidSyncLatestGenerationFields(gen); err != nil {
 		t.Fatalf("generation contract: %v", err)
 	}
-	return map[string]any{"generation": gen}
+	return map[string]any{
+		"dearrow_mode": dearrowMode,
+		"generation":   gen,
+	}
 }
 
 func buildAndroidSyncItemsPageContract(t *testing.T) any {

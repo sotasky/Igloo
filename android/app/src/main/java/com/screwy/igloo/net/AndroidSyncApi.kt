@@ -162,6 +162,7 @@ private fun String.syncErrorPreview(): String =
 data class AndroidSyncLatestResponse(
     val generation: AndroidSyncGenerationDto,
     val refreshing: Boolean = false,
+    @SerialName("dearrow_mode") val dearrowMode: String? = null,
     val ok: Boolean = true,
     val server_time_ms: Long? = null,
 )

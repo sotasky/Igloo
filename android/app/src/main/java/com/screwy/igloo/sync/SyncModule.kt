@@ -105,6 +105,7 @@ val iglooSyncModule = module {
             foregroundPromoter = get(),
             mediaRoot = get(named("mediaRoot")),
             logger = get(),
+            prefs = prefs,
             retentionProvider = {
                 AndroidSyncRetentionRequest(
                     feedDays = prefs.retentionDaysFeed().first(),

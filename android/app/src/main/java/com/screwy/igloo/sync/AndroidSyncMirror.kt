@@ -76,6 +76,7 @@ class AndroidSyncMirror(
     private val foregroundPromoter: ForegroundPromoter,
     mediaRoot: File,
     private val logger: Logger,
+    private val prefs: PreferencesRepo,
     private val retentionProvider: suspend () -> AndroidSyncRetentionRequest = {
         AndroidSyncRetentionRequest(
             feedDays = PreferencesRepo.Defaults.RETENTION_DAYS_FEED,
@@ -173,6 +174,7 @@ class AndroidSyncMirror(
             val latest = withMetadataRetry("latest_generation") {
                 api.latestGeneration(retention)
             }
+            applyServerPreferences(latest.dearrowMode)
             val generation = latest.generation
             dao.upsertGeneration(generation.toEntity())
             logger.info(
@@ -249,6 +251,14 @@ class AndroidSyncMirror(
         } finally {
             foregroundPromoter.finishActiveDrain()
         }
+    }
+
+    private suspend fun applyServerPreferences(dearrowMode: String?) {
+        if (dearrowMode == null) return
+        prefs.putString(
+            PreferencesRepo.Keys.DEARROW_MODE,
+            PreferencesRepo.Defaults.normalizeDearrowMode(dearrowMode),
+        )
     }
 
     private fun scheduleRefreshRetry() {

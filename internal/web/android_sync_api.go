@@ -19,6 +19,7 @@ import (
 	"github.com/screwys/igloo/internal/db"
 	"github.com/screwys/igloo/internal/feed"
 	"github.com/screwys/igloo/internal/model"
+	"github.com/screwys/igloo/internal/settings"
 	"github.com/screwys/igloo/internal/subtitlemeta"
 )
 
@@ -73,7 +74,12 @@ func (s *Server) handleAndroidSyncLatestGeneration(w http.ResponseWriter, r *htt
 		"refreshing", refreshing,
 		"duration_ms", time.Since(start).Milliseconds(),
 	)
-	writeJSON(w, http.StatusOK, map[string]any{"generation": gen, "refreshing": refreshing})
+	dearrowMode, _ := s.db.GetSetting("dearrow_mode", "off")
+	writeJSON(w, http.StatusOK, map[string]any{
+		"generation":   gen,
+		"refreshing":   refreshing,
+		"dearrow_mode": settings.NormalizeDearrowMode(dearrowMode),
+	})
 }
 
 func (s *Server) handleAndroidSyncGenerationItems(w http.ResponseWriter, r *http.Request) {

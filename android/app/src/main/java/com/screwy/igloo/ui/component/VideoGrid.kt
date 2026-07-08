@@ -50,8 +50,7 @@ import kotlinx.coroutines.launch
 import org.koin.compose.koinInject
 
 /**
- * YouTube-style video grid with watch-progress bar and faded state for
- * not-downloaded entries.
+ * YouTube-style video grid with watch-progress bar.
  * "VideoGrid".
  */
 @Composable
@@ -192,14 +191,11 @@ private fun VideoCell(
 ) {
     val colors = MaterialTheme.iglooColors
     val video = item.video
-    val isDownloaded = !video.filePath.isNullOrEmpty()
-    val cellAlpha = if (isDownloaded) 1f else 0.55f
 
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(4.dp)
-            .alpha(cellAlpha),
+            .padding(4.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         VideoThumbnail(

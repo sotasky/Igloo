@@ -219,6 +219,45 @@ class AndroidSyncMirrorTest {
         assertEquals("false", waitForLog("android_sync_generation_refresh_pending").fields["retry_scheduled"])
     }
 
+    @Test fun syncOnceMirrorsServerDearrowMode() = runBlocking {
+        val engine = MockEngine { request ->
+            when (request.url.encodedPath) {
+                "/api/android/sync/generation/latest" -> respondJson(
+                    AndroidSyncLatestResponse(
+                        generation = AndroidSyncGenerationDto(
+                            generation_id = GENERATION_ID,
+                            created_at_ms = nowMs,
+                            status = "published",
+                            source_version = "test",
+                        ),
+                        dearrowMode = "casual",
+                    ),
+                )
+                "/api/android/sync/generation/$GENERATION_ID/items" -> respondJson(
+                    AndroidSyncItemsResponse(
+                        generation_id = GENERATION_ID,
+                        items = emptyList(),
+                        end_of_stream = true,
+                    ),
+                )
+                "/api/android/sync/generation/$GENERATION_ID/assets" -> respondJson(
+                    AndroidSyncAssetsResponse(
+                        generation_id = GENERATION_ID,
+                        assets = emptyList(),
+                        end_of_stream = true,
+                    ),
+                )
+                "/api/android/sync/health" -> respond("""{"ok":true}""", HttpStatusCode.OK, jsonHeaders())
+                else -> error("Unexpected request ${request.url}")
+            }
+        }
+        val mirror = buildMirror(engine)
+
+        mirror.syncOnce()
+
+        assertEquals("casual", db.preferenceDao().getValue(PreferencesRepo.Keys.DEARROW_MODE))
+    }
+
     @Test fun sameGenerationSyncSkipsRepeatedOrphanFileWalkWhenNothingWasPruned() = runBlocking {
         val engine = MockEngine { request ->
             when (request.url.encodedPath) {
@@ -2652,6 +2691,7 @@ class AndroidSyncMirrorTest {
             foregroundPromoter = foregroundPromoter,
             mediaRoot = tmpFolder.root,
             logger = logger,
+            prefs = PreferencesRepo(db.preferenceDao(), scope, nowMsProvider = { nowMs }),
             retentionProvider = retentionProvider,
             nowMsProvider = { nowMs },
             refreshRetryDelayMs = refreshRetryDelayMs,
