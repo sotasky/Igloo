@@ -344,6 +344,10 @@ channel := model.Channel{
 video := model.Video{
 	VideoID:   "9000000000000000000",
 	ChannelID: "tiktok_sample",
+}
+otherVideo := model.Video{
+	VideoID:   "sample_plain_video",
+	ChannelID: "tiktok_sample_plain_author",
 }`,
 		},
 		{
@@ -818,7 +822,7 @@ func allowedSampleTailToken(token string) bool {
 		"example", "existing", "export", "first", "fixture", "followed",
 		"gamma", "ghost", "handle", "image", "import", "imported", "media",
 		"missing", "muted", "new", "newer", "old", "older", "one", "parent",
-		"photo", "post", "profile", "quote", "reply", "repost", "reposter",
+		"photo", "plain", "post", "profile", "quote", "reply", "repost", "reposter",
 		"root", "second", "seen", "slide", "slides", "slideshow", "source",
 		"star", "starred", "story", "target", "test", "tweet", "two", "unfollowed",
 		"unseen", "user", "video":
