@@ -185,6 +185,74 @@ func TestGetVideosExcludesNativeStoriesFromNormalMoments(t *testing.T) {
 	}
 }
 
+func TestGetVideosAllMomentsUsesRepostEventForFollowedAuthor(t *testing.T) {
+	d := openWritableTestDB(t)
+	if err := d.SetSetting("", "moments_include_reposts_default", "true"); err != nil {
+		t.Fatalf("SetSetting moments_include_reposts_default: %v", err)
+	}
+
+	if err := d.ExecRaw(`
+		INSERT INTO channels (channel_id, source_id, name, platform) VALUES
+			('tiktok_sample_author', 'sample_author', 'Sample Author', 'tiktok'),
+			('tiktok_sample_reposter', 'sample_reposter', 'Sample Reposter', 'tiktok'),
+			('tiktok_sample_author_b', 'sample_author_b', 'Sample Author B', 'tiktok')
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.ExecRaw(`
+		INSERT INTO channel_follows (user_id, channel_id, followed_at) VALUES
+			('', 'tiktok_sample_author', 1),
+			('', 'tiktok_sample_reposter', 1),
+			('', 'tiktok_sample_author_b', 1)
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.ExecRaw(`
+		INSERT INTO videos (video_id, channel_id, title, duration, file_path, media_kind, published_at) VALUES
+			('sample_old_author_reposted_late', 'tiktok_sample_author', 'Old author clip', 0, '', 'video', 10),
+			('sample_plain_middle_clip', 'tiktok_sample_author_b', 'Plain clip', 0, '', 'video', 50)
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.ExecRaw(`
+		INSERT INTO video_repost_sources (
+			video_id, reposter_channel_id, reposter_handle, reposter_display_name, reposted_at_ms, first_seen_at_ms, updated_at_ms
+		) VALUES (
+			'sample_old_author_reposted_late', 'tiktok_sample_reposter', 'sample_reposter', 'Sample Reposter', 100, 90, 100
+		)
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	all, err := d.GetVideos(GetVideosOpts{Platform: "shorts", MomentsMode: "all", OrderAsc: true, Limit: 10})
+	if err != nil {
+		t.Fatalf("GetVideos all moments: %v", err)
+	}
+	if got := videoIDs(all); len(got) != 2 || got[0] != "sample_plain_middle_clip" || got[1] != "sample_old_author_reposted_late" {
+		t.Fatalf("all moments ids = %v, want [sample_plain_middle_clip sample_old_author_reposted_late]", got)
+	}
+	reposted := all[1]
+	if !reposted.RepostIntroduced || reposted.EffectiveMomentAtMs != 100 {
+		t.Fatalf("reposted event fields = introduced %v effective %d, want true/100", reposted.RepostIntroduced, reposted.EffectiveMomentAtMs)
+	}
+
+	ordinal, ok, err := d.GetShortsOrdinal("sample_old_author_reposted_late", "all")
+	if err != nil {
+		t.Fatalf("GetShortsOrdinal all: %v", err)
+	}
+	if !ok || ordinal != 2 {
+		t.Fatalf("reposted ordinal = %d/%v, want 2/true", ordinal, ok)
+	}
+
+	following, err := d.GetVideos(GetVideosOpts{Platform: "shorts", MomentsMode: "following", OrderAsc: true, Limit: 10})
+	if err != nil {
+		t.Fatalf("GetVideos following moments: %v", err)
+	}
+	if got := videoIDs(following); len(got) != 2 || got[0] != "sample_old_author_reposted_late" || got[1] != "sample_plain_middle_clip" {
+		t.Fatalf("following moments ids = %v, want [sample_old_author_reposted_late sample_plain_middle_clip]", got)
+	}
+}
+
 func TestGetVideosKeepsUndownloadedYouTubeRowsHidden(t *testing.T) {
 	d := openWritableTestDB(t)
 

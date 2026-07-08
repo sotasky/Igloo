@@ -82,6 +82,41 @@ class ReadDaoTest {
         assertEquals(emptyList<String>(), following.map { it.video.videoId })
     }
 
+    @Test fun momentsAll_usesRepostEventTimeWhenOriginalAuthorIsFollowed() = runBlocking {
+        db.channelDao().upsert(listOf(
+            ChannelEntity("tiktok_sample_author", name = "Sample Author", platform = "tiktok", sourceId = "sample_author"),
+            ChannelEntity("tiktok_sample_reposter", name = "Sample Reposter", platform = "tiktok", sourceId = "sample_reposter"),
+            ChannelEntity("tiktok_sample_author_b", name = "Sample Author B", platform = "tiktok", sourceId = "sample_author_b"),
+        ))
+        db.channelFollowDao().upsert(ChannelFollowEntity(channelId = "tiktok_sample_author"))
+        db.channelFollowDao().upsert(ChannelFollowEntity(channelId = "tiktok_sample_reposter"))
+        db.channelFollowDao().upsert(ChannelFollowEntity(channelId = "tiktok_sample_author_b"))
+        db.videoDao().upsert(listOf(
+            VideoEntity("sample_old_author_reposted_late", "tiktok_sample_author", title = "Old author clip", publishedAt = 10),
+            VideoEntity("sample_plain_middle_clip", "tiktok_sample_author_b", title = "Plain clip", publishedAt = 50),
+        ))
+        db.videoRepostSourceDao().upsert(listOf(VideoRepostSourceEntity(
+            videoId = "sample_old_author_reposted_late",
+            reposterChannelId = "tiktok_sample_reposter",
+            reposterHandle = "sample_reposter",
+            repostAuthorLabel = "Sample Reposter",
+            repostedAtMs = 100,
+            firstSeenAtMs = 90,
+        )))
+
+        val all = db.momentReadDao().momentsAllFlow().first()
+        val playerAll = db.momentReadDao().playerMomentsAllFlow().first()
+        val following = db.momentReadDao().momentsFollowingFlow().first()
+
+        assertEquals(listOf("sample_plain_middle_clip", "sample_old_author_reposted_late"), all.map { it.video.videoId })
+        assertEquals(listOf("sample_plain_middle_clip", "sample_old_author_reposted_late"), playerAll.map { it.video.videoId })
+        assertEquals(1, all.last().repostIntroduced)
+        assertEquals(1, all.last().channelIsFollowed)
+        assertEquals(100L, all.last().effectiveMomentAtMs)
+        assertEquals("tiktok_sample_reposter", all.last().reposterChannelId)
+        assertEquals(listOf("sample_old_author_reposted_late", "sample_plain_middle_clip"), following.map { it.video.videoId })
+    }
+
     @Test fun moments_flagsViewedWhenSideTablePresent() = runBlocking {
         db.channelDao().upsert(
             ChannelEntity("tiktok_alice", name = "Alice Doe", platform = "tiktok", sourceId = "alice"),

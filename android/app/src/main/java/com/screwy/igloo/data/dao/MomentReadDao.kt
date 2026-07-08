@@ -51,8 +51,8 @@ interface MomentReadDao {
                COALESCE(rh.reposter_display_name, '')              AS reposter_display_name,
                COALESCE(rh.repost_author_label, '')                AS repost_author_label,
                COALESCE(rh.repost_count, 0)                        AS repost_count,
-               CASE WHEN cf.channel_id IS NULL AND rh.video_id IS NOT NULL THEN 1 ELSE 0 END AS repost_introduced,
-               CASE WHEN cf.channel_id IS NULL AND rh.video_id IS NOT NULL
+               CASE WHEN rh.video_id IS NOT NULL THEN 1 ELSE 0 END AS repost_introduced,
+               CASE WHEN rh.video_id IS NOT NULL
                     THEN COALESCE(NULLIF(rh.reposted_at_ms, 0), NULLIF(rh.first_seen_at_ms, 0), v.published_at)
                     ELSE COALESCE(v.published_at, 0)
                 END AS effective_moment_at_ms
@@ -133,8 +133,8 @@ interface MomentReadDao {
                COALESCE(rh.reposter_display_name, '')            AS reposter_display_name,
                COALESCE(rh.repost_author_label, '')              AS repost_author_label,
                COALESCE(rh.repost_count, 0)                      AS repost_count,
-               CASE WHEN cf.channel_id IS NULL AND rh.video_id IS NOT NULL THEN 1 ELSE 0 END AS repost_introduced,
-               CASE WHEN cf.channel_id IS NULL AND rh.video_id IS NOT NULL
+               CASE WHEN rh.video_id IS NOT NULL THEN 1 ELSE 0 END AS repost_introduced,
+               CASE WHEN rh.video_id IS NOT NULL
                     THEN COALESCE(NULLIF(rh.reposted_at_ms, 0), NULLIF(rh.first_seen_at_ms, 0), v.published_at)
                     ELSE COALESCE(v.published_at, 0)
                 END AS effective_moment_at_ms

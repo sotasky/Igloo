@@ -251,8 +251,8 @@ func (db *DB) GetVideos(opts GetVideosOpts) ([]model.Video, error) {
 		       COALESCE(mr.reposter_handle, '') AS reposter_handle,
 		       COALESCE(mr.reposter_display_name, '') AS reposter_display_name,
 		       COALESCE(mr.repost_count, 0) AS repost_count,
-		       CASE WHEN cf.channel_id IS NULL AND mr.video_id IS NOT NULL THEN 1 ELSE 0 END AS repost_introduced,
-		       CASE WHEN cf.channel_id IS NULL AND mr.video_id IS NOT NULL
+		       CASE WHEN mr.video_id IS NOT NULL THEN 1 ELSE 0 END AS repost_introduced,
+		       CASE WHEN mr.video_id IS NOT NULL
 		            THEN COALESCE(NULLIF(mr.reposted_at_ms, 0), NULLIF(mr.first_seen_at_ms, 0), v.published_at, 0)
 		            ELSE COALESCE(v.published_at, 0)
 		        END AS effective_moment_at_ms`
@@ -648,7 +648,7 @@ func (db *DB) GetShortsOrdinal(videoID, momentsMode string) (int, bool, error) {
 		),
 		visible AS (
 			SELECT v.video_id,
-			       CASE WHEN cf.channel_id IS NULL AND mr.video_id IS NOT NULL
+			       CASE WHEN mr.video_id IS NOT NULL
 			            THEN COALESCE(NULLIF(mr.reposted_at_ms, 0), NULLIF(mr.first_seen_at_ms, 0), v.published_at, 0)
 			            ELSE COALESCE(v.published_at, 0)
 			        END AS effective_moment_at_ms
@@ -809,7 +809,7 @@ func (db *DB) shortsVisibleCTE(momentsMode string) string {
 		),
 		visible AS (
 			SELECT v.video_id,
-			       CASE WHEN cf.channel_id IS NULL AND mr.video_id IS NOT NULL
+			       CASE WHEN mr.video_id IS NOT NULL
 			            THEN COALESCE(NULLIF(mr.reposted_at_ms, 0), NULLIF(mr.first_seen_at_ms, 0), v.published_at, 0)
 			            ELSE COALESCE(v.published_at, 0)
 			        END AS effective_moment_at_ms
