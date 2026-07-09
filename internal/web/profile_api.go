@@ -181,15 +181,15 @@ func (s *Server) refreshOneProfile(ctx context.Context, channelID string, existi
 		}
 		return
 	}
-	if err := fetchprofile.ValidateChannelIdentity(channelID, p); err != nil {
-		return
-	}
 	isInstagramStub := instagramFetchProfileIsStub(p)
 	if isInstagramStub && existing == nil {
 		existing, _ = s.db.GetChannelProfile(channelID)
 	}
 	if isInstagramStub && existing != nil {
 		mergeInstagramStubProfile(p, existing)
+	}
+	if err := fetchprofile.ValidateChannelIdentity(channelID, p); err != nil {
+		return
 	}
 	if profileUsesLatestVideoBanner(p.Platform) && p.BannerURL == "" {
 		if sentinel, ok := s.synthesizeLatestVideoBanner(channelID, existing); ok {
@@ -270,7 +270,7 @@ func instagramFetchProfileIsStub(p *fetchprofile.Profile) bool {
 		p.Following == 0 &&
 		!p.Verified &&
 		strings.TrimSpace(p.VerifiedType) == "" &&
-		strings.TrimSpace(p.DisplayName) == handle
+		(strings.TrimSpace(p.DisplayName) == "" || strings.TrimSpace(p.DisplayName) == handle)
 }
 
 func mergeInstagramStubProfile(p *fetchprofile.Profile, existing *model.ChannelProfile) {

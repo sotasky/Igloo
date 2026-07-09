@@ -519,14 +519,6 @@ func (db *DB) UpdateChannelSettings(channelID string, fields map[string]any) err
 	})
 }
 
-// UpdateChannelName sets channels.name for channelID.
-func (db *DB) UpdateChannelName(channelID, name string) error {
-	return db.WithWrite(func(tx *sql.Tx) error {
-		_, err := tx.Exec(`UPDATE channels SET name=? WHERE channel_id=?`, name, channelID)
-		return err
-	})
-}
-
 // AddChannel inserts a new channel. Returns an error if channel_id already
 // exists. Per-channel settings (max_videos, download_subtitles, media_*,
 // include_reposts) are written to the channel_settings side table via

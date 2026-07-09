@@ -134,7 +134,7 @@ func (db *DB) GetBookmarks(opts GetBookmarksOpts) ([]model.Video, error) {
 		       ), v.downloaded_at,
 		       COALESCE(v.watched,0), COALESCE(v.is_temp,0), COALESCE(v.is_pinned,0),
 		       COALESCE(v.metadata_json,''),
-		       COALESCE(c.name,''),
+		       COALESCE(cp.display_name,''),
 		       COALESCE(c.platform,
 		           CASE
 		               WHEN v.channel_id LIKE 'twitter_%%' THEN 'twitter'
@@ -176,6 +176,7 @@ func (db *DB) GetBookmarks(opts GetBookmarksOpts) ([]model.Video, error) {
 		FROM bookmarks b
 		JOIN videos v ON b.video_id = v.video_id
 		LEFT JOIN channels c ON v.channel_id = c.channel_id
+		LEFT JOIN channel_profiles cp ON cp.channel_id = v.channel_id
 		LEFT JOIN channel_follows cf ON cf.channel_id = v.channel_id AND cf.user_id = ''
 		LEFT JOIN feed_items fi ON fi.tweet_id = v.video_id
 		%s

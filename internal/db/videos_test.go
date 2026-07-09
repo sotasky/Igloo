@@ -36,6 +36,48 @@ func TestGetVideoNotFound(t *testing.T) {
 	}
 }
 
+func TestVideoReadersUseProfileDisplayName(t *testing.T) {
+	d := openWritableTestDB(t)
+	if err := d.ExecRaw(`
+		INSERT INTO channels (channel_id, source_id, name, platform)
+		VALUES
+			('youtube_sample_channel', 'sample_source_id', 'sample_source_id', 'youtube'),
+			('youtube_missing_profile', 'sample_missing_source', 'sample_missing_source', 'youtube');
+		INSERT INTO channel_profiles (channel_id, platform, handle, display_name)
+		VALUES ('youtube_sample_channel', 'youtube', '@sample_creator', 'Sample Creator');
+		INSERT INTO videos (video_id, channel_id, title, duration, file_path, published_at)
+		VALUES
+			('sample_video', 'youtube_sample_channel', 'Sample Video', 0, 'media/sample_video.mp4', 1),
+			('missing_profile_video', 'youtube_missing_profile', 'Missing Profile', 0, 'media/missing_profile.mp4', 1)
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	video, err := d.GetVideo("sample_video")
+	if err != nil || video == nil {
+		t.Fatalf("GetVideo: %v / %+v", err, video)
+	}
+	if video.ChannelName != "Sample Creator" {
+		t.Fatalf("GetVideo channel name = %q, want profile display name", video.ChannelName)
+	}
+
+	videos, err := d.GetVideos(GetVideosOpts{ChannelID: "youtube_sample_channel", Limit: 1})
+	if err != nil || len(videos) != 1 {
+		t.Fatalf("GetVideos: %v / %+v", err, videos)
+	}
+	if videos[0].ChannelName != "Sample Creator" {
+		t.Fatalf("GetVideos channel name = %q, want profile display name", videos[0].ChannelName)
+	}
+
+	missing, err := d.GetVideo("missing_profile_video")
+	if err != nil || missing == nil {
+		t.Fatalf("GetVideo missing profile: %v / %+v", err, missing)
+	}
+	if missing.ChannelName != "" {
+		t.Fatalf("missing profile channel name = %q, want no invented fallback", missing.ChannelName)
+	}
+}
+
 func TestGetVideos(t *testing.T) {
 	d := openTestDB(t)
 	videos, err := d.GetVideos(GetVideosOpts{Limit: 5})

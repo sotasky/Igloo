@@ -391,7 +391,18 @@ func TestRefreshInstagramProfileFetchesMissingAvatarDespiteDownloadBacklog(t *te
 		t.Fatalf("seed download queue: %v", err)
 	}
 
-	m := &Manager{db: d, cfg: testCfg(dir)}
+	m := &Manager{
+		db:  d,
+		cfg: testCfg(dir),
+		instagramProfileFetch: func(_ context.Context, channelID, handle string) (*model.ChannelProfile, error) {
+			return &model.ChannelProfile{
+				ChannelID:   channelID,
+				Platform:    "instagram",
+				Handle:      handle,
+				DisplayName: "Waiting",
+			}, nil
+		},
+	}
 	avDir, bnDir := filepath.Join(dir, "a"), filepath.Join(dir, "b")
 	_ = os.MkdirAll(avDir, 0o755)
 	_ = os.MkdirAll(bnDir, 0o755)
@@ -530,43 +541,6 @@ func TestRefreshInstagramProfileBacksOffFailedStoredAvatarDownload(t *testing.T)
 	}
 	if hasConventionalMediaFile(avDir, "instagram_sample_author") {
 		t.Fatal("unexpected avatar file after failed download")
-	}
-}
-
-func TestRefreshProfilePromoteTikTokName(t *testing.T) {
-	d := newTestWorkerDB(t)
-	dir := t.TempDir()
-	// Subscribe a tiktok channel whose name is still the raw handle.
-	if err := d.AddChannel(model.Channel{
-		ChannelID: "tiktok_bob",
-		Platform:  "tiktok",
-		Name:      "bob",
-		URL:       "https://tiktok/@bob",
-	}); err != nil {
-		t.Fatalf("seed: %v", err)
-	}
-
-	f := newFakeFetcher()
-	f.results["tiktok_bob"] = &fetchprofile.Profile{
-		ChannelID:   "tiktok_bob",
-		Platform:    "tiktok",
-		Handle:      "bob",
-		DisplayName: "Bob the Builder",
-	}
-	_ = d.UpsertChannelProfile(model.ChannelProfile{ChannelID: "tiktok_bob", Platform: "tiktok"})
-
-	m := &Manager{db: d, cfg: testCfg(dir)}
-	avDir, bnDir := filepath.Join(dir, "a"), filepath.Join(dir, "b")
-	_ = os.MkdirAll(avDir, 0o755)
-	_ = os.MkdirAll(bnDir, 0o755)
-
-	m.refreshProfile(context.Background(), f.Fetch, "tiktok_bob", avDir, bnDir)
-	ch, err := d.GetChannelByID("tiktok_bob")
-	if err != nil {
-		t.Fatalf("GetChannelByID: %v", err)
-	}
-	if ch.Name != "Bob the Builder" {
-		t.Fatalf("channel name not promoted, got %q", ch.Name)
 	}
 }
 
@@ -1241,8 +1215,8 @@ func TestRefreshStaleProfilesBatchRunsPlatformsInParallel(t *testing.T) {
 	}
 
 	f := newGatedProfileFetcher(map[string]*fetchprofile.Profile{
-		"twitter_parallel": {ChannelID: "twitter_parallel", Platform: "twitter", Handle: "parallel"},
-		"tiktok_parallel":  {ChannelID: "tiktok_parallel", Platform: "tiktok", Handle: "parallel"},
+		"twitter_parallel": {ChannelID: "twitter_parallel", Platform: "twitter", Handle: "parallel", DisplayName: "Parallel"},
+		"tiktok_parallel":  {ChannelID: "tiktok_parallel", Platform: "tiktok", Handle: "parallel", DisplayName: "Parallel"},
 	})
 	m := &Manager{db: d, cfg: testCfg(dir)}
 	avDir, bnDir := filepath.Join(dir, "avatars"), filepath.Join(dir, "banners")
@@ -1295,8 +1269,8 @@ func TestRefreshFeedProfileCompletenessBatchRunsPlatformsInParallel(t *testing.T
 	}
 
 	f := newGatedProfileFetcher(map[string]*fetchprofile.Profile{
-		"twitter_profile_parallel": {ChannelID: "twitter_profile_parallel", Platform: "twitter", Handle: "profile_parallel"},
-		"tiktok_profile_parallel":  {ChannelID: "tiktok_profile_parallel", Platform: "tiktok", Handle: "profile_parallel"},
+		"twitter_profile_parallel": {ChannelID: "twitter_profile_parallel", Platform: "twitter", Handle: "profile_parallel", DisplayName: "Profile Parallel"},
+		"tiktok_profile_parallel":  {ChannelID: "tiktok_profile_parallel", Platform: "tiktok", Handle: "profile_parallel", DisplayName: "Profile Parallel"},
 	})
 	m := &Manager{db: d, cfg: testCfg(dir)}
 	avDir, bnDir := filepath.Join(dir, "avatars"), filepath.Join(dir, "banners")
@@ -1352,12 +1326,13 @@ func TestRefreshFeedProfileCompletenessFetchesReplyParent(t *testing.T) {
 
 	f := newFakeFetcher()
 	f.results["twitter_reply_parent"] = &fetchprofile.Profile{
-		ChannelID: "twitter_reply_parent",
-		Platform:  "twitter",
-		Handle:    "reply_parent",
-		AvatarURL: avatarServer.URL + "/avatar.png",
-		Followers: 1,
-		Following: 1,
+		ChannelID:   "twitter_reply_parent",
+		Platform:    "twitter",
+		Handle:      "reply_parent",
+		DisplayName: "Reply Parent",
+		AvatarURL:   avatarServer.URL + "/avatar.png",
+		Followers:   1,
+		Following:   1,
 	}
 
 	m := &Manager{db: d, cfg: testCfg(dir), downloader: testDownloader()}

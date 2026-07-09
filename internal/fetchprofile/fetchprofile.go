@@ -21,6 +21,10 @@ var ErrNotFound = errors.New("fetchprofile: profile not found upstream")
 // should treat this as transient and preserve existing local data.
 var ErrIdentityMismatch = errors.New("fetchprofile: profile identity mismatch")
 
+// ErrIncompleteProfile signals that upstream returned a structurally valid
+// response without the presentation identity required by clients.
+var ErrIncompleteProfile = errors.New("fetchprofile: incomplete profile")
+
 // Profile is the platform-generic profile record.
 type Profile struct {
 	ChannelID    string
@@ -40,11 +44,17 @@ type Profile struct {
 
 func ValidateChannelIdentity(channelID string, p *Profile) error {
 	channelID = strings.TrimSpace(channelID)
-	if channelID == "" || p == nil {
+	if channelID == "" {
 		return nil
+	}
+	if p == nil {
+		return fmt.Errorf("%w: %s returned no profile", ErrIncompleteProfile, channelID)
 	}
 	if p.ChannelID != "" && !strings.EqualFold(strings.TrimSpace(p.ChannelID), channelID) {
 		return fmt.Errorf("%w: requested %s returned %s", ErrIdentityMismatch, channelID, p.ChannelID)
+	}
+	if strings.TrimSpace(p.DisplayName) == "" {
+		return fmt.Errorf("%w: %s has no display name", ErrIncompleteProfile, channelID)
 	}
 	if handle, ok := strings.CutPrefix(strings.ToLower(channelID), "twitter_"); ok {
 		got := strings.ToLower(strings.TrimSpace(strings.TrimPrefix(p.Handle, "@")))
@@ -80,10 +90,9 @@ func Fetch(ctx context.Context, channelID string) (*Profile, error) {
 	case strings.HasPrefix(channelID, "instagram_"):
 		handle := strings.TrimPrefix(channelID, "instagram_")
 		return &Profile{
-			ChannelID:   channelID,
-			Platform:    "instagram",
-			Handle:      handle,
-			DisplayName: handle,
+			ChannelID: channelID,
+			Platform:  "instagram",
+			Handle:    handle,
 		}, nil
 	default:
 		return nil, fmt.Errorf("fetchprofile: unknown platform for channel_id %q", channelID)

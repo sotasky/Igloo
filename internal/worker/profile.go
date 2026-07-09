@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"math"
 	"net"
@@ -578,12 +579,6 @@ func (m *Manager) refreshProfile(ctx context.Context, fetch fetchFn, channelID, 
 		(bnChanged || !hasConventionalMediaFile(bnDir, channelID)) {
 		m.downloadProfileMedia(ctx, channelID, "banner", p.BannerURL, bnDir)
 	}
-
-	// TikTok display-name promotion: if channels.name still equals the raw
-	// handle, promote to nickname.
-	if p.Platform == "tiktok" && p.DisplayName != "" {
-		m.maybePromoteChannelName(channelID, p.DisplayName)
-	}
 }
 
 func (m *Manager) fetchProfile(ctx context.Context, fetch fetchFn, channelID string) (*fetchprofile.Profile, error) {
@@ -594,12 +589,11 @@ func (m *Manager) refreshInstagramStoredProfile(ctx context.Context, channelID, 
 	now := time.Now().UTC()
 	handle := strings.TrimPrefix(channelID, "instagram_")
 	row := model.ChannelProfile{
-		ChannelID:   channelID,
-		Platform:    "instagram",
-		Handle:      handle,
-		DisplayName: handle,
-		FetchedAt:   &now,
-		FailCount:   0,
+		ChannelID: channelID,
+		Platform:  "instagram",
+		Handle:    handle,
+		FetchedAt: &now,
+		FailCount: 0,
 	}
 	if existing != nil {
 		row.Handle = existing.Handle
@@ -607,9 +601,6 @@ func (m *Manager) refreshInstagramStoredProfile(ctx context.Context, channelID, 
 			row.Handle = handle
 		}
 		row.DisplayName = existing.DisplayName
-		if row.DisplayName == "" {
-			row.DisplayName = row.Handle
-		}
 		row.Bio = existing.Bio
 		row.Website = existing.Website
 		row.Followers = existing.Followers
@@ -662,14 +653,16 @@ func (m *Manager) refreshInstagramStoredProfile(ctx context.Context, channelID, 
 		m.recordProfileFetchError(channelID, errorBase, err, now)
 		return
 	} else if profile != nil {
+		if strings.TrimSpace(profile.DisplayName) == "" {
+			m.recordProfileFetchError(channelID, errorBase,
+				fmt.Errorf("%w: %s has no display name", fetchprofile.ErrIncompleteProfile, channelID), now)
+			return
+		}
 		row.Handle = profile.Handle
 		if row.Handle == "" {
 			row.Handle = handle
 		}
 		row.DisplayName = profile.DisplayName
-		if row.DisplayName == "" {
-			row.DisplayName = row.Handle
-		}
 		row.Bio = profile.Bio
 		row.Website = profile.Website
 		row.Followers = profile.Followers
@@ -742,7 +735,7 @@ func (m *Manager) fetchInstagramProfile(ctx context.Context, channelID, handle s
 		return m.instagramProfileFetch(ctx, channelID, handle)
 	}
 	if m == nil || m.downloader == nil || m.downloader.GalleryDL == nil {
-		return nil, nil
+		return nil, errors.New("instagram profile downloader unavailable")
 	}
 	cookiesFile, cookiesBrowser := m.cookieFileAndBrowserFor("instagram")
 	profile, err := m.downloader.GalleryDL.InstagramProfile(ctx, handle, cookiesFile, cookiesBrowser)
@@ -956,26 +949,6 @@ func (m *Manager) downloadInstagramProfileAvatar(ctx context.Context, channelID,
 	return false, lastErr
 }
 
-// maybePromoteChannelName updates channels.name to displayName when the
-// existing name is still the raw @handle form — i.e., TikTok channels added
-// before the profile worker filled in nicknames.
-func (m *Manager) maybePromoteChannelName(channelID, displayName string) {
-	ch, err := m.db.GetChannelByID(channelID)
-	if err != nil {
-		return
-	}
-	handle := strings.TrimPrefix(channelID, "tiktok_")
-	looksLikeHandle := strings.EqualFold(ch.Name, handle) ||
-		strings.EqualFold(ch.Name, "@"+handle) ||
-		ch.Name == ""
-	if !looksLikeHandle || strings.EqualFold(ch.Name, displayName) {
-		return
-	}
-	if err := m.db.UpdateChannelName(channelID, displayName); err != nil {
-		log.Printf("[profile] promote channel name %s: %v", channelID, err)
-	}
-}
-
 func (m *Manager) recordProfileFetchError(channelID string, existing *model.ChannelProfile, err error, now time.Time) {
 	if errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 		log.Printf("[profile] canceled %s: %v", channelID, err)
@@ -1036,7 +1009,6 @@ func (m *Manager) recordInstagramAvatarFallbackError(channelID string, existing 
 		ChannelID:   channelID,
 		Platform:    "instagram",
 		Handle:      strings.TrimPrefix(channelID, "instagram_"),
-		DisplayName: strings.TrimPrefix(channelID, "instagram_"),
 		FailCount:   failCount,
 		NextRetryAt: &next,
 	}
@@ -1050,9 +1022,6 @@ func (m *Manager) recordInstagramAvatarFallbackError(channelID string, existing 
 			row.Handle = strings.TrimPrefix(channelID, "instagram_")
 		}
 		row.DisplayName = existing.DisplayName
-		if row.DisplayName == "" {
-			row.DisplayName = row.Handle
-		}
 		row.Bio = existing.Bio
 		row.Website = existing.Website
 		row.Followers = existing.Followers

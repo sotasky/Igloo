@@ -209,12 +209,14 @@ func (db *DB) ListVideosForDelta(platforms []string, since int64, limit int) ([]
 		       COALESCE(v.is_temp,0), COALESCE(v.is_pinned,0),
 		       COALESCE(v.metadata_json,''), COALESCE(v.media_kind,''),
 		       COALESCE(v.slide_count,0), COALESCE(v.source_kind,''), COALESCE(v.sync_seq,0),
-		       COALESCE(c.name,''), COALESCE(c.platform,''),
+		       COALESCE(cp.display_name,''),
+		       COALESCE(c.platform,''),
 		       CASE WHEN cf.channel_id IS NOT NULL THEN 1 ELSE 0 END AS is_followed,
 		       CASE WHEN cs.channel_id IS NOT NULL THEN 1 ELSE 0 END AS is_starred,
 		       v.dearrow_title, v.dearrow_title_casual, v.dearrow_thumb_path, v.dearrow_checked_at
 		FROM videos v
 		LEFT JOIN channels c ON c.channel_id = v.channel_id
+		LEFT JOIN channel_profiles cp ON cp.channel_id = v.channel_id
 		LEFT JOIN channel_follows cf
 		  ON cf.channel_id = v.channel_id AND cf.user_id = ''
 		LEFT JOIN channel_stars cs

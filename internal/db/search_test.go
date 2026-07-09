@@ -212,6 +212,30 @@ func TestSearchFTSTriggersKeepReadyIndexCurrent(t *testing.T) {
 	if len(videos) != 1 || videos[0].VideoID != "sample_video_1" {
 		t.Fatalf("videos = %+v, want sample_video_1", videos)
 	}
+
+	videos, err = d.SearchVideosFast("display", 10)
+	if err != nil {
+		t.Fatalf("SearchVideosFast profile display name: %v", err)
+	}
+	if len(videos) != 1 || videos[0].VideoID != "sample_video_1" {
+		t.Fatalf("profile display-name videos = %+v, want sample_video_1", videos)
+	}
+
+	if err := d.UpsertChannelProfile(model.ChannelProfile{
+		ChannelID:   "tiktok_sample_channel",
+		Platform:    "tiktok",
+		Handle:      "sample_handle",
+		DisplayName: "Sample Renamed Creator",
+	}); err != nil {
+		t.Fatalf("update channel profile: %v", err)
+	}
+	videos, err = d.SearchVideosFast("renamed", 10)
+	if err != nil {
+		t.Fatalf("SearchVideosFast updated profile display name: %v", err)
+	}
+	if len(videos) != 1 || videos[0].VideoID != "sample_video_1" {
+		t.Fatalf("updated profile display-name videos = %+v, want sample_video_1", videos)
+	}
 }
 
 // Test helpers.

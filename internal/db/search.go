@@ -164,7 +164,7 @@ func (db *DB) SearchVideosFast(q string, limit int) ([]model.Video, error) {
 	rows, err := db.conn.Query(`
 		SELECT f.video_id_pk,
 		       COALESCE(v.title, f.title),
-		       COALESCE(c.name, f.channel_name, ''),
+		       COALESCE(cp.display_name,''),
 		       COALESCE(v.channel_id, ''),
 		       COALESCE(c.platform, 'youtube'),
 		       v.published_at,
@@ -173,6 +173,7 @@ func (db *DB) SearchVideosFast(q string, limit int) ([]model.Video, error) {
 		FROM search_videos_fts f
 		LEFT JOIN videos v ON v.video_id = f.video_id_pk
 		LEFT JOIN channels c ON c.channel_id = v.channel_id
+		LEFT JOIN channel_profiles cp ON cp.channel_id = v.channel_id
 		WHERE search_videos_fts MATCH ?
 		ORDER BY rank
 		LIMIT ?
@@ -213,11 +214,14 @@ func (db *DB) searchVideosFallback(q string, limit int) ([]model.Video, error) {
 	// regardless of which title column matched, mirroring how channel search
 	// ranks c.name and cp.display_name prefix matches as equal tier 0.
 	rows, err := db.conn.Query(`
-		SELECT v.video_id, v.title, COALESCE(c.name,''), v.channel_id,
+		SELECT v.video_id, v.title,
+		       COALESCE(cp.display_name,''),
+		       v.channel_id,
 		       COALESCE(c.platform,'youtube'), v.published_at, COALESCE(v.is_temp,0),
 		       v.dearrow_title, v.dearrow_title_casual, v.dearrow_thumb_path
 		FROM videos v
 		LEFT JOIN channels c ON v.channel_id = c.channel_id
+		LEFT JOIN channel_profiles cp ON cp.channel_id = v.channel_id
 		WHERE v.title                LIKE ? OR v.title                LIKE ?
 		   OR v.dearrow_title        LIKE ? OR v.dearrow_title        LIKE ?
 		   OR v.dearrow_title_casual LIKE ? OR v.dearrow_title_casual LIKE ?
@@ -297,9 +301,9 @@ func (db *DB) RebuildSearchIndex(ctx context.Context) (int, error) {
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO search_videos_fts(rowid, video_id_pk, title, dearrow_title, dearrow_title_casual, channel_name)
 		SELECT v.id, v.video_id, COALESCE(v.title, ''), COALESCE(v.dearrow_title, ''),
-		       COALESCE(v.dearrow_title_casual, ''), COALESCE(c.name, '')
+		       COALESCE(v.dearrow_title_casual, ''), COALESCE(cp.display_name, '')
 		FROM videos v
-		LEFT JOIN channels c ON c.channel_id = v.channel_id
+		LEFT JOIN channel_profiles cp ON cp.channel_id = v.channel_id
 	`); err != nil {
 		return 0, fmt.Errorf("populate video search index: %w", err)
 	}

@@ -41,19 +41,7 @@ func videoAvatarURL(v model.Video) string {
 }
 
 func videoChannelName(v model.Video) string {
-	if v.ChannelName != "" {
-		return v.ChannelName
-	}
-	// Channel IDs are stored as "platform_handle" — strip the prefix for display.
-	for _, prefix := range []string{"twitter_", "tiktok_", "instagram_", "youtube_"} {
-		if handle, ok := strings.CutPrefix(v.ChannelID, prefix); ok {
-			if handle != "" {
-				return handle
-			}
-			return v.ChannelID
-		}
-	}
-	return v.ChannelID
+	return v.ChannelName
 }
 
 func videoRepostLabel(v model.Video) string {

@@ -47,12 +47,14 @@ func (db *DB) GetVideo(videoID string) (*model.Video, error) {
 		       COALESCE(v.watched,0), COALESCE(v.is_temp,0), COALESCE(v.is_pinned,0),
 		       COALESCE(v.metadata_json,''),
 		       COALESCE(v.media_kind,''), COALESCE(v.slide_count,0), COALESCE(v.source_kind,''),
-		       COALESCE(c.name,''), COALESCE(c.platform,'youtube'),
+		       COALESCE(cp.display_name,''),
+		       COALESCE(c.platform,'youtube'),
 		       CASE WHEN cs.channel_id IS NOT NULL THEN 1 ELSE 0 END,
 		       CASE WHEN cf.channel_id IS NOT NULL THEN 1 ELSE 0 END,
 		       v.dearrow_title, v.dearrow_title_casual, v.dearrow_thumb_path, v.dearrow_checked_at
 		FROM videos v
 		LEFT JOIN channels c ON v.channel_id = c.channel_id
+		LEFT JOIN channel_profiles cp ON cp.channel_id = v.channel_id
 		LEFT JOIN channel_follows cf ON cf.channel_id = c.channel_id AND cf.user_id = ''
 		LEFT JOIN channel_stars cs ON cs.channel_id = c.channel_id AND cs.user_id = ''
 		WHERE v.video_id = ?
@@ -96,12 +98,14 @@ func (db *DB) GetNextVideo(videoID string) (*model.Video, error) {
 		       COALESCE(v.watched,0), COALESCE(v.is_temp,0), COALESCE(v.is_pinned,0),
 		       COALESCE(v.metadata_json,''),
 		       COALESCE(v.media_kind,''), COALESCE(v.slide_count,0),
-		       COALESCE(c.name,''), COALESCE(c.platform,'youtube'),
+		       COALESCE(cp.display_name,''),
+		       COALESCE(c.platform,'youtube'),
 		       CASE WHEN cs.channel_id IS NOT NULL THEN 1 ELSE 0 END,
 		       CASE WHEN cf.channel_id IS NOT NULL THEN 1 ELSE 0 END,
 		       v.dearrow_title, v.dearrow_title_casual, v.dearrow_thumb_path, v.dearrow_checked_at
 		FROM videos v
 		LEFT JOIN channels c ON v.channel_id = c.channel_id
+		LEFT JOIN channel_profiles cp ON cp.channel_id = v.channel_id
 		LEFT JOIN channel_follows cf ON cf.channel_id = c.channel_id AND cf.user_id = ''
 		LEFT JOIN channel_stars cs ON cs.channel_id = c.channel_id AND cs.user_id = ''
 		WHERE v.published_at < (SELECT published_at FROM videos WHERE video_id = ?)
@@ -267,7 +271,8 @@ func (db *DB) GetVideos(opts GetVideosOpts) ([]model.Video, error) {
 		       COALESCE(v.watched,0), COALESCE(v.is_temp,0), COALESCE(v.is_pinned,0),
 		       %s,
 		       COALESCE(v.media_kind,''), COALESCE(v.slide_count,0), COALESCE(v.source_kind,''),
-		       COALESCE(c.name,''), COALESCE(c.platform,'youtube'),
+		       COALESCE(cp.display_name,''),
+		       COALESCE(c.platform,'youtube'),
 		       CASE WHEN cs.channel_id IS NOT NULL THEN 1 ELSE 0 END,
 		       CASE WHEN cf.channel_id IS NOT NULL THEN 1 ELSE 0 END,
 		       b.category_id,
@@ -275,6 +280,7 @@ func (db *DB) GetVideos(opts GetVideosOpts) ([]model.Video, error) {
 		       v.dearrow_title, v.dearrow_title_casual, v.dearrow_thumb_path, v.dearrow_checked_at
 		FROM videos v
 		LEFT JOIN channels c ON v.channel_id = c.channel_id
+		LEFT JOIN channel_profiles cp ON cp.channel_id = v.channel_id
 		LEFT JOIN channel_follows cf ON cf.channel_id = c.channel_id AND cf.user_id = ''
 		LEFT JOIN channel_stars cs ON cs.channel_id = c.channel_id AND cs.user_id = ''
 		LEFT JOIN bookmarks b ON b.video_id = v.video_id
@@ -355,13 +361,15 @@ func (db *DB) GetLatestVideosPerChannel(perChannel int, channelIDs ...string) (m
 			       COALESCE(v.watched,0) as watched, COALESCE(v.is_temp,0) as is_temp, COALESCE(v.is_pinned,0) as is_pinned,
 			       '' as metadata_json,
 			       COALESCE(v.media_kind,'') as media_kind, COALESCE(v.slide_count,0) as slide_count,
-			       COALESCE(c.name,'') as channel_name, COALESCE(c.platform,'youtube') as platform,
+			       COALESCE(cp.display_name,'') as channel_name,
+			       COALESCE(c.platform,'youtube') as platform,
 			       CASE WHEN cs.channel_id IS NOT NULL THEN 1 ELSE 0 END as is_starred,
 			       CASE WHEN cf.channel_id IS NOT NULL THEN 1 ELSE 0 END as is_subscribed,
 			       v.dearrow_title, v.dearrow_title_casual, v.dearrow_thumb_path, v.dearrow_checked_at,
 			       ROW_NUMBER() OVER (PARTITION BY v.channel_id ORDER BY v.published_at DESC) as rn
 			FROM videos v
 			LEFT JOIN channels c ON v.channel_id = c.channel_id
+			LEFT JOIN channel_profiles cp ON cp.channel_id = v.channel_id
 			INNER JOIN channel_follows cf ON cf.channel_id = c.channel_id AND cf.user_id = ''
 			LEFT JOIN channel_stars cs ON cs.channel_id = c.channel_id AND cs.user_id = ''
 			WHERE COALESCE(v.is_temp,0) = 0
