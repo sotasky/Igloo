@@ -7,6 +7,8 @@ import { apiFetch, showToast, stateBool, setStateBool, t, tf } from './utils.js'
 var bookmarkMenu = null
 var bookmarkCategories = []
 var bookmarkLabels = []
+var bookmarkAccountOptions = []
+var bookmarkAccountOptionsLoaded = false
 
 // In-memory alias cache + bookmarked handles set
 var aliasCache = {}
@@ -64,6 +66,7 @@ export function closeBookmarkMenu() {
   if (!bookmarkMenu) return
   var menu = bookmarkMenu
   bookmarkMenu = null
+  if (menu._accountPicker && menu._accountPicker.parentNode) menu._accountPicker.remove()
   if (menu.parentNode) menu.remove()
   if (_bmOutsideHandler) { document.removeEventListener('mousedown', _bmOutsideHandler); _bmOutsideHandler = null }
   if (_bmEscHandler) { document.removeEventListener('keydown', _bmEscHandler); _bmEscHandler = null }
@@ -91,6 +94,59 @@ function loadBookmarkLabels() {
       return bookmarkLabels
     })
     .catch(function () { return bookmarkLabels })
+}
+
+function loadBookmarkAccountOptions() {
+  if (bookmarkAccountOptionsLoaded) return Promise.resolve(bookmarkAccountOptions)
+  return apiFetch('/api/bookmark-account-options')
+    .then(function (data) {
+      var accounts = Array.isArray(data) ? data : (data && data.accounts) || []
+      bookmarkAccountOptions = accounts
+        .map(function (account) {
+          return {
+            handle: String(account.handle || '').trim().replace(/^@+/, ''),
+            label: String(account.label || '').trim(),
+            platform: String(account.platform || '').trim()
+          }
+        })
+        .filter(function (account) { return account.handle })
+      bookmarkAccountOptionsLoaded = true
+      return bookmarkAccountOptions
+    })
+    .catch(function () {
+      bookmarkAccountOptionsLoaded = true
+      return bookmarkAccountOptions
+    })
+}
+
+function normalizeAccountKey(handle) {
+  return String(handle || '').trim().replace(/^@+/, '').toLowerCase()
+}
+
+function accountOptionSearchText(account) {
+  return [account.handle, account.label, account.platform].join(' ').toLowerCase()
+}
+
+function parseAccountHandles(value) {
+  if (!value) return []
+  var handles = Array.isArray(value) ? value : String(value || '').split(',')
+  var seen = new Set()
+  var out = []
+  handles.forEach(function (handle) {
+    var clean = String(handle || '').trim().replace(/^@+/, '')
+    var key = normalizeAccountKey(clean)
+    if (!key || seen.has(key)) return
+    seen.add(key)
+    out.push(clean)
+  })
+  return out
+}
+
+function loadStoredBookmarkAccountHandles(itemId) {
+  if (!itemId) return Promise.resolve([])
+  return apiFetch('/api/bookmark/' + encodeURIComponent(itemId))
+    .then(function (data) { return parseAccountHandles(data && data.account_handles) })
+    .catch(function () { return [] })
 }
 
 function platformLabelFallback(platform) {
@@ -134,7 +190,7 @@ export async function openBookmarkMenu(anchorEl, root, opts) {
   var titleFallback = String(opts.titleFallback || platformLabelFallback(platform) || '').trim()
 
   await loadBookmarkCategories()
-  await Promise.all([loadBookmarkAliasesFromApi(), loadBookmarkLabels()])
+  await Promise.all([loadBookmarkAliasesFromApi(), loadBookmarkLabels(), loadBookmarkAccountOptions()])
 
   // One-time migration from localStorage to API
   var legacyAliases = localStorage.getItem('bookmarkAliasesV1')
@@ -162,6 +218,7 @@ export async function openBookmarkMenu(anchorEl, root, opts) {
   var currentCategoryId = String(root.getAttribute('data-bookmark-category-id') || getLastBookmarkCategoryId() || '')
   var authorHandle = String(root.getAttribute('data-author-handle') || '').trim()
   var sourceHandle = platform === 'twitter' ? String(root.getAttribute('data-source-handle') || '').trim() : ''
+  var storedAccountHandles = isBookmarked ? await loadStoredBookmarkAccountHandles(itemId) : []
 
   // Build accounts list
   var accounts = []
@@ -176,14 +233,14 @@ export async function openBookmarkMenu(anchorEl, root, opts) {
       accounts.push({ handle: quoteAuthorHandle, selected: false })
     }
   }
-  var existingHandles = new Set(accounts.map(function (a) { return a.handle.toLowerCase() }))
+  var existingHandles = new Set(accounts.map(function (a) { return normalizeAccountKey(a.handle) }))
   var mentionRe = /(^|[^A-Za-z0-9_.])@([A-Za-z0-9_](?:[A-Za-z0-9_.]{2,28}[A-Za-z0-9_])?)/g
   var mentionMatch
   while ((mentionMatch = mentionRe.exec(bodyText)) !== null) {
     var mHandle = String(mentionMatch[2] || '').trim()
-    if (!existingHandles.has(mHandle.toLowerCase())) {
+    if (!existingHandles.has(normalizeAccountKey(mHandle))) {
       accounts.push({ handle: mHandle, selected: false })
-      existingHandles.add(mHandle.toLowerCase())
+      existingHandles.add(normalizeAccountKey(mHandle))
     }
   }
 
@@ -196,21 +253,35 @@ export async function openBookmarkMenu(anchorEl, root, opts) {
       for (var ti = 0; ti < tagged.length; ti++) {
         var taggedAccount = tagged[ti] || {}
         var th = String(taggedAccount.retweeter_handle || taggedAccount.handle || taggedAccount.username || '').trim()
-        if (th && !existingHandles.has(th.toLowerCase())) {
+        if (th && !existingHandles.has(normalizeAccountKey(th))) {
           accounts.push({ handle: th, selected: true })
-          existingHandles.add(th.toLowerCase())
+          existingHandles.add(normalizeAccountKey(th))
           hasTagged = true
         } else if (th) {
-          var existing = accounts.find(function (a) { return a.handle.toLowerCase() === th.toLowerCase() })
+          var existing = accounts.find(function (a) { return normalizeAccountKey(a.handle) === normalizeAccountKey(th) })
           if (existing) { existing.selected = true; hasTagged = true }
         }
       }
     }
   } catch (_) {}
 
+  var hasStoredAccountHandles = false
+  storedAccountHandles.forEach(function (handle) {
+    var key = normalizeAccountKey(handle)
+    if (!key) return
+    var existing = accounts.find(function (a) { return normalizeAccountKey(a.handle) === key })
+    if (existing) {
+      existing.selected = true
+    } else {
+      accounts.push({ handle: handle, selected: true })
+      existingHandles.add(key)
+    }
+    hasStoredAccountHandles = true
+  })
+
   // Smart pre-selection
   var channelKey = (sourceHandle || authorHandle || '').toLowerCase()
-  var preSelected = hasTagged
+  var preSelected = hasTagged || hasStoredAccountHandles
   if (!preSelected) {
     try {
       var prefs = JSON.parse(localStorage.getItem('bookmarkAccountPrefsV1') || '{}')
@@ -265,7 +336,16 @@ export async function openBookmarkMenu(anchorEl, root, opts) {
   })
 
   setTimeout(function () {
-    _bmOutsideHandler = function (e) { if (!popover.contains(e.target) && e.target !== anchorEl) closeBookmarkMenu() }
+    _bmOutsideHandler = function (e) {
+      var picker = popover._accountPicker
+      var pickerToggle = popover._accountPickerToggle
+      if (picker && !picker.classList.contains('hidden') &&
+          !picker.contains(e.target) &&
+          !(pickerToggle && pickerToggle.contains(e.target))) {
+        picker.classList.add('hidden')
+      }
+      if (!popover.contains(e.target) && !(picker && picker.contains(e.target)) && e.target !== anchorEl) closeBookmarkMenu()
+    }
     _bmEscHandler = function (e) { if (e.key === 'Escape') closeBookmarkMenu() }
     document.addEventListener('mousedown', _bmOutsideHandler)
     document.addEventListener('keydown', _bmEscHandler)
@@ -299,11 +379,14 @@ export async function openBookmarkMenu(anchorEl, root, opts) {
     body.appendChild(catList)
 
     // Account pills
-    if (accounts.length > 0) {
+    if (accounts.length > 0 || bookmarkAccountOptions.length > 0) {
       var accountLabel = document.createElement('div')
       accountLabel.className = 'bookmark-sheet-field-label'
       accountLabel.textContent = t('bookmark_account', 'Account')
       body.appendChild(accountLabel)
+
+      var accountWrap = document.createElement('div')
+      accountWrap.className = 'bookmark-sheet-account-wrap'
 
       var pillRow = document.createElement('div')
       pillRow.className = 'bookmark-sheet-account-row'
@@ -311,8 +394,7 @@ export async function openBookmarkMenu(anchorEl, root, opts) {
       pillRow.style.flexWrap = 'wrap'
       pillRow.style.gap = '6px'
 
-      for (var ai = 0; ai < accounts.length; ai++) {
-        ;(function (acc) {
+      function createAccountPill(acc) {
           var resolvedName = resolveBookmarkAlias(acc.handle)
           var pill = document.createElement('button')
           pill.type = 'button'
@@ -352,9 +434,111 @@ export async function openBookmarkMenu(anchorEl, root, opts) {
           })
 
           pillRow.appendChild(pill)
-        })(accounts[ai])
+          return pill
       }
-      body.appendChild(pillRow)
+
+      for (var ai = 0; ai < accounts.length; ai++) {
+        createAccountPill(accounts[ai])
+      }
+      var accountAddBtn = document.createElement('button')
+      accountAddBtn.className = 'bookmark-sheet-account-add-btn'
+      accountAddBtn.type = 'button'
+      accountAddBtn.textContent = '+'
+      accountAddBtn.setAttribute('aria-label', t('bookmark_add_account', 'Add account'))
+      pillRow.appendChild(accountAddBtn)
+      popover._accountPickerToggle = accountAddBtn
+      accountWrap.appendChild(pillRow)
+
+      var accountPicker = document.createElement('div')
+      accountPicker.className = 'bookmark-sheet-account-picker hidden'
+      var accountSearch = document.createElement('input')
+      accountSearch.type = 'text'
+      accountSearch.className = 'bookmark-sheet-input bookmark-sheet-account-search'
+      accountSearch.placeholder = t('bookmark_filter_accounts', 'Filter accounts')
+      accountSearch.setAttribute('autocomplete', 'off')
+      accountPicker.appendChild(accountSearch)
+      var accountResults = document.createElement('div')
+      accountResults.className = 'bookmark-sheet-account-results'
+      accountPicker.appendChild(accountResults)
+      document.body.appendChild(accountPicker)
+      popover._accountPicker = accountPicker
+      body.appendChild(accountWrap)
+
+      function positionAccountPicker() {
+        var rect = accountAddBtn.getBoundingClientRect()
+        var pickerRect = accountPicker.getBoundingClientRect()
+        var margin = 8
+        var left = rect.right + margin
+        if (left + pickerRect.width > window.innerWidth - margin) {
+          left = Math.max(margin, rect.left - pickerRect.width - margin)
+        }
+        var top = rect.top
+        if (top + pickerRect.height > window.innerHeight - margin) {
+          top = Math.max(margin, window.innerHeight - pickerRect.height - margin)
+        }
+        accountPicker.style.left = left + 'px'
+        accountPicker.style.top = top + 'px'
+      }
+
+      function renderAccountResults() {
+        var existing = new Set(accounts.map(function (a) { return normalizeAccountKey(a.handle) }))
+        var query = normalizeAccountKey(accountSearch.value)
+        var matches = bookmarkAccountOptions
+          .filter(function (account) {
+            return !existing.has(normalizeAccountKey(account.handle)) &&
+              (!query || accountOptionSearchText(account).indexOf(query) !== -1)
+          })
+          .slice(0, 8)
+        accountResults.textContent = ''
+        if (!matches.length) {
+          var empty = document.createElement('div')
+          empty.className = 'bookmark-sheet-account-empty'
+          empty.textContent = t('bookmark_no_accounts_found', 'No accounts found')
+          accountResults.appendChild(empty)
+          return
+        }
+        matches.forEach(function (account) {
+          var row = document.createElement('button')
+          row.type = 'button'
+          row.className = 'bookmark-sheet-account-result'
+          var handleSpan = document.createElement('span')
+          handleSpan.className = 'bookmark-sheet-account-result-handle'
+          handleSpan.textContent = account.handle
+          row.appendChild(handleSpan)
+          var label = account.label && normalizeAccountKey(account.label) !== normalizeAccountKey(account.handle)
+            ? account.label
+            : account.platform
+          if (label) {
+            var labelSpan = document.createElement('span')
+            labelSpan.className = 'bookmark-sheet-account-result-label'
+            labelSpan.textContent = label
+            row.appendChild(labelSpan)
+          }
+          row.addEventListener('click', function () {
+            var acc = { handle: account.handle, selected: true }
+            accounts.push(acc)
+            pillRow.insertBefore(createAccountPill(acc), accountAddBtn)
+            accountSearch.value = ''
+            accountPicker.classList.add('hidden')
+          })
+          accountResults.appendChild(row)
+        })
+      }
+
+      accountAddBtn.addEventListener('click', function () {
+        accountPicker.classList.toggle('hidden')
+        renderAccountResults()
+        if (!accountPicker.classList.contains('hidden')) {
+          requestAnimationFrame(function () {
+            positionAccountPicker()
+            try { accountSearch.focus({ preventScroll: true }) } catch (_) {}
+          })
+        }
+      })
+      accountSearch.addEventListener('input', function () {
+        renderAccountResults()
+        positionAccountPicker()
+      })
     }
 
     // Label input with suggestions

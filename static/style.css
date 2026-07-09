@@ -2005,6 +2005,18 @@ select.input:focus {
 .bookmark-sheet-account-pill:hover { background: rgba(var(--accent-primary-rgb), 0.12); border-color: var(--accent-secondary); }
 .bookmark-sheet-account-pill.active { background: rgba(var(--accent-primary-rgb), 0.75); border-color: rgba(var(--accent-primary-rgb), 0.75); color: var(--text-primary); }
 .bookmark-sheet-account-input { background: rgba(255,255,255,0.06); border: 1px solid rgba(var(--accent-primary-rgb), 0.5); color: inherit; border-radius: 16px; padding: 4px 10px; font-size: 0.82rem; outline: none; }
+.bookmark-sheet-account-wrap { position: relative; margin-bottom: 10px; }
+.bookmark-sheet-account-add-btn { width: 26px; height: 26px; border-radius: 9999px; border: 1px solid rgba(var(--accent-primary-rgb), 0.35); background: transparent; color: var(--text-secondary); cursor: pointer; font-size: 0.9rem; line-height: 1; }
+.bookmark-sheet-account-add-btn:hover { background: rgba(var(--accent-primary-rgb), 0.12); border-color: var(--accent-secondary); color: var(--text-primary); }
+.bookmark-sheet-account-picker { position: fixed; width: 280px; max-width: calc(100vw - 16px); display: flex; flex-direction: column; gap: 6px; padding: 8px; background: var(--bg-primary); border: 1px solid rgba(var(--accent-primary-rgb), 0.3); border-radius: 10px; box-shadow: 0 12px 28px rgba(0,0,0,0.42); z-index: 43000; }
+.bookmark-sheet-account-picker.hidden { display: none; }
+.bookmark-sheet-account-search { width: 100%; box-sizing: border-box; }
+.bookmark-sheet-account-results { overflow: hidden; max-height: min(220px, calc(100vh - 80px)); overflow-y: auto; }
+.bookmark-sheet-account-result { display: flex; align-items: baseline; gap: 8px; width: 100%; border: none; background: transparent; color: var(--text-primary); padding: 7px 9px; cursor: pointer; text-align: left; }
+.bookmark-sheet-account-result:hover { background: rgba(var(--accent-primary-rgb), 0.12); }
+.bookmark-sheet-account-result-handle { font-size: 0.83rem; font-weight: 650; }
+.bookmark-sheet-account-result-label { font-size: 0.75rem; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bookmark-sheet-account-empty { padding: 8px 9px; color: var(--text-muted); font-size: 0.78rem; }
 .bookmark-media-idx-row { display: flex; flex-wrap: wrap; gap: 5px; margin: 4px 0 8px; }
 .bookmark-media-idx-btn { width: 28px; height: 28px; border-radius: 6px; border: 1px solid rgba(var(--accent-primary-rgb), 0.35); background: transparent; color: var(--text-secondary); font-size: 0.78rem; font-weight: 600; cursor: pointer; padding: 0; line-height: 28px; text-align: center; transition: background 0.12s, border-color 0.12s; }
 .bookmark-media-idx-btn:hover { background: rgba(var(--accent-primary-rgb), 0.18); border-color: var(--accent-secondary); }

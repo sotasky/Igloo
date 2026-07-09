@@ -30,6 +30,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
@@ -61,7 +63,10 @@ import androidx.compose.ui.unit.dp
 import com.screwy.igloo.R
 import com.screwy.igloo.data.DatabaseHolder
 import com.screwy.igloo.data.PreferencesRepo
+import com.screwy.igloo.data.stripPlatformPrefix
 import com.screwy.igloo.data.entity.BookmarkEntity
+import com.screwy.igloo.data.entity.ChannelDisplay
+import com.screwy.igloo.data.entity.displayOrName
 import com.screwy.igloo.ui.theme.iglooColors
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.yield
@@ -102,6 +107,13 @@ data class BookmarkCategoryDisplay(
 ) {
     val isPending: Boolean get() = categoryId < 0L
 }
+
+/** Followed account option available for manual bookmark tagging. */
+data class BookmarkAccountOption(
+    val handle: String,
+    val label: String,
+    val platform: String = "",
+)
 
 /** Payload emitted by Confirm. `mediaIndices == null` signals "all indices." */
 data class BookmarkPayload(
@@ -149,6 +161,7 @@ fun BookmarkSheet(
     val scope = rememberCoroutineScope()
 
     val labelSuggestions by db.bookmarkLabelDao().labelSuggestionsFlow().collectAsState(initial = emptyList())
+    val followedChannels by db.channelReadDao().allFlow().collectAsState(initial = emptyList())
     val bookmarkedHandleSet by produceState(initialValue = emptySet<String>(), key1 = target.itemId) {
         value = runCatching {
             loadBookmarkedHandleSet(db.bookmarkDao().accountHandleSelections())
@@ -166,11 +179,14 @@ fun BookmarkSheet(
         }
     }
 
-    val accountHandles = remember(target) { buildBookmarkAccountOptions(target) }
+    val initialAccountHandles = remember(target) { buildBookmarkAccountOptions(target) }
+    val subscriptionAccountOptions = remember(followedChannels) {
+        buildSubscriptionBookmarkAccountOptions(followedChannels)
+    }
     val initialSelectedHandles = remember(target, rememberedAccountHandles, bookmarkedHandleSet) {
         initialSelectedAccountHandles(
             target = target,
-            accountHandles = accountHandles,
+            accountHandles = initialAccountHandles,
             rememberedAccountHandles = rememberedAccountHandles,
             bookmarkedHandleSet = bookmarkedHandleSet,
         )
@@ -184,9 +200,12 @@ fun BookmarkSheet(
     var customTitle by remember(target) {
         mutableStateOf(bookmarkLabelTextFieldValue(target.currentBookmark?.customTitle))
     }
+    var visibleAccountHandles by remember(target) { mutableStateOf(initialAccountHandles) }
     var selectedAccountHandles by remember(target, rememberedAccountHandles, bookmarkedHandleSet) {
         mutableStateOf(initialSelectedHandles)
     }
+    var showAccountPicker by remember(target) { mutableStateOf(false) }
+    var accountSearch by remember(target) { mutableStateOf("") }
     var selectedIndices by remember(target) {
         mutableStateOf(
             defaultMediaIndices(
@@ -239,7 +258,7 @@ fun BookmarkSheet(
             mediaIndices = selectedIndices,
             mediaCount = target.mediaCount,
             selectedAccountHandles = selectedAccountHandles,
-            availableAccountHandles = accountHandles,
+            availableAccountHandles = visibleAccountHandles,
         )
         scope.launch {
             prefs.setLastBookmarkCategoryId(catId)
@@ -411,7 +430,7 @@ fun BookmarkSheet(
                 )
             }
 
-            if (accountHandles.isNotEmpty()) {
+            if (visibleAccountHandles.isNotEmpty() || subscriptionAccountOptions.isNotEmpty()) {
                 Text(
                     text = stringResource(R.string.bookmark_account),
                     style = MaterialTheme.typography.labelMedium,
@@ -422,7 +441,7 @@ fun BookmarkSheet(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    accountHandles.forEach { handle ->
+                    visibleAccountHandles.forEach { handle ->
                         FilterChip(
                             selected = handle in selectedAccountHandles,
                             onClick = {
@@ -435,6 +454,69 @@ fun BookmarkSheet(
                             colors = chipColors,
                             label = { Text(handle) },
                         )
+                    }
+                    Box {
+                        FilterChip(
+                            selected = false,
+                            onClick = { showAccountPicker = !showAccountPicker },
+                            colors = chipColors,
+                            label = { Text("+") },
+                        )
+                        DropdownMenu(
+                            expanded = showAccountPicker,
+                            onDismissRequest = { showAccountPicker = false },
+                            modifier = Modifier.widthIn(min = 260.dp, max = 340.dp),
+                        ) {
+                            val filteredAccounts = filterBookmarkAccountOptions(
+                                query = accountSearch,
+                                options = subscriptionAccountOptions,
+                                existingHandles = visibleAccountHandles,
+                            )
+                            OutlinedTextField(
+                                value = accountSearch,
+                                onValueChange = { accountSearch = it },
+                                placeholder = { Text(stringResource(R.string.drawer_search_accounts)) },
+                                singleLine = true,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                            )
+                            if (filteredAccounts.isEmpty()) {
+                                Text(
+                                    text = stringResource(R.string.search_no_results),
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                                    color = colors.onSurfaceMuted,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                )
+                            } else {
+                                filteredAccounts.forEach { account ->
+                                    DropdownMenuItem(
+                                        text = {
+                                            Column {
+                                                Text(
+                                                    text = account.handle,
+                                                    color = colors.onSurface,
+                                                    style = MaterialTheme.typography.bodyMedium,
+                                                )
+                                                if (account.label != account.handle) {
+                                                    Text(
+                                                        text = account.label,
+                                                        color = colors.onSurfaceMuted,
+                                                        style = MaterialTheme.typography.labelSmall,
+                                                    )
+                                                }
+                                            }
+                                        },
+                                        onClick = {
+                                            visibleAccountHandles = (visibleAccountHandles + account.handle).distinct()
+                                            selectedAccountHandles = selectedAccountHandles + account.handle
+                                            accountSearch = ""
+                                            showAccountPicker = false
+                                        },
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -672,6 +754,65 @@ internal fun buildBookmarkAccountOptions(target: BookmarkTarget): List<String> {
         .forEach(ordered::add)
     return ordered.toList()
 }
+
+internal fun buildSubscriptionBookmarkAccountOptions(channels: List<ChannelDisplay>): List<BookmarkAccountOption> {
+    val seen = linkedSetOf<String>()
+    return channels
+        .asSequence()
+        .filter { it.isFollowed != 0 }
+        .mapNotNull { channel ->
+            val handle = subscriptionAccountHandle(channel).takeIf { it.isNotBlank() } ?: return@mapNotNull null
+            val key = handle.lowercase()
+            if (!seen.add(key)) return@mapNotNull null
+            BookmarkAccountOption(
+                handle = handle,
+                label = channel.displayOrName.trim().ifEmpty { handle },
+                platform = channel.channel.platform,
+            )
+        }
+        .toList()
+}
+
+internal fun filterBookmarkAccountOptions(
+    query: String,
+    options: List<BookmarkAccountOption>,
+    existingHandles: List<String>,
+): List<BookmarkAccountOption> {
+    val existing = existingHandles.map(::normalizeHandle).map(String::lowercase).toSet()
+    val normalizedQuery = normalizeHandle(query).lowercase()
+    return options
+        .filter { option -> option.handle.lowercase() !in existing }
+        .filter { option ->
+            normalizedQuery.isEmpty() ||
+                listOf(option.handle, option.label, option.platform)
+                    .joinToString(" ")
+                    .lowercase()
+                    .contains(normalizedQuery)
+        }
+        .take(8)
+}
+
+private fun subscriptionAccountHandle(channel: ChannelDisplay): String {
+    normalizeSubscriptionAccountHandle(channel.channel.platform, channel.handle)
+        .takeIf { it.isNotBlank() }
+        ?.let { return it }
+    if (channel.channel.platform != "youtube") {
+        normalizeSubscriptionAccountHandle(channel.channel.platform, channel.channel.sourceId)
+            .takeIf { it.isNotBlank() }
+            ?.let { return it }
+        normalizeSubscriptionAccountHandle(channel.channel.platform, stripPlatformPrefix(channel.channel.channelId))
+            .takeIf { it.isNotBlank() }
+            ?.let { return it }
+    }
+    return ""
+}
+
+private fun normalizeSubscriptionAccountHandle(platform: String, raw: String?): String =
+    if (platform == "tiktok") {
+        tikTokHandleUnlessInternalId(raw)
+    } else {
+        normalizeHandle(raw)
+    }
 
 internal fun initialSelectedAccountHandles(
     target: BookmarkTarget,

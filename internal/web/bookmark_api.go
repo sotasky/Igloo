@@ -23,6 +23,7 @@ func (s *Server) registerBookmarkAPIRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/bookmark/{videoID}", s.handleBookmarkAdd)
 	mux.HandleFunc("DELETE /api/bookmark/{videoID}", s.handleBookmarkRemove)
 	mux.HandleFunc("GET /api/bookmark/{videoID}", s.handleBookmarkGet)
+	mux.HandleFunc("GET /api/bookmark-account-options", s.handleBookmarkAccountOptions)
 	mux.HandleFunc("GET /api/bookmark-categories", s.handleBookmarkCategoriesList)
 	mux.HandleFunc("POST /api/bookmark-categories", s.handleBookmarkCategoryCreate)
 	mux.HandleFunc("POST /api/bookmark-categories/batch", s.handleBookmarkCategoryBatch)
@@ -32,6 +33,49 @@ func (s *Server) registerBookmarkAPIRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/bookmark-aliases", s.handleBookmarkAliasesUpsert)
 	mux.HandleFunc("GET /api/bookmark-labels", s.handleBookmarkLabels)
 	mux.HandleFunc("DELETE /api/bookmark-labels/{label}", s.handleBookmarkLabelDelete)
+}
+
+type bookmarkAccountOption struct {
+	Handle    string `json:"handle"`
+	Label     string `json:"label"`
+	Platform  string `json:"platform,omitempty"`
+	ChannelID string `json:"channel_id,omitempty"`
+}
+
+func (s *Server) handleBookmarkAccountOptions(w http.ResponseWriter, r *http.Request) {
+	channels, err := s.db.GetSubscribedChannels()
+	if err != nil {
+		slog.Error("GetSubscribedChannels", "err", err)
+		writeJSON(w, 500, map[string]any{"error": "db error"})
+		return
+	}
+
+	options := make([]bookmarkAccountOption, 0, len(channels))
+	seen := make(map[string]struct{}, len(channels))
+	for _, ch := range channels {
+		handle := strings.TrimSpace(components.ChannelDisplayHandle(ch))
+		if handle == "" {
+			continue
+		}
+		key := strings.ToLower(handle)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+
+		label := strings.TrimSpace(components.ChannelDisplayName(ch))
+		if label == "" {
+			label = handle
+		}
+		options = append(options, bookmarkAccountOption{
+			Handle:    handle,
+			Label:     label,
+			Platform:  ch.Platform,
+			ChannelID: ch.ChannelID,
+		})
+	}
+
+	writeJSON(w, 200, map[string]any{"accounts": options})
 }
 
 func (s *Server) handleBookmarkAdd(w http.ResponseWriter, r *http.Request) {
@@ -248,7 +292,49 @@ func (s *Server) handleBookmarkGet(w http.ResponseWriter, r *http.Request) {
 		"bookmarked":    bookmarked,
 		"category_id":   catID,
 		"category_name": categoryName,
+		"account_handles": func() []string {
+			if !bookmarked {
+				return nil
+			}
+			var raw sql.NullString
+			if err := s.db.QueryRow(`
+				SELECT account_handles
+				  FROM bookmarks
+				 WHERE user_id = ? AND video_id = ?
+			`, userID, videoID).Scan(&raw); err != nil {
+				return nil
+			}
+			return parseBookmarkAccountHandles(nullableString(raw))
+		}(),
 	})
+}
+
+func parseBookmarkAccountHandles(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	var parsed []string
+	if strings.HasPrefix(raw, "[") {
+		_ = json.Unmarshal([]byte(raw), &parsed)
+	} else {
+		parsed = strings.Split(raw, ",")
+	}
+	seen := make(map[string]struct{}, len(parsed))
+	out := make([]string, 0, len(parsed))
+	for _, handle := range parsed {
+		clean := strings.TrimSpace(strings.TrimPrefix(handle, "@"))
+		if clean == "" {
+			continue
+		}
+		key := strings.ToLower(clean)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, clean)
+	}
+	return out
 }
 
 var slugRe = regexp.MustCompile(`[^a-z0-9]+`)

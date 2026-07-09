@@ -1,5 +1,7 @@
 package com.screwy.igloo.ui.component
 
+import com.screwy.igloo.data.entity.ChannelDisplay
+import com.screwy.igloo.data.entity.ChannelEntity
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -180,6 +182,80 @@ class BookmarkSheetTest {
     }
 
     @Test
+    fun buildSubscriptionBookmarkAccountOptions_usesFollowedChannelHandles() {
+        val internalNumericId = "7".repeat(16)
+        val internalSecUid = listOf("MS4w", "LjAB", "sample", "internal", "id").joinToString("")
+        val options = buildSubscriptionBookmarkAccountOptions(
+            listOf(
+                channelDisplay(
+                    channelId = "twitter_sample_alpha",
+                    sourceId = "sample_alpha",
+                    name = "Sample Alpha",
+                    platform = "twitter",
+                    isFollowed = 1,
+                    handle = "sample_alpha",
+                    displayName = "Readable Alpha",
+                ),
+                channelDisplay(
+                    channelId = "twitter_sample_beta",
+                    sourceId = "sample_beta",
+                    name = "Sample Beta",
+                    platform = "twitter",
+                    isFollowed = 0,
+                    handle = "sample_beta",
+                    displayName = "Readable Beta",
+                ),
+                channelDisplay(
+                    channelId = "youtube_sample_channel",
+                    sourceId = "sample_channel",
+                    name = "Sample Video Channel",
+                    platform = "youtube",
+                    isFollowed = 1,
+                    handle = "",
+                    displayName = "Sample Video Channel",
+                ),
+                channelDisplay(
+                    channelId = "tiktok_$internalNumericId",
+                    sourceId = internalNumericId,
+                    name = "Internal Numeric",
+                    platform = "tiktok",
+                    isFollowed = 1,
+                    handle = "",
+                    displayName = "Internal Numeric",
+                ),
+                channelDisplay(
+                    channelId = "tiktok_$internalSecUid",
+                    sourceId = internalSecUid,
+                    name = "Internal SecUid",
+                    platform = "tiktok",
+                    isFollowed = 1,
+                    handle = "",
+                    displayName = "Internal SecUid",
+                ),
+            ),
+        )
+
+        assertEquals(listOf(BookmarkAccountOption("sample_alpha", "Readable Alpha", "twitter")), options)
+    }
+
+    @Test
+    fun filterBookmarkAccountOptions_matchesHandleAndLabelAndSkipsExisting() {
+        val options = listOf(
+            BookmarkAccountOption("sample_alpha", "Readable Alpha", "twitter"),
+            BookmarkAccountOption("sample_beta", "Readable Beta", "twitter"),
+        )
+
+        assertEquals(
+            listOf(BookmarkAccountOption("sample_beta", "Readable Beta", "twitter")),
+            filterBookmarkAccountOptions(
+                query = "readable",
+                options = options,
+                existingHandles = listOf("@sample_alpha"),
+            ),
+        )
+    }
+
+    @Test
     fun initialSelectedAccountHandles_prefersCurrentBookmarkAccounts() {
         val editing = target.copy(
             currentBookmark = BookmarkState(
@@ -212,4 +288,26 @@ class BookmarkSheetTest {
             ),
         )
     }
+
+    private fun channelDisplay(
+        channelId: String,
+        sourceId: String?,
+        name: String,
+        platform: String,
+        isFollowed: Int,
+        handle: String?,
+        displayName: String?,
+    ): ChannelDisplay =
+        ChannelDisplay(
+            channel = ChannelEntity(
+                channelId = channelId,
+                sourceId = sourceId,
+                name = name,
+                platform = platform,
+            ),
+            isStarred = 0,
+            isFollowed = isFollowed,
+            handle = handle,
+            displayName = displayName,
+        )
 }

@@ -259,6 +259,96 @@ func TestHandleBookmarkCategoriesListHidesArchivePathForNonAdmin(t *testing.T) {
 	}
 }
 
+func TestHandleBookmarkAccountOptionsUsesSubscribedChannelHandles(t *testing.T) {
+	srv := newTestServer(t)
+
+	if err := srv.db.ExecRaw(`
+		INSERT INTO channels (channel_id, source_id, name, platform)
+		VALUES
+			('twitter_sample_alpha', 'sample_alpha', 'Sample Alpha', 'twitter'),
+			('twitter_sample_beta', 'sample_beta', 'Sample Beta', 'twitter'),
+			('youtube_sample_channel', 'sample_channel', 'Sample Video Channel', 'youtube')
+	`); err != nil {
+		t.Fatalf("insert channels: %v", err)
+	}
+	if err := srv.db.ExecRaw(`
+		INSERT INTO channel_profiles (channel_id, platform, handle, display_name)
+		VALUES
+			('twitter_sample_alpha', 'twitter', 'sample_alpha', 'Readable Alpha'),
+			('twitter_sample_beta', 'twitter', 'sample_beta', 'Readable Beta'),
+			('youtube_sample_channel', 'youtube', '', 'Sample Video Channel')
+	`); err != nil {
+		t.Fatalf("insert profiles: %v", err)
+	}
+	if err := srv.db.ExecRaw(`
+		INSERT INTO channel_follows (user_id, channel_id, followed_at)
+		VALUES
+			('', 'twitter_sample_alpha', 1),
+			('', 'twitter_sample_beta', 2),
+			('', 'youtube_sample_channel', 3)
+	`); err != nil {
+		t.Fatalf("insert follows: %v", err)
+	}
+
+	req := httptest.NewRequest("GET", "/api/bookmark-account-options", nil)
+	rr := httptest.NewRecorder()
+	srv.mux.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status: got %d - %s", rr.Code, rr.Body.String())
+	}
+
+	var payload struct {
+		Accounts []bookmarkAccountOption `json:"accounts"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(payload.Accounts) != 2 {
+		t.Fatalf("accounts = %#v, want two handle-backed options", payload.Accounts)
+	}
+	if payload.Accounts[0].Handle != "sample_alpha" || payload.Accounts[0].Label != "Readable Alpha" {
+		t.Fatalf("first account = %#v, want sample_alpha / Readable Alpha", payload.Accounts[0])
+	}
+	if payload.Accounts[1].Handle != "sample_beta" || payload.Accounts[1].Label != "Readable Beta" {
+		t.Fatalf("second account = %#v, want sample_beta / Readable Beta", payload.Accounts[1])
+	}
+}
+
+func TestHandleBookmarkGetReturnsStoredAccountHandles(t *testing.T) {
+	srv := newTestServer(t)
+
+	categoryID, err := srv.db.CreateBookmarkCategory("alice", "Saved", "")
+	if err != nil {
+		t.Fatalf("CreateBookmarkCategory: %v", err)
+	}
+	body := fmt.Sprintf(`{"category_id":%d,"account_handles":["sample_alpha","sample_extra"]}`, categoryID)
+	req := httptest.NewRequest("POST", "/api/bookmark/tweet_with_manual_account", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req = attachTestAuth(req, "alice")
+	rr := httptest.NewRecorder()
+	srv.mux.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("add status: got %d - %s", rr.Code, rr.Body.String())
+	}
+
+	req = httptest.NewRequest("GET", "/api/bookmark/tweet_with_manual_account", nil)
+	req = attachTestAuth(req, "alice")
+	rr = httptest.NewRecorder()
+	srv.mux.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("get status: got %d - %s", rr.Code, rr.Body.String())
+	}
+	var payload struct {
+		AccountHandles []string `json:"account_handles"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if fmt.Sprint(payload.AccountHandles) != "[sample_alpha sample_extra]" {
+		t.Fatalf("account_handles = %#v, want saved manual handles", payload.AccountHandles)
+	}
+}
+
 func TestHandleBookmarkCategoryCreateLeavesArchivePathEmptyByDefault(t *testing.T) {
 	srv := newTestServer(t)
 
