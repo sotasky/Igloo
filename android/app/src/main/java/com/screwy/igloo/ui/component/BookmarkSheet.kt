@@ -498,7 +498,7 @@ fun BookmarkSheet(
                                                     color = colors.onSurface,
                                                     style = MaterialTheme.typography.bodyMedium,
                                                 )
-                                                if (account.label != account.handle) {
+                                                if (account.label.isNotBlank()) {
                                                     Text(
                                                         text = account.label,
                                                         color = colors.onSurfaceMuted,

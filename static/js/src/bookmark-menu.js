@@ -505,13 +505,10 @@ export async function openBookmarkMenu(anchorEl, root, opts) {
           handleSpan.className = 'bookmark-sheet-account-result-handle'
           handleSpan.textContent = account.handle
           row.appendChild(handleSpan)
-          var label = account.label && normalizeAccountKey(account.label) !== normalizeAccountKey(account.handle)
-            ? account.label
-            : account.platform
-          if (label) {
+          if (account.label) {
             var labelSpan = document.createElement('span')
             labelSpan.className = 'bookmark-sheet-account-result-label'
-            labelSpan.textContent = label
+            labelSpan.textContent = account.label
             row.appendChild(labelSpan)
           }
           row.addEventListener('click', function () {
