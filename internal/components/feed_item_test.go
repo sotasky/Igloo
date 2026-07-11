@@ -221,6 +221,42 @@ func TestFeedItemDoesNotSynthesizeVideoEndpointWhenInventoryIsMissing(t *testing
 	}
 }
 
+func TestFeedItemUsesReadyPreviewWithoutDeferringPrefetchedImages(t *testing.T) {
+	item := model.FeedItem{
+		TweetID:              "sample_video",
+		AuthorHandle:         "sample_author",
+		AuthorAvatarURL:      "/api/media/avatar/twitter_sample_author",
+		MediaStreamURL:       "/api/media/stream/sample_video?owner_kind=tweet",
+		MediaPreviewURL:      "/api/media/thumbnail/sample_video?owner_kind=tweet",
+		QuoteTweetID:         "sample_quote_video",
+		QuoteMediaStreamURL:  "/api/media/stream/sample_quote_video?owner_kind=tweet",
+		QuoteMediaPreviewURL: "/api/media/thumbnail/sample_quote_video?owner_kind=tweet",
+		Media: []model.MediaRef{{
+			Type: "video",
+			URL:  "https://cdn.example/video.mp4",
+		}},
+		QuoteMedia: []model.MediaRef{{
+			Type: "video",
+			URL:  "https://cdn.example/quote.mp4",
+		}},
+	}
+
+	var buf bytes.Buffer
+	if err := FeedItem(PageProps{}, item).Render(context.Background(), &buf); err != nil {
+		t.Fatalf("render feed item: %v", err)
+	}
+	html := buf.String()
+	if !strings.Contains(html, `poster="/api/media/thumbnail/sample_video?owner_kind=tweet"`) {
+		t.Fatalf("ready local preview was not used as the video poster: %s", html)
+	}
+	if !strings.Contains(html, `poster="/api/media/thumbnail/sample_quote_video?owner_kind=tweet"`) {
+		t.Fatalf("ready local quote preview was not used as the video poster: %s", html)
+	}
+	if strings.Contains(html, `loading="lazy"`) {
+		t.Fatalf("prefetched feed card retained a second lazy image gate: %s", html)
+	}
+}
+
 func TestFeedItemRendersArticleCoverAsImage(t *testing.T) {
 	item := model.FeedItem{
 		TweetID:      "article_1",

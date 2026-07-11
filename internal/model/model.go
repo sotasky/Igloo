@@ -482,15 +482,16 @@ type FeedItem struct {
 	// depth 0; direct replies are depth 1.
 	ThreadDepth int
 	// Media enrichment
-	MediaKind           string // video|image|slideshow
-	MediaSlideCount     int
-	MediaStatus         string // ready|pending|failed|pruned|cdn
-	MediaStreamURL      string
-	MediaPreviewURL     string
-	MediaSlideURLs      []string
-	QuoteMediaStreamURL string
-	QuoteMediaSlideURLs []string
-	QuoteCanonicalURL   string
+	MediaKind            string // video|image|slideshow
+	MediaSlideCount      int
+	MediaStatus          string // ready|pending|failed|pruned|cdn
+	MediaStreamURL       string
+	MediaPreviewURL      string
+	MediaSlideURLs       []string
+	QuoteMediaStreamURL  string
+	QuoteMediaPreviewURL string
+	QuoteMediaSlideURLs  []string
+	QuoteCanonicalURL    string
 	// Translation
 	BodyTranslation  string
 	BodySourceLang   string

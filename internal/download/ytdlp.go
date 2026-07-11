@@ -414,41 +414,35 @@ func completedOutputBase(opts Opts, paths []string) string {
 // runVideoDownload executes the main yt-dlp download and extracts output paths,
 // with fallbacks for non-fatal exit codes and schema-mismatch parse errors.
 func runVideoDownload(ctx context.Context, cmd *ytdlp.Command, url string) ([]string, error) {
-	result, err := cmd.Run(ctx, url)
-	if err != nil {
+	result := CommandRunner{}.RunBuilt(ctx, cmd.BuildCommand(ctx, url), CommandOptions{BulkWrite: true})
+	paths := extractFilenamesFromJSON(result.Stdout)
+	if result.Err != nil {
 		// yt-dlp may exit non-zero for non-fatal errors while the video
 		// was written. Try to salvage filenames if the files exist.
-		if result != nil {
-			paths := extractFilenamesFromRaw(result)
-			var existing []string
-			for _, p := range paths {
-				if fi, statErr := os.Stat(p); statErr == nil && fi.Size() > 0 {
-					existing = append(existing, p)
-				}
-			}
-			if len(existing) > 0 {
-				return existing, nil
+		var existing []string
+		for _, p := range paths {
+			if fi, statErr := os.Stat(p); statErr == nil && fi.Size() > 0 {
+				existing = append(existing, p)
 			}
 		}
-		return nil, fmt.Errorf("yt-dlp: %w", err)
-	}
-
-	infos, parseErr := result.GetExtractedInfo()
-	if parseErr != nil {
-		paths := extractFilenamesFromRaw(result)
-		if len(paths) > 0 {
-			return paths, nil
+		if len(existing) > 0 {
+			return existing, nil
 		}
-		return nil, fmt.Errorf("parse yt-dlp output: %w", parseErr)
-	}
-
-	var paths []string
-	for _, info := range infos {
-		if info.Filename != nil && *info.Filename != "" {
-			paths = append(paths, *info.Filename)
-		}
+		return nil, fmt.Errorf("yt-dlp: %w: %s", result.Err, strings.TrimSpace(string(result.Stderr)))
 	}
 	return paths, nil
+}
+
+func extractFilenamesFromJSON(output []byte) []string {
+	var paths []string
+	for _, payload := range JSONPayloads(output) {
+		for _, raw := range FlattenJSONObjects(payload) {
+			if filename, _ := raw["filename"].(string); filename != "" {
+				paths = append(paths, filename)
+			}
+		}
+	}
+	return paths
 }
 
 // DownloadSubtitles runs a skip-download pass and returns the exact VTT files

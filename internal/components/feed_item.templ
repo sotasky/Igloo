@@ -48,7 +48,6 @@ templ feedThreadCapsule(p PageProps, item model.FeedItem) {
 						<img
 							class="feed-thread-capsule-avatar"
 							src={ participant.AvatarURL }
-							loading="lazy"
 							alt=""
 							onload="window.MpaSiteBase&&window.MpaSiteBase.avatarLoad(this)"
 							onerror="if(window.MpaSiteBase&&window.MpaSiteBase.avatarError(this))return; this.style.display='none'; this.nextElementSibling.style.display='inline-flex';"
@@ -285,7 +284,6 @@ templ feedAvatar(p PageProps, avatarURL string, authorLabel string) {
 			<img
 				class="feed-avatar-image"
 				src={ avatarURL }
-				loading="lazy"
 				alt={ L(p, "content_description_channel_avatar", "Channel avatar") }
 				onload="window.MpaSiteBase&&window.MpaSiteBase.avatarLoad(this)"
 				onerror="if(window.MpaSiteBase&&window.MpaSiteBase.avatarError(this))return; this.style.display='none'; this.nextElementSibling.style.display='inline-flex';"
@@ -492,6 +490,10 @@ templ feedMedia(p PageProps, item model.FeedItem) {
 	if mediaCount == 1 && feedMediaRefIsVideo(item.Media[0]) {
 		{{ streamURL := item.MediaStreamURL }}
 		{{ mediaURL := feedMediaURLAt(item.MediaSlideURLs, 0) }}
+		{{ posterURL := item.Media[0].ThumbnailURL }}
+		if posterURL == "" {
+			{{ posterURL = item.MediaPreviewURL }}
+		}
 		if streamURL != "" {
 			<div
 				class="feed-media-wrap"
@@ -505,8 +507,8 @@ templ feedMedia(p PageProps, item model.FeedItem) {
 				tabindex="0"
 				aria-label={ L(p, "action_open_media", "Open media") }
 			>
-				if item.Media[0].ThumbnailURL != "" {
-					<video class="feed-media-video" muted playsinline loop preload="none" data-feed-inline-video poster={ item.Media[0].ThumbnailURL }>
+				if posterURL != "" {
+					<video class="feed-media-video" muted playsinline loop preload="none" data-feed-inline-video poster={ posterURL }>
 						<source src={ streamURL }/>
 					</video>
 				} else {
@@ -531,14 +533,14 @@ templ feedMedia(p PageProps, item model.FeedItem) {
 			tabindex="0"
 			aria-label={ L(p, "action_open_media", "Open media") }
 		>
-			<img class="feed-media-image" src={ mediaURL } loading="lazy" alt={ L(p, "feed_post_media", "Post media") }/>
+			<img class="feed-media-image" src={ mediaURL } alt={ L(p, "feed_post_media", "Post media") }/>
 		</div>
 	} else if readyMediaCount > 0 {
 		<div class="feed-media-wrap feed-media-wrap-grid">
 			<div class={ fmt.Sprintf("feed-media-grid count-%d", readyMediaCount) }>
 				for i, m := range item.Media {
 					if i < 4 && feedMediaURLAt(item.MediaSlideURLs, i) != "" {
-						@feedMediaTile(p, i, m, mediaCount, item.MediaStreamURL, feedMediaURLAt(item.MediaSlideURLs, i))
+						@feedMediaTile(p, i, m, mediaCount, item.MediaStreamURL, item.MediaPreviewURL, feedMediaURLAt(item.MediaSlideURLs, i))
 					}
 				}
 			</div>
@@ -546,10 +548,14 @@ templ feedMedia(p PageProps, item model.FeedItem) {
 	}
 }
 
-templ feedMediaTile(p PageProps, index int, m model.MediaRef, mediaCount int, streamURL string, slideURL string) {
+templ feedMediaTile(p PageProps, index int, m model.MediaRef, mediaCount int, streamURL string, previewURL string, slideURL string) {
 	{{ ariaLabel := fmt.Sprintf(L(p, "feed_open_media_index", "Open media %d"), index+1) }}
 	if feedMediaRefIsVideo(m) {
 		{{ tileStreamURL := streamURL }}
+		{{ posterURL := m.ThumbnailURL }}
+		if posterURL == "" && index == 0 {
+			{{ posterURL = previewURL }}
+		}
 		if mediaCount > 1 || tileStreamURL == "" || strings.HasPrefix(tileStreamURL, "/api/media/slide/") {
 			{{ tileStreamURL = slideURL }}
 		}
@@ -569,8 +575,8 @@ templ feedMediaTile(p PageProps, index int, m model.MediaRef, mediaCount int, st
 			aria-label={ ariaLabel }
 		>
 			if tileStreamURL != "" {
-				if m.ThumbnailURL != "" && m.Type == "video" {
-					<video class="feed-media-video" muted playsinline loop preload="none" data-feed-inline-video poster={ m.ThumbnailURL }>
+				if posterURL != "" && m.Type == "video" {
+					<video class="feed-media-video" muted playsinline loop preload="none" data-feed-inline-video poster={ posterURL }>
 						<source src={ tileStreamURL }/>
 					</video>
 				} else {
@@ -579,7 +585,7 @@ templ feedMediaTile(p PageProps, index int, m model.MediaRef, mediaCount int, st
 					</video>
 				}
 			} else {
-				<img class="feed-media-image" src={ slideURL } loading="lazy" alt={ fmt.Sprintf(L(p, "feed_post_media_index", "Post media %d"), index+1) }/>
+				<img class="feed-media-image" src={ slideURL } alt={ fmt.Sprintf(L(p, "feed_post_media_index", "Post media %d"), index+1) }/>
 			}
 			if index == 3 && mediaCount > 4 {
 				<span class="feed-media-more">+{ fmt.Sprintf("%d", mediaCount-4) }</span>
@@ -594,7 +600,7 @@ templ feedMediaTile(p PageProps, index int, m model.MediaRef, mediaCount int, st
 			data-feed-media-url={ slideURL }
 			aria-label={ ariaLabel }
 		>
-			<img class="feed-media-image" src={ slideURL } loading="lazy" alt={ fmt.Sprintf(L(p, "feed_post_media_index", "Post media %d"), index+1) }/>
+			<img class="feed-media-image" src={ slideURL } alt={ fmt.Sprintf(L(p, "feed_post_media_index", "Post media %d"), index+1) }/>
 			if index == 3 && mediaCount > 4 {
 				<span class="feed-media-more">+{ fmt.Sprintf("%d", mediaCount-4) }</span>
 			}
@@ -628,7 +634,6 @@ templ feedQuoteCard(p PageProps, item model.FeedItem) {
 					<img
 						class="feed-quote-avatar-image"
 						src={ item.QuoteAuthorAvatarURL }
-						loading="lazy"
 						alt={ L(p, "feed_quoted_author_avatar", "Quoted author avatar") }
 						onload="window.MpaSiteBase&&window.MpaSiteBase.avatarLoad(this)"
 						onerror="if(window.MpaSiteBase&&window.MpaSiteBase.avatarError(this))return; this.style.display='none'; this.nextElementSibling.style.display='inline-flex';"
@@ -716,7 +721,7 @@ templ feedQuoteMedia(p PageProps, item model.FeedItem, qMediaCount int) {
 			tabindex="0"
 			aria-label={ L(p, "action_open_media", "Open media") }
 		>
-			<video class="feed-media-video" muted playsinline loop preload="none" data-feed-inline-video>
+			<video class="feed-media-video" muted playsinline loop preload="none" data-feed-inline-video poster={ item.QuoteMediaPreviewURL }>
 				<source src={ item.QuoteMediaStreamURL } type="video/mp4"/>
 			</video>
 			<button class="feed-video-expand-btn" type="button" aria-label={ L(p, "action_enter_fullscreen", "Enter fullscreen") } data-feed-video-expand>&#x2922;</button>
@@ -735,14 +740,14 @@ templ feedQuoteMedia(p PageProps, item model.FeedItem, qMediaCount int) {
 			tabindex="0"
 			aria-label={ L(p, "action_open_media", "Open media") }
 		>
-			<img class="feed-media-image" src={ mediaURL } loading="lazy" alt={ L(p, "feed_quoted_post_media", "Quoted post media") }/>
+			<img class="feed-media-image" src={ mediaURL } alt={ L(p, "feed_quoted_post_media", "Quoted post media") }/>
 		</div>
 	} else if qMediaCount > 1 && readyMediaCount > 0 {
 		<div class="feed-media-wrap feed-media-wrap-grid">
 			<div class={ fmt.Sprintf("feed-media-grid count-%d", readyMediaCount) }>
 				for i, qm := range item.QuoteMedia {
 					if i < 4 && feedMediaURLAt(item.QuoteMediaSlideURLs, i) != "" {
-						@feedQuoteMediaTile(p, i, qm, qMediaCount, item.QuoteMediaStreamURL, feedMediaURLAt(item.QuoteMediaSlideURLs, i))
+						@feedQuoteMediaTile(p, i, qm, qMediaCount, item.QuoteMediaStreamURL, item.QuoteMediaPreviewURL, feedMediaURLAt(item.QuoteMediaSlideURLs, i))
 					}
 				}
 			</div>
@@ -752,10 +757,14 @@ templ feedQuoteMedia(p PageProps, item model.FeedItem, qMediaCount int) {
 	}
 }
 
-templ feedQuoteMediaTile(p PageProps, index int, qm model.MediaRef, qMediaCount int, streamURL string, slideURL string) {
+templ feedQuoteMediaTile(p PageProps, index int, qm model.MediaRef, qMediaCount int, streamURL string, previewURL string, slideURL string) {
 	{{ ariaLabel := fmt.Sprintf(L(p, "feed_open_media_index", "Open media %d"), index+1) }}
 	if feedMediaRefIsVideo(qm) {
 		{{ tileStreamURL := streamURL }}
+		{{ posterURL := qm.ThumbnailURL }}
+		if posterURL == "" && index == 0 {
+			{{ posterURL = previewURL }}
+		}
 		if qMediaCount > 1 || tileStreamURL == "" || strings.HasPrefix(tileStreamURL, "/api/media/slide/") {
 			{{ tileStreamURL = slideURL }}
 		}
@@ -775,8 +784,8 @@ templ feedQuoteMediaTile(p PageProps, index int, qm model.MediaRef, qMediaCount 
 			aria-label={ ariaLabel }
 		>
 			if tileStreamURL != "" {
-				if qm.ThumbnailURL != "" && qm.Type == "video" {
-					<video class="feed-media-video" muted playsinline loop preload="none" data-feed-inline-video poster={ qm.ThumbnailURL }>
+				if posterURL != "" && qm.Type == "video" {
+					<video class="feed-media-video" muted playsinline loop preload="none" data-feed-inline-video poster={ posterURL }>
 						<source src={ tileStreamURL }/>
 					</video>
 				} else {
@@ -785,7 +794,7 @@ templ feedQuoteMediaTile(p PageProps, index int, qm model.MediaRef, qMediaCount 
 					</video>
 				}
 			} else {
-				<img class="feed-media-image" src={ slideURL } loading="lazy" alt={ fmt.Sprintf(L(p, "feed_quoted_post_media_index", "Quoted post media %d"), index+1) }/>
+				<img class="feed-media-image" src={ slideURL } alt={ fmt.Sprintf(L(p, "feed_quoted_post_media_index", "Quoted post media %d"), index+1) }/>
 			}
 			if index == 3 && qMediaCount > 4 {
 				<span class="feed-media-more">+{ fmt.Sprintf("%d", qMediaCount-4) }</span>
@@ -800,7 +809,7 @@ templ feedQuoteMediaTile(p PageProps, index int, qm model.MediaRef, qMediaCount 
 			data-feed-media-url={ slideURL }
 			aria-label={ ariaLabel }
 		>
-			<img class="feed-media-image" src={ slideURL } loading="lazy" alt={ fmt.Sprintf(L(p, "feed_quoted_post_media_index", "Quoted post media %d"), index+1) }/>
+			<img class="feed-media-image" src={ slideURL } alt={ fmt.Sprintf(L(p, "feed_quoted_post_media_index", "Quoted post media %d"), index+1) }/>
 			if index == 3 && qMediaCount > 4 {
 				<span class="feed-media-more">+{ fmt.Sprintf("%d", qMediaCount-4) }</span>
 			}

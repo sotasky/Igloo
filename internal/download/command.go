@@ -16,7 +16,8 @@ import (
 type CommandRunner struct{}
 
 type CommandOptions struct {
-	Timeout time.Duration
+	Timeout   time.Duration
+	BulkWrite bool
 }
 
 type CommandResult struct {
@@ -55,12 +56,12 @@ func (r CommandRunner) Run(ctx context.Context, tool string, args []string, opts
 	defer cancel()
 
 	var stdout, stderr bytes.Buffer
-	err := runCommand(runCtx, tool, args, &stdout, &stderr)
+	err := runCommand(runCtx, tool, args, opts.BulkWrite, &stdout, &stderr)
 	if executableNotFound(err) {
 		toolenv.ApplyCommonToolPaths()
 		stdout.Reset()
 		stderr.Reset()
-		err = runCommand(runCtx, tool, args, &stdout, &stderr)
+		err = runCommand(runCtx, tool, args, opts.BulkWrite, &stdout, &stderr)
 	}
 	ended := time.Now()
 	exitCode := 0
@@ -89,11 +90,61 @@ func (r CommandRunner) Run(ctx context.Context, tool string, args []string, opts
 	}
 }
 
-func runCommand(ctx context.Context, tool string, args []string, stdout, stderr *bytes.Buffer) error {
+func (r CommandRunner) RunBuilt(ctx context.Context, cmd *exec.Cmd, opts CommandOptions) CommandResult {
+	start := time.Now()
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if opts.BulkWrite {
+		prioritizeBulkDownloader(cmd)
+	}
+	err := cmd.Run()
+	ended := time.Now()
+	exitCode := 0
+	if err != nil {
+		exitCode = -1
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			exitCode = exitErr.ExitCode()
+		}
+		if ctx.Err() != nil {
+			err = ctx.Err()
+		}
+	}
+
+	return CommandResult{
+		Tool:         cmd.Path,
+		Args:         append([]string(nil), cmd.Args[1:]...),
+		RedactedArgs: RedactArgs(cmd.Args[1:]),
+		Stdout:       append([]byte(nil), stdout.Bytes()...),
+		Stderr:       append([]byte(nil), stderr.Bytes()...),
+		StartedAtMs:  start.UnixMilli(),
+		EndedAtMs:    ended.UnixMilli(),
+		ElapsedMs:    ended.Sub(start).Milliseconds(),
+		ExitCode:     exitCode,
+		Err:          err,
+	}
+}
+
+func runCommand(ctx context.Context, tool string, args []string, bulkWrite bool, stdout, stderr *bytes.Buffer) error {
 	cmd := exec.CommandContext(ctx, tool, args...)
+	if bulkWrite {
+		prioritizeBulkDownloader(cmd)
+	}
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 	return cmd.Run()
+}
+
+func prioritizeBulkDownloader(cmd *exec.Cmd) {
+	ionice, err := exec.LookPath("ionice")
+	if err != nil {
+		return
+	}
+	originalPath := cmd.Path
+	originalArgs := append([]string(nil), cmd.Args[1:]...)
+	cmd.Path = ionice
+	cmd.Args = append([]string{ionice, "-c", "3", "--", originalPath}, originalArgs...)
 }
 
 func executableNotFound(err error) bool {

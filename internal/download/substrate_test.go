@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -57,6 +58,45 @@ func TestCommandRunnerFindsToolsFromCommonUserBins(t *testing.T) {
 	}
 	if got := strings.TrimSpace(string(result.CombinedOutput())); got != "common-path-tool" {
 		t.Fatalf("output = %q, want common-path-tool", got)
+	}
+}
+
+func TestCommandRunnerGivesDownloaderIOToInteractiveReads(t *testing.T) {
+	if _, err := exec.LookPath("ionice"); err != nil {
+		t.Skip("ionice unavailable")
+	}
+	dir := t.TempDir()
+	tool := filepath.Join(dir, "yt-dlp")
+	if err := os.WriteFile(tool, []byte("#!/bin/sh\nionice -p $$\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	result := CommandRunner{}.Run(context.Background(), "yt-dlp", nil, CommandOptions{BulkWrite: true})
+	if result.Err != nil {
+		t.Fatalf("run downloader: %v: %s", result.Err, result.CombinedOutput())
+	}
+	if got := strings.TrimSpace(string(result.Stdout)); got != "idle" {
+		t.Fatalf("downloader I/O class = %q, want idle", got)
+	}
+}
+
+func TestCommandRunnerDoesNotDemoteReadOnlyDownloaderCalls(t *testing.T) {
+	if _, err := exec.LookPath("ionice"); err != nil {
+		t.Skip("ionice unavailable")
+	}
+	dir := t.TempDir()
+	tool := filepath.Join(dir, "gallery-dl")
+	if err := os.WriteFile(tool, []byte("#!/bin/sh\nionice -p $$\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	result := CommandRunner{}.Run(context.Background(), tool, nil, CommandOptions{})
+	if result.Err != nil {
+		t.Fatalf("run downloader: %v: %s", result.Err, result.CombinedOutput())
+	}
+	if got := strings.TrimSpace(string(result.Stdout)); got != "none: prio 0" {
+		t.Fatalf("read-only downloader I/O class = %q, want normal priority", got)
 	}
 }
 

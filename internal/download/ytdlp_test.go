@@ -7,6 +7,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	ytdlp "github.com/lrstanley/go-ytdlp"
 )
 
 func TestCompletedYtDlpOutputsReturnsOnlyExactProducerSidecars(t *testing.T) {
@@ -30,6 +32,42 @@ func TestCompletedYtDlpOutputsReturnsOnlyExactProducerSidecars(t *testing.T) {
 	}
 	if len(completed.MediaPaths) != 1 || completed.MediaPaths[0] != filepath.Join(dir, "sample.mp4") {
 		t.Fatalf("media paths = %#v", completed.MediaPaths)
+	}
+}
+
+func TestRunVideoDownloadGivesBulkWritesIdleIOPriority(t *testing.T) {
+	bin := t.TempDir()
+	writeExecutable(t, filepath.Join(bin, "yt-dlp"), `#!/bin/sh
+class=$(ionice -p $$)
+test "$class" = "idle" || exit 19
+printf '{"filename":"%s","io_class":"%s"}\n' "$1" "$class"
+`)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	output := filepath.Join(t.TempDir(), "sample.mp4")
+	paths, err := runVideoDownload(context.Background(), ytdlp.New().SetExecutable(filepath.Join(bin, "yt-dlp")), output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(paths) != 1 || paths[0] != output {
+		t.Fatalf("paths = %#v, want %q", paths, output)
+	}
+}
+
+func TestRunVideoDownloadExtractsFilenameAfterLogOutput(t *testing.T) {
+	bin := t.TempDir()
+	writeExecutable(t, filepath.Join(bin, "yt-dlp"), `#!/bin/sh
+printf 'downloader warning\n'
+printf '{"filename":"%s"}\n' "$1"
+`)
+
+	output := filepath.Join(t.TempDir(), "sample.mp4")
+	paths, err := runVideoDownload(context.Background(), ytdlp.New().SetExecutable(filepath.Join(bin, "yt-dlp")), output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(paths) != 1 || paths[0] != output {
+		t.Fatalf("paths = %#v, want %q", paths, output)
 	}
 }
 

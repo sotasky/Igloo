@@ -108,14 +108,20 @@ func TestEnrichFeedItemsProjectsOnlyReadyCanonicalMediaURLs(t *testing.T) {
 
 func TestEnrichFeedItemsTypesTweetVideoMediaURLs(t *testing.T) {
 	d, stateRoot := openWritableFeedTestDBAt(t)
-	const tweetID = "sample_video_media"
+	const (
+		tweetID = "sample_video_media"
+		quoteID = "sample_quote_video_media"
+	)
 	for _, asset := range []struct {
+		ownerID     string
 		kind        string
 		key         string
 		contentType string
 	}{
-		{kind: "post_media", key: filepath.Join("media", "twitter", "sample", tweetID+".mp4"), contentType: "video/mp4"},
-		{kind: "post_thumbnail", key: filepath.Join("thumbnails", "generated", tweetID+".jpg"), contentType: "image/jpeg"},
+		{ownerID: tweetID, kind: "post_media", key: filepath.Join("media", "twitter", "sample", tweetID+".mp4"), contentType: "video/mp4"},
+		{ownerID: tweetID, kind: "post_thumbnail", key: filepath.Join("thumbnails", "generated", tweetID+".jpg"), contentType: "image/jpeg"},
+		{ownerID: quoteID, kind: "post_media", key: filepath.Join("media", "twitter", "sample", quoteID+".mp4"), contentType: "video/mp4"},
+		{ownerID: quoteID, kind: "post_thumbnail", key: filepath.Join("thumbnails", "generated", quoteID+".jpg"), contentType: "image/jpeg"},
 	} {
 		path := filepath.Join(stateRoot, filepath.FromSlash(asset.key))
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -125,22 +131,30 @@ func TestEnrichFeedItemsTypesTweetVideoMediaURLs(t *testing.T) {
 			t.Fatal(err)
 		}
 		if err := d.StoreReadyAsset(db.Asset{
-			AssetID: db.BuildAssetID("twitter", "tweet", tweetID, asset.kind, 0), AssetKind: asset.kind,
-			OwnerKind: "tweet", OwnerID: tweetID, FilePath: asset.key, ContentType: asset.contentType, RequiredReason: "retention",
+			AssetID: db.BuildAssetID("twitter", "tweet", asset.ownerID, asset.kind, 0), AssetKind: asset.kind,
+			OwnerKind: "tweet", OwnerID: asset.ownerID, FilePath: asset.key, ContentType: asset.contentType, RequiredReason: "retention",
 		}, 1); err != nil {
 			t.Fatal(err)
 		}
 	}
 
 	got := EnrichFeedItemsPreserveRows(d, []model.FeedItem{{
-		TweetID: tweetID,
-		Media:   []model.MediaRef{{Type: "video", URL: "https://cdn.example/sample.mp4"}},
+		TweetID:      tweetID,
+		QuoteTweetID: quoteID,
+		Media:        []model.MediaRef{{Type: "video", URL: "https://cdn.example/sample.mp4"}},
+		QuoteMedia:   []model.MediaRef{{Type: "video", URL: "https://cdn.example/quote.mp4"}},
 	}})[0]
 	if got.MediaStreamURL != "/api/media/stream/"+tweetID+"?owner_kind=tweet" {
 		t.Fatalf("MediaStreamURL = %q", got.MediaStreamURL)
 	}
 	if got.MediaPreviewURL != "/api/media/thumbnail/"+tweetID+"?owner_kind=tweet" {
 		t.Fatalf("MediaPreviewURL = %q", got.MediaPreviewURL)
+	}
+	if got.QuoteMediaStreamURL != "/api/media/stream/"+quoteID+"?owner_kind=tweet" {
+		t.Fatalf("QuoteMediaStreamURL = %q", got.QuoteMediaStreamURL)
+	}
+	if got.QuoteMediaPreviewURL != "/api/media/thumbnail/"+quoteID+"?owner_kind=tweet" {
+		t.Fatalf("QuoteMediaPreviewURL = %q", got.QuoteMediaPreviewURL)
 	}
 }
 

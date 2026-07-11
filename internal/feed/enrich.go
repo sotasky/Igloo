@@ -200,6 +200,9 @@ func enrichFeedItems(database *db.DB, items []model.FeedItem, deduplicate bool) 
 		if item.QuoteTweetID != "" {
 			if availability := mediaAssets[item.QuoteTweetID]; availability.ReadyVideo {
 				item.QuoteMediaStreamURL = "/api/media/stream/" + item.QuoteTweetID + "?owner_kind=tweet"
+				if availability.ReadyPreview {
+					item.QuoteMediaPreviewURL = "/api/media/thumbnail/" + item.QuoteTweetID + "?owner_kind=tweet"
+				}
 			}
 		}
 
