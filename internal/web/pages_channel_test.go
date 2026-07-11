@@ -12,9 +12,14 @@ import (
 )
 
 func TestFeedItemToVideoKeepsTweetAssetOwnership(t *testing.T) {
-	video := feedItemToVideo(model.FeedItem{TweetID: "sample_post"}, model.Channel{ChannelID: "twitter_sample"})
+	video := feedItemToVideo(model.FeedItem{TweetID: "sample_post"}, model.Channel{
+		ChannelID: "twitter_sample", IsSubscribed: true, IsStarred: true,
+	})
 	if video.ThumbnailURL != "/api/media/thumbnail/sample_post?owner_kind=tweet" {
 		t.Fatalf("thumbnail URL = %q", video.ThumbnailURL)
+	}
+	if video.OwnerKind != "tweet" || !video.IsSubscribed || !video.IsStarred {
+		t.Fatalf("converted owner/follow state = %+v", video)
 	}
 }
 

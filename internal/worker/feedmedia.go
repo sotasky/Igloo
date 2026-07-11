@@ -100,12 +100,38 @@ func (m *Manager) processContentAsset(ctx context.Context, asset db.Asset) {
 		}
 		return
 	}
+	if asset.AssetKind == "post_media" && strings.HasPrefix(contentType, "video/") {
+		if err := m.publishContentVideoThumbnail(ctx, asset, finalPath); err != nil {
+			log.Printf("[feedmedia] publish thumbnail %s: %v", asset.AssetID, err)
+		}
+	}
 	if oldPath != "" && oldPath != key {
 		if _, err := m.db.RemoveAssetFileIfUnreferenced(oldPath); err != nil {
 			log.Printf("[feedmedia] remove replaced file %s: %v", oldPath, err)
 		}
 	}
 	m.EmitFeed("feed_media", fmt.Sprintf("Downloaded %s for %s", asset.AssetKind, asset.OwnerID), "done")
+}
+
+func (m *Manager) publishContentVideoThumbnail(ctx context.Context, media db.Asset, videoPath string) error {
+	path, err := m.materializeVideoThumbnail(ctx, "twitter", media.OwnerID, "", videoPath)
+	if err != nil || path == "" {
+		return err
+	}
+	key, err := m.cfg.Storage.Key(path)
+	if err != nil {
+		_ = os.Remove(path)
+		return err
+	}
+	return m.db.StoreReadyAsset(db.Asset{
+		AssetID:        db.BuildAssetID("twitter", "tweet", media.OwnerID, "post_thumbnail", 0),
+		AssetKind:      "post_thumbnail",
+		OwnerKind:      "tweet",
+		OwnerID:        media.OwnerID,
+		FilePath:       key,
+		ContentType:    "image/jpeg",
+		RequiredReason: media.RequiredReason,
+	}, time.Now().UnixMilli())
 }
 
 func (m *Manager) downloadContentAsset(ctx context.Context, asset db.Asset) (string, string, error) {

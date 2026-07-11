@@ -99,6 +99,26 @@ func TestVideoCardRendersMediaTypesForMixedSlides(t *testing.T) {
 	}
 }
 
+func TestVideoCardUsesTweetAssetOwner(t *testing.T) {
+	v := model.Video{
+		VideoID: "sample_post", OwnerKind: "tweet", MediaKind: "slideshow", MediaSlideCount: 2,
+	}
+	var buf bytes.Buffer
+	if err := VideoCard(newTestPageProps(), v).Render(context.Background(), &buf); err != nil {
+		t.Fatal(err)
+	}
+	html := buf.String()
+	for _, want := range []string{
+		`data-stream-url="/api/media/stream/sample_post?owner_kind=tweet"`,
+		`data-slide-url-suffix="?owner_kind=tweet"`,
+		`src="/api/media/thumbnail/sample_post?owner_kind=tweet"`,
+	} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("rendered card missing %q: %s", want, html)
+		}
+	}
+}
+
 func TestVideoCardRendersInstagramCoauthorsAsTaggedAccounts(t *testing.T) {
 	v := model.Video{
 		VideoID:      "instagram_post_POST123",

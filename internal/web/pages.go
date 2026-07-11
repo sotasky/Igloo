@@ -210,6 +210,7 @@ func feedItemToVideo(item model.FeedItem, ch model.Channel) model.Video {
 	return model.Video{
 		VideoID:         item.TweetID,
 		ChannelID:       ch.ChannelID,
+		OwnerKind:       "tweet",
 		Title:           title,
 		PublishedAt:     item.PublishedAt,
 		Platform:        "twitter",
@@ -219,6 +220,8 @@ func feedItemToVideo(item model.FeedItem, ch model.Channel) model.Video {
 		MediaKind:       mediaKind,
 		MediaSlideCount: slideCount,
 		IsShortForm:     true,
+		IsSubscribed:    ch.IsSubscribed,
+		IsStarred:       ch.IsStarred,
 	}
 }
 

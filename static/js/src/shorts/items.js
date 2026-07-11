@@ -87,6 +87,7 @@ export function parseCardData(card) {
     avatarUrl: String(card.getAttribute('data-avatar-url') || ''),
     thumbUrl: String(card.getAttribute('data-thumb-url') || ''),
     streamUrl: String(card.getAttribute('data-stream-url') || ''),
+    slideUrlSuffix: String(card.getAttribute('data-slide-url-suffix') || ''),
     audioUrl: String(card.getAttribute('data-audio-url') || ''),
     href: String(card.getAttribute('href') || '/shorts?video=' + encodeURIComponent(id)),
     bookmarked: String(card.getAttribute('data-bookmarked') || '') === '1',
@@ -329,7 +330,7 @@ export function makeShortItem(entryData, existingEl) {
         slide.decoding = 'async'
         slide.loading = 'lazy'
       }
-      slide.src = '/api/media/slide/' + encId + '/' + String(i)
+      slide.src = '/api/media/slide/' + encId + '/' + String(i) + String(entryData.slideUrlSuffix || '')
       slideWrap.appendChild(slide)
       slides.push(slide)
     }

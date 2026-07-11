@@ -107,9 +107,10 @@ templ VideoCard(p PageProps, v model.Video) {
 		data-channel-href={ "/channels/" + v.ChannelID }
 		data-avatar-url={ videoAvatarURL(v) }
 		data-thumb-url={ videoThumbURL(v) }
-		data-stream-url={ "/api/media/stream/" + v.VideoID }
+		data-stream-url={ videoMediaURL("stream", v) }
+		data-slide-url-suffix={ videoSlideURLSuffix(v) }
 		if v.MediaKind == "slideshow" {
-			data-audio-url={ "/api/media/audio/" + v.VideoID }
+			data-audio-url={ videoMediaURL("audio", v) }
 		}
 		data-bookmarked={ boolDataAttr(v.BookmarkCategoryID != nil) }
 		data-bookmark-category-id={ bookmarkCategoryIDStr(v.BookmarkCategoryID) }

@@ -1605,18 +1605,33 @@ func (p PrefsData) VideoThumbURL(v model.Video) string {
 		if v.ThumbnailURL != "" {
 			return v.ThumbnailURL
 		}
-		return "/api/media/thumbnail/" + v.VideoID
+		return videoMediaURL("thumbnail", v)
 	}
 	// Whatever URL is in v.ThumbnailURL (may include a query), append ?da=1.
 	base := v.ThumbnailURL
 	if base == "" {
-		base = "/api/media/thumbnail/" + v.VideoID
+		base = videoMediaURL("thumbnail", v)
 	}
 	sep := "?"
 	if strings.Contains(base, "?") {
 		sep = "&"
 	}
 	return base + sep + "da=1"
+}
+
+func videoMediaURL(route string, v model.Video) string {
+	url := "/api/media/" + route + "/" + v.VideoID
+	if v.OwnerKind == "tweet" {
+		url += "?owner_kind=tweet"
+	}
+	return url
+}
+
+func videoSlideURLSuffix(v model.Video) string {
+	if v.OwnerKind == "tweet" {
+		return "?owner_kind=tweet"
+	}
+	return ""
 }
 
 // fallbackVideoTitle replicates the existing videoTitle's behavior for the

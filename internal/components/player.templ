@@ -43,7 +43,7 @@ templ PlayerPage(p PageProps, video model.Video, comments []model.Comment, moreF
 							}
 							playsinline
 						>
-							<source src={ "/api/media/stream/" + video.VideoID } type="video/mp4"/>
+							<source src={ videoMediaURL("stream", video) } type="video/mp4"/>
 						</video>
 						<media-loading-indicator noautohide></media-loading-indicator>
 						<media-control-bar class="vjs-control-bar dashboard-media-control-bar">
