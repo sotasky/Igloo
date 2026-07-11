@@ -108,7 +108,7 @@ func (db *DB) GetBookmarks(opts GetBookmarksOpts) ([]model.Video, error) {
 	}
 
 	query := fmt.Sprintf(`
-		SELECT v.video_id, v.channel_id,
+		SELECT v.video_id, v.channel_id, v.owner_kind,
 		       CASE WHEN v.title LIKE 'X post %%' THEN COALESCE(fi.body_text,
 		           (SELECT fp.quote_body_text
 		            FROM feed_items fp
@@ -139,7 +139,7 @@ func (db *DB) GetBookmarks(opts GetBookmarksOpts) ([]model.Video, error) {
 		               ELSE 'youtube'
 		           END),
 		       CASE WHEN cf.channel_id IS NOT NULL THEN 1 ELSE 0 END,
-		       b.category_id,
+		       b.category_id, COALESCE(fi.quote_tweet_id,''),
 		       COALESCE((
 		           SELECT GROUP_CONCAT(media_type, ',')
 		           FROM (
@@ -195,14 +195,14 @@ func (db *DB) GetBookmarks(opts GetBookmarksOpts) ([]model.Video, error) {
 		var v model.Video
 		var pubAt, dlAt sql.NullInt64
 		var catID int64
-		var directMediaTypes, quoteMediaTypes string
+		var directMediaTypes, quoteMediaTypes, quoteTweetID string
 		err := rows.Scan(
-			&v.VideoID, &v.ChannelID, &v.Title, &v.Description,
+			&v.VideoID, &v.ChannelID, &v.OwnerKind, &v.Title, &v.Description,
 			&v.Duration, &pubAt, &dlAt,
 			&v.Watched, &v.IsTemp, &v.IsPinned,
 			&v.MetadataJSON,
 			&v.ChannelName, &v.Platform, &v.IsSubscribed,
-			&catID,
+			&catID, &quoteTweetID,
 			&directMediaTypes, &quoteMediaTypes,
 		)
 		if err != nil {
@@ -233,6 +233,13 @@ func (db *DB) GetBookmarks(opts GetBookmarksOpts) ([]model.Video, error) {
 				v.MediaKind = "video"
 				v.MediaSlideCount = 0
 			}
+		}
+		if v.OwnerKind == "tweet" {
+			thumbnailOwnerID := v.VideoID
+			if len(directMediaTypes) == 0 && len(quoteMediaTypes) > 0 && quoteTweetID != "" {
+				thumbnailOwnerID = quoteTweetID
+			}
+			v.ThumbnailURL = "/api/media/thumbnail/" + thumbnailOwnerID + "?owner_kind=tweet"
 		}
 
 		videos = append(videos, v)

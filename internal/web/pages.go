@@ -215,7 +215,7 @@ func feedItemToVideo(item model.FeedItem, ch model.Channel) model.Video {
 		Platform:        "twitter",
 		ChannelName:     displayName,
 		AvatarURL:       "/api/media/avatar/" + ch.ChannelID,
-		ThumbnailURL:    "/api/media/thumbnail/" + item.TweetID,
+		ThumbnailURL:    "/api/media/thumbnail/" + item.TweetID + "?owner_kind=tweet",
 		MediaKind:       mediaKind,
 		MediaSlideCount: slideCount,
 		IsShortForm:     true,

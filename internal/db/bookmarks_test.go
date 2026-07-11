@@ -635,6 +635,9 @@ func TestGetBookmarksDerivesImageFromCanonicalQuoteAsset(t *testing.T) {
 	if got := bookmarks[0].MediaSlideCount; got != 1 {
 		t.Fatalf("MediaSlideCount = %d, want 1", got)
 	}
+	if got := bookmarks[0].ThumbnailURL; got != "/api/media/thumbnail/sample_quote_media?owner_kind=tweet" {
+		t.Fatalf("ThumbnailURL = %q", got)
+	}
 	wantTypes := []string{"image"}
 	if got := bookmarks[0].MediaTypes; strings.Join(got, ",") != strings.Join(wantTypes, ",") {
 		t.Fatalf("MediaTypes = %#v, want %#v", got, wantTypes)

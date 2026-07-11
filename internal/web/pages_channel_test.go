@@ -11,6 +11,13 @@ import (
 	"github.com/screwys/igloo/internal/model"
 )
 
+func TestFeedItemToVideoKeepsTweetAssetOwnership(t *testing.T) {
+	video := feedItemToVideo(model.FeedItem{TweetID: "sample_post"}, model.Channel{ChannelID: "twitter_sample"})
+	if video.ThumbnailURL != "/api/media/thumbnail/sample_post?owner_kind=tweet" {
+		t.Fatalf("thumbnail URL = %q", video.ThumbnailURL)
+	}
+}
+
 func TestHandlePageChannelRendersProfileOnlyTikTok(t *testing.T) {
 	srv := newTestServer(t)
 	srv.staticV = func(path string) string { return "/static/" + path }
