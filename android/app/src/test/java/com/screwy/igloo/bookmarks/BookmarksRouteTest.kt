@@ -277,6 +277,21 @@ class BookmarksRouteTest {
     }
 
     @Test
+    fun bookmark_without_mirrored_content_waits_for_bootstrap_without_becoming_a_tile() {
+        val unresolved =
+            videoBookmark(videoId = "pending_video").copy(
+                feedItem = null,
+                video = null,
+            )
+
+        assertEquals(null, bookmarkOwnerKind(unresolved))
+        assertTrue(visibleBookmarkItems(listOf(unresolved)).isEmpty())
+        assertTrue(
+            bookmarkMomentPlaylistItems(listOf(unresolved), BookmarkFilter.All).isEmpty()
+        )
+    }
+
+    @Test
     fun label_search_matches_displayed_no_label_row() {
         val rows =
             listOf(

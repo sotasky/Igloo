@@ -453,7 +453,7 @@ private fun BookmarkTile(
     val colors = MaterialTheme.iglooColors
     val resolvers: MediaResolvers = koinInject()
 
-    val ownerKind = bookmarkOwnerKind(item)
+    val ownerKind = bookmarkOwnerKind(item) ?: return
     val mediaOwnerId = bookmarkMediaOwnerId(item)
     val channelId = item.resolvedChannelId
 	val thumbUri by resolvers.thumbnailForPostFlow(mediaOwnerId, ownerKind)

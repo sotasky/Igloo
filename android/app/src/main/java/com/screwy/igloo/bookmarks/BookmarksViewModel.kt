@@ -100,7 +100,7 @@ class BookmarksViewModel(
     private val allItems: StateFlow<List<BookmarkItem>?> =
         db.bookmarkReadDao()
             .bookmarksFlow()
-            .map<List<BookmarkItem>, List<BookmarkItem>?> { rows -> rows }
+			.map<List<BookmarkItem>, List<BookmarkItem>?> { rows -> visibleBookmarkItems(rows) }
             .stateIn(
                 scope = viewModelScope,
                 started = SharingStarted.WhileSubscribed(5_000L),

@@ -36,8 +36,15 @@ internal fun bookmarkMomentPlaylistItems(
 	filter: BookmarkFilter,
 ): List<MomentItem> =
 	filterBookmarkItems(items, filter)
+		.filter(::hasBookmarkContent)
 		.filter(::opensBookmarkInMomentsOverlay)
 		.map(::toBookmarkMomentItem)
+
+internal fun visibleBookmarkItems(items: List<BookmarkItem>): List<BookmarkItem> =
+	items.filter(::hasBookmarkContent)
+
+private fun hasBookmarkContent(item: BookmarkItem): Boolean =
+	item.feedItem != null || item.video != null
 
 internal fun bookmarkPlaylistId(filter: BookmarkFilter): String = when (filter) {
     BookmarkFilter.All -> BookmarkPlaylistAllId
@@ -93,14 +100,14 @@ internal fun toBookmarkMomentItem(item: BookmarkItem): MomentItem {
         mediaKind = item.video?.let { video -> bookmarkEffectiveMediaKind(item, video) } ?: feedMediaKind,
         slideCount = item.video?.let { video -> bookmarkEffectiveSlideCount(item, video) } ?: feedSlideCount,
         publishedAt = bookmarkPublishedAt(item),
-		ownerKind = bookmarkOwnerKind(item),
+		ownerKind = requireNotNull(bookmarkOwnerKind(item)),
         isAuthorFollowed = item.resolvedChannelIsFollowed == 1,
     )
 }
 
-internal fun bookmarkOwnerKind(item: BookmarkItem): OwnerKind {
+internal fun bookmarkOwnerKind(item: BookmarkItem): OwnerKind? {
 	if (item.feedItem != null) return OwnerKind.Tweet
-	return ownerKindFromAssetOwnerKind(requireNotNull(item.video).ownerKind)
+	return item.video?.let { ownerKindFromAssetOwnerKind(it.ownerKind) }
 }
 
 internal fun bookmarkMediaOwnerId(item: BookmarkItem): String {

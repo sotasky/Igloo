@@ -287,6 +287,9 @@ class AndroidSyncMirrorTest {
     fun interruptedBootstrapResumesWithoutHidingCanonicalRows() = runBlocking {
         db.feedItemDao().upsert(FeedItemEntity(tweetId = "sample_old_post"))
         db.androidSyncDao().upsertHead(AndroidSyncHeadEntity("feed", "sample_old_post", "feed", nowMs))
+        db.androidSyncDao().upsertAsset(
+            readyAsset("sample_old_asset").copy(ownerId = "sample_old_owner")
+        )
         var bootstrapCalls = 0
         val firstEngine = MockEngine { request ->
             when (request.url.encodedPath) {
@@ -307,6 +310,7 @@ class AndroidSyncMirrorTest {
         assertEquals("bootstrap-token", db.androidSyncDao().syncState()?.cursor)
         assertNotNull(db.feedItemDao().getById("sample_old_post"))
         assertNotNull(db.feedItemDao().getById("sample_new_post"))
+        assertNotNull(db.androidSyncDao().asset("sample_old_asset"))
 
         var resumedAfter: String? = null
         val secondEngine = MockEngine { request ->

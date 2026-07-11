@@ -106,6 +106,9 @@ interface AndroidSyncDao {
     @Query("SELECT COUNT(*) FROM android_sync_assets")
     suspend fun assetCount(): Int
 
+    @Query("SELECT * FROM android_sync_assets")
+    suspend fun allAssets(): List<AndroidSyncAssetEntity>
+
     @Query("DELETE FROM android_sync_assets WHERE asset_id = :assetId")
     suspend fun deleteAsset(assetId: String)
 
@@ -295,50 +298,4 @@ interface AndroidSyncDao {
     )
     suspend fun retainedAssetOwnerIds(): List<String>
 
-    @Query(
-        """
-        SELECT c.channel_id
-        FROM channels c
-        WHERE NOT EXISTS (SELECT 1 FROM channel_follows WHERE channel_id = c.channel_id)
-          AND NOT EXISTS (SELECT 1 FROM channel_stars WHERE channel_id = c.channel_id)
-          AND NOT EXISTS (SELECT 1 FROM muted_channels WHERE channel_id = c.channel_id)
-          AND NOT EXISTS (
-              SELECT 1 FROM channel_settings
-              WHERE channel_id = c.channel_id
-                AND (media_only IS NOT NULL
-                  OR include_reposts IS NOT NULL
-                  OR media_download_limit IS NOT NULL
-                  OR max_videos IS NOT NULL
-                  OR download_subtitles IS NOT NULL)
-          )
-          AND NOT EXISTS (SELECT 1 FROM videos WHERE channel_id = c.channel_id)
-          AND NOT EXISTS (SELECT 1 FROM feed_items WHERE channel_id = c.channel_id)
-          AND NOT EXISTS (SELECT 1 FROM feed_items WHERE source_channel_id = c.channel_id)
-          AND NOT EXISTS (SELECT 1 FROM feed_items WHERE quote_channel_id = c.channel_id)
-          AND NOT EXISTS (SELECT 1 FROM feed_items WHERE reply_channel_id = c.channel_id)
-          AND NOT EXISTS (SELECT 1 FROM feed_items WHERE reposter_channel_id = c.channel_id)
-          AND NOT EXISTS (SELECT 1 FROM video_repost_sources WHERE reposter_channel_id = c.channel_id)
-          AND NOT EXISTS (SELECT 1 FROM retweet_sources WHERE retweeter_channel_id = c.channel_id)
-        """,
-    )
-    suspend fun unreferencedChannelIds(): List<String>
-
-    @Query(
-        """
-        SELECT a.*
-        FROM android_sync_assets a
-        WHERE NOT EXISTS (SELECT 1 FROM feed_items WHERE tweet_id = a.owner_id)
-          AND NOT EXISTS (SELECT 1 FROM feed_likes WHERE tweet_id = a.owner_id)
-          AND NOT EXISTS (SELECT 1 FROM bookmarks WHERE video_id = a.owner_id)
-          AND NOT EXISTS (SELECT 1 FROM feed_items WHERE quote_tweet_id = a.owner_id)
-          AND NOT EXISTS (SELECT 1 FROM feed_items WHERE canonical_tweet_id = a.owner_id)
-          AND NOT EXISTS (SELECT 1 FROM videos WHERE video_id = a.owner_id)
-          AND NOT EXISTS (SELECT 1 FROM channels WHERE channel_id = a.owner_id)
-          AND NOT EXISTS (SELECT 1 FROM channel_profiles WHERE channel_id = a.owner_id)
-          AND NOT EXISTS (SELECT 1 FROM video_repost_sources WHERE reposter_channel_id = a.owner_id)
-          AND NOT EXISTS (SELECT 1 FROM retweet_sources WHERE retweeter_channel_id = a.owner_id)
-          AND NOT EXISTS (SELECT 1 FROM video_comments WHERE author_id = a.owner_id)
-        """,
-    )
-    suspend fun unreferencedAssets(): List<AndroidSyncAssetEntity>
 }

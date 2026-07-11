@@ -200,11 +200,13 @@ class AndroidSyncMirror(
                 applySecondary(change, protectedChannels, retainedAssetOwners, deletedAssets)
             }
 
-            if (bootstrap && page.end_of_stream) {
-                sweepBootstrap(deletedAssets)
-                sweepHeadlessThinState()
-                overlay.restore(db)
-                cleanupOrphans(deletedAssets, sweepHeadlessContent = true)
+            if (bootstrap) {
+                if (page.end_of_stream) {
+                    sweepBootstrap(deletedAssets)
+                    sweepHeadlessThinState()
+                    overlay.restore(db)
+                    cleanupOrphans(deletedAssets, sweepHeadlessContent = true)
+                }
             } else if (
                 page.changes.any { it.operation == OP_DELETE || it.replacesDependencies() }
             ) {
@@ -549,12 +551,14 @@ class AndroidSyncMirror(
         db.retweetSourceDao().deleteOrphans()
         db.feedRankDao().deleteOrphans()
 
-        dao.unreferencedChannelIds().chunked(PRUNE_BATCH_SIZE).forEach {
+        val protectedChannels = dao.protectedChannelIds().toHashSet()
+        db.channelDao().allIds().filterNot(protectedChannels::contains).chunked(PRUNE_BATCH_SIZE).forEach {
             db.channelDao().deleteByIds(it)
         }
         db.channelProfileDao().deleteUnreferenced()
 
-        val orphanAssets = dao.unreferencedAssets()
+        val retainedAssetOwners = dao.retainedAssetOwnerIds().toHashSet()
+        val orphanAssets = dao.allAssets().filterNot { it.ownerId in retainedAssetOwners }
         if (orphanAssets.isNotEmpty()) {
             deletedAssets += orphanAssets
             orphanAssets.map(AndroidSyncAssetEntity::assetId).chunked(PRUNE_BATCH_SIZE).forEach {
