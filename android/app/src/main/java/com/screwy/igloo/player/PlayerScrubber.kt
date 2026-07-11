@@ -27,7 +27,6 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import com.screwy.igloo.data.entity.SponsorBlockSegmentEntity
-import com.screwy.igloo.perf.PerfProbe
 
 @Composable
 internal fun ScrubberWithSegments(
@@ -47,71 +46,64 @@ internal fun ScrubberWithSegments(
     var isDragging by remember { mutableStateOf(false) }
     var dragFraction by remember { mutableFloatStateOf(0f) }
     var barWidthPx by remember { mutableIntStateOf(1) }
-    val shownFraction = if (isDragging) {
-        dragFraction
-    } else {
-        scrubberFractionForPosition(positionMs, duration)
-    }
+    val shownFraction =
+        if (isDragging) {
+            dragFraction
+        } else {
+            scrubberFractionForPosition(positionMs, duration)
+        }
 
     Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(if (isDragging) 86.dp else 24.dp)
-            .onSizeChanged { barWidthPx = it.width.coerceAtLeast(1) }
-            .pointerInput(durationMs, segments) {
-                awaitEachGesture {
-                    val down = awaitFirstDown(requireUnconsumed = false)
-                    down.consume()
-                    dragFraction = scrubberFractionForX(down.position.x, barWidthPx)
-                    PerfProbe.log(
-                        event = "long_form_scrub_start",
-                    ) {
-                        mapOf(
-                            "segments" to segments.size,
-                            "duration_ms" to durationMs,
-                            "preview_enabled" to (previewSpritePath != null && previewTrackJsonPath != null),
-                        )
-                    }
-                    onScrubStart(scrubberTargetMs(dragFraction, duration))
-                    val downSegment = scrubberSegmentAtFraction(
-                        segments = segments,
-                        fraction = dragFraction,
-                        durationMs = duration,
-                    )
-                    val slop = awaitTouchSlopOrCancellation(down.id) { change, _ ->
-                        change.consume()
-                    }
-                    if (slop == null) {
-                        val target = scrubberTapTargetMs(
-                            fraction = dragFraction,
-                            durationMs = duration,
-                            downSegment = downSegment,
-                        )
+        modifier =
+            Modifier.fillMaxWidth()
+                .height(if (isDragging) 86.dp else 24.dp)
+                .onSizeChanged { barWidthPx = it.width.coerceAtLeast(1) }
+                .pointerInput(durationMs, segments) {
+                    awaitEachGesture {
+                        val down = awaitFirstDown(requireUnconsumed = false)
+                        down.consume()
+                        dragFraction = scrubberFractionForX(down.position.x, barWidthPx)
+
+                        onScrubStart(scrubberTargetMs(dragFraction, duration))
+                        val downSegment =
+                            scrubberSegmentAtFraction(
+                                segments = segments,
+                                fraction = dragFraction,
+                                durationMs = duration,
+                            )
+                        val slop =
+                            awaitTouchSlopOrCancellation(down.id) { change, _ -> change.consume() }
+                        if (slop == null) {
+                            val target =
+                                scrubberTapTargetMs(
+                                    fraction = dragFraction,
+                                    durationMs = duration,
+                                    downSegment = downSegment,
+                                )
+                            onSeekTo(target)
+                            onScrubEnd(target)
+
+                            return@awaitEachGesture
+                        }
+
+                        isDragging = true
+                        dragFraction = scrubberFractionForX(slop.position.x, barWidthPx)
+                        onScrubUpdate(scrubberTargetMs(dragFraction, duration))
+                        val pointerId = slop.id
+                        while (true) {
+                            val event = awaitPointerEvent()
+                            val change = event.changes.firstOrNull { it.id == pointerId } ?: break
+                            if (!change.pressed) break
+                            change.consume()
+                            dragFraction = scrubberFractionForX(change.position.x, barWidthPx)
+                            onScrubUpdate(scrubberTargetMs(dragFraction, duration))
+                        }
+                        val target = scrubberTargetMs(dragFraction, duration)
                         onSeekTo(target)
                         onScrubEnd(target)
-                        PerfProbe.log(event = "long_form_scrub_end") { mapOf("dragging" to false) }
-                        return@awaitEachGesture
+                        isDragging = false
                     }
-
-                    isDragging = true
-                    dragFraction = scrubberFractionForX(slop.position.x, barWidthPx)
-                    onScrubUpdate(scrubberTargetMs(dragFraction, duration))
-                    val pointerId = slop.id
-                    while (true) {
-                        val event = awaitPointerEvent()
-                        val change = event.changes.firstOrNull { it.id == pointerId } ?: break
-                        if (!change.pressed) break
-                        change.consume()
-                        dragFraction = scrubberFractionForX(change.position.x, barWidthPx)
-                        onScrubUpdate(scrubberTargetMs(dragFraction, duration))
-                    }
-                    val target = scrubberTargetMs(dragFraction, duration)
-                    onSeekTo(target)
-                    onScrubEnd(target)
-                    isDragging = false
-                    PerfProbe.log(event = "long_form_scrub_end") { mapOf("dragging" to true) }
                 }
-            },
     ) {
         if (isDragging) {
             SeekPreview(
@@ -119,70 +111,71 @@ internal fun ScrubberWithSegments(
                 visible = true,
                 previewSpritePath = previewSpritePath,
                 previewTrackJsonPath = previewTrackJsonPath,
-                modifier = Modifier
-                    .align(Alignment.TopStart)
-                    .offset(
-                        x = with(density) {
-                            trackThumbOffsetPx(
-                                shownFraction = dragFraction,
-                                barWidthPx = barWidthPx,
-                                thumbWidthPx = 96.dp.toPx(),
-                            ).toDp()
-                        },
-                    ),
+                modifier =
+                    Modifier.align(Alignment.TopStart)
+                        .offset(
+                            x =
+                                with(density) {
+                                    trackThumbOffsetPx(
+                                            shownFraction = dragFraction,
+                                            barWidthPx = barWidthPx,
+                                            thumbWidthPx = 96.dp.toPx(),
+                                        )
+                                        .toDp()
+                                }
+                        ),
             )
         }
         Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(3.dp)
-                .align(if (isDragging) Alignment.BottomCenter else Alignment.Center)
-                .background(Color.White.copy(alpha = 0.35f)),
+            modifier =
+                Modifier.fillMaxWidth()
+                    .height(3.dp)
+                    .align(if (isDragging) Alignment.BottomCenter else Alignment.Center)
+                    .background(Color.White.copy(alpha = 0.35f))
         )
         Box(
-            modifier = Modifier
-                .fillMaxWidth(shownFraction.coerceIn(0f, 1f))
-                .height(3.dp)
-                .align(if (isDragging) Alignment.BottomStart else Alignment.CenterStart)
-                .background(accentColor),
-        ) {
-        }
-        segments.forEach { seg ->
-            val (startFraction, widthFraction) = sponsorSegmentFractions(
-                startTimeSec = seg.startTime,
-                endTimeSec = seg.endTime,
-                durationMs = duration,
-            )
-            if (widthFraction <= 0f) return@forEach
-            val offsetDp = with(density) { (startFraction * barWidthPx.toFloat()).toDp() }
-            val widthDp = with(density) { (widthFraction * barWidthPx.toFloat()).coerceAtLeast(2f).toDp() }
-            Box(
-                modifier = Modifier
-                    .offset(x = offsetDp)
-                    .width(widthDp)
+            modifier =
+                Modifier.fillMaxWidth(shownFraction.coerceIn(0f, 1f))
                     .height(3.dp)
                     .align(if (isDragging) Alignment.BottomStart else Alignment.CenterStart)
-                    .background(sponsorBlockColorFor(seg.category).copy(alpha = 0.85f)),
+                    .background(accentColor)
+        ) {}
+        segments.forEach { seg ->
+            val (startFraction, widthFraction) =
+                sponsorSegmentFractions(
+                    startTimeSec = seg.startTime,
+                    endTimeSec = seg.endTime,
+                    durationMs = duration,
+                )
+            if (widthFraction <= 0f) return@forEach
+            val offsetDp = with(density) { (startFraction * barWidthPx.toFloat()).toDp() }
+            val widthDp =
+                with(density) { (widthFraction * barWidthPx.toFloat()).coerceAtLeast(2f).toDp() }
+            Box(
+                modifier =
+                    Modifier.offset(x = offsetDp)
+                        .width(widthDp)
+                        .height(3.dp)
+                        .align(if (isDragging) Alignment.BottomStart else Alignment.CenterStart)
+                        .background(sponsorBlockColorFor(seg.category).copy(alpha = 0.85f))
             )
         }
         Box(
-            modifier = Modifier
-                .align(if (isDragging) Alignment.BottomStart else Alignment.CenterStart)
-                .offset(
-                    x = with(density) {
-                        trackThumbOffsetPx(
-                            shownFraction = shownFraction,
-                            barWidthPx = barWidthPx,
-                            thumbWidthPx = 10.dp.toPx(),
-                        ).toDp()
-                    },
-                ),
+            modifier =
+                Modifier.align(if (isDragging) Alignment.BottomStart else Alignment.CenterStart)
+                    .offset(
+                        x =
+                            with(density) {
+                                trackThumbOffsetPx(
+                                        shownFraction = shownFraction,
+                                        barWidthPx = barWidthPx,
+                                        thumbWidthPx = 10.dp.toPx(),
+                                    )
+                                    .toDp()
+                            }
+                    )
         ) {
-            Box(
-                modifier = Modifier
-                    .size(10.dp)
-                    .background(accentColor, CircleShape),
-            )
+            Box(modifier = Modifier.size(10.dp).background(accentColor, CircleShape))
         }
     }
 }
@@ -201,8 +194,7 @@ internal fun scrubberTapTargetMs(
     durationMs: Long,
     downSegment: SponsorBlockSegmentEntity?,
 ): Long =
-    downSegment?.let { (it.endTime * 1000.0).toLong() }
-        ?: scrubberTargetMs(fraction, durationMs)
+    downSegment?.let { (it.endTime * 1000.0).toLong() } ?: scrubberTargetMs(fraction, durationMs)
 
 internal fun scrubberSegmentAtFraction(
     segments: List<SponsorBlockSegmentEntity>,
@@ -211,11 +203,12 @@ internal fun scrubberSegmentAtFraction(
 ): SponsorBlockSegmentEntity? {
     if (durationMs <= 0L) return null
     return segments.firstOrNull { seg ->
-        val (startFraction, widthFraction) = sponsorSegmentFractions(
-            startTimeSec = seg.startTime,
-            endTimeSec = seg.endTime,
-            durationMs = durationMs,
-        )
+        val (startFraction, widthFraction) =
+            sponsorSegmentFractions(
+                startTimeSec = seg.startTime,
+                endTimeSec = seg.endTime,
+                durationMs = durationMs,
+            )
         fraction >= startFraction && fraction <= startFraction + widthFraction
     }
 }
@@ -233,24 +226,21 @@ internal fun sponsorSegmentFractions(
     return startFraction to widthFraction.coerceAtMost(1f - startFraction)
 }
 
-internal fun trackThumbOffsetPx(
-    shownFraction: Float,
-    barWidthPx: Int,
-    thumbWidthPx: Float,
-): Float {
+internal fun trackThumbOffsetPx(shownFraction: Float, barWidthPx: Int, thumbWidthPx: Float): Float {
     val clamped = shownFraction.coerceIn(0f, 1f)
     val maxOffset = (barWidthPx - thumbWidthPx).coerceAtLeast(0f)
     return ((clamped * barWidthPx) - (thumbWidthPx / 2f)).coerceIn(0f, maxOffset)
 }
 
-private fun sponsorBlockColorFor(category: String): Color = when (category.lowercase()) {
-    "sponsor" -> Color(0xFF00D400)
-    "selfpromo" -> Color(0xFFFFFF00)
-    "interaction" -> Color(0xFF00FFFF)
-    "intro" -> Color(0xFF00FFFF)
-    "outro" -> Color(0xFF0202ED)
-    "preview" -> Color(0xFF008FD6)
-    "music_offtopic" -> Color(0xFFFF9900)
-    "filler" -> Color(0xFF7E7E7E)
-    else -> Color(0xFFAA00AA)
-}
+private fun sponsorBlockColorFor(category: String): Color =
+    when (category.lowercase()) {
+        "sponsor" -> Color(0xFF00D400)
+        "selfpromo" -> Color(0xFFFFFF00)
+        "interaction" -> Color(0xFF00FFFF)
+        "intro" -> Color(0xFF00FFFF)
+        "outro" -> Color(0xFF0202ED)
+        "preview" -> Color(0xFF008FD6)
+        "music_offtopic" -> Color(0xFFFF9900)
+        "filler" -> Color(0xFF7E7E7E)
+        else -> Color(0xFFAA00AA)
+    }

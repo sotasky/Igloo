@@ -32,12 +32,9 @@ fun deriveSubsystem(event: String, fields: Map<String, String>): Subsystem {
     fields["subsystem"]?.let { return Subsystem.fromString(it) }
     return when {
         event.startsWith("outbox_")              -> Subsystem.Outbox
-        event.startsWith("mutation_delta_")      -> Subsystem.Sync
-        event.startsWith("stream_")              -> Subsystem.Sync
+        event.startsWith("android_sync_")        -> Subsystem.Sync
+        event.startsWith("sync_")                -> Subsystem.Sync
         event.startsWith("periodic_sync_")       -> Subsystem.Sync
-        event.startsWith("inbound_")             -> Subsystem.Sync
-        event.startsWith("retention_")           -> Subsystem.Sync
-        event.startsWith("bundle_")              -> Subsystem.Sync
         event.startsWith("media_")               -> Subsystem.Media
         event.startsWith("foreground_")          -> Subsystem.Media
         event.startsWith("cache_")               -> Subsystem.Media

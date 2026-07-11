@@ -23,12 +23,12 @@ var ErrRefreshTokenUnknown = errors.New("refresh token unknown")
 
 // AuthSession is the row shape returned from lookup calls.
 type AuthSession struct {
-	SessionID       string
-	Username        string
-	CreatedAtMs     int64
-	LastActiveAtMs  int64
-	Revoked         bool
-	RevokeReason    string
+	SessionID      string
+	Username       string
+	CreatedAtMs    int64
+	LastActiveAtMs int64
+	Revoked        bool
+	RevokeReason   string
 }
 
 // NewRandomID returns a 128-bit hex-encoded random identifier for use as

@@ -3,39 +3,62 @@ package main
 import (
 	"archive/zip"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/screwys/igloo/internal/config"
 	"github.com/screwys/igloo/internal/db"
-	"github.com/screwys/igloo/internal/model"
+	"github.com/screwys/igloo/internal/restore"
+	"github.com/screwys/igloo/internal/storage"
 )
+
+func writeStateRootMarker(t *testing.T, root string) {
+	t.Helper()
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".igloo-state-root"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestRunImportsCurrentFullExportZipFreshInstall(t *testing.T) {
 	dataDir := t.TempDir()
+	writeStateRootMarker(t, dataDir)
 	configDir := t.TempDir()
 	t.Setenv("IGLOO_DATA_DIR", dataDir)
 	t.Setenv("IGLOO_CONFIG_DIR", configDir)
 	repoDir := filepath.Clean("../..")
 	t.Setenv("IGLOO_REPO_DIR", repoDir)
+	if err := os.WriteFile(filepath.Join(configDir, "config.json"), []byte(`{"enabled_platforms":`), 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	zipPath := filepath.Join(t.TempDir(), "igloo-full-test.zip")
 	writeFullExportZipFixture(t, zipPath)
 
 	var stdout, stderr strings.Builder
-	if code := run([]string{"--replace", zipPath}, &stdout, &stderr); code != 0 {
+	if code := run([]string{zipPath}, &stdout, &stderr); code != 0 {
 		t.Fatalf("run exit = %d, stderr=%s stdout=%s", code, stderr.String(), stdout.String())
 	}
-	if !strings.Contains(stdout.String(), "format=full_export_zip") {
+	if !strings.Contains(stdout.String(), "format=zip_backup") {
 		t.Fatalf("stdout missing format summary: %s", stdout.String())
 	}
-	if !strings.Contains(stdout.String(), "owner=user:admin") {
-		t.Fatalf("stdout missing export owner summary: %s", stdout.String())
+	if !restore.HasPending(dataDir) {
+		t.Fatal("import command did not leave a pending startup restore")
+	}
+	if _, err := os.Stat(filepath.Join(dataDir, "igloo.db")); !os.IsNotExist(err) {
+		t.Fatalf("import command applied database before startup: %v", err)
+	}
+	if err := restore.ApplyPending(config.Load()); err != nil {
+		t.Fatalf("apply staged restore: %v", err)
 	}
 
-	store, err := db.Open(filepath.Join(dataDir, "igloo.db"), dataDir)
+	store, err := db.OpenPath(filepath.Join(dataDir, "igloo.db"), dataDir)
 	if err != nil {
 		t.Fatalf("open imported db: %v", err)
 	}
@@ -43,21 +66,22 @@ func TestRunImportsCurrentFullExportZipFreshInstall(t *testing.T) {
 		_ = store.Close()
 	}()
 
-	var categoryUser, bookmarkUser, likeUser string
-	if err := store.QueryRow(`SELECT user_id FROM bookmark_categories WHERE name='Watch Later'`).Scan(&categoryUser); err != nil {
+	var categories, bookmarks, likes int
+	if err := store.QueryRow(`SELECT COUNT(*) FROM bookmark_categories WHERE name='Watch Later'`).Scan(&categories); err != nil {
 		t.Fatalf("category missing: %v", err)
 	}
-	if err := store.QueryRow(`SELECT user_id FROM bookmarks WHERE video_id='booked_video'`).Scan(&bookmarkUser); err != nil {
+	if err := store.QueryRow(`SELECT COUNT(*) FROM bookmarks WHERE video_id='test_bookmarked_video'`).Scan(&bookmarks); err != nil {
 		t.Fatalf("bookmark missing: %v", err)
 	}
-	if err := store.QueryRow(`SELECT username FROM feed_likes WHERE tweet_id='liked_post'`).Scan(&likeUser); err != nil {
+	if err := store.QueryRow(`SELECT COUNT(*) FROM feed_likes WHERE tweet_id='liked_post'`).Scan(&likes); err != nil {
 		t.Fatalf("like missing: %v", err)
 	}
-	if categoryUser != "admin" || bookmarkUser != "admin" || likeUser != "admin" {
-		t.Fatalf("fresh import owner = category %q bookmark %q like %q, want admin", categoryUser, bookmarkUser, likeUser)
+	if categories != 1 || bookmarks != 1 || likes != 1 {
+		t.Fatalf("fresh import state = categories %d bookmarks %d likes %d, want one each", categories, bookmarks, likes)
 	}
 
 	restoredConfig := map[string]string{
+		"config.json":                 `{"enabled_platforms":["youtube"]}`,
 		"custom.env":                  "CUSTOM_SECRET=example\n",
 		"auth_users.json":             `{"admin":{"role":"admin"}}` + "\n",
 		"auth_secret":                 "secret-key",
@@ -92,85 +116,58 @@ func TestRunImportsCurrentFullExportZipFreshInstall(t *testing.T) {
 		}
 	}
 
-	var mediaRel, videoPath string
-	if err := store.QueryRow(`SELECT file_path FROM media_files WHERE owner_type='feed_media' AND owner_id='booked_video' AND media_index=0`).Scan(&mediaRel); err != nil {
-		t.Fatalf("media_files row missing: %v", err)
+	if _, err := store.GetChannelByID("youtube_test_fresh_channel"); err != nil {
+		t.Fatalf("imported channel missing: %v", err)
 	}
-	if err := store.QueryRow(`SELECT file_path FROM videos WHERE video_id='booked_video'`).Scan(&videoPath); err != nil {
-		t.Fatalf("video row missing: %v", err)
-	}
-	if mediaRel != filepath.ToSlash(filepath.Join("media", "imported", "bookmarks", "booked_video", "000.mp4")) {
-		t.Fatalf("media file_path = %q", mediaRel)
-	}
-	if videoPath != filepath.Join(dataDir, mediaRel) {
-		t.Fatalf("video file_path = %q, want %q", videoPath, filepath.Join(dataDir, mediaRel))
-	}
-	restored, err := os.ReadFile(filepath.Join(dataDir, mediaRel))
-	if err != nil {
-		t.Fatalf("read restored media: %v", err)
-	}
-	if string(restored) != "bookmarked-video-bytes" {
-		t.Fatalf("restored media = %q", string(restored))
-	}
-	restoredAvatar, err := os.ReadFile(filepath.Join(dataDir, "thumbnails", "avatars", "youtube_UCfresh.jpg"))
-	if err != nil {
-		t.Fatalf("read restored avatar: %v", err)
-	}
-	if string(restoredAvatar) != "avatar-bytes" {
-		t.Fatalf("restored avatar = %q", string(restoredAvatar))
+	if video, err := store.GetVideo("test_bookmarked_video"); err != nil || video == nil {
+		t.Fatalf("imported video missing: video=%#v err=%v", video, err)
 	}
 
-	channels, _, err := store.ListChannelsForDelta(0, 500)
-	if err != nil {
-		t.Fatalf("ListChannelsForDelta: %v", err)
+	if err := store.Close(); err != nil {
+		t.Fatalf("close imported database: %v", err)
 	}
-	if !hasDeltaChannel(channels, "youtube_UCfresh") {
-		t.Fatalf("imported channel missing from fresh delta: %#v", channels)
-	}
-	videos, _, err := store.ListVideosForDelta([]string{"youtube"}, 0, 500)
-	if err != nil {
-		t.Fatalf("ListVideosForDelta: %v", err)
-	}
-	if !hasDeltaVideo(videos, "booked_video") {
-		t.Fatalf("imported video missing from fresh delta: %#v", videos)
-	}
-
-	if code := run([]string{"--replace", zipPath}, &stdout, &stderr); code != 0 {
+	stdout.Reset()
+	stderr.Reset()
+	if code := run([]string{zipPath}, &stdout, &stderr); code != 0 {
 		t.Fatalf("second run exit = %d, stderr=%s stdout=%s", code, stderr.String(), stdout.String())
 	}
-	var bookmarkCount, mediaCount int
-	if err := store.QueryRow(`SELECT COUNT(*) FROM bookmarks WHERE video_id='booked_video'`).Scan(&bookmarkCount); err != nil {
+	if err := restore.ApplyPending(config.Load()); err != nil {
+		t.Fatalf("apply second staged restore: %v", err)
+	}
+	store, err = db.OpenPath(filepath.Join(dataDir, "igloo.db"), dataDir)
+	if err != nil {
+		t.Fatalf("reopen imported db: %v", err)
+	}
+	var bookmarkCount int
+	if err := store.QueryRow(`SELECT COUNT(*) FROM bookmarks WHERE video_id='test_bookmarked_video'`).Scan(&bookmarkCount); err != nil {
 		t.Fatalf("bookmark count: %v", err)
 	}
-	if err := store.QueryRow(`SELECT COUNT(*) FROM media_files WHERE owner_type='feed_media' AND owner_id='booked_video'`).Scan(&mediaCount); err != nil {
-		t.Fatalf("media count: %v", err)
-	}
-	if bookmarkCount != 1 || mediaCount != 1 {
-		t.Fatalf("after rerun bookmarkCount=%d mediaCount=%d, want 1/1", bookmarkCount, mediaCount)
+	if bookmarkCount != 1 {
+		t.Fatalf("after rerun bookmarkCount=%d, want 1", bookmarkCount)
 	}
 }
 
-func hasDeltaChannel(channels []model.Channel, id string) bool {
-	for _, ch := range channels {
-		if ch.ChannelID == id {
-			return true
-		}
-	}
-	return false
-}
+func TestRunDoesNotProvisionMissingStateRoot(t *testing.T) {
+	base := t.TempDir()
+	dataDir := filepath.Join(base, "missing-state")
+	t.Setenv("IGLOO_DATA_DIR", dataDir)
+	t.Setenv("IGLOO_CONFIG_DIR", filepath.Join(base, "config"))
+	t.Setenv("IGLOO_REPO_DIR", filepath.Clean("../.."))
 
-func hasDeltaVideo(videos []model.Video, id string) bool {
-	for _, v := range videos {
-		if v.VideoID == id {
-			return true
-		}
+	var stdout, stderr strings.Builder
+	if code := run([]string{filepath.Join(base, "missing.zip")}, &stdout, &stderr); code != 1 {
+		t.Fatalf("run exit = %d, stderr=%s stdout=%s", code, stderr.String(), stdout.String())
 	}
-	return false
+	if !strings.Contains(stderr.String(), "state root") {
+		t.Fatalf("stderr did not identify the unavailable state root: %s", stderr.String())
+	}
+	if _, err := os.Stat(dataDir); !os.IsNotExist(err) {
+		t.Fatalf("import created the missing state root: %v", err)
+	}
 }
 
 func writeFullExportZipFixture(t *testing.T, path string) {
 	t.Helper()
-
 	out, err := os.Create(path)
 	if err != nil {
 		t.Fatalf("create zip: %v", err)
@@ -185,14 +182,13 @@ func writeFullExportZipFixture(t *testing.T, path string) {
 		t.Fatalf("create export.json: %v", err)
 	}
 	cfg := db.ConfigExport{
-		Version:    1,
-		UserID:     "admin",
+		Version:    db.ConfigExportVersion,
 		ExportedAt: time.Unix(1700000000, 0).UTC(),
 		Settings: map[string]string{
 			"starting_page": "feed",
 		},
 		Subscriptions: []db.ChannelExport{{
-			ChannelID: "youtube_UCfresh",
+			ChannelID: "youtube_test_fresh_channel",
 			Name:      "Fresh Channel",
 			Platform:  "youtube",
 			IsStarred: true,
@@ -201,7 +197,7 @@ func writeFullExportZipFixture(t *testing.T, path string) {
 			Name: "Watch Later",
 		}},
 		Bookmarks: []db.BookmarkExport{{
-			VideoID:      "booked_video",
+			VideoID:      "test_bookmarked_video",
 			CategoryName: "Watch Later",
 			CustomTitle:  "Saved clip",
 		}},
@@ -213,10 +209,10 @@ func writeFullExportZipFixture(t *testing.T, path string) {
 			PublishedAt:  "2026-05-01T12:00:00Z",
 		}},
 		BookmarkedVideos: []db.BookmarkedVideoExport{{
-			VideoID:      "booked_video",
-			ChannelID:    "youtube_UCfresh",
+			VideoID:      "test_bookmarked_video",
+			ChannelID:    "youtube_test_fresh_channel",
+			OwnerKind:    "youtube_video",
 			Title:        "Saved Video",
-			Platform:     "youtube",
 			Duration:     42,
 			PublishedAt:  "2026-05-01T12:00:00Z",
 			CategoryName: "Watch Later",
@@ -225,15 +221,48 @@ func writeFullExportZipFixture(t *testing.T, path string) {
 	if err := json.NewEncoder(exportFile).Encode(cfg); err != nil {
 		t.Fatalf("encode export.json: %v", err)
 	}
+	sourceStateRoot := t.TempDir()
+	writeStateRootMarker(t, sourceStateRoot)
+	sourceLayout, err := storage.New(sourceStateRoot, "")
+	if err != nil {
+		t.Fatalf("create source layout: %v", err)
+	}
+	sourceStore, err := db.Open(sourceLayout)
+	if err != nil {
+		t.Fatalf("open source database: %v", err)
+	}
+	if _, err := sourceStore.ImportConfig(cfg, true); err != nil {
+		_ = sourceStore.Close()
+		t.Fatalf("seed source database: %v", err)
+	}
+	if err := sourceStore.Close(); err != nil {
+		t.Fatalf("close source database: %v", err)
+	}
+	databaseFile, err := zw.Create(config.DatabaseFilename)
+	if err != nil {
+		t.Fatalf("create database entry: %v", err)
+	}
+	databaseSource, err := os.Open(sourceLayout.DatabasePath())
+	if err != nil {
+		t.Fatalf("open source database file: %v", err)
+	}
+	if _, err := io.Copy(databaseFile, databaseSource); err != nil {
+		_ = databaseSource.Close()
+		t.Fatalf("write database entry: %v", err)
+	}
+	if err := databaseSource.Close(); err != nil {
+		t.Fatalf("close source database file: %v", err)
+	}
 	runtimeFile, err := zw.Create("runtime.json")
 	if err != nil {
 		t.Fatalf("create runtime.json: %v", err)
 	}
-	if _, err := runtimeFile.Write([]byte(`{"version":1,"data_dir":"/old/data","config_dir":"/old/config","repo_dir":"/old/repo"}`)); err != nil {
+	if _, err := runtimeFile.Write([]byte(`{"version":2,"data_dir":"/old/data","config_dir":"/old/config","repo_dir":"/old/repo"}`)); err != nil {
 		t.Fatalf("write runtime.json: %v", err)
 	}
 	configEntries := map[string]string{
 		"config/nginx.conf":                  "pid /old/data/nginx.pid;\nssl_certificate /old/config/server.crt;\nroot /old/repo/static;\n",
+		"config/config.json":                 `{"enabled_platforms":["youtube"]}`,
 		"config/custom.env":                  "CUSTOM_SECRET=example\n",
 		"config/auth_users.json":             `{"admin":{"role":"admin"}}` + "\n",
 		"config/auth_secret":                 "secret-key",
@@ -247,20 +276,6 @@ func writeFullExportZipFixture(t *testing.T, path string) {
 		if _, err := f.Write([]byte(content)); err != nil {
 			t.Fatalf("write %s: %v", name, err)
 		}
-	}
-	mediaFile, err := zw.Create("media/bookmarks/booked_video/000.mp4")
-	if err != nil {
-		t.Fatalf("create media entry: %v", err)
-	}
-	if _, err := mediaFile.Write([]byte("bookmarked-video-bytes")); err != nil {
-		t.Fatalf("write media entry: %v", err)
-	}
-	avatarFile, err := zw.Create("media/avatars/youtube_UCfresh.jpg")
-	if err != nil {
-		t.Fatalf("create avatar entry: %v", err)
-	}
-	if _, err := avatarFile.Write([]byte("avatar-bytes")); err != nil {
-		t.Fatalf("write avatar entry: %v", err)
 	}
 	if err := zw.Close(); err != nil {
 		t.Fatalf("close zip: %v", err)

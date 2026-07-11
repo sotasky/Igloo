@@ -19,7 +19,6 @@ interface VideoReadDao {
         SELECT v.*,
                wh.playback_position AS wh_playback_position,
                wh.duration          AS wh_duration,
-               wh.last_watched      AS wh_last_watched,
                c.name               AS channel_name,
                c.source_id          AS channel_source_id
         FROM videos v
@@ -38,7 +37,6 @@ interface VideoReadDao {
         SELECT v.*,
                wh.playback_position AS wh_playback_position,
                wh.duration          AS wh_duration,
-               wh.last_watched      AS wh_last_watched,
                c.name               AS channel_name,
                c.source_id          AS channel_source_id
         FROM videos v

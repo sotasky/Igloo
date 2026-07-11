@@ -263,7 +263,7 @@ func TestHandlePageShortsStartsAtOldestMoment(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := srv.db.ExecRaw(
-		`INSERT INTO channel_follows (user_id, channel_id, followed_at) VALUES ('', ?, 1)`,
+		`INSERT INTO channel_follows (channel_id, followed_at) VALUES (?, 1)`,
 		"tiktok_demo",
 	); err != nil {
 		t.Fatal(err)
@@ -271,8 +271,8 @@ func TestHandlePageShortsStartsAtOldestMoment(t *testing.T) {
 	for i := 1; i <= 3; i++ {
 		videoID := "short_00" + string(rune('0'+i))
 		if err := srv.db.ExecRaw(
-			`INSERT INTO videos (video_id, channel_id, title, duration, published_at)
-			 VALUES (?, ?, ?, 0, ?)`,
+			`INSERT INTO videos (video_id, channel_id, owner_kind, title, duration, published_at)
+			 VALUES (?, ?, 'tiktok_video', ?, 0, ?)`,
 			videoID, "tiktok_demo", "Short 00"+string(rune('0'+i)), i,
 		); err != nil {
 			t.Fatal(err)

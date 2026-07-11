@@ -3,8 +3,6 @@ package main
 import (
 	"database/sql"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 )
@@ -20,187 +18,54 @@ func androidSyncStatus(minutes int) (string, error) {
 
 	var sb strings.Builder
 	sb.WriteString("=== Android Sync Status ===\n\n")
-	writeAndroidSyncGenerations(&sb, conn)
-	latestID := writeAndroidSyncLatestGeneration(&sb, conn)
-	if latestID != "" {
-		writeAndroidSyncLatestAssets(&sb, conn, latestID)
-	}
+	writeAndroidSyncClockAndHeads(&sb, conn)
 	writeAndroidSyncHealthReports(&sb, conn)
 	writeAndroidSyncInventory(&sb, conn)
+	writeAndroidSyncMissingSamples(&sb, conn)
 	writeAndroidSyncClientFailureSummary(&sb, minutes)
 	return strings.TrimRight(sb.String(), "\n"), nil
 }
 
-func writeAndroidSyncGenerations(sb *strings.Builder, conn *sql.DB) {
-	sb.WriteString("Generations:\n")
+func writeAndroidSyncClockAndHeads(sb *strings.Builder, conn *sql.DB) {
+	sb.WriteString("Convergence stream:\n")
+	var epoch string
+	var revision, heads int64
+	err := conn.QueryRow(`
+		SELECT c.epoch, c.revision, (SELECT COUNT(*) FROM android_sync_heads)
+		FROM android_sync_clock c
+		WHERE c.id = 1
+	`).Scan(&epoch, &revision, &heads)
+	if err != nil {
+		fmt.Fprintf(sb, "  unavailable: %v\n\n", err)
+		return
+	}
+	fmt.Fprintf(sb, "  epoch=%s revision=%d compact_heads=%d\n", epoch, revision, heads)
 	rows, err := conn.Query(`
-		SELECT status, COUNT(*), COALESCE(MAX(created_at_ms), 0)
-		FROM android_sync_generations
-		GROUP BY status
-		ORDER BY COUNT(*) DESC, status
+		SELECT owner_kind, COUNT(*), COALESCE(MAX(revision), 0)
+		FROM android_sync_heads
+		GROUP BY owner_kind
+		ORDER BY owner_kind
 	`)
 	if err != nil {
-		fmt.Fprintf(sb, "  unavailable: %v\n\n", err)
+		fmt.Fprintf(sb, "  head summary unavailable: %v\n\n", err)
 		return
 	}
-	defer func() {
-		_ = rows.Close()
-	}()
-	wrote := false
+	defer func() { _ = rows.Close() }()
 	for rows.Next() {
-		var status string
-		var count int
-		var newestMs int64
-		if err := rows.Scan(&status, &count, &newestMs); err != nil {
-			continue
+		var kind string
+		var count, latest int64
+		if err := rows.Scan(&kind, &count, &latest); err == nil {
+			fmt.Fprintf(sb, "  %-20s count=%d latest_revision=%d\n", kind, count, latest)
 		}
-		wrote = true
-		fmt.Fprintf(sb, "  %-10s count=%d newest=%s\n", status, count, formatMillis(newestMs))
-	}
-	if !wrote {
-		sb.WriteString("  none\n")
 	}
 	sb.WriteString("\n")
-}
-
-func writeAndroidSyncLatestGeneration(sb *strings.Builder, conn *sql.DB) string {
-	sb.WriteString("Latest generation:\n")
-	var (
-		id            string
-		status        string
-		createdAtMs   int64
-		itemCount     int64
-		assetCount    int64
-		readyCount    int64
-		missingCount  int64
-		totalBytes    int64
-		contentCounts string
-		assetCounts   string
-	)
-	err := conn.QueryRow(`
-		SELECT generation_id, status, created_at_ms, item_count, asset_count,
-		       ready_asset_count, server_missing_asset_count, total_bytes,
-		       content_counts_json, asset_counts_json
-		FROM android_sync_generations
-		ORDER BY created_at_ms DESC, generation_id DESC
-		LIMIT 1
-	`).Scan(&id, &status, &createdAtMs, &itemCount, &assetCount, &readyCount, &missingCount, &totalBytes, &contentCounts, &assetCounts)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			sb.WriteString("  none\n\n")
-			return ""
-		}
-		fmt.Fprintf(sb, "  unavailable: %v\n\n", err)
-		return ""
-	}
-	fmt.Fprintf(sb, "  id: %s\n", id)
-	fmt.Fprintf(sb, "  status: %s\n", status)
-	fmt.Fprintf(sb, "  created: %s\n", formatMillis(createdAtMs))
-	fmt.Fprintf(sb, "  counts: items=%d assets=%d ready=%d server_missing=%d bytes=%s\n", itemCount, assetCount, readyCount, missingCount, formatSize(totalBytes))
-	if contentCounts != "" && contentCounts != "{}" {
-		fmt.Fprintf(sb, "  content_counts_json: %s\n", compactLong(contentCounts, 300))
-	}
-	if assetCounts != "" && assetCounts != "{}" {
-		fmt.Fprintf(sb, "  asset_counts_json: %s\n", compactLong(assetCounts, 300))
-	}
-	sb.WriteString("\n")
-	return id
-}
-
-func writeAndroidSyncLatestAssets(sb *strings.Builder, conn *sql.DB, generationID string) {
-	sb.WriteString("Latest generation assets:\n")
-	rows, err := conn.Query(`
-		SELECT state, asset_kind, COUNT(*)
-		FROM android_sync_assets
-		WHERE generation_id = ?
-		GROUP BY state, asset_kind
-		ORDER BY state, COUNT(*) DESC, asset_kind
-	`, generationID)
-	if err != nil {
-		fmt.Fprintf(sb, "  unavailable: %v\n\n", err)
-		return
-	}
-	defer func() {
-		_ = rows.Close()
-	}()
-	wrote := false
-	for rows.Next() {
-		var state, kind string
-		var count int
-		if err := rows.Scan(&state, &kind, &count); err != nil {
-			continue
-		}
-		wrote = true
-		fmt.Fprintf(sb, "  %-15s %-20s %d\n", state, kind, count)
-	}
-	if !wrote {
-		sb.WriteString("  none\n")
-	}
-	writeAndroidSyncServerMissingSamples(sb, conn, generationID)
-	sb.WriteString("\n")
-}
-
-func writeAndroidSyncServerMissingSamples(sb *strings.Builder, conn *sql.DB, generationID string) {
-	rows, err := conn.Query(`
-		SELECT asset_kind, owner_kind, COUNT(*)
-		FROM android_sync_assets
-		WHERE generation_id = ? AND state = 'server_missing'
-		GROUP BY asset_kind, owner_kind
-		ORDER BY COUNT(*) DESC, asset_kind, owner_kind
-		LIMIT 10
-	`, generationID)
-	if err != nil {
-		return
-	}
-	defer func() {
-		_ = rows.Close()
-	}()
-	var groups []string
-	for rows.Next() {
-		var kind, ownerKind string
-		var count int
-		if err := rows.Scan(&kind, &ownerKind, &count); err != nil {
-			continue
-		}
-		groups = append(groups, fmt.Sprintf("%s/%s=%d", kind, ownerKind, count))
-	}
-	if len(groups) > 0 {
-		fmt.Fprintf(sb, "  server_missing groups: %s\n", strings.Join(groups, ", "))
-	}
-
-	samples, err := conn.Query(`
-		SELECT asset_kind, owner_kind, owner_id, media_index, required_reason
-		FROM android_sync_assets
-		WHERE generation_id = ? AND state = 'server_missing'
-		ORDER BY asset_kind, owner_kind, seq
-		LIMIT 8
-	`, generationID)
-	if err != nil {
-		return
-	}
-	defer func() {
-		_ = samples.Close()
-	}()
-	wroteHeader := false
-	for samples.Next() {
-		var kind, ownerKind, ownerID, reason string
-		var mediaIndex int
-		if err := samples.Scan(&kind, &ownerKind, &ownerID, &mediaIndex, &reason); err != nil {
-			continue
-		}
-		if !wroteHeader {
-			sb.WriteString("  server_missing samples:\n")
-			wroteHeader = true
-		}
-		fmt.Fprintf(sb, "    %s/%s owner=%s media_index=%d reason=%s\n", kind, ownerKind, ownerID, mediaIndex, reason)
-	}
 }
 
 func writeAndroidSyncHealthReports(sb *strings.Builder, conn *sql.DB) {
-	sb.WriteString("Recent health reports:\n")
+	sb.WriteString("Recent cursor health reports:\n")
 	rows, err := conn.Query(`
-		SELECT generation_id, reported_at_ms, verified_assets, pending_assets,
-		       failed_assets, missing_assets, total_assets, verified_bytes
+		SELECT cursor, reported_at_ms, verified_assets, pending_assets,
+		       missing_assets, total_assets, verified_bytes
 		FROM android_sync_health_reports
 		ORDER BY reported_at_ms DESC, id DESC
 		LIMIT 5
@@ -209,31 +74,17 @@ func writeAndroidSyncHealthReports(sb *strings.Builder, conn *sql.DB) {
 		fmt.Fprintf(sb, "  unavailable: %v\n\n", err)
 		return
 	}
-	defer func() {
-		_ = rows.Close()
-	}()
+	defer func() { _ = rows.Close() }()
 	wrote := false
 	for rows.Next() {
-		var generationID string
-		var reportedAtMs int64
-		var verified, pending, failed, missing, total int64
-		var verifiedBytes int64
-		if err := rows.Scan(&generationID, &reportedAtMs, &verified, &pending, &failed, &missing, &total, &verifiedBytes); err != nil {
+		var cursor string
+		var reportedAtMs, verified, pending, missing, total, verifiedBytes int64
+		if err := rows.Scan(&cursor, &reportedAtMs, &verified, &pending, &missing, &total, &verifiedBytes); err != nil {
 			continue
 		}
 		wrote = true
-		fmt.Fprintf(
-			sb,
-			"  %s reported=%s verified=%d pending=%d failed=%d missing=%d total=%d bytes=%s\n",
-			generationID,
-			formatMillis(reportedAtMs),
-			verified,
-			pending,
-			failed,
-			missing,
-			total,
-			formatSize(verifiedBytes),
-		)
+		fmt.Fprintf(sb, "  cursor=%s reported=%s verified=%d pending=%d missing=%d total=%d bytes=%s\n",
+			compactLong(cursor, 80), formatMillis(reportedAtMs), verified, pending, missing, total, formatSize(verifiedBytes))
 	}
 	if !wrote {
 		sb.WriteString("  none\n")
@@ -241,6 +92,35 @@ func writeAndroidSyncHealthReports(sb *strings.Builder, conn *sql.DB) {
 	sb.WriteString("\n")
 }
 
+func writeAndroidSyncMissingSamples(sb *strings.Builder, conn *sql.DB) {
+	sb.WriteString("Canonical missing assets:\n")
+	rows, err := conn.Query(`
+		SELECT asset_kind, owner_kind, COUNT(*)
+		FROM assets
+		WHERE state IN ('server_missing', 'permanent_missing')
+		GROUP BY asset_kind, owner_kind
+		ORDER BY COUNT(*) DESC, asset_kind, owner_kind
+		LIMIT 10
+	`)
+	if err != nil {
+		fmt.Fprintf(sb, "  unavailable: %v\n\n", err)
+		return
+	}
+	defer func() { _ = rows.Close() }()
+	wrote := false
+	for rows.Next() {
+		var kind, ownerKind string
+		var count int
+		if err := rows.Scan(&kind, &ownerKind, &count); err == nil {
+			wrote = true
+			fmt.Fprintf(sb, "  %s/%s=%d\n", kind, ownerKind, count)
+		}
+	}
+	if !wrote {
+		sb.WriteString("  none\n")
+	}
+	sb.WriteString("\n")
+}
 func writeAndroidSyncInventory(sb *strings.Builder, conn *sql.DB) {
 	sb.WriteString("Current asset inventory:\n")
 	rows, err := conn.Query(`
@@ -276,24 +156,16 @@ func writeAndroidSyncInventory(sb *strings.Builder, conn *sql.DB) {
 
 func writeAndroidSyncClientFailureSummary(sb *strings.Builder, minutes int) {
 	sb.WriteString("Recent Android client sync failures:\n")
-	assetFailures, assetStale, metadataRetries, err := doctorAndroidSyncClientFailureCounts(minutes)
+	metadataRetries, err := doctorAndroidSyncMetadataRetryCounts(minutes)
 	if err != nil {
 		fmt.Fprintf(sb, "  unavailable: %v\n", err)
 		return
 	}
-	if len(assetFailures) == 0 && len(assetStale) == 0 && len(metadataRetries) == 0 {
+	if len(metadataRetries) == 0 {
 		sb.WriteString("  none\n")
 		return
 	}
-	if len(assetFailures) > 0 {
-		fmt.Fprintf(sb, "  asset_failed %s\n", strings.Join(assetFailures, ", "))
-	}
-	if len(assetStale) > 0 {
-		fmt.Fprintf(sb, "  asset_stale %s\n", strings.Join(assetStale, ", "))
-	}
-	if len(metadataRetries) > 0 {
-		fmt.Fprintf(sb, "  metadata_retry %s\n", strings.Join(metadataRetries, ", "))
-	}
+	fmt.Fprintf(sb, "  metadata_retry %s\n", strings.Join(metadataRetries, ", "))
 }
 
 func identityMediaStatus(channelID, platform, handle, tweetID string, limit int) (string, error) {
@@ -324,9 +196,8 @@ func identityMediaStatus(channelID, platform, handle, tweetID string, limit int)
 		return sb.String(), nil
 	}
 
-	dataDir := filepath.Dir(getDBPath())
 	for _, candidate := range candidates {
-		writeIdentityCandidateStatus(&sb, conn, dataDir, candidate, limit)
+		writeIdentityCandidateStatus(&sb, conn, candidate, limit)
 	}
 	return strings.TrimRight(sb.String(), "\n"), nil
 }
@@ -380,7 +251,7 @@ func writeTweetIdentityContext(sb *strings.Builder, conn *sql.DB, tweetID string
 		       quote_author_handle, reply_to_handle, published_at, fetched_at,
 		       author_display_name, quote_author_display_name,
 		       author_avatar_url, quote_author_avatar_url
-		FROM feed_items
+		FROM feed_items_resolved
 		WHERE tweet_id = ?
 	`, tweetID).Scan(
 		&row.sourceHandle,
@@ -440,7 +311,7 @@ func writeTweetIdentityContext(sb *strings.Builder, conn *sql.DB, tweetID string
 	return candidates, nil
 }
 
-func writeIdentityCandidateStatus(sb *strings.Builder, conn *sql.DB, dataDir string, candidate identityCandidate, limit int) {
+func writeIdentityCandidateStatus(sb *strings.Builder, conn *sql.DB, candidate identityCandidate, limit int) {
 	if candidate.channelID == "" && candidate.handle == "" {
 		return
 	}
@@ -449,19 +320,28 @@ func writeIdentityCandidateStatus(sb *strings.Builder, conn *sql.DB, dataDir str
 
 	profile := loadProfileStatus(conn, candidate)
 	if profile.found {
-		fmt.Fprintf(sb, "  profile: channel_id=%s platform=%s handle=%s tombstone=%d fail_count=%d fetched=%s next_retry=%s\n",
+		fmt.Fprintf(sb, "  profile: channel_id=%s platform=%s handle=%s tombstone=%d fetched=%s\n",
 			profile.channelID,
 			profile.platform,
 			profile.handle,
 			profile.tombstone,
-			profile.failCount,
 			formatMillis(profile.fetchedAt),
-			formatMillis(profile.nextRetryAt),
 		)
 		if profile.displayName != "" {
 			fmt.Fprintf(sb, "  display_name: %s\n", profile.displayName)
 		}
-		fmt.Fprintf(sb, "  profile urls: avatar=%t banner=%t\n", profile.avatarURL != "", profile.bannerURL != "")
+		if profile.jobFound {
+			fmt.Fprintf(sb, "  profile_job: requested=%d completed=%d attempts=%d next_attempt=%s leased=%t lease_until=%s error=%s\n",
+				profile.requestedRevision, profile.completedRevision, profile.attempts,
+				formatMillis(profile.nextAttemptAtMs), profile.leaseOwner != "",
+				formatMillis(profile.leaseUntilMs), emptyDash(profile.lastError))
+		} else {
+			sb.WriteString("  profile_job: missing\n")
+		}
+		fmt.Fprintf(sb, "  profile assets: avatar=%s banner=%s\n",
+			emptyDash(profile.avatar.state), emptyDash(profile.banner.state))
+		writeProfileAssetStatus(sb, "avatar", profile.avatar)
+		writeProfileAssetStatus(sb, "banner", profile.banner)
 		candidate.channelID = profile.channelID
 		if candidate.handle == "" {
 			candidate.handle = profile.handle
@@ -470,60 +350,88 @@ func writeIdentityCandidateStatus(sb *strings.Builder, conn *sql.DB, dataDir str
 		sb.WriteString("  profile: missing\n")
 	}
 
-	avatarPath, hasAvatarFile := firstProfileMediaPath(dataDir, "avatars", candidate.channelID)
-	bannerPath, hasBannerFile := firstProfileMediaPath(dataDir, "banners", candidate.channelID)
-	fmt.Fprintf(sb, "  cached files: avatar=%t", hasAvatarFile)
-	if hasAvatarFile {
-		fmt.Fprintf(sb, " (%s)", avatarPath)
-	}
-	fmt.Fprintf(sb, " banner=%t", hasBannerFile)
-	if hasBannerFile {
-		fmt.Fprintf(sb, " (%s)", bannerPath)
-	}
-	sb.WriteString("\n")
-
-	writeIdentityAssetRows(sb, conn, candidate.channelID)
-	writeIdentityChannelQueue(sb, conn, candidate.channelID)
 	writeIdentityFeedTimeline(sb, conn, candidate, limit)
 	sb.WriteString("\n")
 }
 
 type profileStatus struct {
-	found       bool
-	channelID   string
-	platform    string
-	handle      string
-	displayName string
-	avatarURL   string
-	bannerURL   string
-	fetchedAt   int64
-	nextRetryAt int64
-	failCount   int
-	tombstone   int
+	found             bool
+	channelID         string
+	platform          string
+	handle            string
+	displayName       string
+	fetchedAt         int64
+	tombstone         int
+	jobFound          bool
+	requestedRevision int64
+	completedRevision int64
+	attempts          int
+	nextAttemptAtMs   int64
+	leaseOwner        string
+	leaseUntilMs      int64
+	lastError         string
+	avatar            profileAssetStatus
+	banner            profileAssetStatus
+}
+
+type profileAssetStatus struct {
+	state     string
+	filePath  string
+	sourceURL string
+	errorKind string
+	updatedAt int64
 }
 
 func loadProfileStatus(conn *sql.DB, candidate identityCandidate) profileStatus {
 	var profile profileStatus
 	err := conn.QueryRow(`
-		SELECT channel_id, platform, COALESCE(handle, ''), COALESCE(display_name, ''),
-		       COALESCE(avatar_url, ''), COALESCE(banner_url, ''),
-		       fetched_at, next_retry_at, COALESCE(fail_count, 0), COALESCE(tombstone, 0)
-		FROM channel_profiles
-		WHERE channel_id = ?
-		   OR (platform = ? AND LOWER(COALESCE(handle, '')) = LOWER(?))
-		ORDER BY CASE WHEN channel_id = ? THEN 0 ELSE 1 END
+		SELECT cp.channel_id, cp.platform, COALESCE(cp.handle, ''), COALESCE(cp.display_name, ''),
+		       cp.fetched_at, COALESCE(cp.tombstone, 0),
+		       CASE WHEN pj.channel_id IS NULL THEN 0 ELSE 1 END,
+		       COALESCE(pj.requested_revision, 0), COALESCE(pj.completed_revision, 0),
+		       COALESCE(pj.attempts, 0), COALESCE(pj.next_attempt_at_ms, 0),
+		       COALESCE(pj.lease_owner, ''), COALESCE(pj.lease_until_ms, 0), COALESCE(pj.last_error, ''),
+		       COALESCE(avatar.state, ''), COALESCE(avatar.file_path, ''),
+		       COALESCE(avatar.source_url, ''), COALESCE(avatar.last_error_kind, ''), COALESCE(avatar.updated_at_ms, 0),
+		       COALESCE(banner.state, ''), COALESCE(banner.file_path, ''),
+		       COALESCE(banner.source_url, ''), COALESCE(banner.last_error_kind, ''), COALESCE(banner.updated_at_ms, 0)
+		FROM channel_profiles cp
+		LEFT JOIN profile_jobs pj ON pj.channel_id = cp.channel_id
+		LEFT JOIN assets avatar
+		  ON avatar.owner_kind = 'channel' AND avatar.owner_id = cp.channel_id
+		 AND avatar.asset_kind = 'avatar' AND avatar.media_index = 0
+		LEFT JOIN assets banner
+		  ON banner.owner_kind = 'channel' AND banner.owner_id = cp.channel_id
+		 AND banner.asset_kind = 'banner' AND banner.media_index = 0
+		WHERE cp.channel_id = ?
+		   OR (cp.platform = ? AND LOWER(COALESCE(cp.handle, '')) = LOWER(?))
+		ORDER BY CASE WHEN cp.channel_id = ? THEN 0 ELSE 1 END
 		LIMIT 1
 	`, candidate.channelID, candidate.platform, candidate.handle, candidate.channelID).Scan(
 		&profile.channelID,
 		&profile.platform,
 		&profile.handle,
 		&profile.displayName,
-		&profile.avatarURL,
-		&profile.bannerURL,
 		&profile.fetchedAt,
-		&profile.nextRetryAt,
-		&profile.failCount,
 		&profile.tombstone,
+		&profile.jobFound,
+		&profile.requestedRevision,
+		&profile.completedRevision,
+		&profile.attempts,
+		&profile.nextAttemptAtMs,
+		&profile.leaseOwner,
+		&profile.leaseUntilMs,
+		&profile.lastError,
+		&profile.avatar.state,
+		&profile.avatar.filePath,
+		&profile.avatar.sourceURL,
+		&profile.avatar.errorKind,
+		&profile.avatar.updatedAt,
+		&profile.banner.state,
+		&profile.banner.filePath,
+		&profile.banner.sourceURL,
+		&profile.banner.errorKind,
+		&profile.banner.updatedAt,
 	)
 	if err == nil {
 		profile.found = true
@@ -531,59 +439,13 @@ func loadProfileStatus(conn *sql.DB, candidate identityCandidate) profileStatus 
 	return profile
 }
 
-func writeIdentityAssetRows(sb *strings.Builder, conn *sql.DB, channelID string) {
-	if channelID == "" {
+func writeProfileAssetStatus(sb *strings.Builder, kind string, asset profileAssetStatus) {
+	if asset.state == "" {
 		return
 	}
-	rows, err := conn.Query(`
-		SELECT asset_kind, state, owner_kind, owner_id, media_index,
-		       COALESCE(file_path, ''), COALESCE(last_error_kind, ''), updated_at_ms
-		FROM assets
-		WHERE owner_id = ? AND asset_kind IN ('avatar', 'banner')
-		ORDER BY asset_kind, media_index
-	`, channelID)
-	if err != nil {
-		return
-	}
-	defer func() {
-		_ = rows.Close()
-	}()
-	wrote := false
-	for rows.Next() {
-		var kind, state, ownerKind, ownerID, filePath, errorKind string
-		var mediaIndex int
-		var updatedAtMs int64
-		if err := rows.Scan(&kind, &state, &ownerKind, &ownerID, &mediaIndex, &filePath, &errorKind, &updatedAtMs); err != nil {
-			continue
-		}
-		if !wrote {
-			sb.WriteString("  asset rows:\n")
-			wrote = true
-		}
-		fmt.Fprintf(sb, "    %s state=%s owner=%s/%s media_index=%d updated=%s file=%s error_kind=%s\n",
-			kind, state, ownerKind, ownerID, mediaIndex, formatMillis(updatedAtMs), emptyDash(filePath), emptyDash(errorKind))
-	}
-	if !wrote {
-		sb.WriteString("  asset rows: none\n")
-	}
-}
-
-func writeIdentityChannelQueue(sb *strings.Builder, conn *sql.DB, channelID string) {
-	if channelID == "" {
-		return
-	}
-	var status string
-	var priority int
-	var addedAt, startedAt, completedAt int64
-	err := conn.QueryRow(`
-		SELECT COALESCE(status, ''), COALESCE(priority, 0), added_at, started_at, completed_at
-		FROM channel_queue
-		WHERE channel_id = ?
-	`, channelID).Scan(&status, &priority, &addedAt, &startedAt, &completedAt)
-	if err == nil {
-		fmt.Fprintf(sb, "  channel_queue: status=%s priority=%d added=%s started=%s completed=%s\n",
-			status, priority, formatMillis(addedAt), formatMillis(startedAt), formatMillis(completedAt))
-	}
+	fmt.Fprintf(sb, "    %s: file=%s source=%t updated=%s error_kind=%s\n",
+		kind, emptyDash(asset.filePath), asset.sourceURL != "",
+		formatMillis(asset.updatedAt), emptyDash(asset.errorKind))
 }
 
 func writeIdentityFeedTimeline(sb *strings.Builder, conn *sql.DB, candidate identityCandidate, limit int) {
@@ -598,7 +460,7 @@ func writeIdentityFeedTimeline(sb *strings.Builder, conn *sql.DB, candidate iden
 	var maxFetched, maxPublished sql.NullInt64
 	_ = conn.QueryRow(`
 		SELECT COUNT(*), MAX(fetched_at), MAX(published_at)
-		FROM feed_items
+		FROM feed_items_resolved
 		WHERE LOWER(COALESCE(author_handle, '')) = LOWER(?)
 		   OR LOWER(COALESCE(source_handle, '')) = LOWER(?)
 		   OR LOWER(COALESCE(retweeted_by_handle, '')) = LOWER(?)
@@ -620,7 +482,7 @@ func writeIdentityFeedTimeline(sb *strings.Builder, conn *sql.DB, candidate iden
 		         WHEN LOWER(COALESCE(reply_to_handle, '')) = LOWER(?) THEN 'reply_parent'
 		         ELSE 'unknown'
 		       END AS role
-		FROM feed_items
+		FROM feed_items_resolved
 		WHERE LOWER(COALESCE(author_handle, '')) = LOWER(?)
 		   OR LOWER(COALESCE(source_handle, '')) = LOWER(?)
 		   OR LOWER(COALESCE(retweeted_by_handle, '')) = LOWER(?)
@@ -664,19 +526,6 @@ func dedupeIdentityCandidates(candidates []identityCandidate) []identityCandidat
 		out = append(out, candidate)
 	}
 	return out
-}
-
-func firstProfileMediaPath(dataDir, dirName, channelID string) (string, bool) {
-	if channelID == "" {
-		return "", false
-	}
-	for _, ext := range []string{".jpg", ".jpeg", ".png", ".webp", ".gif"} {
-		rel := filepath.Join("thumbnails", dirName, channelID+ext)
-		if _, err := os.Stat(filepath.Join(dataDir, rel)); err == nil {
-			return rel, true
-		}
-	}
-	return "", false
 }
 
 func normalizeChannelID(channelID, platform, handle string) string {

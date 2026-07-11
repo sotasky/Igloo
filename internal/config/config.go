@@ -10,19 +10,18 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/screwys/igloo/internal/storage"
 )
 
-const (
-	DatabaseFilename = "igloo.db"
-)
+const DatabaseFilename = "igloo.db"
 
 var SupportedPlatforms = []string{"youtube", "twitter", "tiktok", "instagram"}
 
 var secretKeyRandomReader io.Reader = rand.Reader
 
 type Config struct {
-	DatabasePath        string
-	DataDir             string
+	Storage             storage.Layout
 	ConfDir             string
 	RepoDir             string
 	StaticDir           string
@@ -43,17 +42,17 @@ type Config struct {
 }
 
 func Load() *Config {
-	dataDir := envOr("IGLOO_DATA_DIR", filepath.Join(homeDir(), ".local", "share", "igloo"))
+	stateRoot := envOr("IGLOO_DATA_DIR", filepath.Join(homeDir(), ".local", "share", "igloo"))
+	mediaRoot := strings.TrimSpace(os.Getenv("IGLOO_MEDIA_DIR"))
+	layout, storageErr := storage.New(stateRoot, mediaRoot)
 	configDir := envOr("IGLOO_CONFIG_DIR", filepath.Join(homeDir(), ".config", "igloo"))
 	repoDir := envOr("IGLOO_REPO_DIR", findRepoDir())
-	databasePath := envOr("IGLOO_DB_PATH", DefaultDatabasePath(dataDir))
 	runtimePath := filepath.Join(configDir, "config.json")
 	runtimeConfig, runtimeErr := loadRuntimeConfig(runtimePath)
 	enabledPlatforms, platformErr := resolveEnabledPlatforms(configDir, runtimeConfig)
 
 	return &Config{
-		DatabasePath:        databasePath,
-		DataDir:             dataDir,
+		Storage:             layout,
 		ConfDir:             configDir,
 		RepoDir:             repoDir,
 		StaticDir:           filepath.Join(repoDir, "static"),
@@ -70,12 +69,8 @@ func Load() *Config {
 
 		EnabledPlatforms:   enabledPlatforms,
 		EnabledPlatformSet: platformSet(enabledPlatforms),
-		ConfigError:        firstErr(runtimeErr, platformErr),
+		ConfigError:        firstErr(storageErr, runtimeErr, platformErr),
 	}
-}
-
-func DefaultDatabasePath(dataDir string) string {
-	return filepath.Join(dataDir, DatabaseFilename)
 }
 
 func normalizePublishedServerURL(raw string) string {
@@ -264,14 +259,11 @@ func (c *Config) EnsureRuntimeDirs() error {
 	if c == nil {
 		return fmt.Errorf("config is nil")
 	}
-	if strings.TrimSpace(c.DataDir) == "" {
-		return fmt.Errorf("data dir is empty")
-	}
 	if strings.TrimSpace(c.ConfDir) == "" {
 		return fmt.Errorf("config dir is empty")
 	}
-	if err := os.MkdirAll(c.DataDir, 0o755); err != nil {
-		return fmt.Errorf("mkdir data dir: %w", err)
+	if err := c.Storage.Ensure(); err != nil {
+		return fmt.Errorf("ensure storage: %w", err)
 	}
 	if err := os.MkdirAll(c.ConfDir, 0o700); err != nil {
 		return fmt.Errorf("mkdir config dir: %w", err)
@@ -313,6 +305,31 @@ func loadRuntimeConfig(path string) (RuntimeConfig, error) {
 		return RuntimeConfig{}, fmt.Errorf("parse runtime config: %w", err)
 	}
 	return cfg, nil
+}
+
+// ValidateRuntimeConfigFile applies the same parsing and platform rules used
+// by startup without changing process configuration.
+func ValidateRuntimeConfigFile(path string) error {
+	runtimeConfig, err := loadRuntimeConfig(path)
+	if err != nil {
+		return err
+	}
+	if runtimeConfig.EnabledPlatforms == nil {
+		return nil
+	}
+	_, err = NormalizeEnabledPlatforms(runtimeConfig.EnabledPlatforms)
+	return err
+}
+
+// ValidateEffectiveRuntimeConfigFile applies startup's environment override
+// rules to one prospective runtime config file.
+func ValidateEffectiveRuntimeConfigFile(path string) error {
+	runtimeConfig, err := loadRuntimeConfig(path)
+	if err != nil {
+		return err
+	}
+	_, err = resolveEnabledPlatforms(filepath.Dir(path), runtimeConfig)
+	return err
 }
 
 func firstErr(errs ...error) error {

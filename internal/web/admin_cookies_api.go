@@ -236,7 +236,7 @@ func (s *Server) handleToggleCookie(w http.ResponseWriter, r *http.Request) {
 	if current == "0" {
 		newVal = "1"
 	}
-	if err := s.db.SetSetting("", key, newVal); err != nil {
+	if err := s.db.SetSetting(key, newVal); err != nil {
 		slog.Error("SetSetting cookie toggle", "platform", platform, "err", err)
 		writeJSON(w, 500, map[string]any{"error": "db error"})
 		return
@@ -287,7 +287,7 @@ func (s *Server) handleSetCookieBrowser(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	key := "cookies_" + platform + "_browser"
-	if err := s.db.SetSetting("", key, browser); err != nil {
+	if err := s.db.SetSetting(key, browser); err != nil {
 		writeJSON(w, 500, map[string]any{"error": "db error"})
 		return
 	}

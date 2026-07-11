@@ -1,83 +1,69 @@
 package db
 
 import (
-	"strings"
 	"testing"
+	"time"
+
+	"github.com/screwys/igloo/internal/model"
 )
 
-func TestBookmarkMutationBumpsContentHashSiblings(t *testing.T) {
+func TestLikeMutationRequeuesPrunedDirectAndQuoteAssets(t *testing.T) {
 	d := openWritableTestDB(t)
-
-	fixtures := []struct {
-		tweetID     string
-		contentHash string
-		syncSeq     int64
-	}{
-		{tweetID: "tw_a_direct", contentHash: "shared_hash", syncSeq: 10},
-		{tweetID: "tw_b_sibling", contentHash: "shared_hash", syncSeq: 11},
-		{tweetID: "tw_c_unrelated", contentHash: "other_hash", syncSeq: 12},
+	item := model.FeedItem{
+		TweetID: "sample_liked_parent", SourceHandle: "sample_source", AuthorHandle: "sample_author",
+		MediaJSON:      `[{"url":"https://cdn.example/direct.jpg","type":"photo"}]`,
+		QuoteTweetID:   "sample_liked_quote",
+		QuoteMediaJSON: `[{"url":"https://cdn.example/quote.jpg","type":"photo"}]`,
 	}
-	for _, row := range fixtures {
-		if err := d.ExecRaw(`
-			INSERT INTO feed_items (
-				tweet_id, source_handle, author_handle, body_text,
-				content_hash, published_at, fetched_at, sync_seq
-			) VALUES (?, 'source', 'author', 'body', ?, 1, 1, ?)`,
-			row.tweetID, row.contentHash, row.syncSeq,
-		); err != nil {
-			t.Fatalf("insert %s: %v", row.tweetID, err)
+	if _, err := d.UpsertFeedItems([]model.FeedItem{item}); err != nil {
+		t.Fatalf("UpsertFeedItems: %v", err)
+	}
+	if _, err := d.markXContentAssetsPruned([]string{item.TweetID, item.QuoteTweetID}, 1000); err != nil {
+		t.Fatalf("mark assets pruned: %v", err)
+	}
+
+	if err := d.ApplyLikeMutation(item.TweetID, "set", 2000); err != nil {
+		t.Fatalf("ApplyLikeMutation set: %v", err)
+	}
+	for _, ownerID := range []string{item.TweetID, item.QuoteTweetID} {
+		asset, err := d.GetAsset(BuildAssetID("twitter", "tweet", ownerID, "post_media", 0), "post_media")
+		if err != nil {
+			t.Fatalf("GetAsset %s: %v", ownerID, err)
+		}
+		if asset == nil || asset.State != AssetStateQueued || asset.RequiredReason != "like" {
+			t.Fatalf("required asset %s = %+v", ownerID, asset)
 		}
 	}
-	if err := d.initSyncSeq(); err != nil {
-		t.Fatalf("init sync seq: %v", err)
-	}
-
-	if _, err := d.ApplyBookmarkMutation("admin", BookmarkMutation{
-		VideoID:     "tw_a_direct",
-		Action:      "set",
-		UpdatedAtMs: 99,
-	}); err != nil {
-		t.Fatalf("ApplyBookmarkMutation: %v", err)
-	}
-
-	seqs := map[string]int64{}
-	rows, err := d.conn.Query(`SELECT tweet_id, sync_seq FROM feed_items`)
+	prunable, err := d.xPrunableAssetOwners([]string{item.TweetID})
 	if err != nil {
-		t.Fatalf("query sync seqs: %v", err)
+		t.Fatalf("xPrunableAssetOwners: %v", err)
 	}
-	defer func() {
-		_ = rows.Close()
-	}()
-	for rows.Next() {
-		var tweetID string
-		var syncSeq int64
-		if err := rows.Scan(&tweetID, &syncSeq); err != nil {
-			t.Fatalf("scan sync seq: %v", err)
-		}
-		seqs[tweetID] = syncSeq
+	if len(prunable) != 0 {
+		t.Fatalf("liked direct/quote owners remained prunable: %v", prunable)
 	}
-	if err := rows.Err(); err != nil {
-		t.Fatalf("sync seq rows: %v", err)
+	claimed, err := d.ClaimContentAssetDownloadBatch(LeaseOptions{
+		Owner: "x-worker", NowMs: 2001, LeaseMs: time.Minute.Milliseconds(), Limit: 10,
+	})
+	if err != nil || len(claimed) != 2 {
+		t.Fatalf("claimed = %+v, err = %v; want direct and quote", claimed, err)
 	}
 
-	if seqs["tw_a_direct"] <= 12 {
-		t.Fatalf("direct bookmark row was not bumped: got %d", seqs["tw_a_direct"])
+	if err := d.ApplyLikeMutation(item.TweetID, "clear", 3000); err != nil {
+		t.Fatalf("ApplyLikeMutation clear: %v", err)
 	}
-	if seqs["tw_b_sibling"] <= 12 {
-		t.Fatalf("content-hash sibling was not bumped: got %d", seqs["tw_b_sibling"])
+	quote, err := d.GetAsset(BuildAssetID("twitter", "tweet", item.QuoteTweetID, "post_media", 0), "post_media")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if seqs["tw_a_direct"] == seqs["tw_b_sibling"] {
-		t.Fatalf("direct and sibling rows must receive unique sync_seq values: %v", seqs)
-	}
-	if seqs["tw_c_unrelated"] != 12 {
-		t.Fatalf("unrelated row should not be bumped: got %d", seqs["tw_c_unrelated"])
+	if quote == nil || quote.State != AssetStateDownloading || quote.RequiredReason != "retention" {
+		t.Fatalf("clear eagerly changed claimed quote content: %+v", quote)
 	}
 }
 
 func TestBookmarkMutationUsesCurrentTimeWhenUpdatedAtMissing(t *testing.T) {
 	d := openWritableTestDB(t)
 
-	if _, err := d.ApplyBookmarkMutation("admin", BookmarkMutation{
+	if err := d.ApplyBookmarkMutation(BookmarkMutation{
 		VideoID:     "missing_timestamp_bookmark",
 		Action:      "set",
 		UpdatedAtMs: 0,
@@ -89,7 +75,7 @@ func TestBookmarkMutationUsesCurrentTimeWhenUpdatedAtMissing(t *testing.T) {
 	if err := d.QueryRow(`
 		SELECT bookmarked_at
 		FROM bookmarks
-		WHERE user_id = 'admin' AND video_id = 'missing_timestamp_bookmark'
+		WHERE video_id = 'missing_timestamp_bookmark'
 	`).Scan(&bookmarkedAt); err != nil {
 		t.Fatalf("read bookmark: %v", err)
 	}
@@ -97,51 +83,99 @@ func TestBookmarkMutationUsesCurrentTimeWhenUpdatedAtMissing(t *testing.T) {
 		t.Fatalf("bookmarked_at = %d, want positive timestamp", bookmarkedAt)
 	}
 
-	var value string
-	if err := d.QueryRow(`
-		SELECT value
-		FROM sync_changes
-		WHERE type = 'bookmark' AND item_id = 'missing_timestamp_bookmark'
-		ORDER BY version DESC
-		LIMIT 1
-	`).Scan(&value); err != nil {
-		t.Fatalf("read sync change: %v", err)
-	}
-	if !strings.Contains(value, `"bookmarked_at":`) || strings.Contains(value, `"updated_at_ms":0`) {
-		t.Fatalf("sync value did not carry repaired timestamp: %s", value)
-	}
 }
 
 func TestMomentsCursorMutationKeepsNewerClientTimestamp(t *testing.T) {
 	d := openWritableTestDB(t)
 
-	if _, err := d.ApplyMomentsCursorMutationWithSortAt("admin", "moment_newer", 0, 2_000, "all", 20_000); err != nil {
+	if err := d.ApplyMomentsCursorMutationWithSortAt("moment_newer", 0, 2_000, "all", 20_000); err != nil {
 		t.Fatalf("newer cursor mutation: %v", err)
 	}
-	if _, err := d.ApplyMomentsCursorMutationWithSortAt("admin", "moment_older", 0, 1_000, "all", 10_000); err != nil {
-		t.Fatalf("older cursor mutation: %v", err)
+	if err := d.ApplyMomentsCursorMutationWithSortAt("moment_older", 0, 1_000, "all", 10_000); !IsStaleMutation(err) {
+		t.Fatalf("older cursor mutation error = %v, want stale mutation", err)
 	}
 
-	var videoID, updatedAt, sortAt string
-	if err := d.QueryRow(`SELECT value FROM settings WHERE key = 'shorts_cursor_video_id_admin_all'`).Scan(&videoID); err != nil {
-		t.Fatalf("read cursor video: %v", err)
+	var videoID string
+	var updatedAt, sortAt int64
+	if err := d.QueryRow(`
+		SELECT video_id, updated_at_ms, sort_at_ms
+		FROM moments_cursors WHERE scope = 'all'
+	`).Scan(&videoID, &updatedAt, &sortAt); err != nil {
+		t.Fatalf("read cursor: %v", err)
 	}
-	if err := d.QueryRow(`SELECT value FROM settings WHERE key = 'shorts_cursor_updated_at_ms_admin_all'`).Scan(&updatedAt); err != nil {
-		t.Fatalf("read cursor timestamp: %v", err)
+	if videoID != "moment_newer" || updatedAt != 2000 || sortAt != 20000 {
+		t.Fatalf("cursor = (%q, %d, %d), want newer cursor", videoID, updatedAt, sortAt)
 	}
-	if err := d.QueryRow(`SELECT value FROM settings WHERE key = 'shorts_cursor_sort_at_ms_admin_all'`).Scan(&sortAt); err != nil {
-		t.Fatalf("read cursor sort: %v", err)
-	}
-	if videoID != "moment_newer" || updatedAt != "2000" || sortAt != "20000" {
-		t.Fatalf("cursor = (%q, %q, %q), want newer cursor", videoID, updatedAt, sortAt)
-	}
+}
 
-	var staleRows int
-	if err := d.QueryRow(`SELECT COUNT(*) FROM sync_changes WHERE type = 'moments_cursor' AND item_id = 'moment_older'`).Scan(&staleRows); err != nil {
-		t.Fatalf("count stale cursor changes: %v", err)
+func TestProgressMutationRejectsStaleAndDoesNotReviseExactRetry(t *testing.T) {
+	d := openWritableTestDB(t)
+	if _, err := d.MutateProgress("sample_video", 30, 120, 2_000); err != nil {
+		t.Fatalf("initial progress: %v", err)
 	}
-	if staleRows != 0 {
-		t.Fatalf("stale cursor wrote %d sync changes, want 0", staleRows)
+	var revision int64
+	if err := d.QueryRow(`
+		SELECT revision FROM android_sync_heads
+		WHERE owner_kind = 'watch_history' AND owner_id = 'sample_video'
+	`).Scan(&revision); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.MutateProgress("sample_video", 30, 120, 2_000); err != nil {
+		t.Fatalf("exact retry: %v", err)
+	}
+	var retryRevision int64
+	if err := d.QueryRow(`
+		SELECT revision FROM android_sync_heads
+		WHERE owner_kind = 'watch_history' AND owner_id = 'sample_video'
+	`).Scan(&retryRevision); err != nil {
+		t.Fatal(err)
+	}
+	if retryRevision != revision {
+		t.Fatalf("exact retry revision = %d, want %d", retryRevision, revision)
+	}
+	if _, err := d.MutateProgress("sample_video", 10, 120, 1_000); !IsStaleMutation(err) {
+		t.Fatalf("older progress error = %v, want stale mutation", err)
+	}
+	var position float64
+	if err := d.QueryRow(`SELECT playback_position FROM watch_history WHERE video_id = 'sample_video'`).Scan(&position); err != nil {
+		t.Fatal(err)
+	}
+	if position != 30 {
+		t.Fatalf("stale progress changed position to %v", position)
+	}
+}
+
+func TestWebProgressClearRejectsOlderAndroidProgress(t *testing.T) {
+	d := openWritableTestDB(t)
+	if _, err := d.MutateProgress("sample_video_two", 30, 120, 2_000); err != nil {
+		t.Fatalf("initial Android progress: %v", err)
+	}
+	if err := d.DeleteWatchHistory("sample_video_two", 3_000); err != nil {
+		t.Fatalf("web clear: %v", err)
+	}
+	if _, err := d.MutateProgress("sample_video_two", 45, 120, 2_500); !IsStaleMutation(err) {
+		t.Fatalf("older Android progress error = %v, want stale mutation", err)
+	}
+	var rows int
+	if err := d.QueryRow(`SELECT COUNT(*) FROM watch_history WHERE video_id = 'sample_video_two'`).Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
+	if rows != 0 {
+		t.Fatalf("watch history rows = %d, want cleared", rows)
+	}
+	var action string
+	var updatedAt int64
+	if err := d.QueryRow(`
+		SELECT action, updated_at_ms FROM mutation_clocks
+		WHERE kind = 'progress' AND item_key = 'sample_video_two'
+	`).Scan(&action, &updatedAt); err != nil {
+		t.Fatal(err)
+	}
+	if action != "clear" || updatedAt != 3_000 {
+		t.Fatalf("progress clock = %s/%d, want clear/3000", action, updatedAt)
+	}
+	if err := d.UpsertWatchHistoryFullyWatched("sample_video_two", 4_000); err != nil {
+		t.Fatalf("newer web set: %v", err)
 	}
 }
 
@@ -155,12 +189,12 @@ func TestBookmarkMutationCreatesVideoStubForFeedItem(t *testing.T) {
 	)
 	if err := d.ExecRaw(`
 		INSERT INTO feed_items (
-			tweet_id, source_handle, author_handle, body_text,
+			tweet_id, source_channel_id, channel_id, body_text,
 			canonical_url, published_at, fetched_at
 		) VALUES (?, ?, ?, 'sample body', ?, ?, ?)`,
 		tweetID,
-		authorHandle,
-		authorHandle,
+		"twitter_"+authorHandle,
+		"twitter_"+authorHandle,
 		"https://x.com/sample_author/status/sample_feed_bookmark",
 		publishedAtMs,
 		publishedAtMs,
@@ -168,7 +202,7 @@ func TestBookmarkMutationCreatesVideoStubForFeedItem(t *testing.T) {
 		t.Fatalf("insert feed item: %v", err)
 	}
 
-	if _, err := d.ApplyBookmarkMutation("admin", BookmarkMutation{
+	if err := d.ApplyBookmarkMutation(BookmarkMutation{
 		VideoID:     tweetID,
 		Action:      "set",
 		UpdatedAtMs: publishedAtMs + 1000,
@@ -177,22 +211,17 @@ func TestBookmarkMutationCreatesVideoStubForFeedItem(t *testing.T) {
 	}
 
 	var channelID string
-	var syncSeq int64
 	if err := d.QueryRow(`
-		SELECT channel_id, sync_seq
+		SELECT channel_id
 		FROM videos
 		WHERE video_id = ?
-	`, tweetID).Scan(&channelID, &syncSeq); err != nil {
+	`, tweetID).Scan(&channelID); err != nil {
 		t.Fatalf("read video stub: %v", err)
 	}
 	if channelID != "twitter_sample_author" {
 		t.Fatalf("channel_id = %q, want twitter_sample_author", channelID)
 	}
-	if syncSeq <= 0 {
-		t.Fatalf("sync_seq = %d, want bumped stub", syncSeq)
-	}
-
-	bookmarks, err := d.GetBookmarks(GetBookmarksOpts{UserID: "admin", Limit: 10})
+	bookmarks, err := d.GetBookmarks(GetBookmarksOpts{Limit: 10})
 	if err != nil {
 		t.Fatalf("GetBookmarks: %v", err)
 	}

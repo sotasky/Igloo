@@ -20,11 +20,13 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/screwys/igloo/internal/db"
 	"github.com/screwys/igloo/internal/dearrow"
+	"github.com/screwys/igloo/internal/storage"
 )
 
 func main() {
@@ -41,12 +43,18 @@ func main() {
 	if override := os.Getenv("IGLOO_DATA_DIR"); override != "" {
 		dataDir = override
 	}
-	dbPath := filepath.Join(dataDir, "igloo.db")
+	layout, err := storage.New(dataDir, strings.TrimSpace(os.Getenv("IGLOO_MEDIA_DIR")))
+	if err != nil {
+		log.Fatalf("storage layout: %v", err)
+	}
+	if err := layout.Ensure(); err != nil {
+		log.Fatalf("storage availability: %v", err)
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	d, err := db.Open(dbPath, dataDir)
+	d, err := db.Open(layout)
 	if err != nil {
 		log.Fatalf("db.Open: %v", err)
 	}
@@ -54,10 +62,14 @@ func main() {
 		_ = d.Close()
 	}()
 
+	thumbDir, err := layout.WritePath("thumbnails/dearrow")
+	if err != nil {
+		log.Fatalf("DeArrow thumbnail path: %v", err)
+	}
 	fetcher := &dearrow.Fetcher{
 		Client:   dearrow.NewClient(dearrow.DefaultBaseURL),
 		Extract:  dearrow.ExtractFrame,
-		ThumbDir: filepath.Join(dataDir, "thumbnails", "dearrow"),
+		ThumbDir: thumbDir,
 	}
 
 	processed, updated, failed := 0, 0, 0
@@ -91,14 +103,18 @@ func main() {
 			if *max > 0 && processed >= *max {
 				return
 			}
-			v, err := d.GetVideo(id)
-			if err != nil || v == nil {
-				log.Printf("skip %s: get: %v", id, err)
+			asset, err := d.GetReadyVideoPrimaryAsset(id)
+			if err != nil {
+				log.Printf("skip %s: get media asset: %v", id, err)
 				continue
 			}
-			absPath := v.FilePath
-			if absPath != "" && !filepath.IsAbs(absPath) {
-				absPath = filepath.Join(dataDir, absPath)
+			absPath := ""
+			if asset != nil {
+				absPath, err = layout.Path(asset.FilePath)
+				if err != nil {
+					log.Printf("skip %s: resolve video path: %v", id, err)
+					continue
+				}
 			}
 			res, err := fetcher.FetchAndProcess(ctx, id, absPath)
 			processed++
@@ -106,6 +122,9 @@ func main() {
 			if *dry {
 				log.Printf("dry %s: title=%v casual=%v thumb=%v err=%v",
 					id, ptrStr(res.Title), ptrStr(res.CasualTitle), ptrStr(res.ThumbPath), err)
+				if res.ThumbPath != nil {
+					_ = os.Remove(*res.ThumbPath)
+				}
 				time.Sleep(*rate)
 				continue
 			}
@@ -120,20 +139,31 @@ func main() {
 					time.Sleep(*rate)
 					continue
 				}
-				// fall through with partial data
+				if saveErr := d.SetDearrowTitles(id, res.Title, res.CasualTitle, time.Now().UnixMilli()); saveErr != nil {
+					log.Printf("save partial %s: %v", id, saveErr)
+				}
+				time.Sleep(*rate)
+				continue
 			}
 			var thumbRel *string
 			if res.ThumbPath != nil {
-				rel, relErr := filepath.Rel(dataDir, *res.ThumbPath)
+				rel, relErr := layout.Key(*res.ThumbPath)
 				if relErr == nil {
 					thumbRel = &rel
 				} else {
-					abs := *res.ThumbPath
-					thumbRel = &abs
+					_ = os.Remove(*res.ThumbPath)
+					if saveErr := d.SetDearrowTitles(id, res.Title, res.CasualTitle, time.Now().UnixMilli()); saveErr != nil {
+						log.Printf("save partial %s: %v", id, saveErr)
+					}
+					time.Sleep(*rate)
+					continue
 				}
 			}
 			if saveErr := d.SetDearrowData(id, res.Title, res.CasualTitle, thumbRel, time.Now().UnixMilli()); saveErr != nil {
 				log.Printf("save %s: %v", id, saveErr)
+				if res.ThumbPath != nil {
+					_ = os.Remove(*res.ThumbPath)
+				}
 			} else if res.Title != nil || res.CasualTitle != nil || thumbRel != nil {
 				updated++
 				log.Printf("ok %s: title=%v casual=%v thumb=%v",

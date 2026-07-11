@@ -2,18 +2,27 @@ package db
 
 import (
 	"database/sql"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/screwys/igloo/internal/storage"
 )
 
 func TestOpenWithOptionsReportsStartupPhases(t *testing.T) {
 	tmpDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmpDir, ".igloo-state-root"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
 	var phases []string
+	layout, err := storage.New(tmpDir, "")
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	d, err := OpenWithOptions(
-		filepath.Join(tmpDir, "igloo.db"),
-		filepath.Join(tmpDir, "data"),
+		layout,
 		OpenOptions{
 			Phase: func(name string, elapsed time.Duration) {
 				if elapsed < 0 {
@@ -32,11 +41,22 @@ func TestOpenWithOptionsReportsStartupPhases(t *testing.T) {
 		"db.sql_open",
 		"db.ping",
 		"db.ensure_schema",
-		"db.cleanup_retired_reading",
-		"db.init_sync_seq",
-		"db.repair_video_media_shapes",
 		"db.open_total",
 	})
+}
+
+func TestOpenWithOptionsDoesNotCreateDatabaseInUnmarkedStateRoot(t *testing.T) {
+	stateRoot := t.TempDir()
+	layout, err := storage.New(stateRoot, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := OpenWithOptions(layout, OpenOptions{}); err == nil {
+		t.Fatal("OpenWithOptions succeeded without the state marker")
+	}
+	if _, err := os.Stat(layout.DatabasePath()); !os.IsNotExist(err) {
+		t.Fatalf("database was created in the unmarked state root: %v", err)
+	}
 }
 
 func TestEnsureSchemaWithOptionsReportsSubPhases(t *testing.T) {
@@ -60,13 +80,8 @@ func TestEnsureSchemaWithOptionsReportsSubPhases(t *testing.T) {
 
 	assertPhaseSubsequence(t, phases, []string{
 		"schema.create_tables",
-		"schema.add_columns",
-		"schema.drop_channel_check_interval",
+		"schema.android_sync_revision_triggers",
 		"schema.indexes",
-		"schema.android_sync_cleanup",
-		"schema.legacy_table_repairs",
-		"schema.sync_seq_backfill",
-		"schema.feed_media_legacy_fixes",
 		"schema.total",
 	})
 }

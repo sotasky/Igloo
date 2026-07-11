@@ -1,6 +1,8 @@
 package db
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -11,9 +13,8 @@ func TestMarkDearrowChecked_SetsTimestamp(t *testing.T) {
 		t.Fatalf("insert channel: %v", err)
 	}
 	if err := d.InsertVideo(
-		"vid1", "youtube_testchan", "Original Title", "desc",
-		60, "thumbs/orig.jpg", "videos/orig.mp4", 1024,
-		1_700_000_000_000, "", "video", 0, false,
+		"vid1", "youtube_testchan", "youtube_video", "Original Title", "desc",
+		60, 1_700_000_000_000, "", "video", 0, false,
 	); err != nil {
 		t.Fatalf("InsertVideo: %v", err)
 	}
@@ -41,8 +42,8 @@ func TestMarkDearrowChecked_SetsTimestamp(t *testing.T) {
 	if got.DearrowTitleCasual != nil {
 		t.Errorf("DearrowTitleCasual should be nil, got %v", got.DearrowTitleCasual)
 	}
-	if got.DearrowThumbPath != nil {
-		t.Errorf("DearrowThumbPath should be nil, got %v", got.DearrowThumbPath)
+	if thumb, err := d.GetAssetByOwnerIdentity("dearrow_thumbnail", "youtube_video", "vid1", 0); err != nil || thumb != nil {
+		t.Errorf("DeArrow thumbnail asset = %+v, err = %v; want none", thumb, err)
 	}
 }
 
@@ -53,9 +54,8 @@ func TestSetDearrowData_RoundTrip(t *testing.T) {
 		t.Fatalf("insert channel: %v", err)
 	}
 	if err := d.InsertVideo(
-		"vid1", "youtube_testchan", "Original Title", "desc",
-		60, "thumbs/orig.jpg", "videos/orig.mp4", 1024,
-		1_700_000_000_000, "", "video", 0, false,
+		"vid1", "youtube_testchan", "youtube_video", "Original Title", "desc",
+		60, 1_700_000_000_000, "", "video", 0, false,
 	); err != nil {
 		t.Fatalf("InsertVideo: %v", err)
 	}
@@ -63,6 +63,15 @@ func TestSetDearrowData_RoundTrip(t *testing.T) {
 	title := "Better"
 	titleCasual := "Casual"
 	thumbPath := "thumbnails/dearrow/vid1.jpg"
+	collidingThumb := "thumbnails/dearrow/tiktok-vid1.jpg"
+	writeDBTestFile(t, filepath.Join(d.storage.StateRoot(), thumbPath), []byte("dearrow thumbnail"))
+	writeDBTestFile(t, filepath.Join(d.storage.StateRoot(), collidingThumb), []byte("tiktok thumbnail"))
+	if err := d.StoreReadyAsset(Asset{
+		AssetID: BuildAssetID("tiktok", "tiktok_video", "test_video_1", "dearrow_thumbnail", 0), AssetKind: "dearrow_thumbnail",
+		OwnerKind: "tiktok_video", OwnerID: "test_video_1", FilePath: collidingThumb,
+	}, 1); err != nil {
+		t.Fatal(err)
+	}
 	if err := d.SetDearrowData("vid1", &title, &titleCasual, &thumbPath, 1_700_000_100_000); err != nil {
 		t.Fatalf("SetDearrowData: %v", err)
 	}
@@ -80,24 +89,31 @@ func TestSetDearrowData_RoundTrip(t *testing.T) {
 	if got.DearrowTitleCasual == nil || *got.DearrowTitleCasual != "Casual" {
 		t.Errorf("DearrowTitleCasual = %v, want 'Casual'", got.DearrowTitleCasual)
 	}
-	if got.DearrowThumbPath == nil || *got.DearrowThumbPath != "thumbnails/dearrow/vid1.jpg" {
-		t.Errorf("DearrowThumbPath = %v, want 'thumbnails/dearrow/vid1.jpg'", got.DearrowThumbPath)
+	thumb, err := d.GetAssetByOwnerIdentity("dearrow_thumbnail", "youtube_video", "vid1", 0)
+	if err != nil || thumb == nil || thumb.FilePath != thumbPath {
+		t.Errorf("DeArrow thumbnail asset = %+v, err = %v", thumb, err)
 	}
 	if got.DearrowCheckedAtMs == nil || *got.DearrowCheckedAtMs != 1_700_000_100_000 {
 		t.Errorf("DearrowCheckedAtMs = %v, want 1700000100000", got.DearrowCheckedAtMs)
+	}
+	colliding, err := d.GetAssetByOwnerIdentity("dearrow_thumbnail", "tiktok_video", "test_video_1", 0)
+	if err != nil || colliding == nil || colliding.FilePath != collidingThumb {
+		t.Fatalf("colliding DeArrow asset changed: %+v %v", colliding, err)
+	}
+	if _, err := os.Stat(filepath.Join(d.storage.StateRoot(), collidingThumb)); err != nil {
+		t.Fatalf("colliding DeArrow file was removed: %v", err)
 	}
 }
 
 func TestSetDearrowData_NilClearsField(t *testing.T) {
 	d := openFreshTestDB(t)
 
-	if err := d.ExecRaw(`INSERT INTO channels (channel_id, name, platform) VALUES ('youtube_testchan', 'Test Channel', 'youtube')`); err != nil {
+	if err := d.ExecRaw(`INSERT INTO channels (channel_id, name, platform) VALUES ('youtube_test_channel', 'Test Channel', 'youtube')`); err != nil {
 		t.Fatalf("insert channel: %v", err)
 	}
 	if err := d.InsertVideo(
-		"vid1", "youtube_testchan", "Original Title", "desc",
-		60, "thumbs/orig.jpg", "videos/orig.mp4", 1024,
-		1_700_000_000_000, "", "video", 0, false,
+		"vid1", "youtube_testchan", "youtube_video", "Original Title", "desc",
+		60, 1_700_000_000_000, "", "video", 0, false,
 	); err != nil {
 		t.Fatalf("InsertVideo: %v", err)
 	}
@@ -106,6 +122,7 @@ func TestSetDearrowData_NilClearsField(t *testing.T) {
 	title := "Better"
 	titleCasual := "Casual"
 	thumbPath := "thumbnails/dearrow/vid1.jpg"
+	writeDBTestFile(t, filepath.Join(d.storage.StateRoot(), thumbPath), []byte("dearrow thumbnail"))
 	if err := d.SetDearrowData("vid1", &title, &titleCasual, &thumbPath, 1_700_000_100_000); err != nil {
 		t.Fatalf("SetDearrowData (set): %v", err)
 	}
@@ -128,11 +145,43 @@ func TestSetDearrowData_NilClearsField(t *testing.T) {
 	if got.DearrowTitleCasual != nil {
 		t.Errorf("DearrowTitleCasual should be nil after clear, got %v", got.DearrowTitleCasual)
 	}
-	if got.DearrowThumbPath != nil {
-		t.Errorf("DearrowThumbPath should be nil after clear, got %v", got.DearrowThumbPath)
+	if thumb, err := d.GetAssetByOwnerIdentity("dearrow_thumbnail", "youtube_video", "vid1", 0); err != nil || thumb != nil {
+		t.Errorf("DeArrow thumbnail asset = %+v, err = %v; want removed", thumb, err)
 	}
 	if got.DearrowCheckedAtMs == nil || *got.DearrowCheckedAtMs != 1_700_000_200_000 {
 		t.Errorf("DearrowCheckedAtMs = %v, want 1700000200000", got.DearrowCheckedAtMs)
+	}
+}
+
+func TestSetDearrowTitlesPreservesMissingFieldsAndReadyThumbnail(t *testing.T) {
+	d := openFreshTestDB(t)
+	if err := d.ExecRaw(`INSERT INTO channels (channel_id, name, platform) VALUES ('youtube_testchan', 'Test Channel', 'youtube')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.InsertVideo("vid1", "youtube_test_channel", "youtube_video", "Original", "", 60, 1, "", "video", 0, false); err != nil {
+		t.Fatal(err)
+	}
+	oldTitle, oldCasual := "Old title", "Old casual"
+	thumb := "thumbnails/dearrow/ready.jpg"
+	writeDBTestFile(t, filepath.Join(d.storage.StateRoot(), thumb), []byte("ready thumbnail"))
+	if err := d.SetDearrowData("vid1", &oldTitle, &oldCasual, &thumb, 1); err != nil {
+		t.Fatal(err)
+	}
+	newTitle := "New title"
+	if err := d.SetDearrowTitles("vid1", &newTitle, nil, 2); err != nil {
+		t.Fatal(err)
+	}
+	video, err := d.GetVideo("vid1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if video.DearrowTitle == nil || *video.DearrowTitle != newTitle ||
+		video.DearrowTitleCasual == nil || *video.DearrowTitleCasual != oldCasual {
+		t.Fatalf("partial title update cleared ready branding: %+v", video)
+	}
+	asset, err := d.GetAssetByOwnerIdentity("dearrow_thumbnail", "youtube_video", "vid1", 0)
+	if err != nil || asset == nil || asset.FilePath != thumb {
+		t.Fatalf("partial title update changed ready thumbnail: %+v, err = %v", asset, err)
 	}
 }
 
@@ -152,10 +201,13 @@ func TestListVideosNeedingDearrow(t *testing.T) {
 
 	insertVideo := func(videoID, channelID string, publishedAtMs int64) {
 		t.Helper()
+		ownerKind := "youtube_video"
+		if channelID == "twitter_tchan" {
+			ownerKind = "tweet"
+		}
 		if err := d.InsertVideo(
-			videoID, channelID, "Title", "desc",
-			60, "thumbs/t.jpg", "videos/v.mp4", 1024,
-			publishedAtMs, "", "video", 0, false,
+			videoID, channelID, ownerKind, "Title", "desc",
+			60, publishedAtMs, "", "video", 0, false,
 		); err != nil {
 			t.Fatalf("InsertVideo %s: %v", videoID, err)
 		}
@@ -183,6 +235,12 @@ func TestListVideosNeedingDearrow(t *testing.T) {
 		t.Fatalf("SetDearrowData y_has_data: %v", err)
 	}
 
+	insertVideo("y_asset_only", "youtube_ychan", nowMs-dayMsDearrow)
+	assetThumb := "thumbnails/dearrow/y_asset_only.jpg"
+	writeDBTestFile(t, filepath.Join(d.storage.StateRoot(), assetThumb), []byte("ready thumbnail"))
+	if err := d.SetDearrowData("y_asset_only", nil, nil, &assetThumb, nowMs-2*dayMsDearrow); err != nil {
+		t.Fatal(err)
+	}
 	// t_never: Twitter, never checked → excluded (wrong platform).
 	insertVideo("t_never", "twitter_tchan", nowMs-dayMsDearrow)
 
@@ -212,6 +270,17 @@ func TestListVideosNeedingDearrow(t *testing.T) {
 			t.Errorf("unexpected %q in result; full result: %v", id, ids)
 		}
 	}
+	tasks, err := d.ListVideosNeedingYoutubeEnrichment(nowMs, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	needsDearrow := map[string]bool{}
+	for _, task := range tasks {
+		needsDearrow[task.VideoID] = task.NeedsDearrow
+	}
+	if needsDearrow["y_asset_only"] {
+		t.Fatal("ready canonical DeArrow thumbnail was ignored by enrichment query")
+	}
 }
 
 // TestListVideosNeedingDearrow_CheckedAtExactlyOneDayAgoIsExcluded proves
@@ -225,9 +294,8 @@ func TestListVideosNeedingDearrow_CheckedAtExactlyOneDayAgoIsExcluded(t *testing
 		t.Fatalf("insert channel: %v", err)
 	}
 	if err := d.InsertVideo(
-		"y_boundary", "youtube_ychan", "Title", "desc",
-		60, "thumbs/t.jpg", "videos/v.mp4", 1024,
-		nowMs-2*dayMsDearrow, "", "video", 0, false,
+		"y_boundary", "youtube_ychan", "youtube_video", "Title", "desc",
+		60, nowMs-2*dayMsDearrow, "", "video", 0, false,
 	); err != nil {
 		t.Fatalf("InsertVideo: %v", err)
 	}

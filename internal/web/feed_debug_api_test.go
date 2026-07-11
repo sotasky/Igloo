@@ -13,11 +13,13 @@ func TestHandleFeedDebugItemReturnsTimelineAndVisibility(t *testing.T) {
 	srv := newTestServer(t)
 
 	if err := srv.db.ExecRaw(`
+		INSERT INTO channel_profiles (channel_id, platform, handle, display_name, observed_at_ms)
+		VALUES ('twitter_sample_user', 'twitter', 'sample_user', 'Sample User', 2000);
 		INSERT INTO feed_items (
-			tweet_id, source_handle, author_handle, body_text, published_at,
+			tweet_id, source_channel_id, channel_id, body_text, published_at,
 			fetched_at, content_hash, algo_interest, algo_scored_at
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		"tw_debug", "alice", "alice", "debug body", int64(1000),
+		"tw_debug", "twitter_sample_user", "twitter_sample_user", "debug body", int64(1000),
 		int64(2000), "same-body", 4.5, int64(2100),
 	); err != nil {
 		t.Fatal(err)
@@ -27,7 +29,7 @@ func TestHandleFeedDebugItemReturnsTimelineAndVisibility(t *testing.T) {
 			source_id, platform, source_type, external_id, label, url, enabled,
 			last_checked, last_ok, last_error, created_at, updated_at
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		"twitter_user_alice", "twitter", "user", "alice", "@alice", "https://x.com/alice", 1,
+		"twitter_user_sample_user", "twitter", "user", "sample_user", "@sample_user", "https://x.com/sample_user", 1,
 		int64(2400), int64(2500), "", int64(1200), int64(2500),
 	); err != nil {
 		t.Fatal(err)
@@ -35,7 +37,7 @@ func TestHandleFeedDebugItemReturnsTimelineAndVisibility(t *testing.T) {
 	if err := srv.db.ExecRaw(`
 		INSERT INTO feed_item_sources (tweet_id, source_id, first_seen_at, last_seen_at)
 		VALUES (?, ?, ?, ?)`,
-		"tw_debug", "twitter_user_alice", int64(1800), int64(2000),
+		"tw_debug", "twitter_user_sample_user", int64(1800), int64(2000),
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -44,12 +46,12 @@ func TestHandleFeedDebugItemReturnsTimelineAndVisibility(t *testing.T) {
 			handle, fail_count, next_retry_at, last_success_at, last_attempt_at,
 			last_error, last_http_status, avg_latency_ms, updated_at
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		"twitter_alice", 0, float64(0), float64(2300), float64(2300),
+		"twitter_sample_user", 0, float64(0), float64(2300), float64(2300),
 		"", nil, float64(33), int64(2350),
 	); err != nil {
 		t.Fatal(err)
 	}
-	if err := srv.db.ReplaceFeedRankSnapshot("alice", []db.SnapshotRow{{
+	if err := srv.db.ReplaceFeedRankSnapshot([]db.SnapshotRow{{
 		TweetID:            "tw_debug",
 		RankPosition:       7,
 		BaseScore:          6,
@@ -62,26 +64,26 @@ func TestHandleFeedDebugItemReturnsTimelineAndVisibility(t *testing.T) {
 		t.Fatalf("replace snapshot: %v", err)
 	}
 	if err := srv.db.ExecRaw(
-		`UPDATE feed_rank_snapshot SET computed_at = ? WHERE username = ? AND tweet_id = ?`,
-		int64(3000), "alice", "tw_debug",
+		`UPDATE feed_rank_snapshot SET computed_at = ? WHERE tweet_id = ?`,
+		int64(3000), "tw_debug",
 	); err != nil {
 		t.Fatal(err)
 	}
 	if err := srv.db.ExecRaw(
-		`INSERT INTO feed_seen (username, tweet_id, seen_at) VALUES (?, ?, ?)`,
-		"alice", "tw_debug", int64(4000),
+		`INSERT INTO feed_seen (tweet_id, seen_at) VALUES (?, ?)`,
+		"tw_debug", int64(4000),
 	); err != nil {
 		t.Fatal(err)
 	}
 	if err := srv.db.ExecRaw(
-		`INSERT INTO channel_follows (user_id, channel_id, followed_at) VALUES (?, ?, ?)`,
-		"", "twitter_alice", int64(1500),
+		`INSERT INTO channel_follows (channel_id, followed_at) VALUES (?, ?)`,
+		"twitter_sample_user", int64(1500),
 	); err != nil {
 		t.Fatal(err)
 	}
 	if err := srv.db.ExecRaw(
-		`INSERT INTO channel_stars (user_id, channel_id, starred_at) VALUES (?, ?, ?)`,
-		"", "twitter_alice", int64(1600),
+		`INSERT INTO channel_stars (channel_id, starred_at) VALUES (?, ?)`,
+		"twitter_sample_user", int64(1600),
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +126,7 @@ func TestHandleFeedDebugItemReturnsTimelineAndVisibility(t *testing.T) {
 	if !ok {
 		t.Fatalf("source entry = %#v", sources[0])
 	}
-	if sourceEntry["source_id"] != "twitter_user_alice" {
+	if sourceEntry["source_id"] != "twitter_user_sample_user" {
 		t.Fatalf("source_id = %v", sourceEntry["source_id"])
 	}
 	if sourceEntry["first_seen_at_sec"] != float64(1800) {
@@ -136,7 +138,7 @@ func TestHandleFeedDebugItemReturnsTimelineAndVisibility(t *testing.T) {
 	}
 
 	ingest := nestedMap(t, body, "ingest_state")
-	if ingest["handle"] != "twitter_alice" {
+	if ingest["handle"] != "twitter_sample_user" {
 		t.Fatalf("ingest handle = %v", ingest["handle"])
 	}
 	if ingest["last_success_at_sec"] != float64(2300) {

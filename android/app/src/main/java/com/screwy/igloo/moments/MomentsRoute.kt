@@ -16,7 +16,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavController
 import com.screwy.igloo.data.PreferencesRepo
-import com.screwy.igloo.media.MediaUri
 import com.screwy.igloo.ui.UiStateSwitch
 import com.screwy.igloo.ui.component.BookmarkSheet
 import com.screwy.igloo.ui.component.MomentsPlayer
@@ -51,7 +50,6 @@ fun MomentsRoute(
     val uiState by vm.playerUiState.collectAsStateWithLifecycle()
     val pendingBookmark by vm.pendingBookmark.collectAsStateWithLifecycle()
     val categories by vm.bookmarkCategories.collectAsStateWithLifecycle()
-    val pendingTransition by vm.pendingFullscreenTransition.collectAsStateWithLifecycle()
     val activeTab by vm.activeTab.collectAsStateWithLifecycle()
     val storyChannels by vm.storyChannels.collectAsStateWithLifecycle()
     val prefs: PreferencesRepo = koinInject()
@@ -73,7 +71,6 @@ fun MomentsRoute(
             MomentsPlayer(
                 items = items,
                 startIndex = startIndex,
-                startPositionMs = 0L,
                 autoSwipeDefault = autoplayEnabled,
                 muteDefault = muted,
                 onAutoSwipeChanged = vm::setAutoplayEnabled,
@@ -106,10 +103,6 @@ fun MomentsRoute(
                     navigator.openDestination(IglooDestination.AllMoments, IglooNavigationSource.Moments)
                 },
                 onEndReached = vm::notifyUpToDate,
-                cursorTracking = false,
-                initialTransitionPosterVideoId = pendingTransition?.mediaId,
-                initialTransitionPosterUri = pendingTransition?.posterUri ?: MediaUri.Missing,
-                onTransitionPosterDismissed = vm::clearPendingFullscreenTransition,
                 activeTab = playerActiveTab,
                 onTabSelected = { tab ->
                     if (tab == "stories") {

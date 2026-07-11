@@ -287,7 +287,7 @@ func TestKagiCooldownShortCircuitsAfterRateLimit(t *testing.T) {
 	t.Setenv("KAGI_COUNT_FILE", countPath)
 
 	d := openTranslateTestDB(t)
-	if err := d.SetSetting("", "translate_backend", settings.TranslateBackendKagiCLI); err != nil {
+	if err := d.SetSetting("translate_backend", settings.TranslateBackendKagiCLI); err != nil {
 		t.Fatalf("SetSetting translate_backend: %v", err)
 	}
 

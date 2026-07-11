@@ -11,6 +11,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -20,25 +21,14 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import com.screwy.igloo.perf.PerfProbe
+import java.io.File
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
-import java.io.File
-
-/**
- * Renders the active VTT cue as a centered caption below the video surface.
- *
- * VTT parsing is in-memory on first composition. Expected file sizes are small
- * (~KB) so we don't bother with a streaming parser. Malformed cues are skipped
- * rather than failing the whole file.
- */
+import kotlinx.coroutines.withContext
 
 /** One subtitle cue — start/end in ms, text already whitespace-normalized. */
-internal data class SubtitleCue(
-    val startMs: Long,
-    val endMs: Long,
-    val text: String,
-)
+internal data class SubtitleCue(val startMs: Long, val endMs: Long, val text: String)
 
 @Composable
 fun SubtitleOverlay(
@@ -49,26 +39,21 @@ fun SubtitleOverlay(
     bottomPadding: Dp = 12.dp,
 ) {
     if (!visible || subtitlePath == null) return
-    val cues = remember(subtitlePath) {
-        PerfProbe.timed(
-            event = "subtitle_parse",
-            fields = { mapOf("has_path" to true) },
-        ) {
-            runCatching { File(subtitlePath).readText() }
-                .map { parseVtt(it) }
-                .getOrDefault(emptyList())
+    val cues by
+        produceState(emptyList<SubtitleCue>(), subtitlePath) {
+            value = emptyList()
+            value =
+                withContext(Dispatchers.IO) {
+                    runCatching { File(subtitlePath).readText() }
+                        .map { parseVtt(it) }
+                        .getOrDefault(emptyList())
+                }
         }
-    }
     if (cues.isEmpty()) return
 
     // Re-sample the position every 200ms — finer than the eye perceives,
     // coarser than per-frame so it doesn't thrash recomposition.
     var posMs by remember { mutableStateOf(0L) }
-    androidx.compose.runtime.DisposableEffect(subtitlePath) {
-        fun fields() = mapOf("surface" to "subtitle", "cadence_ms" to 200, "cues" to cues.size)
-        val key = PerfProbe.collectorStart("playback_poll", ::fields)
-        onDispose { PerfProbe.collectorEnd("playback_poll", key, ::fields) }
-    }
     LaunchedEffect(subtitlePath) {
         while (isActive) {
             posMs = currentPositionMs()
@@ -76,11 +61,8 @@ fun SubtitleOverlay(
         }
     }
 
-    val active by remember(cues) {
-        derivedStateOf {
-            cues.firstOrNull { posMs in it.startMs..it.endMs }
-        }
-    }
+    val active by
+        remember(cues) { derivedStateOf { cues.firstOrNull { posMs in it.startMs..it.endMs } } }
 
     val current = active ?: return
 
@@ -89,10 +71,10 @@ fun SubtitleOverlay(
         contentAlignment = Alignment.Center,
     ) {
         Box(
-            modifier = Modifier
-                .clip(RoundedCornerShape(4.dp))
-                .background(Color.Black.copy(alpha = 0.72f))
-                .padding(horizontal = 10.dp, vertical = 4.dp),
+            modifier =
+                Modifier.clip(RoundedCornerShape(4.dp))
+                    .background(Color.Black.copy(alpha = 0.72f))
+                    .padding(horizontal = 10.dp, vertical = 4.dp)
         ) {
             Text(
                 text = current.text,
@@ -105,41 +87,32 @@ fun SubtitleOverlay(
 }
 
 /**
- * Parse a VTT file into a cue list. Skips the `WEBVTT` header, blank separator
- * lines, cue IDs, and anything that doesn't match the
- * `HH:MM:SS.mmm --> HH:MM:SS.mmm` timing line. Any cue whose timing line fails
- * to parse is dropped silently — graceful degradation per the task direction.
+ * Parse a VTT file into a cue list. Skips the `WEBVTT` header, blank separator lines, cue IDs, and
+ * anything that doesn't match the `HH:MM:SS.mmm --> HH:MM:SS.mmm` timing line. Any cue whose timing
+ * line fails to parse is dropped silently.
  *
- * Accepts both `HH:MM:SS.mmm` and `MM:SS.mmm` — VTT lets the hour field be
- * omitted for cues under an hour. `,` is accepted in place of `.` as a
- * pragmatic concession to SRT-flavored files.
+ * Accepts both `HH:MM:SS.mmm` and `MM:SS.mmm` — VTT lets the hour field be omitted for cues under
+ * an hour. `,` is accepted in place of `.` as a pragmatic concession to SRT-flavored files.
  */
 internal fun parseVtt(content: String): List<SubtitleCue> {
-    return parseVttCueBlocks(content)
-        .mapNotNull { cue ->
-            val text = sanitizeVttCueText(cue.lines.joinToString("\n"))
-            if (text.isEmpty()) {
-                null
-            } else {
-                SubtitleCue(
-                    startMs = cue.startMs,
-                    endMs = cue.endMs,
-                    text = text,
-                )
-            }
+    return parseVttCueBlocks(content).mapNotNull { cue ->
+        val text = sanitizeVttCueText(cue.lines.joinToString("\n"))
+        if (text.isEmpty()) {
+            null
+        } else {
+            SubtitleCue(startMs = cue.startMs, endMs = cue.endMs, text = text)
         }
+    }
 }
 
 internal fun sanitizeVttCueText(text: String): String {
     return decodeVttEntities(
-        text
-            .replace(WebVttTimestampTagRegex, "")
-            .replace(WebVttCueTagRegex, ""),
-    ).trim()
+            text.replace(WebVttTimestampTagRegex, "").replace(WebVttCueTagRegex, "")
+        )
+        .trim()
 }
 
-private val WebVttTimestampTagRegex =
-    Regex("<(?:\\d{1,2}:)?\\d{2}:\\d{2}[.,]\\d{3}>")
+private val WebVttTimestampTagRegex = Regex("<(?:\\d{1,2}:)?\\d{2}:\\d{2}[.,]\\d{3}>")
 
 private val WebVttCueTagRegex =
     Regex("</?(?:c(?:\\.[^>\\s]+)*|v(?:\\s+[^>]*)?|lang(?:\\s+[^>]*)?|b|i|u|ruby|rt)>")

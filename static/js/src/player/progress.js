@@ -22,13 +22,8 @@ export function initProgress(video, videoId, root) {
         position: savedPos,
         duration: dur,
         updated_at_ms: Date.now(),
-        client_type: 'web',
-      }),
-    }).then(function (data) {
-      if (data && data.sync_version && window.SyncPoller) {
-        window.SyncPoller.advance(data.sync_version)
-      }
-    }).catch(function (err) {
+		}),
+	}).catch(function (err) {
       console.debug('[Progress] save failed', err)
     })
   }
@@ -77,24 +72,5 @@ export function initProgress(video, videoId, root) {
     if (!autoplayNext || !nextUrl) return
     window.location.assign(nextUrl)
   })
-
-  // Sync from another device
-  if (window.SyncPoller) {
-    function applyRemoteProgress(syncVideoId, value) {
-      const currentVideoId = (document.querySelector('[data-video-id]') || {}).dataset &&
-                             document.querySelector('[data-video-id]').dataset.videoId
-      if (syncVideoId !== currentVideoId) return
-      const player = document.querySelector('video')
-      if (!player) return
-      const remotePos = Number(value.position) || 0
-      if (Math.abs(player.currentTime - remotePos) > 5 && player.paused) {
-        player.currentTime = remotePos
-      }
-    }
-
-    window.SyncPoller.on('watch_progress', applyRemoteProgress)
-    window.SyncPoller.on('progress', applyRemoteProgress)
-  }
-
-  return { saveNow: saveProgress }
+	return { saveNow: saveProgress }
 }

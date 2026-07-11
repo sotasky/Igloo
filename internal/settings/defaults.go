@@ -143,7 +143,6 @@ var Defaults = map[string]any{
 	"youtube_default_playback_speed":   "1",
 	"archive_bookmarks":                false,
 	"backup_enabled":                   false,
-	"backup_include_media":             false,
 	"backup_dir":                       "",
 	"backup_keep_count":                5,
 	"sponsorblock_categories":          SponsorBlockCategoriesDefault,

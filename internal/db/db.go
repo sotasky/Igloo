@@ -1,11 +1,13 @@
 package db
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"sync"
-	"sync/atomic"
 	"time"
+
+	"github.com/screwys/igloo/internal/storage"
 
 	_ "modernc.org/sqlite"
 )
@@ -21,20 +23,75 @@ type EnsureSchemaOptions struct {
 }
 
 type DB struct {
-	conn    *sql.DB
-	mu      sync.Mutex // serialize writes
-	dataDir string
-	syncSeq atomic.Int64 // monotonic counter for feed_items.sync_seq
+	conn                 *sql.DB
+	readTx               *sql.Tx
+	mu                   sync.Mutex // serialize writes
+	storage              storage.Layout
+	readyAssetDurability func(string) error
+}
+
+type sqlReader interface {
+	Query(query string, args ...any) (*sql.Rows, error)
+	QueryRow(query string, args ...any) *sql.Row
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+}
+
+func (db *DB) reader() sqlReader {
+	if db.readTx != nil {
+		return db.readTx
+	}
+	return db.conn
+}
+
+func (db *DB) WithReadSnapshot(fn func(*DB) error) error {
+	tx, err := db.conn.BeginTx(context.Background(), &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	snapshot := &DB{
+		conn: db.conn, readTx: tx, storage: db.storage,
+		readyAssetDurability: db.readyAssetDurability,
+	}
+	if err := fn(snapshot); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // Open opens the database for read-write with WAL mode.
-func Open(path, dataDir string) (*DB, error) {
-	return OpenWithOptions(path, dataDir, OpenOptions{})
+func Open(layout storage.Layout) (*DB, error) {
+	return OpenWithOptions(layout, OpenOptions{})
 }
 
 // OpenWithOptions opens the database for read-write with WAL mode and optional
 // startup phase reporting.
-func OpenWithOptions(path, dataDir string, opts OpenOptions) (*DB, error) {
+func OpenWithOptions(layout storage.Layout, opts OpenOptions) (*DB, error) {
+	if err := layout.Ensure(); err != nil {
+		return nil, fmt.Errorf("validate storage layout: %w", err)
+	}
+	return openPathWithOptions(layout.DatabasePath(), layout, opts)
+}
+
+// OpenPath opens an explicit database copy with co-located local storage.
+// Runtime callers use Open; this boundary exists for maintenance tools and
+// schema or restore tests that intentionally operate on another database file.
+func OpenPath(path, stateRoot string) (*DB, error) {
+	layout, err := storage.New(stateRoot, "")
+	if err != nil {
+		return nil, err
+	}
+	return openPathWithOptions(path, layout, OpenOptions{})
+}
+
+func OpenLayoutPath(path string, layout storage.Layout) (*DB, error) {
+	if err := layout.Ensure(); err != nil {
+		return nil, fmt.Errorf("validate storage layout: %w", err)
+	}
+	return openPathWithOptions(path, layout, OpenOptions{})
+}
+
+func openPathWithOptions(path string, layout storage.Layout, opts OpenOptions) (*DB, error) {
 	totalStart := time.Now()
 
 	phaseStart := time.Now()
@@ -53,54 +110,36 @@ func OpenWithOptions(path, dataDir string, opts OpenOptions) (*DB, error) {
 	}
 	reportPhase(opts.Phase, "db.ping", phaseStart)
 
-	d := &DB{conn: conn, dataDir: dataDir}
+	d := &DB{conn: conn, storage: layout}
 	phaseStart = time.Now()
-	if err := EnsureSchemaWithOptions(conn, EnsureSchemaOptions(opts)); err != nil {
+	present, err := schemaPresent(conn)
+	if err == nil && present {
+		err = ValidateCurrentSchema(conn)
+	} else if err == nil {
+		err = EnsureSchemaWithOptions(conn, EnsureSchemaOptions(opts))
+	}
+	if err != nil {
 		_ = conn.Close()
 		reportPhase(opts.Phase, "db.ensure_schema", phaseStart)
 		return nil, fmt.Errorf("ensure schema: %w", err)
 	}
 	reportPhase(opts.Phase, "db.ensure_schema", phaseStart)
 
-	phaseStart = time.Now()
-	if err := d.cleanupRetiredReadingFeature(); err != nil {
-		_ = conn.Close()
-		reportPhase(opts.Phase, "db.cleanup_retired_reading", phaseStart)
-		return nil, fmt.Errorf("cleanup retired reading feature: %w", err)
-	}
-	reportPhase(opts.Phase, "db.cleanup_retired_reading", phaseStart)
-
-	phaseStart = time.Now()
-	if err := d.initSyncSeq(); err != nil {
-		_ = conn.Close()
-		reportPhase(opts.Phase, "db.init_sync_seq", phaseStart)
-		return nil, fmt.Errorf("init sync_seq: %w", err)
-	}
-	reportPhase(opts.Phase, "db.init_sync_seq", phaseStart)
-
-	phaseStart = time.Now()
-	if err := d.repairTwitterPlaceholderAuthorsOnce(); err != nil {
-		_ = conn.Close()
-		reportPhase(opts.Phase, "db.repair_twitter_placeholder_authors", phaseStart)
-		return nil, fmt.Errorf("repair twitter placeholder authors: %w", err)
-	}
-	reportPhase(opts.Phase, "db.repair_twitter_placeholder_authors", phaseStart)
-
-	phaseStart = time.Now()
-	if err := d.RepairVideoMediaShapesOnce(); err != nil {
-		_ = conn.Close()
-		reportPhase(opts.Phase, "db.repair_video_media_shapes", phaseStart)
-		return nil, fmt.Errorf("repair video media shapes: %w", err)
-	}
-	reportPhase(opts.Phase, "db.repair_video_media_shapes", phaseStart)
-
 	reportPhase(opts.Phase, "db.open_total", totalStart)
 	return d, nil
 }
 
 // OpenReadOnly opens the database in read-only mode.
-func OpenReadOnly(path, dataDir string) (*DB, error) {
-	dsn := fmt.Sprintf("file:%s?mode=ro&_pragma=journal_mode(wal)&_pragma=busy_timeout(30000)", path)
+func OpenReadOnly(path, stateRoot string) (*DB, error) {
+	layout, err := storage.New(stateRoot, "")
+	if err != nil {
+		return nil, err
+	}
+	return OpenReadOnlyLayout(path, layout)
+}
+
+func OpenReadOnlyLayout(path string, layout storage.Layout) (*DB, error) {
+	dsn := fmt.Sprintf("file:%s?mode=ro&_pragma=query_only(1)&_pragma=busy_timeout(30000)", path)
 	conn, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open db readonly: %w", err)
@@ -109,7 +148,7 @@ func OpenReadOnly(path, dataDir string) (*DB, error) {
 		_ = conn.Close()
 		return nil, fmt.Errorf("ping db: %w", err)
 	}
-	return &DB{conn: conn, dataDir: dataDir}, nil
+	return &DB{conn: conn, storage: layout}, nil
 }
 
 // Close closes the database connection.
@@ -117,33 +156,12 @@ func (db *DB) Close() error {
 	return db.conn.Close()
 }
 
-// initSyncSeq seeds the global sync_seq counter from the max value across
-// every primary-row table that participates in bundle-delta endpoints (#6).
-// All tables share one monotonic to keep cross-stream ordering
-// deterministic when a single request touches multiple tables.
-func (db *DB) initSyncSeq() error {
-	var maxSeq int64
-	err := db.conn.QueryRow(`
-		SELECT MAX(seq) FROM (
-			SELECT COALESCE(MAX(sync_seq), 0) AS seq FROM feed_items
-			UNION ALL SELECT COALESCE(MAX(sync_seq), 0) FROM videos
-			UNION ALL SELECT COALESCE(MAX(sync_seq), 0) FROM channels
-		)`).Scan(&maxSeq)
-	if err != nil {
-		return err
-	}
-	db.syncSeq.Store(maxSeq)
-	return nil
-}
-
-// NextSyncSeq atomically increments and returns the next sync_seq value.
-func (db *DB) NextSyncSeq() int64 {
-	return db.syncSeq.Add(1)
-}
-
 // WithRead executes a read-only function against the database.
 // No lock needed — WAL allows concurrent reads.
 func (db *DB) WithRead(fn func(conn *sql.DB) error) error {
+	if db.readTx != nil {
+		return fmt.Errorf("direct connection read unavailable inside read snapshot")
+	}
 	return fn(db.conn)
 }
 
@@ -161,19 +179,22 @@ func (db *DB) VacuumInto(dstPath string) error {
 
 // QueryRow exposes raw single-row queries (used by tests).
 func (db *DB) QueryRow(query string, args ...any) *sql.Row {
-	return db.conn.QueryRow(query, args...)
+	return db.reader().QueryRow(query, args...)
 }
 
 // WithWrite executes a write function inside a transaction with mutex.
 func (db *DB) WithWrite(fn func(tx *sql.Tx) error) error {
+	if db.readTx != nil {
+		return fmt.Errorf("write transaction unavailable inside read snapshot")
+	}
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	tx, err := db.conn.Begin()
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
 	}
+	defer func() { _ = tx.Rollback() }()
 	if err := fn(tx); err != nil {
-		_ = tx.Rollback()
 		return err
 	}
 	return tx.Commit()

@@ -57,9 +57,7 @@ fun AppNavHost() {
     val backStackEntry by navController.currentBackStackEntryAsState()
     val authRepo: AuthRepo = koinInject()
     val uiEffects: UiEffects = koinInject()
-    // PreferencesRepo is DB-backed — resolve only when logged in, otherwise
-    // Koin would trigger DatabaseHolder.requireCurrent() before a session exists.
-    val startDestination = if (!authRepo.canOpenLocalSessionSync()) {
+    val startDestination = if (!authRepo.hasSessionSync()) {
         RouteRegistry.Login.route
     } else {
         val prefs: PreferencesRepo = koinInject()
@@ -133,15 +131,11 @@ fun AppNavHost() {
         }
 
         directDestination(RouteRegistry.Media) { entry ->
-            val initialSnapshot = remember(entry) {
-                navController.consumeMediaOpenSnapshotFromPrevious()
-            }
             MediaRoute(
                 ownerKind = entry.arguments!!.getString("owner_kind")!!,
                 ownerId = entry.arguments!!.getString("owner_id")!!,
                 index = entry.arguments!!.getString("index")!!.toIntOrNull() ?: 0,
                 navController = navController,
-                initialSnapshot = initialSnapshot,
             )
         }
 

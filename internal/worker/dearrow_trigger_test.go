@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -40,16 +41,16 @@ func stubDearrowExtract(_ context.Context, _ string, _ float64, out string) erro
 // stub (for inspection). dataDir is under t.TempDir().
 func newTestManagerWithDearrow(t *testing.T, res dearrow.Result, clientErr error) (*Manager, *stubDearrowClient) {
 	t.Helper()
-	d := newTestWorkerDB(t)
 	dataDir := t.TempDir()
+	d := newTestWorkerDBAt(t, dataDir)
 	cfg := testCfg(dataDir)
 	client := &stubDearrowClient{res: res, err: clientErr}
 	m := &Manager{
 		db:  d,
 		cfg: cfg,
 		dearrowFetcher: &dearrow.Fetcher{
-			Client:  client,
-			Extract: stubDearrowExtract,
+			Client:   client,
+			Extract:  stubDearrowExtract,
 			ThumbDir: filepath.Join(dataDir, "thumbnails", "dearrow"),
 		},
 	}
@@ -65,9 +66,8 @@ func seedVideo(t *testing.T, m *Manager, videoID string) {
 		"youtube_testchan", "test", "youtube",
 	)
 	if err := m.db.InsertVideo(
-		videoID, "youtube_testchan", "Original Title", "",
-		60, "", "videos/"+videoID+".mp4", 1024,
-		time.Now().UnixMilli(), "", "video", 0, false,
+		videoID, "youtube_testchan", "youtube_video", "Original Title", "",
+		60, time.Now().UnixMilli(), "", "video", 0, false,
 	); err != nil {
 		t.Fatalf("InsertVideo: %v", err)
 	}
@@ -103,18 +103,22 @@ func TestTriggerDearrowFetch_YouTubePersistsFullBranding(t *testing.T) {
 	if got.DearrowTitleCasual == nil || *got.DearrowTitleCasual != "Casual" {
 		t.Errorf("DearrowTitleCasual = %v, want Casual", got.DearrowTitleCasual)
 	}
-	if got.DearrowThumbPath == nil {
-		t.Fatal("DearrowThumbPath is nil, want a path ending with v1.jpg")
+	thumb, err := m.db.GetAssetByOwnerIdentity("dearrow_thumbnail", "youtube_video", "v1", 0)
+	if err != nil || thumb == nil {
+		t.Fatalf("DeArrow thumbnail asset = %+v, err = %v", thumb, err)
 	}
-	if !strings.HasSuffix(*got.DearrowThumbPath, "v1.jpg") {
-		t.Errorf("DearrowThumbPath = %q, want suffix v1.jpg", *got.DearrowThumbPath)
+	if !strings.HasSuffix(thumb.FilePath, ".jpg") {
+		t.Errorf("DeArrow thumbnail path = %q, want jpg", thumb.FilePath)
 	}
 	if got.DearrowCheckedAtMs == nil || *got.DearrowCheckedAtMs <= 0 {
 		t.Errorf("DearrowCheckedAtMs = %v, want > 0", got.DearrowCheckedAtMs)
 	}
 
 	// Assert thumbnail file exists.
-	thumbAbs := filepath.Join(m.cfg.DataDir, *got.DearrowThumbPath)
+	thumbAbs, err := m.cfg.Storage.Path(thumb.FilePath)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, err := os.Stat(thumbAbs); err != nil {
 		t.Errorf("thumbnail file not found at %s: %v", thumbAbs, err)
 	}
@@ -156,9 +160,8 @@ func TestTriggerDearrowFetch_NilFetcherIsNoOp(t *testing.T) {
 		"youtube_testchan", "test", "youtube",
 	)
 	_ = d.InsertVideo(
-		"v1", "youtube_testchan", "Title", "",
-		60, "", "videos/v1.mp4", 1024,
-		time.Now().UnixMilli(), "", "video", 0, false,
+		"v1", "youtube_testchan", "youtube_video", "Title", "",
+		60, time.Now().UnixMilli(), "", "video", 0, false,
 	)
 
 	ctx := context.Background()
@@ -188,9 +191,12 @@ func TestTriggerDearrowFetch_APIErrorMarksChecked(t *testing.T) {
 	if got.DearrowCheckedAtMs == nil || *got.DearrowCheckedAtMs <= 0 {
 		t.Errorf("DearrowCheckedAtMs = %v, want > 0 (MarkDearrowChecked should fire on error)", got.DearrowCheckedAtMs)
 	}
-	if got.DearrowTitle != nil || got.DearrowTitleCasual != nil || got.DearrowThumbPath != nil {
-		t.Errorf("value columns should be nil on pure error: title=%v casual=%v thumb=%v",
-			got.DearrowTitle, got.DearrowTitleCasual, got.DearrowThumbPath)
+	if got.DearrowTitle != nil || got.DearrowTitleCasual != nil {
+		t.Errorf("value columns should be nil on pure error: title=%v casual=%v",
+			got.DearrowTitle, got.DearrowTitleCasual)
+	}
+	if thumb, err := m.db.GetAssetByOwnerIdentity("dearrow_thumbnail", "youtube_video", "v1", 0); err != nil || thumb != nil {
+		t.Errorf("DeArrow thumbnail asset = %+v, err = %v; want none", thumb, err)
 	}
 }
 
@@ -208,18 +214,57 @@ func TestTriggerDearrowFetch_ThumbPathStoredRelative(t *testing.T) {
 	ctx := context.Background()
 	m.triggerDearrowFetch(ctx, "v1", "videos/v1.mp4", "youtube")
 
-	got, err := m.db.GetVideo("v1")
+	thumb, err := m.db.GetAssetByOwnerIdentity("dearrow_thumbnail", "youtube_video", "v1", 0)
+	if err != nil || thumb == nil {
+		t.Fatalf("DeArrow thumbnail asset = %+v, err = %v", thumb, err)
+	}
+	if filepath.IsAbs(thumb.FilePath) {
+		t.Errorf("DeArrow thumbnail path = %q is absolute; want relative", thumb.FilePath)
+	}
+	if !strings.HasPrefix(thumb.FilePath, "thumbnails/dearrow/") || !strings.HasSuffix(thumb.FilePath, ".jpg") {
+		t.Errorf("DeArrow thumbnail path = %q, want unique jpg under thumbnails/dearrow", thumb.FilePath)
+	}
+}
+
+func TestTriggerDearrowFetch_ExtractionFailurePreservesReadyThumbnail(t *testing.T) {
+	newTitle := "Updated title"
+	ts := 4.0
+	m, _ := newTestManagerWithDearrow(t, dearrow.Result{Title: &newTitle, ThumbTimestamp: &ts}, nil)
+	seedVideo(t, m, "v1")
+
+	oldKey := "thumbnails/dearrow/existing.jpg"
+	oldPath, err := m.cfg.Storage.Path(oldKey)
 	if err != nil {
-		t.Fatalf("GetVideo: %v", err)
+		t.Fatal(err)
 	}
-	if got.DearrowThumbPath == nil {
-		t.Fatal("DearrowThumbPath is nil")
+	if err := os.MkdirAll(filepath.Dir(oldPath), 0o755); err != nil {
+		t.Fatal(err)
 	}
-	if filepath.IsAbs(*got.DearrowThumbPath) {
-		t.Errorf("DearrowThumbPath = %q is absolute; want relative", *got.DearrowThumbPath)
+	if err := os.WriteFile(oldPath, []byte("ready thumbnail"), 0o644); err != nil {
+		t.Fatal(err)
 	}
-	if !strings.HasSuffix(*got.DearrowThumbPath, "thumbnails/dearrow/v1.jpg") {
-		t.Errorf("DearrowThumbPath = %q, want suffix thumbnails/dearrow/v1.jpg", *got.DearrowThumbPath)
+	if err := m.db.SetDearrowData("v1", nil, nil, &oldKey, 1); err != nil {
+		t.Fatal(err)
+	}
+	m.dearrowFetcher.Extract = func(context.Context, string, float64, string) error {
+		return errors.New("extract failed")
+	}
+
+	m.triggerDearrowFetch(context.Background(), "v1", "videos/v1.mp4", "youtube")
+
+	video, err := m.db.GetVideo("v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if video.DearrowTitle == nil || *video.DearrowTitle != newTitle {
+		t.Fatalf("partial title was not persisted: %+v", video.DearrowTitle)
+	}
+	asset, err := m.db.GetAssetByOwnerIdentity("dearrow_thumbnail", "youtube_video", "v1", 0)
+	if err != nil || asset == nil || asset.FilePath != oldKey {
+		t.Fatalf("ready thumbnail was replaced on extraction failure: %+v, err = %v", asset, err)
+	}
+	if body, err := os.ReadFile(oldPath); err != nil || string(body) != "ready thumbnail" {
+		t.Fatalf("ready thumbnail bytes changed: body=%q err=%v", body, err)
 	}
 }
 

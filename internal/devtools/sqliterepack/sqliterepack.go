@@ -71,7 +71,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 			_, _ = fmt.Fprintf(stderr, "sqlite repack: invalid configuration: %v\n", cfg.ConfigError)
 			return 1
 		}
-		dbPath = cfg.DatabasePath
+		dbPath = cfg.Storage.DatabasePath()
 	}
 
 	rep, err := readReport(dbPath)

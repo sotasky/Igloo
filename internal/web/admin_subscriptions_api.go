@@ -120,13 +120,7 @@ func (s *Server) handleSubscribe(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	s.workers.RequestAvatar(ch.ChannelID)
 	s.workers.Emit("system", fmt.Sprintf("Subscribed: %s (%s)", ch.Name, ch.Platform), "done")
-
-	valueJSON := fmt.Sprintf(`{"channel_id":%q,"platform":%q}`, ch.ChannelID, ch.Platform)
-	if err := s.db.RecordSyncChange("subscribe", ch.ChannelID, valueJSON); err != nil {
-		slog.Warn("RecordSyncChange subscribe", "channel", ch.ChannelID, "err", err)
-	}
 
 	if isHTMX {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -155,31 +149,20 @@ func (s *Server) handleSubscribe(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleUnsubscribe(w http.ResponseWriter, r *http.Request) {
 	channelID := r.PathValue("channelID")
-	userID := ""
-	if user := userFromContext(r.Context()); user != nil {
-		userID = user.Username
-	}
-	videos, err := s.db.PurgeUnfollowedChannelContent(channelID, userID)
+	keys, err := s.db.PurgeUnfollowedChannelContent(channelID)
 	if err != nil {
 		slog.Error("PurgeUnfollowedChannelContent", "channel", channelID, "err", err)
 		writeJSON(w, 500, map[string]any{"error": "db error"})
 		return
 	}
-	for _, v := range videos {
-		s.deleteVideoFiles(v)
-	}
+	s.removeCanonicalAssetFiles(keys)
 
 	s.workers.Emit("system", fmt.Sprintf("Unsubscribed: %s", channelID), "info")
-
-	valueJSON := fmt.Sprintf(`{"channel_id":%q}`, channelID)
-	if err := s.db.RecordSyncChange("unsubscribe", channelID, valueJSON); err != nil {
-		slog.Warn("RecordSyncChange unsubscribe", "channel", channelID, "err", err)
-	}
 
 	if r.Header.Get("HX-Request") != "" {
 		// Return empty — hx-swap="outerHTML" removes the channel item
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		return
 	}
-	writeJSON(w, 200, map[string]any{"success": true, "deleted_files": len(videos)})
+	writeJSON(w, 200, map[string]any{"success": true, "deleted_files": len(keys)})
 }

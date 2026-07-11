@@ -1,9 +1,6 @@
 package com.screwy.igloo.ui.component
 
 import androidx.activity.compose.BackHandler
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -58,8 +55,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.ui.layout.ContentScale
@@ -70,28 +67,26 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
-import androidx.media3.common.Player
 import androidx.media3.common.MediaItem as Media3Item
+import androidx.media3.common.Player
 import coil3.compose.AsyncImage
 import com.screwy.igloo.R
 import com.screwy.igloo.media.MediaUri
 import com.screwy.igloo.net.IglooHostProvider
 import com.screwy.igloo.net.auth.AuthTokenProvider
-import com.screwy.igloo.perf.PerfProbe
 import com.screwy.igloo.player.buildIglooPlayer
 import com.screwy.igloo.ui.theme.iglooColors
+import kotlin.math.abs
 import kotlinx.coroutines.delay
 import org.koin.compose.koinInject
-import kotlin.math.abs
 
 /** Shape for one media viewer page. */
 sealed class MediaItem {
     data class Image(val uri: MediaUri, val aspectRatio: Float) : MediaItem()
-    data class Video(
-        val streamUri: MediaUri,
-        val thumbnailUri: MediaUri,
-        val aspectRatio: Float,
-    ) : MediaItem()
+
+    data class Video(val streamUri: MediaUri, val thumbnailUri: MediaUri, val aspectRatio: Float) :
+        MediaItem()
+
     data class Gif(val streamUri: MediaUri, val aspectRatio: Float) : MediaItem()
 }
 
@@ -111,8 +106,7 @@ data class MediaSet(
 internal fun clampZoom(current: Float, scaleDelta: Float, min: Float = 1f, max: Float = 5f): Float =
     (current * scaleDelta).coerceIn(min, max)
 
-internal fun isSwipeDownDismiss(deltaY: Float, thresholdPx: Float): Boolean =
-    deltaY > thresholdPx
+internal fun isSwipeDownDismiss(deltaY: Float, thresholdPx: Float): Boolean = deltaY > thresholdPx
 
 internal fun shouldHandleImageTransform(scale: Float, pointerCount: Int): Boolean =
     scale > 1f || pointerCount > 1
@@ -143,8 +137,8 @@ fun MediaViewer(
     onBookmarkToggle: () -> Unit,
     onLikeToggle: () -> Unit,
     onAuthorClick: () -> Unit,
-    onShare: (url: String) -> Unit = { },
-    onOpenExternal: (url: String) -> Unit = { },
+    onShare: (url: String) -> Unit = {},
+    onOpenExternal: (url: String) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     if (media.items.isEmpty()) return
@@ -155,19 +149,24 @@ fun MediaViewer(
     val pagerState = rememberPagerState(initialPage = initialPage, pageCount = { media.items.size })
     var dragY by remember { mutableFloatStateOf(0f) }
     var muted by remember(media, initialPage) { mutableStateOf(false) }
-    var videoPositionMs by remember(media, initialPage) { mutableLongStateOf(initialVideoPositionMs) }
+    var videoPositionMs by
+        remember(media, initialPage) { mutableLongStateOf(initialVideoPositionMs) }
     var videoProgress by remember(media, initialPage) { mutableFloatStateOf(0f) }
-    var videoSeekToFraction by remember(media, initialPage) { mutableStateOf<((Float) -> Unit)?>(null) }
+    var videoSeekToFraction by
+        remember(media, initialPage) { mutableStateOf<((Float) -> Unit)?>(null) }
     val currentItem by remember { derivedStateOf { media.items.getOrNull(pagerState.currentPage) } }
     val isVideoPage = currentItem is MediaItem.Video || currentItem is MediaItem.Gif
     val bodyText by remember {
         derivedStateOf {
-            if (pagerState.currentPage < media.parentMediaCount) media.bodyText else media.quoteBodyText
+            if (pagerState.currentPage < media.parentMediaCount) media.bodyText
+            else media.quoteBodyText
         }
     }
     val canonicalUrl by remember {
         derivedStateOf {
-            if (pagerState.currentPage < media.parentMediaCount || media.quoteCanonicalUrl.isBlank()) {
+            if (
+                pagerState.currentPage < media.parentMediaCount || media.quoteCanonicalUrl.isBlank()
+            ) {
                 media.canonicalUrl
             } else {
                 media.quoteCanonicalUrl
@@ -179,38 +178,30 @@ fun MediaViewer(
     BackHandler(onBack = dismiss)
 
     LaunchedEffect(pagerState.currentPage, isVideoPage) {
-        PerfProbe.log(
-            event = "media_viewer_page",
-        ) {
-            mapOf(
-                "page" to pagerState.currentPage,
-                "items" to media.items.size,
-                "is_video_page" to isVideoPage,
-            )
-        }
         videoProgress = 0f
         videoSeekToFraction = null
     }
 
     Box(
-        modifier = modifier
-            .fillMaxSize()
-            .background(Color.Black)
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
-                onClick = { },
-            )
-            .pointerInput(Unit) {
-                detectVerticalDragGestures(
-                    onVerticalDrag = { _, amount -> dragY += amount },
-                    onDragEnd = {
-                        if (isSwipeDownDismiss(dragY, dismissThresholdPx)) dismiss()
-                        dragY = 0f
-                    },
-                    onDragCancel = { dragY = 0f },
+        modifier =
+            modifier
+                .fillMaxSize()
+                .background(Color.Black)
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = {},
                 )
-            },
+                .pointerInput(Unit) {
+                    detectVerticalDragGestures(
+                        onVerticalDrag = { _, amount -> dragY += amount },
+                        onDragEnd = {
+                            if (isSwipeDownDismiss(dragY, dismissThresholdPx)) dismiss()
+                            dragY = 0f
+                        },
+                        onDragCancel = { dragY = 0f },
+                    )
+                }
     ) {
         HorizontalPager(
             state = pagerState,
@@ -221,30 +212,32 @@ fun MediaViewer(
             val active = pagerState.currentPage == page
             when (item) {
                 is MediaItem.Image -> MediaImagePage(item)
-                is MediaItem.Video -> MediaVideoPage(
-                    pageIndex = page,
-                    streamUri = item.streamUri,
-                    posterUri = item.thumbnailUri,
-                    active = active,
-                    muted = muted,
-                    loop = true,
-                    initialPositionMs = if (page == initialPage) initialVideoPositionMs else 0L,
-                    onPositionUpdate = { if (active) videoPositionMs = it },
-                    onProgressUpdate = { if (active) videoProgress = it },
-                    onSeekAvailable = { seek -> if (active) videoSeekToFraction = seek },
-                )
-                is MediaItem.Gif -> MediaVideoPage(
-                    pageIndex = page,
-                    streamUri = item.streamUri,
-                    posterUri = MediaUri.Missing,
-                    active = active,
-                    muted = true,
-                    loop = true,
-                    initialPositionMs = if (page == initialPage) initialVideoPositionMs else 0L,
-                    onPositionUpdate = { if (active) videoPositionMs = it },
-                    onProgressUpdate = { if (active) videoProgress = it },
-                    onSeekAvailable = { seek -> if (active) videoSeekToFraction = seek },
-                )
+                is MediaItem.Video ->
+                    MediaVideoPage(
+                        pageIndex = page,
+                        streamUri = item.streamUri,
+                        posterUri = item.thumbnailUri,
+                        active = active,
+                        muted = muted,
+                        loop = true,
+                        initialPositionMs = if (page == initialPage) initialVideoPositionMs else 0L,
+                        onPositionUpdate = { if (active) videoPositionMs = it },
+                        onProgressUpdate = { if (active) videoProgress = it },
+                        onSeekAvailable = { seek -> if (active) videoSeekToFraction = seek },
+                    )
+                is MediaItem.Gif ->
+                    MediaVideoPage(
+                        pageIndex = page,
+                        streamUri = item.streamUri,
+                        posterUri = MediaUri.Missing,
+                        active = active,
+                        muted = true,
+                        loop = true,
+                        initialPositionMs = if (page == initialPage) initialVideoPositionMs else 0L,
+                        onPositionUpdate = { if (active) videoPositionMs = it },
+                        onProgressUpdate = { if (active) videoProgress = it },
+                        onSeekAvailable = { seek -> if (active) videoSeekToFraction = seek },
+                    )
             }
         }
 
@@ -282,57 +275,68 @@ private fun MediaImagePage(item: MediaItem.Image) {
     var offset by remember(item.uri) { mutableStateOf(Offset.Zero) }
     var size by remember(item.uri) { mutableStateOf(IntSize.Zero) }
     Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color.Black)
-            .onSizeChanged { newSize -> size = newSize },
+        modifier =
+            Modifier.fillMaxSize().background(Color.Black).onSizeChanged { newSize ->
+                size = newSize
+            },
         contentAlignment = Alignment.Center,
     ) {
         when (val uri = item.uri) {
             is MediaUri.Local,
-            is MediaUri.Remote -> AsyncImage(
-                model = rememberMediaImageModel(
-                    uri = uri,
-                    memoryCacheKey = cacheKey,
-                    placeholderMemoryCacheKey = cacheKey,
-                ),
-                contentDescription = null,
-                contentScale = ContentScale.Fit,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .graphicsLayer {
-                        scaleX = scale
-                        scaleY = scale
-                        translationX = offset.x
-                        translationY = offset.y
-                    }
-                    .pointerInput(item.uri, size) {
-                        awaitEachGesture {
-                            do {
-                                val event = awaitPointerEvent()
-                                val zoomChange = event.calculateZoom()
-                                val panChange = event.calculatePan()
-                                val pointerCount = event.changes.count { it.pressed }
-                                val transformActive = shouldHandleImageTransform(scale, pointerCount) ||
-                                    abs(zoomChange - 1f) > 0.01f
-                                if (transformActive) {
-                                    val nextScale = clampZoom(scale, zoomChange)
-                                    scale = nextScale
-                                    offset = boundedZoomPanOffset(
-                                        current = if (nextScale <= 1f) Offset.Zero else offset,
-                                        pan = if (nextScale <= 1f) Offset.Zero else panChange,
-                                        scale = nextScale,
-                                        size = size,
-                                    )
-                                    event.changes
-                                        .filter { it.positionChanged() || abs(zoomChange - 1f) > 0.01f }
-                                        .forEach { it.consume() }
+            is MediaUri.Remote ->
+                AsyncImage(
+                    model =
+                        rememberMediaImageModel(
+                            uri = uri,
+                            memoryCacheKey = cacheKey,
+                            placeholderMemoryCacheKey = cacheKey,
+                        ),
+                    contentDescription = null,
+                    contentScale = ContentScale.Fit,
+                    modifier =
+                        Modifier.fillMaxSize()
+                            .graphicsLayer {
+                                scaleX = scale
+                                scaleY = scale
+                                translationX = offset.x
+                                translationY = offset.y
+                            }
+                            .pointerInput(item.uri, size) {
+                                awaitEachGesture {
+                                    do {
+                                        val event = awaitPointerEvent()
+                                        val zoomChange = event.calculateZoom()
+                                        val panChange = event.calculatePan()
+                                        val pointerCount = event.changes.count { it.pressed }
+                                        val transformActive =
+                                            shouldHandleImageTransform(scale, pointerCount) ||
+                                                abs(zoomChange - 1f) > 0.01f
+                                        if (transformActive) {
+                                            val nextScale = clampZoom(scale, zoomChange)
+                                            scale = nextScale
+                                            offset =
+                                                boundedZoomPanOffset(
+                                                    current =
+                                                        if (nextScale <= 1f) Offset.Zero
+                                                        else offset,
+                                                    pan =
+                                                        if (nextScale <= 1f) Offset.Zero
+                                                        else panChange,
+                                                    scale = nextScale,
+                                                    size = size,
+                                                )
+                                            event.changes
+                                                .filter {
+                                                    it.positionChanged() ||
+                                                        abs(zoomChange - 1f) > 0.01f
+                                                }
+                                                .forEach { it.consume() }
+                                        }
+                                    } while (event.changes.any { it.pressed })
                                 }
-                            } while (event.changes.any { it.pressed })
-                        }
-                    }
-                    .alpha(mediaAlpha(uri)),
-            )
+                            }
+                            .alpha(mediaAlpha(uri)),
+                )
             is MediaUri.Missing -> MissingMediaIcon()
         }
         if (isIglooRemoteOffline(item.uri)) DownloadPendingBadge()
@@ -356,90 +360,74 @@ private fun MediaVideoPage(
     val authTokens: AuthTokenProvider = koinInject()
     val iglooHostProvider: IglooHostProvider = koinInject()
     val remoteOffline = isIglooRemoteOffline(streamUri)
-    val player = remember(streamUri, loop, remoteOffline, authTokens.bearerTokenSync()) {
-        if (streamUri is MediaUri.Missing || remoteOffline) {
-            null
-        } else {
-            buildIglooPlayer(context, authTokens, iglooHostProvider).also { player ->
-                PerfProbe.incrementCounter("igloo_media_viewer_player_build_count")
-                PerfProbe.log(
-                    event = "media_viewer_player_build",
-                ) { mapOf("page" to pageIndex, "uri" to PerfProbe.uriKind(streamUri)) }
-                player.repeatMode = if (loop) Player.REPEAT_MODE_ALL else Player.REPEAT_MODE_OFF
-                val mediaItem = when (streamUri) {
-                    is MediaUri.Local -> Media3Item.fromUri(streamUri.file.toURI().toString())
-                    is MediaUri.Remote -> Media3Item.fromUri(streamUri.url)
-                    is MediaUri.Missing -> null
-                }
-                mediaItem?.let {
-                    PerfProbe.timed(
-                        event = "media_viewer_player_prepare",
-                        fields = { mapOf("page" to pageIndex, "uri" to PerfProbe.uriKind(streamUri)) },
-                    ) {
+    val player =
+        remember(streamUri, loop, remoteOffline, authTokens.bearerTokenSync()) {
+            if (streamUri is MediaUri.Missing || remoteOffline) {
+                null
+            } else {
+                buildIglooPlayer(context, authTokens, iglooHostProvider).also { player ->
+                    player.repeatMode = if (loop) Player.REPEAT_MODE_ALL else Player.REPEAT_MODE_OFF
+                    val mediaItem =
+                        when (streamUri) {
+                            is MediaUri.Local ->
+                                Media3Item.fromUri(streamUri.file.toURI().toString())
+                            is MediaUri.Remote -> Media3Item.fromUri(streamUri.url)
+                            is MediaUri.Missing -> null
+                        }
+                    mediaItem?.let {
                         player.setMediaItem(it)
                         player.prepare()
                     }
+                    player.playWhenReady = active
                 }
-                player.playWhenReady = active
             }
         }
-    }
     var firstFrame by remember(player) { mutableStateOf(false) }
     var isPlaying by remember(player) { mutableStateOf(player?.isPlaying == true) }
     var durationMs by remember(player) { mutableLongStateOf(0L) }
     var positionMs by remember(player) { mutableLongStateOf(initialPositionMs) }
     val currentOnPositionUpdate by rememberUpdatedState(onPositionUpdate)
     val currentOnProgressUpdate by rememberUpdatedState(onProgressUpdate)
-    val seekToFraction: ((Float) -> Unit)? = remember(player) {
-        val current = player ?: return@remember null
-        { fraction: Float ->
-            val duration = current.duration
-            if (duration > 0L) {
-                val bounded = fraction.coerceIn(0f, 1f)
-                val target = (bounded * duration).toLong()
-                current.seekTo(target)
-                positionMs = target
-                currentOnPositionUpdate(target)
-                currentOnProgressUpdate(bounded)
+    val seekToFraction: ((Float) -> Unit)? =
+        remember(player) {
+            val current = player ?: return@remember null
+            { fraction: Float ->
+                val duration = current.duration
+                if (duration > 0L) {
+                    val bounded = fraction.coerceIn(0f, 1f)
+                    val target = (bounded * duration).toLong()
+                    current.seekTo(target)
+                    positionMs = target
+                    currentOnPositionUpdate(target)
+                    currentOnProgressUpdate(bounded)
+                }
             }
         }
-    }
 
     DisposableEffect(player) {
-        val current = player ?: return@DisposableEffect onDispose { }
-        val listener = object : Player.Listener {
-            override fun onRenderedFirstFrame() {
-                firstFrame = true
-            }
+        val current = player ?: return@DisposableEffect onDispose {}
+        val listener =
+            object : Player.Listener {
+                override fun onRenderedFirstFrame() {
+                    firstFrame = true
+                }
 
-            override fun onIsPlayingChanged(playing: Boolean) {
-                isPlaying = playing
+                override fun onIsPlayingChanged(playing: Boolean) {
+                    isPlaying = playing
+                }
             }
-        }
         current.addListener(listener)
         onDispose {
-            PerfProbe.incrementCounter("igloo_media_viewer_player_release_count")
-            PerfProbe.log(event = "media_viewer_player_release") { mapOf("page" to pageIndex) }
             currentOnPositionUpdate(current.currentPosition)
             current.removeListener(listener)
             current.release()
         }
     }
-    DisposableEffect(player) {
-        player ?: return@DisposableEffect onDispose { }
-        fun fields() = mapOf("surface" to "media_viewer", "cadence_ms" to "250_or_500")
-        val key = PerfProbe.collectorStart("playback_poll", ::fields)
-        onDispose { PerfProbe.collectorEnd("playback_poll", key, ::fields) }
-    }
     DisposableEffect(active, seekToFraction) {
         if (active) onSeekAvailable(seekToFraction)
-        onDispose {
-            if (active) onSeekAvailable(null)
-        }
+        onDispose { if (active) onSeekAvailable(null) }
     }
-    LaunchedEffect(player, muted) {
-        player?.volume = if (muted) 0f else 1f
-    }
+    LaunchedEffect(player, muted) { player?.volume = if (muted) 0f else 1f }
     LaunchedEffect(player, active) {
         if (active) {
             player?.playWhenReady = true
@@ -457,7 +445,9 @@ private fun MediaVideoPage(
             positionMs = current.currentPosition.coerceAtLeast(0L)
             currentOnPositionUpdate(positionMs)
             if (durationMs > 0L) {
-                currentOnProgressUpdate((positionMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f))
+                currentOnProgressUpdate(
+                    (positionMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f)
+                )
             }
             delay(if (isPlaying) 250L else 500L)
         }
@@ -465,10 +455,8 @@ private fun MediaVideoPage(
 
     val playLabel = stringResource(R.string.action_play)
     Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color.Black)
-            .pointerInput(player) {
+        modifier =
+            Modifier.fillMaxSize().background(Color.Black).pointerInput(player) {
                 detectTapGestures {
                     val current = player ?: return@detectTapGestures
                     current.playWhenReady = !current.isPlaying
@@ -505,11 +493,12 @@ private fun OverlayTopBar(
 ) {
     val muteLabel = stringResource(R.string.action_mute)
     val unmuteLabel = stringResource(R.string.action_unmute)
-    val label = media.authorDisplayName.ifBlank { media.authorHandle.takeIf { it.isNotBlank() }?.let { "@$it" }.orEmpty() }
+    val label =
+        media.authorDisplayName.ifBlank {
+            media.authorHandle.takeIf { it.isNotBlank() }?.let { "@$it" }.orEmpty()
+        }
     Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(start = 14.dp, end = 6.dp, top = 22.dp),
+        modifier = modifier.fillMaxWidth().padding(start = 14.dp, end = 6.dp, top = 22.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -530,7 +519,9 @@ private fun OverlayTopBar(
         if (showMute) {
             IconButton(onClick = onMuteToggle) {
                 Icon(
-                    imageVector = if (muted) Icons.AutoMirrored.Filled.VolumeOff else Icons.AutoMirrored.Filled.VolumeUp,
+                    imageVector =
+                        if (muted) Icons.AutoMirrored.Filled.VolumeOff
+                        else Icons.AutoMirrored.Filled.VolumeUp,
                     contentDescription = if (muted) unmuteLabel else muteLabel,
                     tint = Color.White,
                 )
@@ -556,10 +547,11 @@ private fun OverlayBottomBar(
     modifier: Modifier = Modifier,
 ) {
     Column(
-        modifier = modifier
-            .fillMaxWidth()
-            .navigationBarsPadding()
-            .padding(start = 10.dp, end = 10.dp, bottom = 10.dp),
+        modifier =
+            modifier
+                .fillMaxWidth()
+                .navigationBarsPadding()
+                .padding(start = 10.dp, end = 10.dp, bottom = 10.dp)
     ) {
         if (pageCount > 1) {
             PageDots(pageCount, currentPage, Modifier.align(Alignment.CenterHorizontally))
@@ -578,9 +570,7 @@ private fun OverlayBottomBar(
             VideoScrubber(
                 progress = videoProgress,
                 onSeek = onVideoSeek,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 4.dp, vertical = 8.dp),
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 8.dp),
             )
         }
         MediaActionRow(
@@ -641,7 +631,8 @@ private fun MediaActionRow(
         }
         IconButton(onClick = onBookmarkToggle) {
             Icon(
-                imageVector = if (isBookmarked) Icons.Filled.Bookmark else Icons.Outlined.BookmarkBorder,
+                imageVector =
+                    if (isBookmarked) Icons.Filled.Bookmark else Icons.Outlined.BookmarkBorder,
                 contentDescription = if (isBookmarked) removeBookmarkLabel else bookmarkLabel,
                 tint = if (isBookmarked) colors.primary else Color.White,
             )
@@ -652,13 +643,19 @@ private fun MediaActionRow(
 @Composable
 private fun PageDots(count: Int, current: Int, modifier: Modifier = Modifier) {
     val colors = MaterialTheme.iglooColors
-    Row(modifier = modifier.padding(bottom = 4.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+    Row(
+        modifier = modifier.padding(bottom = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
         repeat(count) { index ->
             Box(
-                modifier = Modifier
-                    .size(6.dp)
-                    .clip(CircleShape)
-                    .background(if (index == current) colors.primary else Color.White.copy(alpha = 0.38f)),
+                modifier =
+                    Modifier.size(6.dp)
+                        .clip(CircleShape)
+                        .background(
+                            if (index == current) colors.primary
+                            else Color.White.copy(alpha = 0.38f)
+                        )
             )
         }
     }
@@ -669,31 +666,30 @@ private fun Poster(posterUri: MediaUri, dimOffline: Boolean) {
     val alphaValue = if (dimOffline) 0.55f else mediaAlpha(posterUri)
     when (posterUri) {
         is MediaUri.Local,
-        is MediaUri.Remote -> AsyncImage(
-            model = rememberMediaImageModel(
-                uri = posterUri,
-                memoryCacheKey = mediaImageMemoryCacheKey(posterUri),
-                placeholderMemoryCacheKey = mediaImageMemoryCacheKey(posterUri),
-            ),
-            contentDescription = null,
-            contentScale = ContentScale.Crop,
-            modifier = Modifier
-                .fillMaxSize()
-                .alpha(alphaValue),
-        )
-        is MediaUri.Missing -> Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(Color.Black),
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(
-                imageVector = Icons.Filled.PlayArrow,
+        is MediaUri.Remote ->
+            AsyncImage(
+                model =
+                    rememberMediaImageModel(
+                        uri = posterUri,
+                        memoryCacheKey = mediaImageMemoryCacheKey(posterUri),
+                        placeholderMemoryCacheKey = mediaImageMemoryCacheKey(posterUri),
+                    ),
                 contentDescription = null,
-                tint = MaterialTheme.iglooColors.onSurfaceFaint,
-                modifier = Modifier.size(52.dp),
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize().alpha(alphaValue),
             )
-        }
+        is MediaUri.Missing ->
+            Box(
+                modifier = Modifier.fillMaxSize().background(Color.Black),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.PlayArrow,
+                    contentDescription = null,
+                    tint = MaterialTheme.iglooColors.onSurfaceFaint,
+                    modifier = Modifier.size(52.dp),
+                )
+            }
     }
 }
 
@@ -708,11 +704,7 @@ private fun MissingMediaIcon() {
 }
 
 @Composable
-private fun VideoScrubber(
-    progress: Float,
-    onSeek: (Float) -> Unit,
-    modifier: Modifier = Modifier,
-) {
+private fun VideoScrubber(progress: Float, onSeek: (Float) -> Unit, modifier: Modifier = Modifier) {
     val colors = MaterialTheme.iglooColors
     var widthPx by remember { mutableIntStateOf(1) }
     var dragProgress by remember { mutableFloatStateOf(progress.coerceIn(0f, 1f)) }
@@ -720,48 +712,47 @@ private fun VideoScrubber(
     val shownProgress = if (isDragging) dragProgress else progress.coerceIn(0f, 1f)
 
     Box(
-        modifier = modifier
-            .fillMaxWidth()
-            .height(40.dp)
-            .onSizeChanged { widthPx = it.width.coerceAtLeast(1) }
-            .pointerInput(onSeek) {
-                detectTapGestures { offset ->
-                    onSeek((offset.x / widthPx).coerceIn(0f, 1f))
+        modifier =
+            modifier
+                .fillMaxWidth()
+                .height(40.dp)
+                .onSizeChanged { widthPx = it.width.coerceAtLeast(1) }
+                .pointerInput(onSeek) {
+                    detectTapGestures { offset -> onSeek((offset.x / widthPx).coerceIn(0f, 1f)) }
                 }
-            }
-            .pointerInput(onSeek) {
-                detectHorizontalDragGestures(
-                    onDragStart = { offset ->
-                        isDragging = true
-                        dragProgress = (offset.x / widthPx).coerceIn(0f, 1f)
-                        onSeek(dragProgress)
-                    },
-                    onHorizontalDrag = { _, delta ->
-                        dragProgress = (dragProgress + delta / widthPx).coerceIn(0f, 1f)
-                        onSeek(dragProgress)
-                    },
-                    onDragEnd = {
-                        onSeek(dragProgress)
-                        isDragging = false
-                    },
-                    onDragCancel = { isDragging = false },
-                )
-            },
+                .pointerInput(onSeek) {
+                    detectHorizontalDragGestures(
+                        onDragStart = { offset ->
+                            isDragging = true
+                            dragProgress = (offset.x / widthPx).coerceIn(0f, 1f)
+                            onSeek(dragProgress)
+                        },
+                        onHorizontalDrag = { _, delta ->
+                            dragProgress = (dragProgress + delta / widthPx).coerceIn(0f, 1f)
+                            onSeek(dragProgress)
+                        },
+                        onDragEnd = {
+                            onSeek(dragProgress)
+                            isDragging = false
+                        },
+                        onDragCancel = { isDragging = false },
+                    )
+                },
         contentAlignment = Alignment.CenterStart,
     ) {
         Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(5.dp)
-                .clip(CircleShape)
-                .background(Color.White.copy(alpha = 0.42f)),
+            modifier =
+                Modifier.fillMaxWidth()
+                    .height(5.dp)
+                    .clip(CircleShape)
+                    .background(Color.White.copy(alpha = 0.42f))
         )
         Box(
-            modifier = Modifier
-                .fillMaxWidth(shownProgress)
-                .height(5.dp)
-                .clip(CircleShape)
-                .background(colors.primary),
+            modifier =
+                Modifier.fillMaxWidth(shownProgress)
+                    .height(5.dp)
+                    .clip(CircleShape)
+                    .background(colors.primary)
         )
     }
 }

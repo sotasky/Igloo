@@ -23,12 +23,12 @@ func TestHandleVideoWatched_RequiresAuth(t *testing.T) {
 	}
 }
 
-func TestHandleVideoWatched_WritesWatchHistoryAndSyncChange(t *testing.T) {
+func TestHandleVideoWatchedWritesWatchHistory(t *testing.T) {
 	srv := newTestServer(t)
 
 	if err := srv.db.ExecRaw(
-		`INSERT INTO videos (video_id, channel_id, title, duration) VALUES (?, ?, ?, ?)`,
-		"vid_abc", "youtube_UCtest", "Hello", 120,
+		`INSERT INTO videos (video_id, channel_id, owner_kind, title, duration) VALUES (?, ?, ?, ?, ?)`,
+		"vid_abc", "youtube_UCtest", "youtube_video", "Hello", 120,
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -46,41 +46,20 @@ func TestHandleVideoWatched_WritesWatchHistoryAndSyncChange(t *testing.T) {
 
 	var pos float64
 	err := srv.db.QueryRow(
-		`SELECT playback_position FROM watch_history WHERE user_id = ? AND video_id = ?`,
-		"alice", "vid_abc",
+		`SELECT playback_position FROM watch_history WHERE video_id = ?`,
+		"vid_abc",
 	).Scan(&pos)
 	if err != nil {
 		t.Fatalf("watch_history row missing: %v", err)
 	}
 
-	var syncType string
-	err = srv.db.QueryRow(
-		`SELECT type FROM sync_changes WHERE item_id = ? ORDER BY version DESC LIMIT 1`,
-		"vid_abc",
-	).Scan(&syncType)
-	if err != nil {
-		t.Fatalf("sync_changes row missing: %v", err)
-	}
-	if syncType != "video_watched" {
-		t.Errorf("sync type: got %q, want video_watched", syncType)
-	}
-
-	var resp struct {
-		Success     bool  `json:"success"`
-		SyncVersion int64 `json:"sync_version"`
-	}
-	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if resp.SyncVersion <= 0 {
-		t.Errorf("sync_version=%d, want > 0", resp.SyncVersion)
-	}
+	_ = mutationOwnerRevision(t, srv, "watch_history", "vid_abc")
 }
 
 func TestHandleShortsHistoryReadsAndroidMomentsCursor(t *testing.T) {
 	srv := newTestServer(t)
 
-	if _, err := srv.db.ApplyMomentsCursorMutation("alice", "short_android", 7890, 123456789, "all"); err != nil {
+	if err := srv.db.ApplyMomentsCursorMutation("short_android", 7890, 123456789, "all"); err != nil {
 		t.Fatalf("ApplyMomentsCursorMutation: %v", err)
 	}
 
@@ -107,25 +86,12 @@ func TestHandleShortsHistoryReadsAndroidMomentsCursor(t *testing.T) {
 	}
 }
 
-func TestHandleShortsHistoryIgnoresStoriesCursor(t *testing.T) {
+func TestHandleShortsHistoryReadsStoriesScope(t *testing.T) {
 	srv := newTestServer(t)
 
-	if _, err := srv.db.ApplyMomentsCursorMutation("alice", "story_cursor", 0, 123456789, "stories"); err != nil {
+	if err := srv.db.ApplyMomentsCursorMutation("story_cursor", 0, 123456789, "stories"); err != nil {
 		t.Fatalf("ApplyMomentsCursorMutation: %v", err)
 	}
-	if err := srv.db.ExecRaw(
-		`INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)`,
-		"shorts_cursor_video_id_alice_stories", "stale_story_cursor",
-	); err != nil {
-		t.Fatal(err)
-	}
-	if err := srv.db.ExecRaw(
-		`INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)`,
-		"shorts_cursor_updated_at_ms_alice_stories", "123456789",
-	); err != nil {
-		t.Fatal(err)
-	}
-
 	req := httptest.NewRequest("GET", "/api/shorts/history?tab=stories", nil)
 	req = attachTestAuth(req, "alice")
 	rr := httptest.NewRecorder()
@@ -142,18 +108,8 @@ func TestHandleShortsHistoryIgnoresStoriesCursor(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if resp.VideoID != "" || resp.UpdatedAtMs != 0 {
-		t.Fatalf("stories history = video %q updated %d, want empty cursor", resp.VideoID, resp.UpdatedAtMs)
-	}
-
-	var stored int
-	if err := srv.db.QueryRow(
-		`SELECT COUNT(*) FROM settings WHERE key = 'shorts_cursor_video_id_alice_stories' AND value = 'story_cursor'`,
-	).Scan(&stored); err != nil {
-		t.Fatal(err)
-	}
-	if stored != 0 {
-		t.Fatalf("stories mutation wrote resume cursor")
+	if resp.VideoID != "story_cursor" || resp.UpdatedAtMs != 123456789 {
+		t.Fatalf("stories history = video %q updated %d", resp.VideoID, resp.UpdatedAtMs)
 	}
 }
 
@@ -167,21 +123,21 @@ func TestHandleShortsHistoryReturnsPageHint(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := srv.db.ExecRaw(
-		`INSERT INTO channel_follows (user_id, channel_id, followed_at) VALUES ('', ?, 1)`,
+		`INSERT INTO channel_follows (channel_id, followed_at) VALUES (?, 1)`,
 		"tiktok_demo",
 	); err != nil {
 		t.Fatal(err)
 	}
 	for i := 1; i <= 205; i++ {
 		if err := srv.db.ExecRaw(
-			`INSERT INTO videos (video_id, channel_id, title, duration, published_at)
-			 VALUES (?, ?, ?, 0, ?)`,
+			`INSERT INTO videos (video_id, channel_id, owner_kind, title, duration, published_at)
+				 VALUES (?, ?, 'tiktok_video', ?, 0, ?)`,
 			fmt.Sprintf("short_%03d", i), "tiktok_demo", fmt.Sprintf("Short %03d", i), i,
 		); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if _, err := srv.db.ApplyMomentsCursorMutation("alice", "short_205", 0, 123456789, "all"); err != nil {
+	if err := srv.db.ApplyMomentsCursorMutation("short_205", 0, 123456789, "all"); err != nil {
 		t.Fatalf("ApplyMomentsCursorMutation: %v", err)
 	}
 
@@ -221,7 +177,7 @@ func TestHandleShortsHistoryFallsBackToNearestVisibleWhenCursorHidden(t *testing
 			t.Fatal(err)
 		}
 		if err := srv.db.ExecRaw(
-			`INSERT INTO channel_follows (user_id, channel_id, followed_at) VALUES ('', ?, 1)`,
+			`INSERT INTO channel_follows (channel_id, followed_at) VALUES (?, 1)`,
 			ch,
 		); err != nil {
 			t.Fatal(err)
@@ -237,14 +193,14 @@ func TestHandleShortsHistoryFallsBackToNearestVisibleWhenCursorHidden(t *testing
 		{"alpha_new", "tiktok_alpha", 300},
 	} {
 		if err := srv.db.ExecRaw(
-			`INSERT INTO videos (video_id, channel_id, title, duration, published_at)
-			 VALUES (?, ?, ?, 0, ?)`,
+			`INSERT INTO videos (video_id, channel_id, owner_kind, title, duration, published_at)
+				 VALUES (?, ?, 'tiktok_video', ?, 0, ?)`,
 			row.id, row.channelID, row.id, row.published,
 		); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if _, err := srv.db.ApplyMomentsCursorMutation("alice", "beta_cursor", 0, 123456789, "all"); err != nil {
+	if err := srv.db.ApplyMomentsCursorMutation("beta_cursor", 0, 123456789, "all"); err != nil {
 		t.Fatalf("ApplyMomentsCursorMutation: %v", err)
 	}
 	if err := srv.db.ExecRaw(`DELETE FROM channel_follows WHERE channel_id = 'tiktok_beta'`); err != nil {
@@ -283,7 +239,7 @@ func TestHandleShortsHistoryFallsBackToNearestVisibleWhenCursorHidden(t *testing
 
 func TestHandleShortsHistoryUsesStoredSortWhenRepostCursorBecomesFollowed(t *testing.T) {
 	srv := newTestServer(t)
-	if err := srv.db.SetSetting("", "instagram_include_tagged_default", "true"); err != nil {
+	if err := srv.db.SetSetting("instagram_include_tagged_default", "true"); err != nil {
 		t.Fatalf("SetSetting instagram_include_tagged_default: %v", err)
 	}
 
@@ -304,7 +260,7 @@ func TestHandleShortsHistoryUsesStoredSortWhenRepostCursorBecomesFollowed(t *tes
 		}
 		if row.followed {
 			if err := srv.db.ExecRaw(
-				`INSERT INTO channel_follows (user_id, channel_id, followed_at) VALUES ('', ?, 1)`,
+				`INSERT INTO channel_follows (channel_id, followed_at) VALUES (?, 1)`,
 				row.id,
 			); err != nil {
 				t.Fatal(err)
@@ -314,33 +270,34 @@ func TestHandleShortsHistoryUsesStoredSortWhenRepostCursorBecomesFollowed(t *tes
 	for _, row := range []struct {
 		id        string
 		channelID string
+		ownerKind string
 		published int
 	}{
-		{"old_tagged_cursor", "instagram_owner", 100},
-		{"direct_before", "tiktok_direct", 900},
-		{"direct_after", "tiktok_direct", 1200},
+		{"old_tagged_cursor", "instagram_owner", "instagram_reel", 100},
+		{"direct_before", "tiktok_direct", "tiktok_video", 900},
+		{"direct_after", "tiktok_direct", "tiktok_video", 1200},
 	} {
 		if err := srv.db.ExecRaw(
-			`INSERT INTO videos (video_id, channel_id, title, duration, published_at)
-			 VALUES (?, ?, ?, 0, ?)`,
-			row.id, row.channelID, row.id, row.published,
+			`INSERT INTO videos (video_id, channel_id, owner_kind, title, duration, published_at)
+			 VALUES (?, ?, ?, ?, 0, ?)`,
+			row.id, row.channelID, row.ownerKind, row.id, row.published,
 		); err != nil {
 			t.Fatal(err)
 		}
 	}
 	if err := srv.db.ExecRaw(
 		`INSERT INTO video_repost_sources (
-			video_id, reposter_channel_id, reposter_handle, reposted_at_ms, first_seen_at_ms, updated_at_ms
-		 ) VALUES (?, ?, ?, 0, 1000, 1000)`,
-		"old_tagged_cursor", "instagram_reposter", "reposter",
+			video_id, reposter_channel_id, reposted_at_ms, first_seen_at_ms, updated_at_ms
+		 ) VALUES (?, ?, 0, 1000, 1000)`,
+		"old_tagged_cursor", "instagram_reposter",
 	); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := srv.db.ApplyMomentsCursorMutation("alice", "old_tagged_cursor", 0, 123456789, "all"); err != nil {
+	if err := srv.db.ApplyMomentsCursorMutation("old_tagged_cursor", 0, 123456789, "all"); err != nil {
 		t.Fatalf("ApplyMomentsCursorMutation: %v", err)
 	}
 	if err := srv.db.ExecRaw(
-		`INSERT INTO channel_follows (user_id, channel_id, followed_at) VALUES ('', 'instagram_owner', 2)`,
+		`INSERT INTO channel_follows (channel_id, followed_at) VALUES ('instagram_owner', 2)`,
 	); err != nil {
 		t.Fatal(err)
 	}

@@ -33,12 +33,12 @@ func TestResolveDearrowTitle(t *testing.T) {
 func TestResolveDearrowDisplayTitles(t *testing.T) {
 	ptr := func(s string) *string { return &s }
 	cases := []struct {
-		name           string
-		original       string
-		community      *string
-		casual         *string
-		wantDefault    string
-		wantCasual     string
+		name        string
+		original    string
+		community   *string
+		casual      *string
+		wantDefault string
+		wantCasual  string
 	}{
 		{
 			name:        "community and casual",
@@ -74,22 +74,18 @@ func TestResolveDearrowDisplayTitles(t *testing.T) {
 }
 
 func TestResolveDearrowThumbURL(t *testing.T) {
-	ptr := func(s string) *string { return &s }
 	cases := []struct {
-		name  string
-		mode  string
-		thumb *string
-		want  string
+		name string
+		mode string
+		want string
 	}{
-		{"off never decorates", "off", ptr("thumbnails/dearrow/v1.jpg"), "/api/media/thumbnail/vid1"},
-		{"default with thumb adds ?da=1", "default", ptr("x"), "/api/media/thumbnail/vid1?da=1"},
-		{"default without thumb bare", "default", nil, "/api/media/thumbnail/vid1"},
-		{"casual with thumb adds ?da=1", "casual", ptr("x"), "/api/media/thumbnail/vid1?da=1"},
-		{"empty path treated as no thumb", "default", ptr(""), "/api/media/thumbnail/vid1"},
+		{"off uses original", "off", "/api/media/thumbnail/vid1"},
+		{"default selects canonical variant", "default", "/api/media/thumbnail/vid1?da=1"},
+		{"casual selects canonical variant", "casual", "/api/media/thumbnail/vid1?da=1"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := ResolveDearrowThumbURL(c.mode, "vid1", c.thumb)
+			got := ResolveDearrowThumbURL(c.mode, "vid1")
 			if got != c.want {
 				t.Errorf("got %q want %q", got, c.want)
 			}

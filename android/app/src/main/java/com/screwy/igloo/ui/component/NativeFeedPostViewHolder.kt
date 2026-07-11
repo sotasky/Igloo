@@ -27,25 +27,24 @@ import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import androidx.recyclerview.widget.RecyclerView
 import coil3.ImageLoader
+import coil3.request.Disposable
 import coil3.target.ImageViewTarget
 import com.screwy.igloo.R
-import com.screwy.igloo.data.entity.FeedItemEntity
 import com.screwy.igloo.data.entity.FeedRow
 import com.screwy.igloo.data.entity.ThreadedFeedRow
 import com.screwy.igloo.feed.FeedMediaCellModel
 import com.screwy.igloo.feed.FeedMediaGridModel
 import com.screwy.igloo.feed.SocialPostModel
 import com.screwy.igloo.feed.buildSocialPostModel
+import com.screwy.igloo.feed.feedMediaViewerIndex
 import com.screwy.igloo.media.MediaResolvers
 import com.screwy.igloo.media.MediaUri
 import com.screwy.igloo.net.IglooHostProvider
 import com.screwy.igloo.net.auth.AuthTokenProvider
-import com.screwy.igloo.perf.PerfProbe
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
 internal class NativeFeedViewHolder(
     context: Context,
@@ -55,13 +54,13 @@ internal class NativeFeedViewHolder(
     private val mediaResolvers: MediaResolvers,
     private val scope: CoroutineScope,
     private val getColors: () -> NativeFeedColors,
-    private val getBaseUrl: () -> String,
     private val getCallbacks: () -> NativeFeedCallbacks,
     private val inlineVideoManager: NativeInlineVideoManager,
 ) : RecyclerView.ViewHolder(NativeFeedCardViews(context).root) {
     private val views: NativeFeedCardViews = itemView.tag as NativeFeedCardViews
     private val videoSlots = mutableListOf<NativeVideoSlot>()
     private val avatarJobs = mutableMapOf<ImageView, Job>()
+    private val avatarRequests = mutableMapOf<ImageView, Disposable>()
     private var boundRow: NativeFeedAdapterItem.Post? = null
     private var showTranslatedBody = true
     private var showTranslatedQuote = true
@@ -86,18 +85,21 @@ internal class NativeFeedViewHolder(
         val shareUrl = feedShareUrl(item).trim()
         val bodyTranslation = item.bodyTranslation?.takeIf { it.isNotBlank() }
         val quoteTranslation = item.quoteTranslation?.takeIf { it.isNotBlank() }
-        val bodyText = if (showTranslatedBody && bodyTranslation != null) {
-            bodyTranslation
-        } else {
-            item.bodyText.orEmpty()
-        }.let { stripReplyPrefix(item, it) }
-        val translationPill = nativeTranslationPillForText(
-            lang = item.lang,
-            sourceLang = item.bodySourceLang,
-            text = item.bodyText,
-            active = showTranslatedBody && bodyTranslation != null,
-            enabled = bodyTranslation != null,
-        )
+        val bodyText =
+            if (showTranslatedBody && bodyTranslation != null) {
+                    bodyTranslation
+                } else {
+                    item.bodyText.orEmpty()
+                }
+                .let { stripReplyPrefix(row, it) }
+        val translationPill =
+            nativeTranslationPillForText(
+                lang = item.lang,
+                sourceLang = item.bodySourceLang,
+                text = item.bodyText,
+                active = showTranslatedBody && bodyTranslation != null,
+                enabled = bodyTranslation != null,
+            )
 
         views.applyColors(colors)
         views.root.setOnClickListener { callbacks.onRowClick(row) }
@@ -107,11 +109,10 @@ internal class NativeFeedViewHolder(
         }
 
         bindThread(adapterRow.threaded, adapterRow.chainPosts, colors, callbacks)
-        bindRetweeter(item, callbacks, colors)
+        bindRetweeter(row, callbacks, colors)
         bindHeader(
             header = views.header,
             channelId = item.channelId.orEmpty(),
-            explicitAvatarUrl = item.authorAvatarUrl,
             displayName = post.author.displayName,
             handle = post.author.handle,
             timestamp = localizedRelativeTime(views.root.context, item.publishedAt),
@@ -122,8 +123,8 @@ internal class NativeFeedViewHolder(
             onClick = {
                 if (post.author.channelId.isNotBlank()) {
                     callbacks.onProfileOpen(post)
-                } else if (item.authorHandle.isNotBlank()) {
-                    callbacks.onMentionClick(item.authorHandle)
+                } else if (post.author.handle.isNotBlank()) {
+                    callbacks.onMentionClick(post.author.handle)
                 }
             },
             onFollowClick = {
@@ -142,7 +143,7 @@ internal class NativeFeedViewHolder(
             },
         )
 
-        bindReply(item, callbacks, colors, visible = adapterRow.threaded.chain.isEmpty())
+        bindReply(row, callbacks, colors, visible = adapterRow.threaded.chain.isEmpty())
         bindBody(
             textView = views.body,
             moreView = views.showMore,
@@ -193,9 +194,7 @@ internal class NativeFeedViewHolder(
         val visibleChain = nativeThreadPreviewAncestors(chain)
         val chainPostsById = chainPosts.associateBy { it.row.item.tweetId }
         visibleChain.forEachIndexed { index, row ->
-            val params = verticalSpacingLayoutParams().apply {
-                if (index == 0) topMargin = 0
-            }
+            val params = verticalSpacingLayoutParams().apply { if (index == 0) topMargin = 0 }
             val post = chainPostsById[row.item.tweetId] ?: buildSocialPostModel(row, emptyMap())
             views.thread.addView(
                 threadAncestorView(
@@ -227,15 +226,15 @@ internal class NativeFeedViewHolder(
         val postCount = threadCapsulePostCount(threaded)
         val peopleCount = threadCapsulePeopleCount(threaded)
         views.threadCapsule.visibility = View.VISIBLE
-        views.threadCapsuleText.text = context.getString(R.string.feed_thread_capsule, postCount, peopleCount) +
-            " - " + context.getString(R.string.feed_thread_open_inline)
-        views.threadCapsule.contentDescription = context.getString(
-            R.string.feed_thread_open_capsule_a11y,
-            postCount,
-            peopleCount,
-        )
+        views.threadCapsuleText.text =
+            context.getString(R.string.feed_thread_capsule, postCount, peopleCount) +
+                " - " +
+                context.getString(R.string.feed_thread_open_inline)
+        views.threadCapsule.contentDescription =
+            context.getString(R.string.feed_thread_open_capsule_a11y, postCount, peopleCount)
         views.threadCapsuleText.setTextColor(colors.onSurfaceMuted)
-        views.threadCapsule.background = roundedStroke(Color.TRANSPARENT, colors.borderSubtle, dp(1), dp(14))
+        views.threadCapsule.background =
+            roundedStroke(Color.TRANSPARENT, colors.borderSubtle, dp(1), dp(14))
         views.threadCapsule.setOnClickListener { callbacks.onRowClick(threaded.row) }
         bindThreadCapsuleAvatars(threaded, colors)
     }
@@ -248,22 +247,23 @@ internal class NativeFeedViewHolder(
     ): LinearLayout {
         val row = post.row
         val item = row.item
-        val authorHandle = normalizeHandle(item.authorHandle)
-        val authorDisplay = displayLabel(
-            primary = item.authorDisplayName,
-            fallback = row.channelName,
-            handle = authorHandle,
-        )
-        val container = LinearLayout(views.root.context).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(0, dp(5), 0, dp(5))
-            setOnClickListener { callbacks.onRowClick(row) }
-        }
+        val authorHandle = normalizeHandle(row.authorHandle)
+        val authorDisplay =
+            displayLabel(
+                primary = row.authorDisplayName,
+                fallback = row.channelName,
+                handle = authorHandle,
+            )
+        val container =
+            LinearLayout(views.root.context).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(0, dp(5), 0, dp(5))
+                setOnClickListener { callbacks.onRowClick(row) }
+            }
         val header = NativeIdentityHeaderViews(views.root.context)
         bindHeader(
             header = header,
             channelId = item.channelId.orEmpty(),
-            explicitAvatarUrl = item.authorAvatarUrl,
             displayName = authorDisplay,
             handle = authorHandle,
             timestamp = localizedRelativeTime(views.root.context, item.publishedAt),
@@ -280,7 +280,7 @@ internal class NativeFeedViewHolder(
         )
         container.addView(header.root)
 
-        val body = stripReplyPrefix(item, item.bodyText.orEmpty())
+        val body = stripReplyPrefix(row, item.bodyText.orEmpty())
         if (body.isNotBlank()) {
             container.addView(
                 bodyText(views.root.context).apply {
@@ -288,13 +288,12 @@ internal class NativeFeedViewHolder(
                     bindMentionText(this, body, colors, callbacks)
                     maxLines = NativeFeedParentBodyCollapsedLines
                     ellipsize = TextUtils.TruncateAt.END
-                },
+                }
             )
         }
         if (post.media.grid.mediaCount > 0) {
-            val media = LinearLayout(views.root.context).apply {
-                orientation = LinearLayout.VERTICAL
-            }
+            val media =
+                LinearLayout(views.root.context).apply { orientation = LinearLayout.VERTICAL }
             bindMediaGrid(
                 container = media,
                 ownerKeyPrefix = ownerKeyPrefix,
@@ -304,36 +303,44 @@ internal class NativeFeedViewHolder(
                 colors = colors,
                 callbacks = callbacks,
             )
-            container.addView(media, LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+            container.addView(
+                media,
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            )
         }
         container.addView(threadAncestorActions(post, colors, callbacks))
         return container
     }
 
     private fun bindRetweeter(
-        item: FeedItemEntity,
+        row: FeedRow,
         callbacks: NativeFeedCallbacks,
         colors: NativeFeedColors,
     ) {
+        val item = row.item
         if (!item.isRetweet) {
             views.retweeter.visibility = View.GONE
             views.retweeter.setCompoundDrawablesWithIntrinsicBounds(null, null, null, null)
             return
         }
         val context = views.root.context
-        val handle = item.retweetedByHandle ?: item.sourceHandle ?: ""
-        val label = item.retweetedByDisplayName?.takeIf { it.isNotBlank() }
-            ?: normalizeHandle(handle).takeIf { it.isNotBlank() }
-        val icon = context.getDrawable(R.drawable.ic_feed_repost_24)?.mutate()?.apply {
-            setTint(colors.onSurfaceMuted)
-            setBounds(0, 0, dp(16), dp(16))
-        }
+        val handle = row.reposterHandle ?: row.sourceHandle ?: ""
+        val label =
+            row.reposterDisplayName?.takeIf { it.isNotBlank() }
+                ?: normalizeHandle(handle).takeIf { it.isNotBlank() }
+        val icon =
+            context.getDrawable(R.drawable.ic_feed_repost_24)?.mutate()?.apply {
+                setTint(colors.onSurfaceMuted)
+                setBounds(0, 0, dp(16), dp(16))
+            }
         views.retweeter.visibility = View.VISIBLE
-        views.retweeter.text = if (label.isNullOrBlank()) {
-            context.getString(R.string.feed_reposted_someone)
-        } else {
-            context.getString(R.string.feed_reposted_single, label)
-        }
+        views.retweeter.text =
+            if (label.isNullOrBlank()) {
+                context.getString(R.string.feed_reposted_someone)
+            } else {
+                context.getString(R.string.feed_reposted_single, label)
+            }
         views.retweeter.setCompoundDrawables(icon, null, null, null)
         views.retweeter.compoundDrawablePadding = dp(4)
         views.retweeter.setTextColor(colors.onSurfaceMuted)
@@ -343,12 +350,12 @@ internal class NativeFeedViewHolder(
     }
 
     private fun bindReply(
-        item: FeedItemEntity,
+        row: FeedRow,
         callbacks: NativeFeedCallbacks,
         colors: NativeFeedColors,
         visible: Boolean = true,
     ) {
-        val replyHandle = normalizeHandle(item.replyToHandle)
+        val replyHandle = normalizeHandle(row.replyHandle)
         if (!visible || replyHandle.isBlank()) {
             views.reply.visibility = View.GONE
             views.reply.setOnClickListener(null)
@@ -375,20 +382,23 @@ internal class NativeFeedViewHolder(
         textView.visibility = View.VISIBLE
         bindMentionText(textView, text, colors, callbacks)
         val shouldClamp = nativeShouldClampBody(text)
-        textView.maxLines = if (bodyExpanded || !shouldClamp) Int.MAX_VALUE else NativeFeedBodyCollapsedLines
+        textView.maxLines =
+            if (bodyExpanded || !shouldClamp) Int.MAX_VALUE else NativeFeedBodyCollapsedLines
         textView.ellipsize = if (bodyExpanded || !shouldClamp) null else TextUtils.TruncateAt.END
         moreView.visibility = if (shouldClamp) View.VISIBLE else View.GONE
-        moreView.text = textView.context.getString(
-            if (bodyExpanded) R.string.action_show_less else R.string.action_read_more,
-        )
+        moreView.text =
+            textView.context.getString(
+                if (bodyExpanded) R.string.action_show_less else R.string.action_read_more
+            )
         moreView.setTextColor(colors.primary)
         moreView.setOnClickListener {
             bodyExpanded = !bodyExpanded
             textView.maxLines = if (bodyExpanded) Int.MAX_VALUE else NativeFeedBodyCollapsedLines
             textView.ellipsize = if (bodyExpanded) null else TextUtils.TruncateAt.END
-            moreView.text = textView.context.getString(
-                if (bodyExpanded) R.string.action_show_less else R.string.action_read_more,
-            )
+            moreView.text =
+                textView.context.getString(
+                    if (bodyExpanded) R.string.action_show_less else R.string.action_read_more
+                )
         }
     }
 
@@ -402,39 +412,46 @@ internal class NativeFeedViewHolder(
         val item = row.item
         val quoteId = item.quoteTweetId?.trim().orEmpty()
         if (quoteId.isBlank()) {
+            cancelAvatarJobsUnder(views.quote)
             views.quote.visibility = View.GONE
             views.quote.setOnClickListener(null)
             views.quoteBody.setOnClickListener(null)
             return
         }
         views.quote.visibility = View.VISIBLE
-        views.quote.background = roundedStroke(colors.surfaceElevated, colors.borderSubtle, dp(1), dp(8))
+        views.quote.background =
+            roundedStroke(colors.surfaceElevated, colors.borderSubtle, dp(1), dp(8))
         views.quote.setOnClickListener { callbacks.onQuoteOpen(quoteId) }
-        val quoteHandle = normalizeHandle(item.quoteAuthorHandle)
-            .ifBlank { displayNameLooksLikeHandle(item.quoteAuthorDisplayName) }
-        val quoteDisplay = displayLabel(
-            primary = item.quoteAuthorDisplayName,
-            fallback = null,
-            handle = quoteHandle,
-        )
-        val quoteChannelId = row.quoteChannelId?.takeIf { it.isNotBlank() } ?: "twitter_${quoteHandle.lowercase()}"
-        val quoteTimestamp = item.quotePublishedAt
-            .takeIf { it > 0L }
-            ?.let { localizedRelativeTime(views.root.context, it) }
-            .orEmpty()
+        val quoteHandle =
+            normalizeHandle(row.quoteAuthorHandle).ifBlank {
+                displayNameLooksLikeHandle(row.quoteAuthorDisplayName)
+            }
+        val quoteDisplay =
+            displayLabel(
+                primary = row.quoteAuthorDisplayName,
+                fallback = null,
+                handle = quoteHandle,
+            )
+        val quoteChannelId =
+            row.quoteChannelId?.takeIf { it.isNotBlank() } ?: "twitter_${quoteHandle.lowercase()}"
+        val quoteTimestamp =
+            item.quotePublishedAt
+                .takeIf { it > 0L }
+                ?.let { localizedRelativeTime(views.root.context, it) }
+                .orEmpty()
         val followTarget = feedQuoteFollowTarget(row)
-        val quoteTranslationPill = nativeTranslationPillForText(
-            lang = item.quoteLang,
-            sourceLang = item.quoteSourceLang,
-            text = item.quoteBodyText,
-            active = showTranslatedQuote && quoteTranslation != null,
-            enabled = quoteTranslation != null,
-        )
+        val quoteTranslationPill =
+            nativeTranslationPillForText(
+                lang = item.quoteLang,
+                sourceLang = item.quoteSourceLang,
+                text = item.quoteBodyText,
+                active = showTranslatedQuote && quoteTranslation != null,
+                enabled = quoteTranslation != null,
+            )
 
         bindHeader(
             header = views.quoteHeader,
             channelId = quoteChannelId,
-            explicitAvatarUrl = item.quoteAuthorAvatarUrl,
             displayName = quoteDisplay,
             handle = quoteHandle,
             timestamp = quoteTimestamp,
@@ -452,11 +469,12 @@ internal class NativeFeedViewHolder(
             },
         )
 
-        val quoteBody = if (showTranslatedQuote && quoteTranslation != null) {
-            quoteTranslation
-        } else {
-            item.quoteBodyText.orEmpty()
-        }
+        val quoteBody =
+            if (showTranslatedQuote && quoteTranslation != null) {
+                quoteTranslation
+            } else {
+                item.quoteBodyText.orEmpty()
+            }
         if (quoteBody.isBlank()) {
             views.quoteBody.visibility = View.GONE
             views.quoteBody.setOnClickListener(null)
@@ -469,7 +487,7 @@ internal class NativeFeedViewHolder(
             views.quoteBody.ellipsize = TextUtils.TruncateAt.END
             views.quoteBody.setOnClickListener { callbacks.onQuoteOpen(quoteId) }
         }
-        val parentCount = post.media.grid.mediaCount
+        val parentCount = post.media.grid.mediaSetItemCount
         val quoteMedia = post.quoteMedia?.grid
         if (quoteMedia == null || quoteMedia.mediaCount == 0) {
             views.quoteMedia.visibility = View.GONE
@@ -500,55 +518,66 @@ internal class NativeFeedViewHolder(
         views.menu.setOnClickListener { showMenu(views.menu, row, post, shareUrl) }
     }
 
-    private fun showMenu(row: FeedRow, post: SocialPostModel, shareUrl: String = feedShareUrl(row.item).trim()) {
+    private fun showMenu(
+        row: FeedRow,
+        post: SocialPostModel,
+        shareUrl: String = feedShareUrl(row.item).trim(),
+    ) {
         showMenu(views.menu, row, post, shareUrl)
     }
 
-    private fun showMenu(anchor: View, row: FeedRow, post: SocialPostModel, shareUrl: String = feedShareUrl(row.item).trim()) {
+    private fun showMenu(
+        anchor: View,
+        row: FeedRow,
+        post: SocialPostModel,
+        shareUrl: String = feedShareUrl(row.item).trim(),
+    ) {
         val callbacks = getCallbacks()
         val context = views.root.context
         val items = mutableListOf<NativeFeedMenuItem>()
         val channelId = row.item.channelId?.trim().orEmpty()
         if (shareUrl.isNotBlank()) {
-            items += NativeFeedMenuItem(
-                label = context.getString(R.string.action_open_on_x),
-                action = {
-                    openExternalUrl(context, shareUrl)
-                },
-            )
+            items +=
+                NativeFeedMenuItem(
+                    label = context.getString(R.string.action_open_on_x),
+                    action = { openExternalUrl(context, shareUrl) },
+                )
         }
         if (channelId.isNotBlank()) {
-            items += NativeFeedMenuItem(
-                label = context.getString(
-                    if (row.channelIsStarred == 1) R.string.action_unstar_channel else R.string.action_star_channel,
-                ),
-                action = {
-                    callbacks.onStarToggle(channelId, row.channelIsStarred == 0)
-                },
-            )
+            items +=
+                NativeFeedMenuItem(
+                    label =
+                        context.getString(
+                            if (row.channelIsStarred == 1) R.string.action_unstar_channel
+                            else R.string.action_star_channel
+                        ),
+                    action = { callbacks.onStarToggle(channelId, row.channelIsStarred == 0) },
+                )
         }
-        feedMuteMenuActions(row, callbacks.mutedHandles).forEach { action ->
-            items += NativeFeedMenuItem(
-                label = context.getString(
-                    if (action.isMuted) R.string.action_unmute_account_handle else R.string.action_mute_account_handle,
-                    action.handle,
-                ),
-                action = {
-                    if (action.isMuted) {
-                        callbacks.onMuteToggle(action.handle, false)
-                    } else {
-                        callbacks.onRequestMuteConfirmation(action)
-                    }
-                },
-            )
+        feedMuteMenuActions(row, callbacks.mutedChannelIds).forEach { action ->
+            items +=
+                NativeFeedMenuItem(
+                    label =
+                        context.getString(
+                            if (action.isMuted) R.string.action_unmute_account_handle
+                            else R.string.action_mute_account_handle,
+                            action.handle,
+                        ),
+                    action = {
+                        if (action.isMuted) {
+                            callbacks.onMuteToggle(action.channelId, false)
+                        } else {
+                            callbacks.onRequestMuteConfirmation(action)
+                        }
+                    },
+                )
         }
         if (items.isEmpty()) {
-            items += NativeFeedMenuItem(
-                label = context.getString(R.string.feed_open_thread),
-                action = {
-                    callbacks.onRowClick(post.row)
-                },
-            )
+            items +=
+                NativeFeedMenuItem(
+                    label = context.getString(R.string.feed_open_thread),
+                    action = { callbacks.onRowClick(post.row) },
+                )
         }
         showNativeFeedPopup(anchor, getColors(), items)
     }
@@ -561,10 +590,11 @@ internal class NativeFeedViewHolder(
         val context = views.root.context
         val row = post.row
         val shareUrl = feedShareUrl(row.item).trim()
-        val actions = LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
+        val actions =
+            LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
         val menu = ImageButton(context)
         configureMenuButton(menu, colors)
         menu.setOnClickListener { showMenu(menu, row, post, shareUrl) }
@@ -591,16 +621,18 @@ internal class NativeFeedViewHolder(
         NativeFeedPrimaryActions.forEach { action ->
             val button = actionIconButton(views.root.context, colors)
             button.contentDescription = action.contentDescription(views.root.context, post)
-            button.isEnabled = when (action) {
-                NativeFeedPrimaryAction.Share -> canOpenExternal
-                NativeFeedPrimaryAction.Like,
-                NativeFeedPrimaryAction.Bookmark -> true
-            }
-            val selected = when (action) {
-                NativeFeedPrimaryAction.Like -> post.actions.isLiked
-                NativeFeedPrimaryAction.Bookmark -> post.actions.isBookmarked
-                else -> false
-            }
+            button.isEnabled =
+                when (action) {
+                    NativeFeedPrimaryAction.Share -> canOpenExternal
+                    NativeFeedPrimaryAction.Like,
+                    NativeFeedPrimaryAction.Bookmark -> true
+                }
+            val selected =
+                when (action) {
+                    NativeFeedPrimaryAction.Like -> post.actions.isLiked
+                    NativeFeedPrimaryAction.Bookmark -> post.actions.isBookmarked
+                    else -> false
+                }
             button.setImageResource(action.iconRes(selected))
             button.setColorFilter(
                 when {
@@ -610,16 +642,15 @@ internal class NativeFeedViewHolder(
                 }
             )
             button.setOnClickListener {
-                PerfProbe.log(
-                    event = "native_feed_action_click",
-                ) { mapOf("action" to action.name.lowercase(), "selected" to selected) }
                 when (action) {
-                    NativeFeedPrimaryAction.Share -> sharePlainText(
-                        views.root.context,
-                        shareUrl,
-                        callbacks.useEmbedFriendlyShareLinks,
-                    )
-                    NativeFeedPrimaryAction.Like -> callbacks.onLikeToggle(row.item.tweetId, row.isLiked == 0)
+                    NativeFeedPrimaryAction.Share ->
+                        sharePlainText(
+                            views.root.context,
+                            shareUrl,
+                            callbacks.useEmbedFriendlyShareLinks,
+                        )
+                    NativeFeedPrimaryAction.Like ->
+                        callbacks.onLikeToggle(row.item.tweetId, row.isLiked == 0)
                     NativeFeedPrimaryAction.Bookmark -> callbacks.onBookmarkToggle(row)
                 }
             }
@@ -636,15 +667,12 @@ internal class NativeFeedViewHolder(
         menu.contentDescription = views.root.context.getString(R.string.action_more)
     }
 
-    private fun threadCapsulePostCount(threaded: ThreadedFeedRow): Int =
-        threaded.chain.size + 1
+    private fun threadCapsulePostCount(threaded: ThreadedFeedRow): Int = threaded.chain.size + 1
 
     private fun threadCapsulePeopleCount(threaded: ThreadedFeedRow): Int {
         val handles = linkedSetOf<String>()
         (threaded.chain + threaded.row).forEach { row ->
-            normalizeHandle(row.item.authorHandle)
-                .takeIf { it.isNotBlank() }
-                ?.let(handles::add)
+            normalizeHandle(row.authorHandle).takeIf { it.isNotBlank() }?.let(handles::add)
         }
         return handles.size
     }
@@ -654,18 +682,16 @@ internal class NativeFeedViewHolder(
         views.threadCapsuleAvatars.removeAllViews()
 
         val participants = threadCapsuleParticipantRows(threaded).take(3)
-        views.threadCapsuleAvatars.visibility = if (participants.isEmpty()) View.GONE else View.VISIBLE
+        views.threadCapsuleAvatars.visibility =
+            if (participants.isEmpty()) View.GONE else View.VISIBLE
         participants.forEachIndexed { index, row ->
-            val avatar = ImageView(views.root.context).apply {
-                scaleType = ImageView.ScaleType.CENTER_CROP
-                background = roundedFill(colors.surfaceVariant, dp(999))
-                clipToOutline = true
-            }
-            loadAvatar(
-                imageView = avatar,
-                channelId = row.item.channelId.orEmpty(),
-                explicitAvatarUrl = row.item.authorAvatarUrl,
-            )
+            val avatar =
+                ImageView(views.root.context).apply {
+                    scaleType = ImageView.ScaleType.CENTER_CROP
+                    background = roundedFill(colors.surfaceVariant, dp(999))
+                    clipToOutline = true
+                }
+            loadAvatar(imageView = avatar, channelId = row.item.channelId.orEmpty())
             views.threadCapsuleAvatars.addView(
                 avatar,
                 LinearLayout.LayoutParams(dp(20), dp(20)).apply {
@@ -678,7 +704,7 @@ internal class NativeFeedViewHolder(
     private fun threadCapsuleParticipantRows(threaded: ThreadedFeedRow): List<FeedRow> {
         val seenHandles = linkedSetOf<String>()
         return (threaded.chain + threaded.row).filter { row ->
-            val handle = normalizeHandle(row.item.authorHandle)
+            val handle = normalizeHandle(row.authorHandle)
             handle.isNotBlank() && seenHandles.add(handle)
         }
     }
@@ -686,7 +712,6 @@ internal class NativeFeedViewHolder(
     private fun bindHeader(
         header: NativeIdentityHeaderViews,
         channelId: String,
-        explicitAvatarUrl: String?,
         displayName: String,
         handle: String,
         timestamp: String,
@@ -700,23 +725,27 @@ internal class NativeFeedViewHolder(
     ) {
         header.root.setOnClickListener { onClick() }
         header.avatar.setOnClickListener { onClick() }
-        loadAvatar(header.avatar, channelId, explicitAvatarUrl)
+        loadAvatar(header.avatar, channelId)
         header.name.text = displayName.ifBlank { handle }
         header.name.setTextColor(colors.onSurface)
         val normalizedHandle = normalizeHandle(handle)
-        header.meta.text = when {
-            normalizedHandle.isNotBlank() && timestamp.isNotBlank() -> "@$normalizedHandle · $timestamp"
-            normalizedHandle.isNotBlank() -> "@$normalizedHandle"
-            else -> timestamp
-        }
+        header.meta.text =
+            when {
+                normalizedHandle.isNotBlank() && timestamp.isNotBlank() ->
+                    "@$normalizedHandle · $timestamp"
+                normalizedHandle.isNotBlank() -> "@$normalizedHandle"
+                else -> timestamp
+            }
         header.meta.setTextColor(colors.onSurfaceHandle)
         bindTranslationPill(header, translation, colors, onTranslationClick)
         header.follow.visibility = if (showFollow) View.VISIBLE else View.GONE
-        header.follow.text = views.root.context.getString(
-            if (isFollowed) R.string.action_following else R.string.action_follow,
-        )
+        header.follow.text =
+            views.root.context.getString(
+                if (isFollowed) R.string.action_following else R.string.action_follow
+            )
         header.follow.setTextColor(if (isFollowed) colors.onSurface else colors.onPrimary)
-        header.follow.background = roundedFill(if (isFollowed) colors.surfaceHighest else colors.primary, dp(999))
+        header.follow.background =
+            roundedFill(if (isFollowed) colors.surfaceHighest else colors.primary, dp(999))
         header.follow.setOnClickListener { onFollowClick() }
     }
 
@@ -734,18 +763,20 @@ internal class NativeFeedViewHolder(
         header.translate.visibility = View.VISIBLE
         header.translate.isEnabled = translation.enabled
         header.translate.alpha = if (translation.enabled) 1f else 0.65f
-        header.translate.contentDescription = header.root.context.getString(R.string.settings_auto_translate)
-        header.translateIcon.setColorFilter(if (translation.active) colors.primary else colors.onSurfaceMuted)
+        header.translate.contentDescription =
+            header.root.context.getString(R.string.settings_auto_translate)
+        header.translateIcon.setColorFilter(
+            if (translation.active) colors.primary else colors.onSurfaceMuted
+        )
         header.translateLabel.text = if (translation.active) translation.sourceLangLabel else ""
-        header.translateLabel.visibility = if (translation.active && translation.sourceLangLabel.isNotBlank()) {
-            View.VISIBLE
-        } else {
-            View.GONE
-        }
+        header.translateLabel.visibility =
+            if (translation.active && translation.sourceLangLabel.isNotBlank()) {
+                View.VISIBLE
+            } else {
+                View.GONE
+            }
         header.translateLabel.setTextColor(colors.primary)
-        header.translate.setOnClickListener {
-            if (translation.enabled) onTranslationClick()
-        }
+        header.translate.setOnClickListener { if (translation.enabled) onTranslationClick() }
     }
 
     private fun bindMentionText(
@@ -758,12 +789,13 @@ internal class NativeFeedViewHolder(
         textView.setLinkTextColor(colors.primary)
         textView.highlightColor = Color.TRANSPARENT
         textView.movementMethod = LinkMovementMethod.getInstance()
-        textView.text = clickableText(
-            raw = text,
-            linkColor = colors.primary,
-            onMentionClick = callbacks.onMentionClick,
-            onUrlClick = { url -> openExternalUrl(textView.context, url) },
-        )
+        textView.text =
+            clickableText(
+                raw = text,
+                linkColor = colors.primary,
+                onMentionClick = callbacks.onMentionClick,
+                onUrlClick = { url -> openExternalUrl(textView.context, url) },
+            )
     }
 
     private fun bindMediaGrid(
@@ -785,22 +817,23 @@ internal class NativeFeedViewHolder(
             val cell = grid.cells.first()
             val aspect = nativeStableSingleMediaAspectRatio(cell)
             val dimensions = nativeSingleMediaDimensions(container.context, aspect)
-            val frame = FrameLayout(container.context).apply {
-                setBackgroundColor(Color.TRANSPARENT)
-                clipToOutline = true
-                background = roundedFill(Color.TRANSPARENT, dp(8))
-            }
-            frame.layoutParams = LinearLayout.LayoutParams(
-                dimensions.widthPx,
-                dimensions.heightPx,
-            ).apply { gravity = Gravity.START }
+            val frame =
+                FrameLayout(container.context).apply {
+                    setBackgroundColor(Color.TRANSPARENT)
+                    clipToOutline = true
+                    background = roundedFill(Color.TRANSPARENT, dp(8))
+                }
+            frame.layoutParams =
+                LinearLayout.LayoutParams(dimensions.widthPx, dimensions.heightPx).apply {
+                    gravity = Gravity.START
+                }
             bindMediaCell(
                 parent = frame,
                 ownerKey = "$ownerKeyPrefix:0",
                 row = row,
                 grid = grid,
                 cell = cell,
-                mediaIndex = mediaIndexOffset,
+                mediaIndex = feedMediaViewerIndex(grid, 0, mediaIndexOffset),
                 isSingle = true,
                 colors = colors,
                 callbacks = callbacks,
@@ -812,18 +845,19 @@ internal class NativeFeedViewHolder(
             val gap = dp(2)
             val displayCells = grid.cells.take(4)
             fun frameFor(index: Int, cell: FeedMediaCellModel): FrameLayout {
-                val frame = FrameLayout(container.context).apply {
-                    setBackgroundColor(colors.surface)
-                    clipToOutline = true
-                    background = roundedFill(colors.surface, dp(8))
-                }
+                val frame =
+                    FrameLayout(container.context).apply {
+                        setBackgroundColor(colors.surface)
+                        clipToOutline = true
+                        background = roundedFill(colors.surface, dp(8))
+                    }
                 bindMediaCell(
                     parent = frame,
                     ownerKey = "$ownerKeyPrefix:$index",
                     row = row,
                     grid = grid,
                     cell = cell,
-                    mediaIndex = mediaIndexOffset + index,
+                    mediaIndex = feedMediaViewerIndex(grid, index, mediaIndexOffset),
                     colors = colors,
                     callbacks = callbacks,
                 )
@@ -835,9 +869,8 @@ internal class NativeFeedViewHolder(
                             setTypeface(typeface, Typeface.BOLD)
                             setTextColor(Color.WHITE)
                             gravity = Gravity.CENTER
-                            background = GradientDrawable().apply {
-                                setColor(Color.argb(145, 0, 0, 0))
-                            }
+                            background =
+                                GradientDrawable().apply { setColor(Color.argb(145, 0, 0, 0)) }
                         },
                         FrameLayout.LayoutParams(
                             ViewGroup.LayoutParams.MATCH_PARENT,
@@ -851,16 +884,14 @@ internal class NativeFeedViewHolder(
             when (displayCells.size) {
                 2 -> {
                     val cellSize = (gridWidth - gap) / 2
-                    val rowLayout = LinearLayout(context).apply {
-                        orientation = LinearLayout.HORIZONTAL
-                    }
+                    val rowLayout =
+                        LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL }
                     rowLayout.layoutParams = LinearLayout.LayoutParams(gridWidth, cellSize)
                     displayCells.forEachIndexed { index, cell ->
                         rowLayout.addView(
                             frameFor(index, cell),
-                            LinearLayout.LayoutParams(cellSize, ViewGroup.LayoutParams.MATCH_PARENT).apply {
-                                if (index > 0) marginStart = gap
-                            },
+                            LinearLayout.LayoutParams(cellSize, ViewGroup.LayoutParams.MATCH_PARENT)
+                                .apply { if (index > 0) marginStart = gap },
                         )
                     }
                     container.addView(rowLayout)
@@ -869,58 +900,59 @@ internal class NativeFeedViewHolder(
                     val gridHeight = (gridWidth / 1.6f).toInt()
                     val columnWidth = (gridWidth - gap) / 2
                     val rightCellHeight = (gridHeight - gap) / 2
-                    val rowLayout = LinearLayout(context).apply {
-                        orientation = LinearLayout.HORIZONTAL
-                    }
+                    val rowLayout =
+                        LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL }
                     rowLayout.layoutParams = LinearLayout.LayoutParams(gridWidth, gridHeight)
                     rowLayout.addView(
                         frameFor(0, displayCells[0]),
                         LinearLayout.LayoutParams(columnWidth, ViewGroup.LayoutParams.MATCH_PARENT),
                     )
-                    val rightColumn = LinearLayout(context).apply {
-                        orientation = LinearLayout.VERTICAL
-                    }
+                    val rightColumn =
+                        LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
                     rowLayout.addView(
                         rightColumn,
-                        LinearLayout.LayoutParams(columnWidth, ViewGroup.LayoutParams.MATCH_PARENT).apply {
-                            marginStart = gap
-                        },
+                        LinearLayout.LayoutParams(columnWidth, ViewGroup.LayoutParams.MATCH_PARENT)
+                            .apply { marginStart = gap },
                     )
                     rightColumn.addView(
                         frameFor(1, displayCells[1]),
-                        LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, rightCellHeight),
+                        LinearLayout.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            rightCellHeight,
+                        ),
                     )
                     rightColumn.addView(
                         frameFor(2, displayCells[2]),
-                        LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, rightCellHeight).apply {
-                            topMargin = gap
-                        },
+                        LinearLayout.LayoutParams(
+                                ViewGroup.LayoutParams.MATCH_PARENT,
+                                rightCellHeight,
+                            )
+                            .apply { topMargin = gap },
                     )
                     container.addView(rowLayout)
                 }
                 else -> {
                     val cellSize = (gridWidth - gap) / 2
-                    val gridLayout = LinearLayout(context).apply {
-                        orientation = LinearLayout.VERTICAL
-                    }
+                    val gridLayout =
+                        LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
                     gridLayout.layoutParams = LinearLayout.LayoutParams(gridWidth, gridWidth)
                     repeat(2) { rowIndex ->
-                        val rowLayout = LinearLayout(context).apply {
-                            orientation = LinearLayout.HORIZONTAL
-                        }
+                        val rowLayout =
+                            LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL }
                         gridLayout.addView(
                             rowLayout,
-                            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, cellSize).apply {
-                                if (rowIndex > 0) topMargin = gap
-                            },
+                            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, cellSize)
+                                .apply { if (rowIndex > 0) topMargin = gap },
                         )
                         repeat(2) { columnIndex ->
                             val index = rowIndex * 2 + columnIndex
                             rowLayout.addView(
                                 frameFor(index, displayCells[index]),
-                                LinearLayout.LayoutParams(cellSize, ViewGroup.LayoutParams.MATCH_PARENT).apply {
-                                    if (columnIndex > 0) marginStart = gap
-                                },
+                                LinearLayout.LayoutParams(
+                                        cellSize,
+                                        ViewGroup.LayoutParams.MATCH_PARENT,
+                                    )
+                                    .apply { if (columnIndex > 0) marginStart = gap },
                             )
                         }
                     }
@@ -937,15 +969,16 @@ internal class NativeFeedViewHolder(
         row: FeedRow,
         grid: FeedMediaGridModel,
         cell: FeedMediaCellModel,
-        mediaIndex: Int,
+        mediaIndex: Int?,
         isSingle: Boolean = false,
         colors: NativeFeedColors,
         callbacks: NativeFeedCallbacks,
     ) {
-        val image = ImageView(parent.context).apply {
-            scaleType = nativeMediaScaleTypeFor(cell.descriptor, isSingle)
-            setBackgroundColor(if (isSingle) Color.TRANSPARENT else colors.surface)
-        }
+        val image =
+            ImageView(parent.context).apply {
+                scaleType = nativeMediaScaleTypeFor(cell.descriptor, isSingle)
+                setBackgroundColor(if (isSingle) Color.TRANSPARENT else colors.surface)
+            }
         parent.addView(
             image,
             FrameLayout.LayoutParams(
@@ -961,13 +994,14 @@ internal class NativeFeedViewHolder(
         )
 
         if (cell.descriptor.isVideo) {
-            val playerView = PlayerView(parent.context).apply {
-                useController = false
-                resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
-                setShutterBackgroundColor(Color.TRANSPARENT)
-                visibility = View.GONE
-                alpha = 0f
-            }
+            val playerView =
+                PlayerView(parent.context).apply {
+                    useController = false
+                    resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+                    setShutterBackgroundColor(Color.TRANSPARENT)
+                    visibility = View.GONE
+                    alpha = 0f
+                }
             parent.addView(
                 playerView,
                 FrameLayout.LayoutParams(
@@ -977,82 +1011,75 @@ internal class NativeFeedViewHolder(
             )
             val streamUri = cell.streamUri()
             if (streamUri !is MediaUri.Missing) {
-                val slot = NativeVideoSlot(
-                    key = ownerKey,
-                    streamUri = streamUri,
-                    container = parent,
-                    playerView = playerView,
-                    poster = image,
-                )
+                val slot =
+                    NativeVideoSlot(
+                        key = ownerKey,
+                        streamUri = streamUri,
+                        container = parent,
+                        playerView = playerView,
+                        poster = image,
+                    )
                 videoSlots += slot
             }
         }
 
-        parent.setOnClickListener {
-            callbacks.onMediaOpen(row, mediaIndex, grid)
+        if (mediaIndex == null) {
+            parent.setOnClickListener(null)
+        } else {
+            parent.setOnClickListener { callbacks.onMediaOpen(row, mediaIndex, grid) }
         }
     }
 
-    private fun loadAvatar(imageView: ImageView, channelId: String, explicitAvatarUrl: String?) {
-        val requestKey = "avatar:${channelId.trim()}:${explicitAvatarUrl.orEmpty().trim()}"
+    private fun loadAvatar(imageView: ImageView, channelId: String) {
+        val requestKey = "avatar:${channelId.trim()}"
         imageView.tag = requestKey
         avatarJobs.remove(imageView)?.cancel()
+        avatarRequests.remove(imageView)?.dispose()
         imageView.setImageDrawable(null)
         imageView.background = roundedFill(getColors().surfaceVariant, dp(999))
 
-        val explicitUri = explicitAvatarUrl?.trim()
-            ?.takeIf { it.isNotBlank() }
-            ?.let(::avatarRemoteUri)
-        if (channelId.isBlank()) {
-            if (explicitUri != null) loadAvatarUri(imageView, explicitUri)
-            return
-        }
+        if (channelId.isBlank()) return
 
-        avatarJobs[imageView] = scope.launch {
-            val resolved = withContext(Dispatchers.IO) {
-                mediaResolvers.avatarForChannel(channelId)
+        avatarJobs[imageView] =
+            scope.launch {
+                mediaResolvers.avatarForChannelFlow(channelId).collect { resolved ->
+                    if (imageView.tag != requestKey) return@collect
+                    loadAvatarUri(imageView, resolved)
+                }
             }
-            if (imageView.tag != requestKey) return@launch
-            loadAvatarUri(
-                imageView = imageView,
-                uri = resolved.takeUnless { it is MediaUri.Missing } ?: explicitUri ?: MediaUri.Missing,
-            )
-        }
     }
 
     private fun loadAvatarUri(imageView: ImageView, uri: MediaUri) {
-        val request = buildMediaImageRequest(
-            context = imageView.context,
-            uri = uri,
-            bearerToken = authTokens.bearerTokenSync(),
-            iglooHost = iglooHostProvider.hostSync(),
-            widthPx = dp(48),
-            heightPx = dp(48),
-        )?.newBuilder(imageView.context)
-            ?.target(ImageViewTarget(imageView))
-            ?.build()
+        avatarRequests.remove(imageView)?.dispose()
+        imageView.setImageDrawable(null)
+        val request =
+            buildMediaImageRequest(
+                    context = imageView.context,
+                    uri = uri,
+                    bearerToken = authTokens.bearerTokenSync(),
+                    iglooHost = iglooHostProvider.hostSync(),
+                    widthPx = dp(48),
+                    heightPx = dp(48),
+                )
+                ?.newBuilder(imageView.context)
+                ?.target(ImageViewTarget(imageView))
+                ?.build()
         if (request != null) {
-            imageLoader.enqueue(request)
+            avatarRequests[imageView] = imageLoader.enqueue(request)
         }
-    }
-
-    private fun avatarRemoteUri(url: String): MediaUri.Remote {
-        val resolved = when {
-            url.startsWith("http://") || url.startsWith("https://") -> url
-            url.startsWith("/") -> getBaseUrl().trim().trimEnd('/') + url
-            else -> url
-        }
-        return MediaUri.Remote(resolved)
     }
 
     private fun cancelAvatarJobs() {
         avatarJobs.values.forEach { it.cancel() }
         avatarJobs.clear()
+        avatarRequests.values.forEach { it.dispose() }
+        avatarRequests.clear()
     }
 
     private fun cancelAvatarJobsUnder(view: View) {
         if (view is ImageView) {
             avatarJobs.remove(view)?.cancel()
+            avatarRequests.remove(view)?.dispose()
         }
         if (view is ViewGroup) {
             for (index in 0 until view.childCount) {
@@ -1062,16 +1089,20 @@ internal class NativeFeedViewHolder(
     }
 
     private fun loadMediaImage(imageView: ImageView, uri: MediaUri, widthPx: Int, heightPx: Int) {
-        val request = buildMediaImageRequest(
-            context = imageView.context,
-            uri = uri,
-            bearerToken = authTokens.bearerTokenSync(),
-            iglooHost = iglooHostProvider.hostSync(),
-            widthPx = widthPx.takeIf { it > 0 } ?: imageView.resources.displayMetrics.widthPixels,
-            heightPx = heightPx.takeIf { it > 0 } ?: imageView.resources.displayMetrics.widthPixels,
-        )?.newBuilder(imageView.context)
-            ?.target(ImageViewTarget(imageView))
-            ?.build()
+        val request =
+            buildMediaImageRequest(
+                    context = imageView.context,
+                    uri = uri,
+                    bearerToken = authTokens.bearerTokenSync(),
+                    iglooHost = iglooHostProvider.hostSync(),
+                    widthPx =
+                        widthPx.takeIf { it > 0 } ?: imageView.resources.displayMetrics.widthPixels,
+                    heightPx =
+                        heightPx.takeIf { it > 0 } ?: imageView.resources.displayMetrics.widthPixels,
+                )
+                ?.newBuilder(imageView.context)
+                ?.target(ImageViewTarget(imageView))
+                ?.build()
         if (request != null) {
             imageLoader.enqueue(request)
         } else {

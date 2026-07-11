@@ -37,7 +37,7 @@ func (db *DB) StoryCutoffMs(nowMs int64) int64 {
 	return storyCutoffMs(nowMs, db.StoriesWindowHours())
 }
 
-func (db *DB) ListStoryChannels(username string, nowMs int64, limit int) ([]model.StoryChannel, bool, error) {
+func (db *DB) ListStoryChannels(nowMs int64, limit int) ([]model.StoryChannel, bool, error) {
 	if limit <= 0 {
 		limit = 200
 	}
@@ -50,8 +50,8 @@ func (db *DB) ListStoryChannels(username string, nowMs int64, limit int) ([]mode
 			       CASE WHEN mv.video_id IS NULL THEN 1 ELSE 0 END AS unseen
 			FROM videos v
 			INNER JOIN channels c ON c.channel_id = v.channel_id
-			INNER JOIN channel_follows cf ON cf.channel_id = v.channel_id AND cf.user_id = ''
-			LEFT JOIN moment_views mv ON mv.username = ? AND mv.video_id = v.video_id
+			INNER JOIN channel_follows cf ON cf.channel_id = v.channel_id
+			LEFT JOIN moment_views mv ON mv.video_id = v.video_id
 			WHERE COALESCE(c.platform, '') IN ('tiktok','instagram')
 			  AND COALESCE(v.source_kind, '') = 'story'
 			  AND COALESCE(v.is_temp, 0) = 0
@@ -82,7 +82,7 @@ func (db *DB) ListStoryChannels(username string, nowMs int64, limit int) ([]mode
 		FROM active a
 		INNER JOIN channels c ON c.channel_id = a.channel_id
 		LEFT JOIN channel_profiles cp ON cp.channel_id = a.channel_id AND COALESCE(cp.tombstone, 0) = 0
-		LEFT JOIN channel_stars cs ON cs.channel_id = a.channel_id AND cs.user_id = ''
+		LEFT JOIN channel_stars cs ON cs.channel_id = a.channel_id
 		GROUP BY a.channel_id, c.platform, c.name, c.source_id, cp.display_name, cp.handle, cs.channel_id
 		ORDER BY CASE WHEN COALESCE(SUM(a.unseen), 0) > 0 THEN 0 ELSE 1 END,
 		         CASE WHEN cs.channel_id IS NOT NULL THEN 0 ELSE 1 END,
@@ -90,7 +90,7 @@ func (db *DB) ListStoryChannels(username string, nowMs int64, limit int) ([]mode
 		         display_name COLLATE NOCASE ASC
 		LIMIT ?
 	`
-	rows, err := db.conn.Query(query, username, cutoff, cutoff, limit)
+	rows, err := db.conn.Query(query, cutoff, cutoff, limit)
 	if err != nil {
 		return nil, false, err
 	}
@@ -123,14 +123,14 @@ func (db *DB) ListStoryChannels(username string, nowMs int64, limit int) ([]mode
 	return out, hasUnseen, rows.Err()
 }
 
-func (db *DB) GetStoryStatusForChannelIDs(username string, channelIDs []string, nowMs int64) (map[string]model.StoryStatus, error) {
+func (db *DB) GetStoryStatusForChannelIDs(channelIDs []string, nowMs int64) (map[string]model.StoryStatus, error) {
 	out := make(map[string]model.StoryStatus, len(channelIDs))
 	ids := normalizeStoryChannelIDs(channelIDs)
 	if len(ids) == 0 {
 		return out, nil
 	}
 	cutoff := db.StoryCutoffMs(nowMs)
-	args := []any{username}
+	var args []any
 	for _, id := range ids {
 		args = append(args, id)
 	}
@@ -143,8 +143,8 @@ func (db *DB) GetStoryStatusForChannelIDs(username string, channelIDs []string, 
 			       CASE WHEN mv.video_id IS NULL THEN 1 ELSE 0 END AS unseen
 			FROM videos v
 			INNER JOIN channels c ON c.channel_id = v.channel_id
-			INNER JOIN channel_follows cf ON cf.channel_id = v.channel_id AND cf.user_id = ''
-			LEFT JOIN moment_views mv ON mv.username = ? AND mv.video_id = v.video_id
+			INNER JOIN channel_follows cf ON cf.channel_id = v.channel_id
+			LEFT JOIN moment_views mv ON mv.video_id = v.video_id
 			WHERE v.channel_id IN (` + placeholders(len(ids)) + `)
 			  AND COALESCE(c.platform, '') IN ('tiktok','instagram')
 			  AND COALESCE(v.source_kind, '') = 'story'
@@ -201,7 +201,7 @@ func (db *DB) GetStoryStatusForChannelIDs(username string, channelIDs []string, 
 	return out, nil
 }
 
-func (db *DB) AttachStoryStatusToVideos(username string, videos []model.Video, nowMs int64) error {
+func (db *DB) AttachStoryStatusToVideos(videos []model.Video, nowMs int64) error {
 	if len(videos) == 0 {
 		return nil
 	}
@@ -209,7 +209,7 @@ func (db *DB) AttachStoryStatusToVideos(username string, videos []model.Video, n
 	for _, v := range videos {
 		ids = append(ids, v.ChannelID)
 	}
-	statuses, err := db.GetStoryStatusForChannelIDs(username, ids, nowMs)
+	statuses, err := db.GetStoryStatusForChannelIDs(ids, nowMs)
 	if err != nil {
 		return err
 	}
@@ -231,7 +231,7 @@ func (db *DB) AttachStoryStatusToVideos(username string, videos []model.Video, n
 	return nil
 }
 
-func (db *DB) GetStoryVideos(username, channelID string, nowMs int64) ([]model.Video, error) {
+func (db *DB) GetStoryVideos(channelID string, nowMs int64) ([]model.Video, error) {
 	channelID = strings.TrimSpace(channelID)
 	if channelID == "" {
 		return nil, nil
@@ -251,7 +251,7 @@ func (db *DB) GetStoryVideos(username, channelID string, nowMs int64) ([]model.V
 	if len(videos) == 0 {
 		return videos, nil
 	}
-	viewed, err := db.momentViewedSet(username, videos)
+	viewed, err := db.momentViewedSet(videos)
 	if err != nil {
 		return nil, err
 	}
@@ -285,7 +285,7 @@ func (db *DB) GetStoryVideos(username, channelID string, nowMs int64) ([]model.V
 	return videos, nil
 }
 
-func (db *DB) DeleteExpiredStoryVideos(nowMs int64, dataDir string) (int, error) {
+func (db *DB) DeleteExpiredStoryVideos(nowMs int64) (int, error) {
 	cutoff := db.StoryCutoffMs(nowMs)
 	if cutoff <= 0 {
 		return 0, nil
@@ -321,14 +321,14 @@ func (db *DB) DeleteExpiredStoryVideos(nowMs int64, dataDir string) (int, error)
 		return 0, err
 	}
 	for _, id := range ids {
-		if err := db.DeleteVideoWithFile(id, dataDir); err != nil {
+		if err := db.DeleteVideoWithFile(id); err != nil {
 			return len(ids), err
 		}
 	}
 	return len(ids), nil
 }
 
-func (db *DB) momentViewedSet(username string, videos []model.Video) (map[string]bool, error) {
+func (db *DB) momentViewedSet(videos []model.Video) (map[string]bool, error) {
 	out := map[string]bool{}
 	ids := make([]string, 0, len(videos))
 	for _, v := range videos {
@@ -339,16 +339,14 @@ func (db *DB) momentViewedSet(username string, videos []model.Video) (map[string
 	if len(ids) == 0 {
 		return out, nil
 	}
-	args := make([]any, 0, len(ids)+1)
-	args = append(args, username)
+	args := make([]any, 0, len(ids))
 	for _, id := range ids {
 		args = append(args, id)
 	}
 	rows, err := db.conn.Query(`
 		SELECT video_id
 		FROM moment_views
-		WHERE username = ?
-		  AND video_id IN (`+placeholders(len(ids))+`)
+		WHERE video_id IN (`+placeholders(len(ids))+`)
 	`, args...)
 	if err != nil {
 		return nil, err

@@ -115,11 +115,9 @@ func (s *Server) handleChannelStar(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	syncVersion, _ := s.db.GetCurrentSyncVersion()
 	writeJSON(w, 200, map[string]any{
-		"success":      true,
-		"is_starred":   isStarred,
-		"sync_version": syncVersion,
+		"success":    true,
+		"is_starred": isStarred,
 	})
 }
 
@@ -137,13 +135,6 @@ func (s *Server) handleChannelSubscribe(w http.ResponseWriter, r *http.Request) 
 			slog.Error("FollowChannel", "channel", channelID, "err", err)
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"success": false, "error": "db error"})
 			return
-		}
-		valueJSON := fmt.Sprintf(`{"channel_id":%q,"platform":%q}`, ch.ChannelID, ch.Platform)
-		if err := s.db.RecordSyncChange("subscribe", ch.ChannelID, valueJSON); err != nil {
-			slog.Warn("RecordSyncChange subscribe", "channel", ch.ChannelID, "err", err)
-		}
-		if s.requestAvatar != nil {
-			s.requestAvatar(ch.ChannelID)
 		}
 		if s.workers != nil {
 			s.workers.Emit("system", fmt.Sprintf("Subscribed: %s (%s)", ch.Name, ch.Platform), "done")
@@ -314,24 +305,6 @@ func (s *Server) handleChannelSettingsPost(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// Emit a sync_change so Android's applyChanges can mirror the setting
-	// and (on flip OFF) delete any already-leaked rows from local Room.
-	if v, ok := body["include_reposts"]; ok {
-		include := true
-		switch t := v.(type) {
-		case int:
-			include = t != 0
-		case float64:
-			include = t != 0
-		case bool:
-			include = t
-		}
-		valueJSON := fmt.Sprintf(`{"include_reposts":%t}`, include)
-		if err := s.db.RecordSyncChange("channel_setting", channelID, valueJSON); err != nil {
-			slog.Warn("RecordSyncChange channel_setting", "channel", channelID, "err", err)
-		}
-	}
-
 	if isHTMX {
 		// Re-read settings and render updated form.
 		updated, _ := s.db.GetChannelSettings(channelID)
@@ -358,10 +331,21 @@ func (s *Server) handleChannelSettingsPost(w http.ResponseWriter, r *http.Reques
 
 func (s *Server) handleChannelRefresh(w http.ResponseWriter, r *http.Request) {
 	channelID := r.PathValue("channelID")
+	profileErr := s.db.RequestProfileJob(channelID, time.Now().UnixMilli())
 	ch, err := s.db.GetChannel(channelID)
 	if err != nil || ch == nil {
+		if profileErr == nil {
+			writeJSON(w, http.StatusOK, map[string]any{
+				"success":    true,
+				"channel_id": channelID,
+			})
+			return
+		}
 		writeJSON(w, 404, map[string]any{"error": "channel not found"})
 		return
+	}
+	if profileErr != nil {
+		slog.Warn("RequestProfileJob", "channel", channelID, "err", profileErr)
 	}
 	if ch.Platform == "twitter" {
 		// Reset ingest state and fetch this channel immediately so a completed
@@ -415,19 +399,14 @@ func (s *Server) handleChannelFeed(w http.ResponseWriter, r *http.Request) {
 	}
 
 	items, _ := s.db.GetFeedItemsByAuthor(handle, limit)
-	user := userFromContext(r.Context())
-	username := ""
-	if user != nil {
-		username = user.Username
-	}
-	items = feed.EnrichFeedItems(s.db, items, username)
+	items = feed.EnrichFeedItems(s.db, items)
 	if feed.AlgorithmicFeedEnabled(s.db) {
 		items = feed.RankFeedItems(items)
 	} else {
 		items = feed.SortFeedItemsChronological(items)
 	}
 
-	s.writeFeedResponse(w, items, false, len(items), username, "")
+	s.writeFeedResponse(w, items, false, len(items), "")
 }
 
 func (s *Server) handleChannelVideos(w http.ResponseWriter, r *http.Request) {

@@ -34,21 +34,25 @@ import androidx.media3.exoplayer.ExoPlayer
 import coil3.compose.AsyncImage
 import com.screwy.igloo.R
 import com.screwy.igloo.data.dao.AndroidSyncDao
-import com.screwy.igloo.data.dao.MediaInventoryDao
 import com.screwy.igloo.data.entity.AndroidSyncAssetEntity
-import com.screwy.igloo.data.entity.MediaInventoryEntity
 import com.screwy.igloo.media.MediaUri
+import com.screwy.igloo.media.OwnerKind
+import com.screwy.igloo.media.assetOwnerKind
 import com.screwy.igloo.net.ServerBaseUrlProvider
+import com.screwy.igloo.net.Reachability
+import com.screwy.igloo.net.androidSyncAssetPath
 import java.io.File
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import org.koin.compose.koinInject
 
 @Composable
 internal fun MomentImageSurface(
     videoId: String,
+    ownerKind: OwnerKind,
     thumbnailUri: MediaUri,
     isActive: Boolean,
     autoSwipe: Boolean,
@@ -56,16 +60,16 @@ internal fun MomentImageSurface(
     modifier: Modifier = Modifier,
 ) {
     val baseUrlProvider: ServerBaseUrlProvider = koinInject()
-    val mediaInventoryDao: MediaInventoryDao = koinInject()
     val syncDao: AndroidSyncDao = koinInject()
+    val reachability: Reachability = koinInject()
     val baseUrl = baseUrlProvider.baseUrl()
-    val slideMediaFlow = remember(mediaInventoryDao, syncDao, baseUrl, videoId) {
+    val slideMediaFlow = remember(syncDao, reachability, baseUrl, videoId, ownerKind) {
         momentSlideMediaFlow(
-            mediaInventoryDao = mediaInventoryDao,
             syncDao = syncDao,
             baseUrl = baseUrl,
             videoId = videoId,
-            fallbackSlideCount = 1,
+            ownerKind = ownerKind.assetOwnerKind(),
+            reachability = reachability,
         )
     }
     val slideMedia by slideMediaFlow.collectAsState(initial = emptyList())
@@ -86,7 +90,7 @@ internal fun MomentImageSurface(
 @Composable
 internal fun MomentSlideshowSurface(
     videoId: String,
-    slideCount: Int,
+    ownerKind: OwnerKind,
     thumbnailUri: MediaUri,
     isActive: Boolean,
     autoSwipe: Boolean,
@@ -97,16 +101,16 @@ internal fun MomentSlideshowSurface(
     modifier: Modifier = Modifier,
 ) {
     val baseUrlProvider: ServerBaseUrlProvider = koinInject()
-    val mediaInventoryDao: MediaInventoryDao = koinInject()
     val syncDao: AndroidSyncDao = koinInject()
+    val reachability: Reachability = koinInject()
     val baseUrl = baseUrlProvider.baseUrl()
-    val slideMediaFlow = remember(mediaInventoryDao, syncDao, baseUrl, videoId, slideCount) {
+    val slideMediaFlow = remember(syncDao, reachability, baseUrl, videoId, ownerKind) {
         momentSlideMediaFlow(
-            mediaInventoryDao = mediaInventoryDao,
             syncDao = syncDao,
             baseUrl = baseUrl,
             videoId = videoId,
-            fallbackSlideCount = slideCount,
+            ownerKind = ownerKind.assetOwnerKind(),
+            reachability = reachability,
         )
     }
     val slideMedia by slideMediaFlow.collectAsState(initial = emptyList())
@@ -201,7 +205,7 @@ internal fun MomentSlideshowSurface(
         }
     }
 
-    LaunchedEffect(videoId, slideCount, isActive, autoSwipe, effectiveSlideCount) {
+    LaunchedEffect(videoId, isActive, autoSwipe, effectiveSlideCount) {
         if (!isActive || effectiveSlideCount <= 0) return@LaunchedEffect
         while (true) {
             val pageAtStart = pagerState.currentPage
@@ -371,198 +375,106 @@ private fun momentSlideVideoMediaItem(mediaUri: MediaUri): MediaItem? = when (me
 }
 
 private fun momentSlideMediaFlow(
-    mediaInventoryDao: MediaInventoryDao,
     syncDao: AndroidSyncDao,
     baseUrl: String,
     videoId: String,
-    fallbackSlideCount: Int,
-) = combine(
-    mediaInventoryDao.forOwnerFlow(videoId),
-    syncDao.latestReadyAssetsForOwnerFlow(videoId, listOf("post_media")),
-) { rows, syncRows ->
-    resolveMomentSlideMedia(
-        rows = rows,
-        baseUrl = baseUrl,
-        videoId = videoId,
-        fallbackSlideCount = fallbackSlideCount,
-        syncRows = syncRows,
-    )
-}
+    ownerKind: String,
+    reachability: Reachability,
+) = combine(syncDao.assetsForOwnerFlow(ownerKind, videoId), reachability.state) { syncRows, state ->
+        resolveMomentSlideMedia(
+            baseUrl = baseUrl,
+            syncRows = syncRows,
+            allowRemote = state is Reachability.State.Online,
+        )
+    }
     .distinctUntilChanged()
 
 internal fun momentAudioUriFlow(
-    mediaInventoryDao: MediaInventoryDao,
     syncDao: AndroidSyncDao,
     baseUrl: String,
     videoId: String,
-) = combine(
-    mediaInventoryDao.forOwnerFlow(videoId),
-    syncDao.latestVerifiedAssetsForOwnerFlow(videoId, listOf("post_audio", "audio")),
-) { rows, syncRows ->
-    resolveMomentAudioUri(
-        rows = rows,
-        baseUrl = baseUrl,
-        videoId = videoId,
-        syncRows = syncRows,
-    )
-}
+    ownerKind: String,
+    reachability: Reachability,
+) = combine(syncDao.assetsForOwnerFlow(ownerKind, videoId), reachability.state) { syncRows, state ->
+        resolveMomentAudioUri(
+            baseUrl = baseUrl,
+            syncRows = syncRows,
+            allowRemote = state is Reachability.State.Online,
+        )
+    }
     .distinctUntilChanged()
 
 internal fun resolveMomentSlideUris(
-    rows: List<MediaInventoryEntity>,
     baseUrl: String,
-    videoId: String,
-    fallbackSlideCount: Int,
     syncRows: List<AndroidSyncAssetEntity> = emptyList(),
+    allowRemote: Boolean = true,
 ): List<MediaUri> = resolveMomentSlideMedia(
-    rows = rows,
     baseUrl = baseUrl,
-    videoId = videoId,
-    fallbackSlideCount = fallbackSlideCount,
     syncRows = syncRows,
+    allowRemote = allowRemote,
 ).map { slide -> slide.uri }
 
 internal fun resolveMomentSlideMedia(
-    rows: List<MediaInventoryEntity>,
     baseUrl: String,
-    videoId: String,
-    fallbackSlideCount: Int,
     syncRows: List<AndroidSyncAssetEntity> = emptyList(),
+    allowRemote: Boolean = true,
 ): List<MomentSlideMedia> {
     val syncSlideRows = syncRows
         .asSequence()
         .filter(::isMomentSyncPostMediaAsset)
         .sortedBy(::momentSyncSlideIndex)
         .toList()
-    if (syncSlideRows.isNotEmpty()) {
-        return syncSlideRows.map { row ->
+    return syncSlideRows.mapNotNull { row ->
+        momentSlideKind(row.contentType)?.let { kind ->
             MomentSlideMedia(
-                uri = momentSyncAssetToMediaUri(row, baseUrl),
-                kind = momentSlideKind(
-                    contentType = row.contentType,
-                    serverUrl = row.serverUrl,
-                    localPath = row.localPath,
-                ),
+                uri = momentSyncAssetToMediaUri(row, baseUrl, allowRemote),
+                kind = kind,
             )
         }
-    }
-
-    val slideRows = rows
-        .asSequence()
-        .filter { row ->
-            row.assetKind == "post_media" && row.serverUrl.contains("/api/media/slide/")
-        }
-        .sortedBy(::momentSlideIndex)
-        .toList()
-    if (slideRows.isNotEmpty()) {
-        return slideRows.map { row ->
-            MomentSlideMedia(
-                uri = momentInventoryRowToMediaUri(row, baseUrl),
-                kind = momentSlideKind(
-                    contentType = row.contentType,
-                    serverUrl = row.serverUrl,
-                    localPath = row.localPath,
-                ),
-            )
-        }
-    }
-
-    val fallbackCount = fallbackSlideCount.coerceAtLeast(0)
-    if (fallbackCount == 0) return emptyList()
-    return List(fallbackCount) { index ->
-        MomentSlideMedia(
-            uri = momentSlideUrl(baseUrl, videoId, index)
-                ?.let(MediaUri::Remote)
-                ?: MediaUri.Missing,
-            kind = MomentSlideKind.Image,
-        )
     }
 }
 
 internal fun resolveMomentAudioUri(
-    rows: List<MediaInventoryEntity>,
     baseUrl: String,
-    videoId: String,
     syncRows: List<AndroidSyncAssetEntity> = emptyList(),
+    allowRemote: Boolean = true,
 ): MediaUri {
     val syncAudioRow = syncRows.firstOrNull { row ->
-        row.assetKind == "audio" ||
-            row.assetKind == "post_audio" ||
-            row.serverUrl.contains("/api/media/audio/")
+        row.assetKind == "post_audio" &&
+            row.contentType?.trim()?.startsWith("audio/", ignoreCase = true) == true
     }
-    if (syncAudioRow != null) {
-        return momentSyncAssetToMediaUri(syncAudioRow, baseUrl)
-    }
-
-    val audioRow = rows.firstOrNull { row ->
-        row.assetKind == "audio" ||
-            row.assetKind == "post_audio" ||
-            row.serverUrl.contains("/api/media/audio/")
-    }
-    if (audioRow != null) {
-        return momentInventoryRowToMediaUri(audioRow, baseUrl)
-    }
-    return momentAudioUrl(baseUrl, videoId)
-        ?.let(MediaUri::Remote)
-        ?: MediaUri.Missing
+    return syncAudioRow?.let { momentSyncAssetToMediaUri(it, baseUrl, allowRemote) } ?: MediaUri.Missing
 }
-
-private fun momentSlideIndex(row: MediaInventoryEntity): Int =
-    row.serverUrl.substringAfterLast('/').toIntOrNull()
-        ?: row.assetId.substringAfterLast('_').toIntOrNull()
-        ?: Int.MAX_VALUE
 
 private fun isMomentSyncPostMediaAsset(row: AndroidSyncAssetEntity): Boolean =
     row.assetKind == "post_media"
 
 private fun momentSlideKind(
     contentType: String?,
-    serverUrl: String?,
-    localPath: String?,
-): MomentSlideKind {
+): MomentSlideKind? {
     val type = contentType?.trim()?.lowercase().orEmpty()
-    if (type.startsWith("video/")) return MomentSlideKind.Video
-    if (type.startsWith("image/")) return MomentSlideKind.Image
-    val path = listOfNotNull(localPath, serverUrl).firstOrNull { it.isNotBlank() }.orEmpty()
-    return when (File(path).extension.lowercase()) {
-        "mp4", "webm", "mkv", "mov", "m4v" -> MomentSlideKind.Video
-        else -> MomentSlideKind.Image
+    return when {
+        type.startsWith("video/") -> MomentSlideKind.Video
+        type.startsWith("image/") -> MomentSlideKind.Image
+        else -> null
     }
 }
 
 private fun momentSyncSlideIndex(row: AndroidSyncAssetEntity): Int =
     row.mediaIndex
 
-internal fun momentInventoryRowToMediaUri(
-    row: MediaInventoryEntity,
-    baseUrl: String,
-): MediaUri {
-    if (row.state == "cached" && !row.localPath.isNullOrBlank()) {
-        val file = File(row.localPath)
-        if (file.exists()) return MediaUri.Local(file)
-    }
-
-    val root = baseUrl.trim().trimEnd('/')
-    if (root.isBlank()) return MediaUri.Missing
-    return MediaUri.Remote(root + row.serverUrl)
-}
-
 private fun momentSyncAssetToMediaUri(
     row: AndroidSyncAssetEntity,
     baseUrl: String,
+    allowRemote: Boolean,
 ): MediaUri {
-    if (row.state == "verified" && !row.localPath.isNullOrBlank()) {
-        val file = File(row.localPath)
-        if (file.exists()) return MediaUri.Local(file)
+    if (!row.localPath.isNullOrBlank()) {
+        return MediaUri.Local(File(row.localPath))
     }
 
-    val trimmedServerUrl = row.serverUrl.trim()
-    if (trimmedServerUrl.startsWith("https://") || trimmedServerUrl.startsWith("http://")) {
-        return MediaUri.Remote(trimmedServerUrl)
-    }
     val root = baseUrl.trim().trimEnd('/')
-    if (root.isBlank() || trimmedServerUrl.isBlank()) return MediaUri.Missing
-    return MediaUri.Remote(root + trimmedServerUrl)
+    if (!allowRemote || root.isBlank() || row.state == "server_missing") return MediaUri.Missing
+    return MediaUri.Remote(root + androidSyncAssetPath(row.assetId, row.revision))
 }
 
 internal fun prepareMomentAudio(

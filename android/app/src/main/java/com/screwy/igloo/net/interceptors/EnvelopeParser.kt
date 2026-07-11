@@ -25,13 +25,10 @@ import kotlinx.serialization.json.longOrNull
  * content-type sniffing when the header is absent. Error paths (4xx/5xx) own their
  * own envelope parsing in `IglooError.classify`.
  *
- * PreferencesRepo is passed as a lambda so pre-login HTTP calls (`/api/auth/login`,
- * `/api/health/live`) don't need an open per-user Room DB. The Room-backed cursor state
- * deliberately does NOT update here: inbound loops own content `next_marker`
- * cursors, and mutation ACK `sync_version` values live in a different server-side
- * version space (`sync_changes.version`) than the content-stream `sync_seq` markers.
- * Mixing those domains can regress or skip stream replay.
- */
+	 * PreferencesRepo is passed as a lambda so pre-login HTTP calls (`/api/auth/login`,
+	 * `/api/health/live`) do not depend on the authenticated Room graph. Snapshot and
+	 * mutation state stay with the call that owns and validates the typed response.
+	 */
 object EnvelopeParser {
 
     private const val TAG = "EnvelopeParser"

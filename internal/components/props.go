@@ -327,7 +327,6 @@ func RelativeTimeText(p PageProps, t *time.Time) string {
 var (
 	urlRe              = regexp.MustCompile(`(https?://[^\s<>"']+)`)
 	anchorRe           = regexp.MustCompile(`(?s)<a\b[^>]*>.*?</a>`)
-	twitterMentionRe   = regexp.MustCompile(`@[A-Za-z0-9_]+`)
 	shortFormMentionRe = regexp.MustCompile(`@[A-Za-z0-9_](?:[A-Za-z0-9_.]{0,30}[A-Za-z0-9_])?`)
 	emailTLD           = regexp.MustCompile(`^\.[A-Za-z]{2,12}\b`)
 )
@@ -352,6 +351,9 @@ func LinkifyForPlatform(s, platform string) string {
 // linkifyMentions replaces @handles with profile links, skipping matches that
 // look like parts of an email address.
 func linkifyMentionsForPlatform(s, platform string) string {
+	if normalized := strings.ToLower(strings.TrimSpace(platform)); normalized != "tiktok" && normalized != "instagram" {
+		return linkifyTwitterMentions(s)
+	}
 	prefix, re := mentionLinkPrefixAndPattern(platform)
 	matches := re.FindAllStringIndex(s, -1)
 	if len(matches) == 0 {
@@ -402,14 +404,32 @@ func linkifyMentionsForPlatform(s, platform string) string {
 	return b.String()
 }
 
+func linkifyTwitterMentions(s string) string {
+	matches := model.LinkableTwitterMentions(s)
+	if len(matches) == 0 {
+		return s
+	}
+	var b strings.Builder
+	last := 0
+	for _, match := range matches {
+		b.WriteString(s[last:match.Start])
+		b.WriteString(`<a href="/channels/twitter_`)
+		b.WriteString(match.Handle)
+		b.WriteString(`" class="feed-inline-link">`)
+		b.WriteString(s[match.Start:match.End])
+		b.WriteString(`</a>`)
+		last = match.End
+	}
+	b.WriteString(s[last:])
+	return b.String()
+}
+
 func mentionLinkPrefixAndPattern(platform string) (string, *regexp.Regexp) {
 	switch strings.ToLower(strings.TrimSpace(platform)) {
 	case "tiktok":
 		return "tiktok_", shortFormMentionRe
-	case "instagram":
-		return "instagram_", shortFormMentionRe
 	default:
-		return "twitter_", twitterMentionRe
+		return "instagram_", shortFormMentionRe
 	}
 }
 

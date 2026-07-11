@@ -21,7 +21,7 @@ func androidDashboardRetentionLabel(key string, retention db.AndroidRetentionSet
 
 func retentionDaysLabel(days int) string {
 	if days <= 0 {
-		return "all"
+		return "off"
 	}
 	if days == 1 {
 		return "1 day"

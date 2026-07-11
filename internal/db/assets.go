@@ -1,13 +1,21 @@
 package db
 
 import (
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
+	"errors"
 	"fmt"
+	"io"
+	"mime"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/screwys/igloo/internal/storage"
 )
 
 const (
@@ -33,6 +41,10 @@ type Asset struct {
 	ContentType     string
 	SizeBytes       int64
 	SHA256          string
+	FileMtimeNs     int64
+	Revision        int64
+	IsAuto          *bool
+	AudioLanguage   string
 	State           string
 	RequiredReason  string
 	LastErrorKind   string
@@ -45,18 +57,191 @@ type Asset struct {
 	UpdatedAtMs     int64
 }
 
-// UpsertAsset inserts or updates an inventory row. The asset identity follows
-// the Android/manifest asset_id contract while this table remains additive.
-func (db *DB) UpsertAsset(asset Asset, nowMs int64) error {
-	asset = normalizeAsset(asset, nowMs)
+type AssetOwnerRef struct {
+	OwnerKind string
+	OwnerID   string
+}
+
+// ListReadyAssetsForOwners selects canonical rows by exact owner identity.
+// An empty assetKinds filter selects every ready asset for those owners.
+func (db *DB) ListReadyAssetsForOwners(owners []AssetOwnerRef, assetKinds []string) ([]Asset, error) {
+	owners = normalizeAssetOwners(owners)
+	assetKinds = uniqueStrings(assetKinds)
+	if len(owners) == 0 {
+		return nil, nil
+	}
+	ownerIDsByKind := make(map[string][]string)
+	for _, owner := range owners {
+		ownerIDsByKind[owner.OwnerKind] = append(ownerIDsByKind[owner.OwnerKind], owner.OwnerID)
+	}
+	ownerKinds := make([]string, 0, len(ownerIDsByKind))
+	for ownerKind := range ownerIDsByKind {
+		ownerKinds = append(ownerKinds, ownerKind)
+	}
+	sort.Strings(ownerKinds)
+	var assets []Asset
+	for _, ownerKind := range ownerKinds {
+		for _, ownerIDs := range stringChunks(ownerIDsByKind[ownerKind], 400) {
+			args := []any{AssetStateReady, ownerKind}
+			args = append(args, stringsToAny(ownerIDs)...)
+			kindClause := ""
+			if len(assetKinds) > 0 {
+				kindClause = " AND asset_kind IN (" + placeholders(len(assetKinds)) + ")"
+				args = append(args, stringsToAny(assetKinds)...)
+			}
+			rows, err := db.reader().Query(`
+			SELECT id, asset_id, asset_kind, owner_kind, owner_id, media_index,
+			       source_url, file_path, content_type, size_bytes, sha256, file_mtime_ns, revision,
+			       is_auto, audio_language, state,
+			       required_reason, last_error_kind, last_error, attempts,
+			       next_attempt_at_ms, lease_owner, lease_until_ms, created_at_ms, updated_at_ms
+			FROM assets
+			WHERE state = ?
+			  AND owner_kind = ?
+			  AND owner_id IN (`+placeholders(len(ownerIDs))+`)`+kindClause+`
+			ORDER BY owner_kind, owner_id, asset_kind, media_index, asset_id
+		`, args...)
+			if err != nil {
+				return nil, fmt.Errorf("list ready owner assets: %w", err)
+			}
+			for rows.Next() {
+				asset, err := scanAsset(rows)
+				if err != nil {
+					_ = rows.Close()
+					return nil, err
+				}
+				assets = append(assets, asset)
+			}
+			if err := rows.Err(); err != nil {
+				_ = rows.Close()
+				return nil, err
+			}
+			if err := rows.Close(); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return assets, nil
+}
+
+func normalizeAssetOwners(owners []AssetOwnerRef) []AssetOwnerRef {
+	seen := make(map[string]struct{}, len(owners))
+	out := make([]AssetOwnerRef, 0, len(owners))
+	for _, owner := range owners {
+		owner.OwnerKind = strings.TrimSpace(owner.OwnerKind)
+		owner.OwnerID = strings.TrimSpace(owner.OwnerID)
+		key := owner.OwnerKind + "\x00" + owner.OwnerID
+		if owner.OwnerKind == "" || owner.OwnerID == "" {
+			continue
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, owner)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].OwnerKind != out[j].OwnerKind {
+			return out[i].OwnerKind < out[j].OwnerKind
+		}
+		return out[i].OwnerID < out[j].OwnerID
+	})
+	return out
+}
+
+func ReadyAssetMatchesSource(asset *Asset, sourceURL string) bool {
+	return asset != nil && asset.State == AssetStateReady && asset.SourceURL == sourceURL &&
+		asset.FilePath != "" && asset.ContentType != "" && asset.SizeBytes > 0 &&
+		asset.SHA256 != "" && asset.FileMtimeNs > 0
+}
+
+// MediaAssetAvailability is the presentation-ready projection of canonical
+// asset state. Operational downloader jobs are deliberately excluded.
+type MediaAssetAvailability struct {
+	Declared     bool
+	ReadyMedia   bool
+	ReadyVideo   bool
+	ReadyPreview bool
+	Pending      bool
+	Failed       bool
+}
+
+// GetTweetMediaAssetAvailability projects presentation state for X content
+// without allowing a colliding video owner to satisfy the row.
+func (db *DB) GetTweetMediaAssetAvailability(ownerIDs []string) (map[string]MediaAssetAvailability, error) {
+	out := make(map[string]MediaAssetAvailability)
+	for _, chunk := range stringChunks(uniqueStrings(ownerIDs), 400) {
+		if len(chunk) == 0 {
+			continue
+		}
+		args := stringsToAny(chunk)
+		rows, err := db.reader().Query(`
+			SELECT owner_id, asset_kind, COALESCE(content_type, ''), state
+			FROM assets
+			WHERE owner_kind = 'tweet'
+			  AND owner_id IN (`+placeholders(len(chunk))+`)
+			  AND asset_kind IN ('post_media', 'post_audio', 'video_stream', 'post_thumbnail')
+		`, args...)
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var ownerID, kind, contentType, state string
+			if err := rows.Scan(&ownerID, &kind, &contentType, &state); err != nil {
+				_ = rows.Close()
+				return nil, err
+			}
+			availability := out[ownerID]
+			availability.Declared = true
+			switch state {
+			case AssetStateReady:
+				if kind == "post_thumbnail" {
+					availability.ReadyPreview = true
+				} else {
+					availability.ReadyMedia = true
+				}
+				if kind == "video_stream" || strings.HasPrefix(contentType, "video/") || contentType == "image/gif" {
+					availability.ReadyVideo = true
+				}
+			case AssetStateQueued, AssetStateDownloading, AssetStateStale:
+				availability.Pending = true
+			case AssetStateFailed, AssetStatePermanentMissing:
+				availability.Failed = true
+			}
+			out[ownerID] = availability
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		_ = rows.Close()
+	}
+	return out, nil
+}
+
+// StoreReadyAsset fingerprints a completed file and publishes its canonical
+// inventory row. Producers call this after the final same-filesystem rename.
+func (db *DB) StoreReadyAsset(asset Asset, nowMs int64) error {
+	asset.State = AssetStateReady
+	prepared, err := db.prepareReadyAssetMetadata(asset, nowMs)
+	if err != nil {
+		return err
+	}
+	prepared = normalizeAsset(prepared, nowMs)
 	return db.WithWrite(func(tx *sql.Tx) error {
-		_, err := tx.Exec(`
+		return upsertAssetTx(tx, prepared)
+	})
+}
+
+func upsertAssetTx(tx *sql.Tx, asset Asset) error {
+	_, err := tx.Exec(`
 			INSERT INTO assets (
 				asset_id, asset_kind, owner_kind, owner_id, media_index,
-				source_url, file_path, content_type, size_bytes, sha256, state,
+				source_url, file_path, content_type, size_bytes, sha256, file_mtime_ns,
+				is_auto, audio_language, state,
 				required_reason, last_error_kind, last_error, attempts,
 				next_attempt_at_ms, lease_owner, lease_until_ms, created_at_ms, updated_at_ms
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(asset_kind, owner_kind, owner_id, media_index) DO UPDATE SET
 				asset_id = excluded.asset_id,
 				source_url = excluded.source_url,
@@ -64,6 +249,9 @@ func (db *DB) UpsertAsset(asset Asset, nowMs int64) error {
 				content_type = excluded.content_type,
 				size_bytes = excluded.size_bytes,
 				sha256 = excluded.sha256,
+				file_mtime_ns = excluded.file_mtime_ns,
+				is_auto = excluded.is_auto,
+				audio_language = excluded.audio_language,
 				state = excluded.state,
 				required_reason = excluded.required_reason,
 				last_error_kind = excluded.last_error_kind,
@@ -73,12 +261,12 @@ func (db *DB) UpsertAsset(asset Asset, nowMs int64) error {
 				lease_owner = excluded.lease_owner,
 				lease_until_ms = excluded.lease_until_ms,
 				updated_at_ms = excluded.updated_at_ms
-		`, asset.AssetID, asset.AssetKind, asset.OwnerKind, asset.OwnerID, asset.MediaIndex,
-			asset.SourceURL, asset.FilePath, asset.ContentType, asset.SizeBytes, asset.SHA256, asset.State,
-			asset.RequiredReason, asset.LastErrorKind, asset.LastError, asset.Attempts,
-			asset.NextAttemptAtMs, asset.LeaseOwner, asset.LeaseUntilMs, asset.CreatedAtMs, asset.UpdatedAtMs)
-		return err
-	})
+	`, asset.AssetID, asset.AssetKind, asset.OwnerKind, asset.OwnerID, asset.MediaIndex,
+		asset.SourceURL, asset.FilePath, asset.ContentType, asset.SizeBytes, asset.SHA256, asset.FileMtimeNs,
+		asset.IsAuto, asset.AudioLanguage, asset.State,
+		asset.RequiredReason, asset.LastErrorKind, asset.LastError, asset.Attempts,
+		asset.NextAttemptAtMs, asset.LeaseOwner, asset.LeaseUntilMs, asset.CreatedAtMs, asset.UpdatedAtMs)
+	return err
 }
 
 func normalizeAsset(asset Asset, nowMs int64) Asset {
@@ -93,6 +281,7 @@ func normalizeAsset(asset Asset, nowMs int64) Asset {
 	asset.FilePath = strings.TrimSpace(asset.FilePath)
 	asset.ContentType = strings.TrimSpace(asset.ContentType)
 	asset.SHA256 = strings.TrimSpace(asset.SHA256)
+	asset.AudioLanguage = strings.TrimSpace(asset.AudioLanguage)
 	asset.State = strings.TrimSpace(asset.State)
 	asset.RequiredReason = strings.TrimSpace(asset.RequiredReason)
 	asset.LastErrorKind = strings.TrimSpace(asset.LastErrorKind)
@@ -112,9 +301,10 @@ func normalizeAsset(asset Asset, nowMs int64) Asset {
 
 // GetAsset returns one inventory row by public asset identity.
 func (db *DB) GetAsset(assetID, assetKind string) (*Asset, error) {
-	row := db.conn.QueryRow(`
+	row := db.reader().QueryRow(`
 		SELECT id, asset_id, asset_kind, owner_kind, owner_id, media_index,
-		       source_url, file_path, content_type, size_bytes, sha256, state,
+		       source_url, file_path, content_type, size_bytes, sha256, file_mtime_ns, revision,
+		       is_auto, audio_language, state,
 		       required_reason, last_error_kind, last_error, attempts,
 		       next_attempt_at_ms, lease_owner, lease_until_ms, created_at_ms, updated_at_ms
 		FROM assets
@@ -130,50 +320,44 @@ func (db *DB) GetAsset(assetID, assetKind string) (*Asset, error) {
 	return &asset, nil
 }
 
-// ClaimAssetRepairBatch claims queued or expired downloading assets for repair.
-func (db *DB) ClaimAssetRepairBatch(limit int) ([]Asset, error) {
-	return db.ClaimAssetRepairBatchWithLease(LeaseOptions{
-		Owner: "assets:legacy",
-		Limit: limit,
-	})
-}
-
-// ClaimAssetRepairBatchWithLease claims assets with a durable lease.
-func (db *DB) ClaimAssetRepairBatchWithLease(opts LeaseOptions) ([]Asset, error) {
-	opts = normalizeLeaseOptions(opts, AssetStateQueued, AssetStateDownloading)
-	var claimed []Asset
+// MarkReadyAssetUnavailable withdraws an exact published file identity after
+// its recorded bytes are found missing or changed. The conditional update
+// cannot overwrite a concurrently published or revalidated replacement.
+func (db *DB) MarkReadyAssetUnavailable(expected Asset, nowMs int64) (bool, error) {
+	expected.AssetID = strings.TrimSpace(expected.AssetID)
+	if expected.AssetID == "" || expected.Revision <= 0 {
+		return false, nil
+	}
+	if nowMs <= 0 {
+		nowMs = time.Now().UnixMilli()
+	}
+	changed := false
 	err := db.WithWrite(func(tx *sql.Tx) error {
-		query := `
-			SELECT asset_id
-			FROM assets
-			WHERE ` + leaseEligibleSQLFor("state", "next_attempt_at_ms", "lease_until_ms") + `
-			ORDER BY attempts ASC, updated_at_ms ASC, id ASC
-			LIMIT ?`
-		ids, err := claimLeasedIDsWithStateColumn(tx, "assets", "asset_id", "state", query, []any{
-			opts.NowMs, opts.StatusFrom, opts.NowMs, opts.StatusTo, opts.NowMs, opts.Limit,
-		}, opts)
+		result, err := tx.Exec(`
+			UPDATE assets
+			SET state = ?, updated_at_ms = ?
+			WHERE asset_id = ? AND revision = ? AND state = ?
+			  AND file_path = ? AND size_bytes = ? AND file_mtime_ns = ? AND sha256 = ?
+		`, AssetStateServerMissing, nowMs, expected.AssetID, expected.Revision, AssetStateReady,
+			expected.FilePath, expected.SizeBytes, expected.FileMtimeNs, expected.SHA256)
 		if err != nil {
 			return err
 		}
-		for _, id := range ids {
-			if _, err := tx.Exec(`UPDATE assets SET updated_at_ms = ? WHERE asset_id = ?`, opts.NowMs, id); err != nil {
-				return err
-			}
-			asset, err := readAssetTx(tx, id)
-			if err != nil {
-				return err
-			}
-			claimed = append(claimed, asset)
+		rows, err := result.RowsAffected()
+		if err != nil {
+			return err
 		}
+		changed = rows > 0
 		return nil
 	})
-	return claimed, err
+	return changed, err
 }
 
 func readAssetTx(tx *sql.Tx, assetID string) (Asset, error) {
 	return scanAsset(tx.QueryRow(`
 		SELECT id, asset_id, asset_kind, owner_kind, owner_id, media_index,
-		       source_url, file_path, content_type, size_bytes, sha256, state,
+		       source_url, file_path, content_type, size_bytes, sha256, file_mtime_ns, revision,
+		       is_auto, audio_language, state,
 		       required_reason, last_error_kind, last_error, attempts,
 		       next_attempt_at_ms, lease_owner, lease_until_ms, created_at_ms, updated_at_ms
 		FROM assets
@@ -181,34 +365,29 @@ func readAssetTx(tx *sql.Tx, assetID string) (Asset, error) {
 	`, assetID))
 }
 
-func (db *DB) CompleteAssetRepair(asset Asset, owner string, nowMs int64) error {
+// CompleteAssetDownload publishes a file for a content asset claimed by its
+// producer-owned queue.
+func (db *DB) CompleteAssetDownload(asset Asset, owner string, nowMs int64) error {
 	if nowMs == 0 {
 		nowMs = time.Now().UnixMilli()
 	}
 	asset.AssetID = strings.TrimSpace(asset.AssetID)
 	asset.AssetKind = strings.TrimSpace(asset.AssetKind)
+	var err error
+	asset, err = db.prepareReadyAssetMetadata(asset, nowMs)
+	if err != nil {
+		return err
+	}
 	return db.WithWrite(func(tx *sql.Tx) error {
 		res, err := tx.Exec(`
 			UPDATE assets
-			   SET state=?,
-			       file_path=?,
-			       content_type=?,
-			       size_bytes=?,
-			       sha256=?,
-			       last_error_kind='',
-			       last_error='',
-			       attempts=0,
-			       next_attempt_at_ms=0,
-			       lease_owner='',
-			       lease_until_ms=0,
-			       updated_at_ms=?
-			 WHERE asset_id=?
-			   AND asset_kind=?
-			   AND state=?
-			   AND lease_owner=?
+			   SET state=?, file_path=?, content_type=?, size_bytes=?, sha256=?, file_mtime_ns=?,
+			       last_error_kind='', last_error='', attempts=0, next_attempt_at_ms=0,
+			       lease_owner='', lease_until_ms=0, updated_at_ms=?
+			 WHERE asset_id=? AND asset_kind=? AND state=? AND lease_owner=?
 		`, AssetStateReady, strings.TrimSpace(asset.FilePath), strings.TrimSpace(asset.ContentType),
-			asset.SizeBytes, strings.TrimSpace(asset.SHA256), nowMs, asset.AssetID, asset.AssetKind,
-			AssetStateDownloading, owner)
+			asset.SizeBytes, strings.TrimSpace(asset.SHA256), asset.FileMtimeNs, nowMs,
+			asset.AssetID, asset.AssetKind, AssetStateDownloading, owner)
 		if err != nil {
 			return err
 		}
@@ -216,7 +395,24 @@ func (db *DB) CompleteAssetRepair(asset Asset, owner string, nowMs int64) error 
 	})
 }
 
-func (db *DB) RetryAssetRepair(assetID, assetKind, owner, kind, message string, delay time.Duration, nowMs int64) error {
+func (db *DB) ReleaseAssetDownload(assetID, assetKind, owner string, nowMs int64) error {
+	if nowMs <= 0 {
+		nowMs = time.Now().UnixMilli()
+	}
+	return db.WithWrite(func(tx *sql.Tx) error {
+		res, err := tx.Exec(`
+			UPDATE assets
+			SET state = ?, lease_owner = '', lease_until_ms = 0, updated_at_ms = ?
+			WHERE asset_id = ? AND asset_kind = ? AND state = ? AND lease_owner = ?
+		`, AssetStateQueued, nowMs, strings.TrimSpace(assetID), strings.TrimSpace(assetKind), AssetStateDownloading, strings.TrimSpace(owner))
+		if err != nil {
+			return err
+		}
+		return requireQueueLeaseUpdate(res, "assets", assetID+"/"+assetKind, owner)
+	})
+}
+
+func (db *DB) RetryAssetDownload(assetID, assetKind, owner, kind, message string, delay time.Duration, nowMs int64) error {
 	if nowMs == 0 {
 		nowMs = time.Now().UnixMilli()
 	}
@@ -227,18 +423,9 @@ func (db *DB) RetryAssetRepair(assetID, assetKind, owner, kind, message string, 
 	return db.WithWrite(func(tx *sql.Tx) error {
 		res, err := tx.Exec(`
 			UPDATE assets
-			   SET state=?,
-			       attempts=attempts+1,
-			       next_attempt_at_ms=?,
-			       last_error_kind=?,
-			       last_error=?,
-			       lease_owner='',
-			       lease_until_ms=0,
-			       updated_at_ms=?
-			 WHERE asset_id=?
-			   AND asset_kind=?
-			   AND state=?
-			   AND lease_owner=?
+			SET state=?, attempts=attempts+1, next_attempt_at_ms=?,
+			    last_error_kind=?, last_error=?, lease_owner='', lease_until_ms=0, updated_at_ms=?
+			WHERE asset_id=? AND asset_kind=? AND state=? AND lease_owner=?
 		`, AssetStateQueued, nextMs, trimJobError(kind), trimJobError(message), nowMs,
 			strings.TrimSpace(assetID), strings.TrimSpace(assetKind), AssetStateDownloading, owner)
 		if err != nil {
@@ -248,35 +435,7 @@ func (db *DB) RetryAssetRepair(assetID, assetKind, owner, kind, message string, 
 	})
 }
 
-func (db *DB) FailAssetRepair(assetID, assetKind, owner, kind, message string, nowMs int64) error {
-	if nowMs == 0 {
-		nowMs = time.Now().UnixMilli()
-	}
-	return db.WithWrite(func(tx *sql.Tx) error {
-		res, err := tx.Exec(`
-			UPDATE assets
-			   SET state=?,
-			       attempts=attempts+1,
-			       next_attempt_at_ms=0,
-			       last_error_kind=?,
-			       last_error=?,
-			       lease_owner='',
-			       lease_until_ms=0,
-			       updated_at_ms=?
-			 WHERE asset_id=?
-			   AND asset_kind=?
-			   AND state=?
-			   AND lease_owner=?
-		`, AssetStateFailed, trimJobError(kind), trimJobError(message), nowMs,
-			strings.TrimSpace(assetID), strings.TrimSpace(assetKind), AssetStateDownloading, owner)
-		if err != nil {
-			return err
-		}
-		return requireQueueLeaseUpdate(res, "assets", strings.TrimSpace(assetID)+"/"+strings.TrimSpace(assetKind), owner)
-	})
-}
-
-func (db *DB) RenewAssetRepairLease(assetID, assetKind, owner string, nowMs int64, lease time.Duration) error {
+func (db *DB) RenewAssetDownloadLease(assetID, assetKind, owner string, nowMs int64, lease time.Duration) error {
 	if assetID == "" || assetKind == "" || owner == "" {
 		return nil
 	}
@@ -288,19 +447,41 @@ func (db *DB) RenewAssetRepairLease(assetID, assetKind, owner string, nowMs int6
 	}
 	return db.WithWrite(func(tx *sql.Tx) error {
 		_, err := tx.Exec(`
-			UPDATE assets
-			   SET lease_until_ms=?, updated_at_ms=?
-			 WHERE asset_id=?
-			   AND asset_kind=?
-			   AND state=?
-			   AND lease_owner=?
+			UPDATE assets SET lease_until_ms=?, updated_at_ms=?
+			WHERE asset_id=? AND asset_kind=? AND state=? AND lease_owner=?
 		`, nowMs+lease.Milliseconds(), nowMs, strings.TrimSpace(assetID), strings.TrimSpace(assetKind), AssetStateDownloading, owner)
 		return err
 	})
 }
 
-// ListAndroidSyncAssetInventoryRows returns inventory rows that can contribute
-// directly to Android sync generation for the desired owner sets.
+// RemoveAssetFileIfUnreferenced deletes a canonical file only after every
+// ready inventory row has stopped referencing its key.
+func (db *DB) RemoveAssetFileIfUnreferenced(key string) (bool, error) {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return false, nil
+	}
+	var references int
+	if err := db.reader().QueryRow(`SELECT COUNT(*) FROM assets WHERE file_path = ? AND state = 'ready'`, key).Scan(&references); err != nil {
+		return false, err
+	}
+	if references > 0 {
+		return false, nil
+	}
+	path, err := db.storage.WritePath(key)
+	if err != nil {
+		return false, fmt.Errorf("resolve unreferenced asset %q: %w", key, err)
+	}
+	if err := os.Remove(path); err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+// ListAndroidSyncAssetInventoryRows returns inventory rows for the desired owners.
 func (db *DB) ListAndroidSyncAssetInventoryRows(sets AndroidSyncDesiredSets) ([]Asset, error) {
 	ownerIDsByKind := map[string]map[string]struct{}{}
 	addOwner := func(ownerKind, ownerID string) {
@@ -314,7 +495,7 @@ func (db *DB) ListAndroidSyncAssetInventoryRows(sets AndroidSyncDesiredSets) ([]
 		}
 		ownerIDsByKind[ownerKind][ownerID] = struct{}{}
 	}
-	for _, id := range sets.SortedTweets() {
+	for _, id := range sets.SortedTweetAssetOwners() {
 		addOwner("tweet", id)
 	}
 	videoIDs := map[string]struct{}{}
@@ -329,11 +510,7 @@ func (db *DB) ListAndroidSyncAssetInventoryRows(sets AndroidSyncDesiredSets) ([]
 		return nil, err
 	}
 	for _, id := range sortedKeys(videoIDs) {
-		ownerKind := videoOwnerKinds[id]
-		if ownerKind == "" {
-			ownerKind = videoOwnerKind(id)
-		}
-		addOwner(ownerKind, id)
+		addOwner(videoOwnerKinds[id], id)
 	}
 	for _, id := range sets.SortedChannels() {
 		addOwner("channel", id)
@@ -354,16 +531,16 @@ func (db *DB) ListAndroidSyncAssetInventoryRows(sets AndroidSyncDesiredSets) ([]
 			for _, id := range chunk {
 				args = append(args, id)
 			}
-			rows, err := db.conn.Query(`
+			rows, err := db.reader().Query(`
 				SELECT id, asset_id, asset_kind, owner_kind, owner_id, media_index,
-				       source_url, file_path, content_type, size_bytes, sha256, state,
+				       source_url, file_path, content_type, size_bytes, sha256, file_mtime_ns, revision,
+				       is_auto, audio_language, state,
 				       required_reason, last_error_kind, last_error, attempts,
 				       next_attempt_at_ms, lease_owner, lease_until_ms, created_at_ms, updated_at_ms
-				FROM assets
-				WHERE owner_kind = ?
-				  AND owner_id IN (`+placeholders(len(chunk))+`)
-				  AND state IN ('ready', 'server_missing')
-				ORDER BY id ASC
+					FROM assets
+					WHERE owner_kind = ?
+					  AND owner_id IN (`+placeholders(len(chunk))+`)
+					  AND state != 'pruned'
 			`, args...)
 			if err != nil {
 				return nil, err
@@ -397,25 +574,23 @@ func (db *DB) androidSyncInventoryVideoOwnerKinds(videoIDs []string) (map[string
 		for i, id := range chunk {
 			args[i] = id
 		}
-		rows, err := db.conn.Query(`
-			SELECT video_id, COALESCE(channel_id, '')
-			FROM videos
-			WHERE video_id IN (`+placeholders(len(chunk))+`)
+		rows, err := db.reader().Query(`
+			SELECT v.video_id, v.owner_kind
+			FROM videos v
+			WHERE v.video_id IN (`+placeholders(len(chunk))+`)
 		`, args...)
 		if err != nil {
 			return nil, err
 		}
 		for rows.Next() {
-			var videoID, channelID string
-			if err := rows.Scan(&videoID, &channelID); err != nil {
+			var videoID, ownerKind string
+			if err := rows.Scan(&videoID, &ownerKind); err != nil {
 				_ = rows.Close()
 				return nil, err
 			}
-			platform := videoPlatformFromChannelID(channelID)
-			if platform == "" {
-				platform = videoPlatform(videoID)
+			if _, ok := videoPlatformForOwnerKind(ownerKind); ok {
+				out[videoID] = ownerKind
 			}
-			out[videoID] = videoOwnerKindForPlatform(platform)
 		}
 		if err := rows.Err(); err != nil {
 			_ = rows.Close()
@@ -444,6 +619,10 @@ func scanAsset(row assetScanner) (Asset, error) {
 		&asset.ContentType,
 		&asset.SizeBytes,
 		&asset.SHA256,
+		&asset.FileMtimeNs,
+		&asset.Revision,
+		&asset.IsAuto,
+		&asset.AudioLanguage,
 		&asset.State,
 		&asset.RequiredReason,
 		&asset.LastErrorKind,
@@ -458,596 +637,334 @@ func scanAsset(row assetScanner) (Asset, error) {
 	return asset, err
 }
 
-// RefreshAssetFileState reconciles one asset's ready/server_missing state from
-// its recorded file path. It does not compute checksums.
-func (db *DB) RefreshAssetFileState(assetID, assetKind string, nowMs int64) error {
-	if nowMs <= 0 {
-		nowMs = time.Now().UnixMilli()
-	}
-	asset, err := db.GetAsset(assetID, assetKind)
-	if err != nil || asset == nil {
-		return err
-	}
-	absPath := resolveManifestDataPath(db.dataDir, asset.FilePath)
-	state := AssetStateServerMissing
-	sizeBytes := int64(0)
-	contentType := asset.ContentType
-	if asset.FilePath == "" {
-		state = AssetStateQueued
-	} else if info, statErr := os.Stat(absPath); statErr == nil {
-		state = AssetStateReady
-		sizeBytes = info.Size()
-		if contentType == "" {
-			contentType = contentTypeForPath(asset.FilePath, "")
-		}
-	}
-	return db.WithWrite(func(tx *sql.Tx) error {
-		_, err := tx.Exec(`
-			UPDATE assets
-			SET state = ?, size_bytes = ?, content_type = ?, updated_at_ms = ?
-			WHERE asset_id = ? AND asset_kind = ?
-		`, state, sizeBytes, contentType, nowMs, asset.AssetID, asset.AssetKind)
-		return err
-	})
-}
-
-// AssetInventoryReconcileOptions controls the explicit legacy-path to assets
-// reconciliation pass. The default behavior reconciles missing inventory rows
-// only; it is intended for one-off maintenance commands, not startup work.
-type AssetInventoryReconcileOptions struct {
-	NowMs  int64 `json:"now_ms"`
-	Limit  int   `json:"limit"`
-	DryRun bool  `json:"dry_run"`
-}
-
-// AssetInventoryReconcileKindResult reports reconciliation work for one asset
-// kind.
-type AssetInventoryReconcileKindResult struct {
-	Candidates    int `json:"candidates"`
-	Written       int `json:"written"`
-	Ready         int `json:"ready"`
-	Queued        int `json:"queued"`
-	ServerMissing int `json:"server_missing"`
-}
-
-// AssetInventoryReconcileResult reports bounded legacy-path reconciliation.
-type AssetInventoryReconcileResult struct {
-	DryRun          bool                                         `json:"dry_run"`
-	Limit           int                                          `json:"limit"`
-	LimitReached    bool                                         `json:"limit_reached"`
-	Candidates      int                                          `json:"candidates"`
-	Written         int                                          `json:"written"`
-	SkippedExisting int                                          `json:"skipped_existing"`
-	ByKind          map[string]AssetInventoryReconcileKindResult `json:"by_kind"`
-}
-
-// BackfillAssetsFromExistingPaths creates or refreshes inventory rows from the
-// legacy media path columns and conventional cache directories. It is safe to
-// run repeatedly, but intentionally remains an explicit call instead of startup
-// behavior.
-func (db *DB) BackfillAssetsFromExistingPaths(nowMs int64) (int, error) {
-	result, err := db.backfillAssetsFromExistingPaths(AssetInventoryReconcileOptions{
-		NowMs: nowMs,
-	}, true)
-	if err != nil {
-		return result.Written, err
-	}
-	return result.Written, nil
-}
-
-// ReconcileAssetInventoryFromExistingPaths populates missing assets rows from
-// legacy media path columns and conventional cache directories. Existing rows
-// are skipped so a small limit makes progress on inventory parity.
-func (db *DB) ReconcileAssetInventoryFromExistingPaths(opts AssetInventoryReconcileOptions) (AssetInventoryReconcileResult, error) {
-	return db.backfillAssetsFromExistingPaths(opts, false)
-}
-
-// MaintainVideoAssets refreshes inventory rows for the media assets implied by
-// one videos row and conventional sibling files such as subtitles/previews.
-func (db *DB) MaintainVideoAssets(videoID string, nowMs int64) error {
-	videoID = strings.TrimSpace(videoID)
-	if videoID == "" {
-		return nil
-	}
-	if nowMs <= 0 {
-		nowMs = time.Now().UnixMilli()
-	}
-	src, ok, err := db.getVideoAssetSource(videoID)
-	if err != nil || !ok {
-		return err
-	}
-	for _, asset := range db.videoAssetsFromSource(src) {
-		if err := db.upsertAssetFromLegacyPath(asset, nowMs); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// MaintainChannelProfileAssets refreshes avatar/banner inventory rows for one
-// non-tombstoned channel profile.
-func (db *DB) MaintainChannelProfileAssets(channelID string, nowMs int64) error {
-	channelID = strings.TrimSpace(channelID)
-	if channelID == "" {
-		return nil
-	}
-	if nowMs <= 0 {
-		nowMs = time.Now().UnixMilli()
-	}
-	src, ok, err := db.getChannelProfileAssetSource(channelID)
-	if err != nil || !ok {
-		return err
-	}
-	for _, asset := range db.profileAssetsFromSource(src) {
-		if err := db.upsertAssetFromLegacyPath(asset, nowMs); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (db *DB) backfillAssetsFromExistingPaths(opts AssetInventoryReconcileOptions, includeExisting bool) (AssetInventoryReconcileResult, error) {
-	run := newAssetInventoryReconcileRun(db, opts, includeExisting)
-	for _, fn := range []func(*assetInventoryReconcileRun) error{
-		db.backfillMediaFileAssets,
-		db.backfillVideoAssets,
-		db.backfillProfileAssets,
-	} {
-		if run.exhausted() {
-			break
-		}
-		if err := fn(run); err != nil {
-			return run.result, err
-		}
-	}
-	return run.result, nil
-}
-
-type assetInventoryReconcileRun struct {
-	db              *DB
-	nowMs           int64
-	limit           int
-	dryRun          bool
-	includeExisting bool
-	result          AssetInventoryReconcileResult
-}
-
-func newAssetInventoryReconcileRun(db *DB, opts AssetInventoryReconcileOptions, includeExisting bool) *assetInventoryReconcileRun {
-	nowMs := opts.NowMs
-	if nowMs <= 0 {
-		nowMs = time.Now().UnixMilli()
-	}
-	limit := opts.Limit
-	if limit < 0 {
-		limit = 0
-	}
-	return &assetInventoryReconcileRun{
-		db:              db,
-		nowMs:           nowMs,
-		limit:           limit,
-		dryRun:          opts.DryRun,
-		includeExisting: includeExisting,
-		result: AssetInventoryReconcileResult{
-			DryRun: opts.DryRun,
-			Limit:  limit,
-			ByKind: map[string]AssetInventoryReconcileKindResult{},
-		},
-	}
-}
-
-func (run *assetInventoryReconcileRun) exhausted() bool {
-	return run.limit > 0 && run.result.Candidates >= run.limit
-}
-
-func (run *assetInventoryReconcileRun) handle(asset Asset) error {
-	if run.exhausted() {
-		return nil
-	}
-	asset = run.db.assetFromLegacyPath(asset)
-	asset = normalizeAsset(asset, run.nowMs)
-	existing, err := run.db.getAssetByOwnerIdentity(asset.AssetKind, asset.OwnerKind, asset.OwnerID, asset.MediaIndex)
-	if err != nil {
-		return err
-	}
-	if existing != nil && !run.includeExisting {
-		run.result.SkippedExisting++
-		return nil
-	}
-	run.recordCandidate(asset)
-	if run.dryRun {
-		return nil
-	}
-	if err := run.db.upsertBackfilledAsset(asset, run.nowMs); err != nil {
-		return err
-	}
-	run.recordWritten(asset)
-	return nil
-}
-
-func (run *assetInventoryReconcileRun) recordCandidate(asset Asset) {
-	run.result.Candidates++
-	byKind := run.result.ByKind[asset.AssetKind]
-	byKind.Candidates++
-	switch asset.State {
-	case AssetStateReady:
-		byKind.Ready++
-	case AssetStateServerMissing:
-		byKind.ServerMissing++
-	case AssetStateQueued:
-		byKind.Queued++
-	}
-	run.result.ByKind[asset.AssetKind] = byKind
-	if run.exhausted() {
-		run.result.LimitReached = true
-	}
-}
-
-func (run *assetInventoryReconcileRun) recordWritten(asset Asset) {
-	run.result.Written++
-	byKind := run.result.ByKind[asset.AssetKind]
-	byKind.Written++
-	run.result.ByKind[asset.AssetKind] = byKind
-}
-
-func (db *DB) backfillMediaFileAssets(run *assetInventoryReconcileRun) error {
-	rows, err := db.conn.Query(`
-		SELECT owner_id, COALESCE(media_type, ''), media_index,
-		       COALESCE(file_size, 0), COALESCE(file_path, ''), COALESCE(source_url, '')
-		FROM media_files
-		WHERE owner_type IN ('feed_media', 'quote_media')
-		ORDER BY id ASC
-	`)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		_ = rows.Close()
-	}()
-
-	for rows.Next() {
-		if run.exhausted() {
-			return nil
-		}
-		var ownerID, mediaType, filePath, sourceURL string
-		var mediaIndex int
-		var fileSize int64
-		if err := rows.Scan(&ownerID, &mediaType, &mediaIndex, &fileSize, &filePath, &sourceURL); err != nil {
-			return err
-		}
-		if manifestSkipsFile(filePath) {
-			continue
-		}
-		asset := Asset{
-			AssetID:        BuildManifestAssetID("twitter", "tweet", ownerID, "post_media", mediaIndex),
-			AssetKind:      "post_media",
-			OwnerKind:      "tweet",
-			OwnerID:        ownerID,
-			MediaIndex:     mediaIndex,
-			SourceURL:      sourceURL,
-			FilePath:       filePath,
-			ContentType:    contentTypeForMediaPath(filePath, mediaType, "image/jpeg"),
-			SizeBytes:      fileSize,
-			State:          AssetStateQueued,
-			RequiredReason: "backfill",
-		}
-		if err := run.handle(asset); err != nil {
-			return err
-		}
-
-		if mediaIndex == 0 && (mediaType == "video" || mediaType == "gif" || !manifestUsesImageTransport(filePath, mediaType)) {
-			if run.exhausted() {
-				return nil
-			}
-			thumbRel := filepath.Join("thumbnails", "generated", ownerID+".jpg")
-			thumb := Asset{
-				AssetID:        BuildManifestAssetID("twitter", "tweet", ownerID, "post_thumbnail", 0),
-				AssetKind:      "post_thumbnail",
-				OwnerKind:      "tweet",
-				OwnerID:        ownerID,
-				FilePath:       thumbRel,
-				ContentType:    "image/jpeg",
-				State:          AssetStateQueued,
-				RequiredReason: "backfill",
-			}
-			if err := run.handle(thumb); err != nil {
-				return err
-			}
-		}
-	}
-	return rows.Err()
-}
-
-type videoAssetSource struct {
-	videoID       string
-	channelID     string
-	thumbnailPath string
-	filePath      string
-	fileSize      int64
-	dearrowPath   string
-}
-
-func (db *DB) getVideoAssetSource(videoID string) (videoAssetSource, bool, error) {
-	var src videoAssetSource
-	err := db.conn.QueryRow(`
-		SELECT video_id, COALESCE(channel_id, ''), COALESCE(thumbnail_path, ''),
-		       COALESCE(file_path, ''), COALESCE(file_size, 0), COALESCE(dearrow_thumb_path, '')
-		FROM videos
-		WHERE video_id = ?
-	`, videoID).Scan(
-		&src.videoID,
-		&src.channelID,
-		&src.thumbnailPath,
-		&src.filePath,
-		&src.fileSize,
-		&src.dearrowPath,
-	)
-	if err == sql.ErrNoRows {
-		return src, false, nil
-	}
-	if err != nil {
-		return src, false, err
-	}
-	return src, true, nil
-}
-
-func (db *DB) videoAssetsFromSource(src videoAssetSource) []Asset {
-	platform := videoPlatformFromChannelID(src.channelID)
-	if platform == "" {
-		platform = videoPlatform(src.videoID)
-	}
-	ownerKind := videoOwnerKindForPlatform(platform)
-	assets := make([]Asset, 0, 8)
-	for _, asset := range []Asset{
-		{
-			AssetID:        BuildManifestAssetID(platform, ownerKind, src.videoID, "video_stream", 0),
-			AssetKind:      "video_stream",
-			OwnerKind:      ownerKind,
-			OwnerID:        src.videoID,
-			FilePath:       src.filePath,
-			ContentType:    contentTypeForMediaPath(src.filePath, "", "video/mp4"),
-			SizeBytes:      src.fileSize,
-			State:          AssetStateQueued,
-			RequiredReason: "retention",
-		},
-		{
-			AssetID:        BuildManifestAssetID(platform, ownerKind, src.videoID, "post_thumbnail", 0),
-			AssetKind:      "post_thumbnail",
-			OwnerKind:      ownerKind,
-			OwnerID:        src.videoID,
-			FilePath:       src.thumbnailPath,
-			ContentType:    contentTypeForPath(src.thumbnailPath, "image/jpeg"),
-			State:          AssetStateQueued,
-			RequiredReason: "retention",
-		},
-		{
-			AssetID:        BuildManifestAssetID(platform, ownerKind, src.videoID, "dearrow_thumbnail", 0),
-			AssetKind:      "dearrow_thumbnail",
-			OwnerKind:      ownerKind,
-			OwnerID:        src.videoID,
-			FilePath:       src.dearrowPath,
-			ContentType:    contentTypeForPath(src.dearrowPath, "image/jpeg"),
-			State:          AssetStateQueued,
-			RequiredReason: "retention",
-		},
-	} {
-		if strings.TrimSpace(asset.FilePath) != "" {
-			assets = append(assets, asset)
-		}
-	}
-	if subtitleRel := db.findSubtitleRelativePath(src.filePath); subtitleRel != "" {
-		assets = append(assets, Asset{
-			AssetID:        BuildManifestAssetID(platform, ownerKind, src.videoID, "subtitle", 0),
-			AssetKind:      "subtitle",
-			OwnerKind:      ownerKind,
-			OwnerID:        src.videoID,
-			FilePath:       subtitleRel,
-			ContentType:    "text/vtt",
-			State:          AssetStateQueued,
-			RequiredReason: "retention",
-		})
-	}
-	for _, preview := range []struct {
-		name        string
-		assetKind   string
-		contentType string
-	}{
-		{name: "track.json", assetKind: "preview_track_json", contentType: "application/json"},
-		{name: "sprite.jpg", assetKind: "preview_sprite", contentType: "image/jpeg"},
-	} {
-		rel := filepath.Join("thumbnails", "previews", src.videoID, preview.name)
-		if _, err := os.Stat(resolveManifestDataPath(db.dataDir, rel)); err != nil {
-			continue
-		}
-		assets = append(assets, Asset{
-			AssetID:        BuildManifestAssetID(platform, ownerKind, src.videoID, preview.assetKind, 0),
-			AssetKind:      preview.assetKind,
-			OwnerKind:      ownerKind,
-			OwnerID:        src.videoID,
-			FilePath:       rel,
-			ContentType:    preview.contentType,
-			State:          AssetStateQueued,
-			RequiredReason: "retention",
-		})
-	}
-	return assets
-}
-
-func (db *DB) backfillVideoAssets(run *assetInventoryReconcileRun) error {
-	rows, err := db.conn.Query(`
-		SELECT video_id, COALESCE(channel_id, ''), COALESCE(thumbnail_path, ''),
-		       COALESCE(file_path, ''), COALESCE(file_size, 0), COALESCE(dearrow_thumb_path, '')
-		FROM videos
-		ORDER BY id ASC
-	`)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		_ = rows.Close()
-	}()
-
-	for rows.Next() {
-		if run.exhausted() {
-			return nil
-		}
-		var videoID, channelID, thumbnailPath, filePath, dearrowPath string
-		var fileSize int64
-		if err := rows.Scan(&videoID, &channelID, &thumbnailPath, &filePath, &fileSize, &dearrowPath); err != nil {
-			return err
-		}
-		for _, asset := range db.videoAssetsFromSource(videoAssetSource{
-			videoID:       videoID,
-			channelID:     channelID,
-			thumbnailPath: thumbnailPath,
-			filePath:      filePath,
-			fileSize:      fileSize,
-			dearrowPath:   dearrowPath,
-		}) {
-			asset.RequiredReason = "backfill"
-			if err := run.handle(asset); err != nil {
-				return err
-			}
-			if run.exhausted() {
-				return nil
-			}
-		}
-	}
-	return rows.Err()
-}
-
-type channelProfileAssetSource struct {
-	channelID string
-	platform  string
-	avatarURL string
-	bannerURL string
-}
-
-func (db *DB) getChannelProfileAssetSource(channelID string) (channelProfileAssetSource, bool, error) {
-	var src channelProfileAssetSource
-	err := db.conn.QueryRow(`
-		SELECT channel_id, COALESCE(platform, ''), COALESCE(avatar_url, ''), COALESCE(banner_url, '')
-		FROM channel_profiles
-		WHERE channel_id = ?
-		  AND COALESCE(tombstone, 0) = 0
-	`, channelID).Scan(&src.channelID, &src.platform, &src.avatarURL, &src.bannerURL)
-	if err == sql.ErrNoRows {
-		return src, false, nil
-	}
-	if err != nil {
-		return src, false, err
-	}
-	return src, true, nil
-}
-
-func (db *DB) profileAssetsFromSource(src channelProfileAssetSource) []Asset {
-	platform := src.platform
-	if platform == "" {
-		platform = videoPlatformFromChannelID(src.channelID)
-	}
-	if platform == "" {
-		platform = strings.SplitN(src.channelID, "_", 2)[0]
-	}
-	assets := make([]Asset, 0, 2)
-	for _, asset := range []Asset{
-		{
-			AssetID:        BuildManifestAssetID(platform, "channel", src.channelID, "avatar", 0),
-			AssetKind:      "avatar",
-			OwnerKind:      "channel",
-			OwnerID:        src.channelID,
-			SourceURL:      src.avatarURL,
-			FilePath:       db.findAvatarRelativePath(src.channelID),
-			ContentType:    "image/jpeg",
-			State:          AssetStateQueued,
-			RequiredReason: "retention",
-		},
-		{
-			AssetID:        BuildManifestAssetID(platform, "channel", src.channelID, "banner", 0),
-			AssetKind:      "banner",
-			OwnerKind:      "channel",
-			OwnerID:        src.channelID,
-			SourceURL:      src.bannerURL,
-			FilePath:       db.findBannerRelativePath(src.channelID),
-			ContentType:    "image/jpeg",
-			State:          AssetStateQueued,
-			RequiredReason: "retention",
-		},
-	} {
-		if asset.FilePath == "" && asset.SourceURL == "" {
-			continue
-		}
-		assets = append(assets, asset)
-	}
-	return assets
-}
-
-func (db *DB) backfillProfileAssets(run *assetInventoryReconcileRun) error {
-	rows, err := db.conn.Query(`
-		SELECT channel_id, COALESCE(platform, ''), COALESCE(avatar_url, ''), COALESCE(banner_url, '')
-		FROM channel_profiles
-		WHERE COALESCE(tombstone, 0) = 0
-		ORDER BY rowid ASC
-	`)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		_ = rows.Close()
-	}()
-
-	for rows.Next() {
-		if run.exhausted() {
-			return nil
-		}
-		var channelID, platform, avatarURL, bannerURL string
-		if err := rows.Scan(&channelID, &platform, &avatarURL, &bannerURL); err != nil {
-			return err
-		}
-		for _, asset := range db.profileAssetsFromSource(channelProfileAssetSource{
-			channelID: channelID,
-			platform:  platform,
-			avatarURL: avatarURL,
-			bannerURL: bannerURL,
-		}) {
-			asset.RequiredReason = "backfill"
-			if err := run.handle(asset); err != nil {
-				return err
-			}
-			if run.exhausted() {
-				return nil
-			}
-		}
-	}
-	return rows.Err()
-}
-
-func (db *DB) upsertAssetFromLegacyPath(asset Asset, nowMs int64) error {
-	return db.upsertBackfilledAsset(db.assetFromLegacyPath(asset), nowMs)
-}
-
-func (db *DB) upsertBackfilledAsset(asset Asset, nowMs int64) error {
+// prepareReadyAssetMetadata fingerprints a completed file once. Repeated
+// declarations reuse the stored checksum while path, size, and mtime agree.
+func (db *DB) prepareReadyAssetMetadata(asset Asset, nowMs int64) (Asset, error) {
 	asset = normalizeAsset(asset, nowMs)
-	if asset.State != AssetStateReady {
-		existing, err := db.getAssetByOwnerIdentity(asset.AssetKind, asset.OwnerKind, asset.OwnerID, asset.MediaIndex)
-		if err != nil {
-			return err
-		}
-		if existing != nil && preservesAssetRetryState(*existing) {
-			asset.State = existing.State
-			asset.LastErrorKind = existing.LastErrorKind
-			asset.LastError = existing.LastError
-			asset.Attempts = existing.Attempts
-			asset.NextAttemptAtMs = existing.NextAttemptAtMs
-			asset.LeaseOwner = existing.LeaseOwner
-			asset.LeaseUntilMs = existing.LeaseUntilMs
-		}
+	path, err := db.storage.WritePath(asset.FilePath)
+	if err != nil {
+		return asset, fmt.Errorf("resolve ready asset path %q: %w", asset.FilePath, err)
 	}
-	return db.UpsertAsset(asset, nowMs)
+	info, err := os.Stat(path)
+	if err != nil {
+		return asset, err
+	}
+	if !info.Mode().IsRegular() {
+		return asset, fmt.Errorf("asset path is not a regular file: %s", asset.FilePath)
+	}
+	asset.State = AssetStateReady
+	asset.SizeBytes = info.Size()
+	asset.FileMtimeNs = info.ModTime().UnixNano()
+	if asset.SizeBytes <= 0 {
+		return asset, fmt.Errorf("ready asset is empty: %s", asset.FilePath)
+	}
+	// The canonical file API owns the checksum. Never trust a checksum supplied
+	// by a caller for bytes that this process can fingerprint itself.
+	asset.SHA256 = ""
+
+	var existing *Asset
+	if asset.AssetID != "" && asset.AssetKind != "" {
+		existing, err = db.GetAsset(asset.AssetID, asset.AssetKind)
+	} else {
+		existing, err = db.GetAssetByOwnerIdentity(asset.AssetKind, asset.OwnerKind, asset.OwnerID, asset.MediaIndex)
+	}
+	if err != nil {
+		return asset, err
+	}
+	if existing != nil && existing.State == AssetStateReady && existing.SHA256 != "" && existing.ContentType != "" &&
+		existing.FilePath == asset.FilePath &&
+		existing.SizeBytes == asset.SizeBytes &&
+		existing.FileMtimeNs == asset.FileMtimeNs {
+		if err := requireSameAssetFile(path, info); err != nil {
+			return asset, err
+		}
+		asset.ContentType = existing.ContentType
+		asset.SHA256 = existing.SHA256
+		return asset, nil
+	}
+	durability := db.readyAssetDurability
+	if durability == nil {
+		durability = makeReadyAssetDurable
+	}
+	if err := durability(path); err != nil {
+		return asset, fmt.Errorf("make ready asset durable %q: %w", asset.FilePath, err)
+	}
+	info, err = os.Stat(path)
+	if err != nil {
+		return asset, err
+	}
+	if !info.Mode().IsRegular() || info.Size() <= 0 {
+		return asset, fmt.Errorf("ready asset is not a non-empty regular file: %s", asset.FilePath)
+	}
+	asset.SizeBytes = info.Size()
+	asset.FileMtimeNs = info.ModTime().UnixNano()
+	asset.ContentType, err = CanonicalAssetContentType(path, asset.FilePath, asset.AssetKind, asset.ContentType)
+	if err != nil {
+		return asset, err
+	}
+
+	size, mtimeNs, sum, err := fingerprintAssetFile(path)
+	if err != nil {
+		return asset, err
+	}
+	asset.SizeBytes = size
+	asset.FileMtimeNs = mtimeNs
+	asset.SHA256 = sum
+	return asset, nil
 }
 
-func (db *DB) getAssetByOwnerIdentity(assetKind, ownerKind, ownerID string, mediaIndex int) (*Asset, error) {
-	row := db.conn.QueryRow(`
+// CanonicalAssetContentType returns the stored media type for verified bytes.
+// Strong byte signatures override declarations and filename extensions.
+func CanonicalAssetContentType(filePath, storageKey, assetKind, declared string) (string, error) {
+	detectedType, err := sniffAssetContentType(filePath, assetKind)
+	if err != nil {
+		return "", err
+	}
+	contentType := detectedType
+	if contentType == "" {
+		contentType = strings.TrimSpace(declared)
+	}
+	if contentType == "" {
+		contentType = contentTypeForPath(storageKey, "")
+	}
+	contentType, _, err = mime.ParseMediaType(contentType)
+	if err != nil {
+		return "", fmt.Errorf("ready asset %s has invalid content type %q", storageKey, declared)
+	}
+	if contentType == "audio/x-m4a" {
+		contentType = "audio/mp4"
+	}
+	if contentType == "" || contentType == "application/octet-stream" || contentType == "text/html" {
+		return "", fmt.Errorf("ready asset %s has invalid content type %q", storageKey, contentType)
+	}
+	return contentType, nil
+}
+
+func sniffAssetContentType(path, assetKind string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = f.Close() }()
+	buf := make([]byte, 512)
+	n, err := f.Read(buf)
+	if err != nil && err != io.EOF {
+		return "", err
+	}
+	buf = buf[:n]
+	if len(buf) >= 12 && string(buf[:4]) == "RIFF" && string(buf[8:12]) == "WEBP" {
+		return "image/webp", nil
+	}
+	if len(buf) >= 8 && string(buf[4:8]) == "ftyp" {
+		if assetKind == "post_audio" {
+			return "audio/mp4", nil
+		}
+		return "video/mp4", nil
+	}
+	if len(buf) >= 4 && buf[0] == 0x1a && buf[1] == 0x45 && buf[2] == 0xdf && buf[3] == 0xa3 {
+		if assetKind == "post_audio" {
+			return "audio/webm", nil
+		}
+		return "video/webm", nil
+	}
+	if len(buf) >= 4 && string(buf[:4]) == "OggS" {
+		return "audio/ogg", nil
+	}
+	if len(buf) >= 3 && string(buf[:3]) == "ID3" {
+		return "audio/mpeg", nil
+	}
+	if len(buf) >= 6 && string(buf[:6]) == "WEBVTT" {
+		return "text/vtt", nil
+	}
+	detected := http.DetectContentType(buf)
+	switch detected {
+	case "image/jpeg", "image/png", "image/gif":
+		return detected, nil
+	case "text/html; charset=utf-8":
+		return "text/html", nil
+	default:
+		return "", nil
+	}
+}
+
+func fingerprintAssetFile(path string) (int64, int64, string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return 0, 0, "", err
+	}
+	defer func() { _ = f.Close() }()
+	before, err := f.Stat()
+	if err != nil {
+		return 0, 0, "", err
+	}
+	if !before.Mode().IsRegular() {
+		return 0, 0, "", fmt.Errorf("asset path is not a regular file: %s", path)
+	}
+	h := sha256.New()
+	n, err := io.Copy(h, f)
+	if err != nil {
+		return 0, 0, "", err
+	}
+	after, err := f.Stat()
+	if err != nil {
+		return 0, 0, "", err
+	}
+	if before.Size() != after.Size() || before.ModTime() != after.ModTime() || n != after.Size() {
+		return 0, 0, "", fmt.Errorf("asset changed while fingerprinting: %s", path)
+	}
+	if err := requireSameAssetFile(path, after); err != nil {
+		return 0, 0, "", err
+	}
+	return n, after.ModTime().UnixNano(), hex.EncodeToString(h.Sum(nil)), nil
+}
+
+func requireSameAssetFile(path string, expected os.FileInfo) error {
+	current, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	if !os.SameFile(expected, current) || expected.Size() != current.Size() || expected.ModTime() != current.ModTime() {
+		return fmt.Errorf("asset changed while preparing metadata: %s", path)
+	}
+	return nil
+}
+
+func makeReadyAssetDurable(path string) error {
+	return makeReadyAssetDurableWith(path, func(file *os.File) error {
+		return file.Sync()
+	}, storage.SyncDirectory)
+}
+
+func makeReadyAssetDurableWith(path string, syncFile func(*os.File) error, syncDirectory func(string) error) error {
+	if syncFile == nil || syncDirectory == nil {
+		return fmt.Errorf("asset durability operations are required")
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	closeWith := func(err error) error { return errors.Join(err, file.Close()) }
+	before, err := file.Stat()
+	if err != nil {
+		return closeWith(err)
+	}
+	if !before.Mode().IsRegular() {
+		return closeWith(fmt.Errorf("asset path is not a regular file: %s", path))
+	}
+	if err := syncFile(file); err != nil {
+		return closeWith(err)
+	}
+	if err := syncDirectory(filepath.Dir(path)); err != nil {
+		return closeWith(err)
+	}
+	after, err := file.Stat()
+	if err != nil {
+		return closeWith(err)
+	}
+	if before.Size() != after.Size() || before.ModTime() != after.ModTime() {
+		return closeWith(fmt.Errorf("asset changed while making durable: %s", path))
+	}
+	if err := requireSameAssetFile(path, after); err != nil {
+		return closeWith(err)
+	}
+	return file.Close()
+}
+
+// BuildAssetID returns the stable public identity for one canonical asset.
+func BuildAssetID(platform, ownerKind, ownerID, assetKind string, index int) string {
+	id := platform + "_" + ownerKind + "_" + ownerID + "_" + assetKind
+	if index > 0 {
+		id = fmt.Sprintf("%s_%d", id, index)
+	}
+	return id
+}
+
+func contentTypeForMediaPath(path, mediaType, fallback string) string {
+	if contentType := contentTypeForPath(path, ""); contentType != "" {
+		return contentType
+	}
+	if mediaType == "video" || mediaType == "gif" {
+		return "video/mp4"
+	}
+	return fallback
+}
+
+func contentTypeForPath(path, fallback string) string {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".jpg", ".jpeg", ".image":
+		return "image/jpeg"
+	case ".png":
+		return "image/png"
+	case ".webp":
+		return "image/webp"
+	case ".gif":
+		return "image/gif"
+	case ".mp4":
+		return "video/mp4"
+	case ".webm":
+		return "video/webm"
+	case ".mkv":
+		return "video/x-matroska"
+	case ".mov":
+		return "video/quicktime"
+	case ".m4v":
+		return "video/x-m4v"
+	case ".mp3":
+		return "audio/mpeg"
+	case ".m4a", ".aac", ".ogg":
+		return "audio/mp4"
+	case ".vtt":
+		return "text/vtt"
+	case ".json":
+		return "application/json"
+	default:
+		return fallback
+	}
+}
+
+// VideoOwnerKindForPlatform translates an exact source platform into the
+// canonical owner kind stored by video producers. Unknown platforms fail
+// closed instead of being treated as YouTube.
+func VideoOwnerKindForPlatform(platform string) (string, bool) {
+	switch platform {
+	case "twitter":
+		return "tweet", true
+	case "youtube":
+		return "youtube_video", true
+	case "tiktok":
+		return "tiktok_video", true
+	case "instagram":
+		return "instagram_reel", true
+	default:
+		return "", false
+	}
+}
+
+func videoPlatformForOwnerKind(ownerKind string) (string, bool) {
+	switch ownerKind {
+	case "tweet":
+		return "twitter", true
+	case "youtube_video":
+		return "youtube", true
+	case "tiktok_video":
+		return "tiktok", true
+	case "instagram_reel":
+		return "instagram", true
+	default:
+		return "", false
+	}
+}
+
+func IsCanonicalVideoOwnerKind(ownerKind string) bool {
+	_, ok := videoPlatformForOwnerKind(ownerKind)
+	return ok
+}
+
+func (db *DB) GetAssetByOwnerIdentity(assetKind, ownerKind, ownerID string, mediaIndex int) (*Asset, error) {
+	row := db.reader().QueryRow(`
 		SELECT id, asset_id, asset_kind, owner_kind, owner_id, media_index,
-		       source_url, file_path, content_type, size_bytes, sha256, state,
+		       source_url, file_path, content_type, size_bytes, sha256, file_mtime_ns, revision,
+		       is_auto, audio_language, state,
 		       required_reason, last_error_kind, last_error, attempts,
 		       next_attempt_at_ms, lease_owner, lease_until_ms, created_at_ms, updated_at_ms
 		FROM assets
@@ -1061,64 +978,4 @@ func (db *DB) getAssetByOwnerIdentity(assetKind, ownerKind, ownerID string, medi
 		return nil, err
 	}
 	return &asset, nil
-}
-
-func preservesAssetRetryState(asset Asset) bool {
-	switch asset.State {
-	case AssetStateDownloading, AssetStateFailed, AssetStatePermanentMissing:
-		return true
-	}
-	return asset.Attempts > 0 ||
-		asset.NextAttemptAtMs > 0 ||
-		strings.TrimSpace(asset.LastErrorKind) != "" ||
-		strings.TrimSpace(asset.LastError) != ""
-}
-
-func (db *DB) assetFromLegacyPath(asset Asset) Asset {
-	path := strings.TrimSpace(asset.FilePath)
-	if path == "" {
-		asset.State = AssetStateQueued
-		asset.SizeBytes = 0
-		return asset
-	}
-	if info, err := os.Stat(resolveManifestDataPath(db.dataDir, path)); err == nil {
-		asset.State = AssetStateReady
-		asset.SizeBytes = info.Size()
-		if asset.ContentType == "" {
-			asset.ContentType = contentTypeForPath(path, "")
-		}
-		return asset
-	}
-	asset.State = AssetStateServerMissing
-	asset.SizeBytes = 0
-	return asset
-}
-
-// AssetServerURL maps an inventory row to the existing server media endpoint
-// contract used by legacy manifest and Android sync asset rows.
-func AssetServerURL(asset Asset) string {
-	switch asset.AssetKind {
-	case "avatar":
-		return "/api/media/avatar/" + asset.OwnerID
-	case "banner":
-		return "/api/media/banner/" + asset.OwnerID
-	case "post_thumbnail":
-		return "/api/media/thumbnail/" + asset.OwnerID
-	case "dearrow_thumbnail":
-		return "/api/media/thumbnail/" + asset.OwnerID + "?da=1"
-	case "video_stream":
-		return "/api/media/stream/" + asset.OwnerID
-	case "subtitle":
-		return "/api/media/subtitle/" + asset.OwnerID
-	case "post_audio":
-		return "/api/media/audio/" + asset.OwnerID
-	case "preview_track_json":
-		return "/api/media/preview-track-json/" + asset.OwnerID
-	case "preview_sprite":
-		return "/api/media/preview-sprite/" + asset.OwnerID
-	case "post_media":
-		return fmt.Sprintf("/api/media/slide/%s/%d", asset.OwnerID, asset.MediaIndex)
-	default:
-		return ""
-	}
 }

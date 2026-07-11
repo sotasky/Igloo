@@ -8,9 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"os"
 	"os/exec"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -362,11 +360,6 @@ func (s *Server) handleSetupSubmit(w http.ResponseWriter, r *http.Request) {
 		s.renderSetupError(w, r, sess, "setup_error_save_failed", "Could not create the admin user.")
 		return
 	}
-	if err := s.db.ClaimBootstrapUserData(username); err != nil {
-		slog.Error("setup ClaimBootstrapUserData", "err", err)
-		s.renderSetupError(w, r, sess, "setup_error_save_failed", "Could not create the admin user.")
-		return
-	}
 	users[username] = auth.UserRecord{
 		Password:  auth.HashPassword(password),
 		Role:      "admin",
@@ -592,13 +585,11 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) buildSidebarContext(r *http.Request, channels []model.Channel) model.SidebarContext {
 	stats, _ := s.db.GetStats()
-	user := userFromContext(r.Context())
+	groups := sidebarGroupsFromChannels(channels)
 	username := ""
-	if user != nil {
+	if user := userFromContext(r.Context()); user != nil {
 		username = user.Username
 	}
-
-	groups := sidebarGroupsFromChannels(channels)
 
 	currentlyWatching, _ := s.db.GetCurrentlyWatchingVideos(1)
 	currentlyAvailable, _ := s.db.GetCurrentlyAvailableVideos()
@@ -739,38 +730,19 @@ func (s *Server) handlePageChannel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	channel.AvatarURL = "/api/media/avatar/" + channelID
+	if s.resolveAvatarPath(channelID) != "" {
+		channel.AvatarURL = "/api/media/avatar/" + channelID
+	} else {
+		channel.AvatarURL = ""
+	}
 	if channel.Platform == "tiktok" || channel.Platform == "instagram" || channel.Platform == "youtube" {
 		if profile == nil {
 			profile, _ = s.db.GetChannelProfile(channelID)
 		}
-		needsRefresh := profile == nil
-		if channel.Platform == "tiktok" && profile != nil && profile.BannerURL == "" {
-			needsRefresh = true
+		if profile != nil && profile.Tombstone {
+			profile = nil
 		}
-		if needsRefresh {
-			ctx, cancel := context.WithTimeout(r.Context(), 1500*time.Millisecond)
-			s.refreshOneProfile(ctx, channelID, profile)
-			cancel()
-			profile, _ = s.db.GetChannelProfile(channelID)
-		}
-		if profile == nil {
-			handle := channelID
-			switch {
-			case strings.HasPrefix(channelID, "tiktok_"):
-				handle = strings.TrimPrefix(channelID, "tiktok_")
-			case strings.HasPrefix(channelID, "youtube_"):
-				handle = strings.TrimPrefix(channelID, "youtube_")
-			case strings.HasPrefix(channelID, "instagram_"):
-				handle = strings.TrimPrefix(channelID, "instagram_")
-			}
-			profile = &model.ChannelProfile{
-				ChannelID:   channelID,
-				Platform:    channel.Platform,
-				Handle:      handle,
-				DisplayName: channel.Name,
-			}
-		}
+		profile = s.profileForPresentation(profile)
 	}
 
 	opts := db.GetVideosOpts{
@@ -786,16 +758,12 @@ func (s *Server) handlePageChannel(w http.ResponseWriter, r *http.Request) {
 
 	usesShorts := channel.Platform == "tiktok" || channel.Platform == "instagram"
 	if usesShorts {
-		userID := ""
-		if user := userFromContext(r.Context()); user != nil {
-			userID = user.Username
-		}
 		nowMs := time.Now().UnixMilli()
-		if err := s.db.AttachStoryStatusToVideos(userID, videos, nowMs); err != nil {
+		if err := s.db.AttachStoryStatusToVideos(videos, nowMs); err != nil {
 			slog.Error("AttachStoryStatusToVideos channel", "channel", channelID, "err", err)
 		}
 		if profile != nil {
-			if statuses, err := s.db.GetStoryStatusForChannelIDs(userID, []string{channelID}, nowMs); err == nil {
+			if statuses, err := s.db.GetStoryStatusForChannelIDs([]string{channelID}, nowMs); err == nil {
 				if status, ok := statuses[channelID]; ok {
 					profile.StoryState = status.State
 					profile.StoryCount = status.Count
@@ -884,19 +852,13 @@ func (s *Server) renderTwitterChannelFeed(w http.ResponseWriter, r *http.Request
 	}
 	pageSize := 40
 
-	user := userFromContext(r.Context())
-	username := ""
-	if user != nil {
-		username = user.Username
-	}
-
 	items, _ := s.db.GetFeedThreadItemsByAuthorPage(handle, pageSize+1, offset)
 	hasMore := len(items) > pageSize
 	if hasMore {
 		items = items[:pageSize]
 	}
 	nextOffset := offset + len(items)
-	items = feed.EnrichFeedItems(s.db, items, username)
+	items = feed.EnrichFeedItems(s.db, items)
 	nextPageURL := ""
 	if hasMore {
 		nextPageURL = fmt.Sprintf("/channels/%s?offset=%d", url.PathEscape(channelID), nextOffset)
@@ -932,19 +894,11 @@ func (s *Server) renderTwitterChannelFeed(w http.ResponseWriter, r *http.Request
 	}
 
 	profile, _ := s.db.GetChannelProfile(channelID)
-	if profile == nil {
-		// Cold cache — synchronously refresh so the hero renders on first
-		// visit (e.g., an @mention click-through for a non-followed handle).
-		ctx, cancel := context.WithTimeout(r.Context(), 1500*time.Millisecond)
-		s.refreshOneProfile(ctx, channelID, nil)
-		cancel()
-		profile, _ = s.db.GetChannelProfile(channelID)
+	if profile != nil && profile.Tombstone {
+		profile = nil
 	}
-	if profile == nil {
-		// Fetch failed (network, fxtwitter down). Synthesize a minimal row
-		// so the hero still renders instead of falling back to the old layout.
-		profile = &model.ChannelProfile{ChannelID: channelID, Platform: "twitter", Handle: handle, DisplayName: displayName}
-	} else if profile.DisplayName != "" {
+	profile = s.profileForPresentation(profile)
+	if profile != nil && profile.DisplayName != "" {
 		displayName = profile.DisplayName
 	}
 
@@ -985,37 +939,14 @@ func (s *Server) handlePagePlayer(w http.ResponseWriter, r *http.Request) {
 		video.AvatarURL = "/api/media/avatar/" + video.ChannelID
 	}
 
-	// For temp videos with no local avatar, fall back to unavatar.io.
-	if video.IsTemp {
-		if !hasLocalAvatar {
-			var rawMeta map[string]any
-			if video.MetadataJSON != "" {
-				_ = json.Unmarshal([]byte(video.MetadataJSON), &rawMeta)
-			}
-			handle := ""
-			if v, _ := rawMeta["uploader_id"].(string); v != "" {
-				handle = strings.TrimLeft(v, "@")
-			} else if v, _ := rawMeta["channel"].(string); v != "" {
-				handle = strings.TrimLeft(v, "@")
-			}
-			if handle != "" {
-				video.AvatarURL = "https://unavatar.io/youtube/" + handle
-			}
-		}
-	}
-
-	user := userFromContext(r.Context())
-	userID := ""
-	if user != nil {
-		userID = user.Username
-	}
-	bookmarked, catID, _ := s.db.IsBookmarked(videoID, userID)
+	bookmarked, catID, _ := s.db.IsBookmarked(videoID)
 	if bookmarked {
 		video.BookmarkCategoryID = &catID
 	}
 
-	video.PlaybackPosition, _ = s.db.GetPlaybackPosition(videoID, userID)
+	video.PlaybackPosition, _ = s.db.GetPlaybackPosition(videoID)
 	comments, _ := s.db.GetComments(videoID, 20)
+	s.projectCommentAuthorAvatars(comments)
 
 	moreFromChannel, _ := s.db.GetVideos(db.GetVideosOpts{
 		ChannelID:       video.ChannelID,
@@ -1054,11 +985,6 @@ func (s *Server) handlePagePlayer(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handlePageFeed(w http.ResponseWriter, r *http.Request) {
-	user := userFromContext(r.Context())
-	username := ""
-	if user != nil {
-		username = user.Username
-	}
 	isHTMX := r.Header.Get("HX-Request") != ""
 
 	// `offset` is a rank_position cursor within one snapshot. Full page loads
@@ -1078,13 +1004,13 @@ func (s *Server) handlePageFeed(w http.ResponseWriter, r *http.Request) {
 	hasMore := false
 
 	// Primary path: read from the pre-built rank snapshot (same data Android uses).
-	snapAt, _ := s.db.SnapshotComputedAt(username)
+	snapAt, _ := s.db.SnapshotComputedAt()
 	if snapAt > 0 {
 		cursorSnapAt, _ := strconv.ParseInt(r.URL.Query().Get("snapshot_at"), 10, 64)
 		if offset > 0 && cursorSnapAt != snapAt && !isHTMX {
 			offset = 0
 		}
-		page, snapErr := s.db.ListSnapshotPage(username, offset, pageSize+1)
+		page, snapErr := s.db.ListSnapshotPage(offset, pageSize+1)
 		if snapErr != nil {
 			slog.Error("ListSnapshotPage", "err", snapErr)
 		} else {
@@ -1096,45 +1022,21 @@ func (s *Server) handlePageFeed(w http.ResponseWriter, r *http.Request) {
 			for i, p := range page {
 				items[i] = p.Item
 			}
-			items = feed.EnrichFeedItems(s.db, items, username)
+			items = feed.EnrichFeedItems(s.db, items)
 			if hasMore && len(page) > 0 {
 				nextPageURL = fmt.Sprintf("/feed?offset=%d&snapshot_at=%d", page[len(page)-1].RankPosition, snapAt)
 			}
 		}
 	}
 
-	// Fallback: snapshot not ready yet — rank in-memory (first page only).
-	// This path dead-ends after one page; the next snapshot tick (5 min) fills
-	// in the rest via the primary path.
+	// Until the rank snapshot is ready, serve one bounded chronological page.
 	if items == nil && offset == 0 {
-		rawItems, err := s.db.ListFeedItemsPage(10000, nil, username)
+		rawItems, err := s.db.ListFeedItemsPage(pageSize, nil, true)
 		if err != nil {
 			slog.Error("ListFeedItemsPage", "err", err)
 			rawItems = nil
 		}
-		rawItems = feed.EnrichFeedItems(s.db, rawItems, username)
-		if feed.AlgorithmicFeedEnabled(s.db) {
-			rawItems = feed.RankFeedItems(rawItems)
-		} else {
-			rawItems = feed.SortFeedItemsChronological(rawItems)
-		}
-
-		n := 0
-		for _, it := range rawItems {
-			if !it.IsSeen {
-				rawItems[n] = it
-				n++
-			}
-		}
-		rawItems = rawItems[:n]
-
-		hasMore = len(rawItems) > pageSize
-		if hasMore {
-			items = rawItems[:pageSize]
-			nextPageURL = "/feed?offset=" + strconv.Itoa(offset+pageSize)
-		} else {
-			items = rawItems
-		}
+		items = feed.EnrichFeedItems(s.db, rawItems)
 	}
 
 	p := s.pageProps(w, r)
@@ -1179,11 +1081,7 @@ func (s *Server) handlePageThread(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	username := ""
-	if user := userFromContext(r.Context()); user != nil {
-		username = user.Username
-	}
-	items = feed.EnrichFeedItemsPreserveRows(s.db, items, username)
+	items = feed.EnrichFeedItemsPreserveRows(s.db, items)
 
 	p := s.pageProps(w, r)
 	p.PageTitle = "Thread"
@@ -1220,7 +1118,7 @@ func (s *Server) handlePageLiked(w http.ResponseWriter, r *http.Request) {
 		cursor = &c
 	}
 
-	likes, err := s.db.GetFeedLikedPage(user.Username, limit+1, cursor)
+	likes, err := s.db.GetFeedLikedPage(limit+1, cursor)
 	if err != nil {
 		slog.Error("GetFeedLikedPage", "err", err)
 		likes = nil
@@ -1258,7 +1156,7 @@ func (s *Server) handlePageLiked(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	items = feed.EnrichFeedItems(s.db, items, user.Username)
+	items = feed.EnrichFeedItems(s.db, items)
 
 	var nextCursor string
 	nextPageURL := ""
@@ -1294,12 +1192,8 @@ func (s *Server) handlePageShorts(w http.ResponseWriter, r *http.Request) {
 	if strings.TrimSpace(r.URL.Query().Get("tab")) == "" {
 		tab = s.db.MomentsDefaultTab()
 	}
-	userID := ""
-	if user := userFromContext(r.Context()); user != nil {
-		userID = user.Username
-	}
 	nowMs := time.Now().UnixMilli()
-	storyChannels, hasUnseenStories, _ := s.db.ListStoryChannels(userID, nowMs, 200)
+	storyChannels, hasUnseenStories, _ := s.db.ListStoryChannels(nowMs, 200)
 	perPage := shortsPageSize
 
 	opts := db.GetVideosOpts{
@@ -1318,7 +1212,7 @@ func (s *Server) handlePageShorts(w http.ResponseWriter, r *http.Request) {
 	var shorts []model.Video
 	if tab != "stories" {
 		shorts, _ = s.db.GetVideos(opts)
-		if err := s.db.AttachStoryStatusToVideos(userID, shorts, nowMs); err != nil {
+		if err := s.db.AttachStoryStatusToVideos(shorts, nowMs); err != nil {
 			slog.Error("AttachStoryStatusToVideos shorts page", "err", err, "tab", tab)
 		}
 	} else {
@@ -1342,12 +1236,6 @@ func (s *Server) handlePageShorts(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handlePageBookmarks(w http.ResponseWriter, r *http.Request) {
-	user := userFromContext(r.Context())
-	userID := ""
-	if user != nil {
-		userID = user.Username
-	}
-
 	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
 	if page < 1 {
 		page = 1
@@ -1362,15 +1250,14 @@ func (s *Server) handlePageBookmarks(w http.ResponseWriter, r *http.Request) {
 	}
 	perPage := bookmarksPageSize
 
-	categories, _ := s.db.GetBookmarkCategories(userID)
-	labelCounts, err := s.db.GetBookmarkLabelCounts(userID)
+	categories, _ := s.db.GetBookmarkCategories()
+	labelCounts, err := s.db.GetBookmarkLabelCounts()
 	if err != nil {
 		slog.Error("GetBookmarkLabelCounts", "err", err)
 	}
 
 	opts := db.GetBookmarksOpts{
 		CategoryID: categoryID,
-		UserID:     userID,
 		Limit:      perPage,
 	}
 	if selectedLabel.IsNoLabel {
@@ -1462,12 +1349,7 @@ func (s *Server) handlePageSearch(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if len(xPosts) > 0 {
-			user := userFromContext(r.Context())
-			username := ""
-			if user != nil {
-				username = user.Username
-			}
-			xPosts = feed.EnrichFeedItems(s.db, xPosts, username)
+			xPosts = feed.EnrichFeedItems(s.db, xPosts)
 		}
 	}
 
@@ -1535,13 +1417,6 @@ func youtubeSearch(q string, limit int) ([]map[string]any, error) {
 		duration, _ := item["duration"].(float64)
 		viewCount, _ := item["view_count"].(float64)
 
-		handle, _ := item["uploader_id"].(string)
-		handle = strings.TrimLeft(handle, "@")
-		avatarURL := ""
-		if handle != "" {
-			avatarURL = "https://unavatar.io/youtube/" + handle
-		}
-
 		results = append(results, map[string]any{
 			"VideoID":      videoID,
 			"Title":        title,
@@ -1551,7 +1426,7 @@ func youtubeSearch(q string, limit int) ([]map[string]any, error) {
 			"Duration":     int(duration),
 			"ViewCount":    int(viewCount),
 			"Platform":     "youtube",
-			"AvatarURL":    avatarURL,
+			"AvatarURL":    "",
 		})
 	}
 	return results, nil
@@ -1597,17 +1472,10 @@ func (s *Server) handlePageTempWatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// If video is already in DB with a file on disk, go straight to player.
-	video, _ := s.db.GetVideo(videoID)
-	if video != nil && video.FilePath != "" {
-		absPath := video.FilePath
-		if !filepath.IsAbs(absPath) {
-			absPath = filepath.Join(s.cfg.DataDir, absPath)
-		}
-		if _, err := os.Stat(absPath); err == nil {
-			http.Redirect(w, r, "/player/"+videoID, http.StatusSeeOther)
-			return
-		}
+	owner, ok := s.videoAssetOwner(videoID)
+	if ok && s.canonicalStreamAsset(owner) != nil {
+		http.Redirect(w, r, "/player/"+videoID, http.StatusSeeOther)
+		return
 	}
 
 	// Video not downloaded yet — render downloading page.

@@ -1,43 +1,30 @@
 package db
 
-import (
-	"database/sql"
-	"time"
-)
+import "time"
 
-// MomentView records that `username` viewed shorts `videoID`.
 type MomentView struct {
 	VideoID  string
 	ViewedAt time.Time
 }
 
-// UpsertMomentView inserts or refreshes viewed_at for (username, videoID).
 // Returns the resulting viewed_at as stored.
-func (db *DB) UpsertMomentView(username, videoID string) (time.Time, error) {
+func (db *DB) UpsertMomentView(videoID string) (time.Time, error) {
 	nowMs := time.Now().UnixMilli()
-	if err := db.WithWrite(func(tx *sql.Tx) error {
-		_, err := tx.Exec(
-			`INSERT INTO moment_views (username, video_id, viewed_at) VALUES (?, ?, ?)
-			 ON CONFLICT(username, video_id) DO UPDATE SET viewed_at = excluded.viewed_at`,
-			username, videoID, nowMs,
-		)
-		return err
-	}); err != nil {
+	if _, err := db.MutateMomentView(videoID, nowMs); err != nil {
 		return time.Time{}, err
 	}
 	return time.UnixMilli(nowMs), nil
 }
 
-// ListMomentViews returns moment views for a user, newest first,
-// filtered to rows with viewed_at > since (zero time = no filter), capped at limit.
-func (db *DB) ListMomentViews(username string, since time.Time, limit int) ([]MomentView, error) {
+// ListMomentViews returns moment views newest first.
+func (db *DB) ListMomentViews(since time.Time, limit int) ([]MomentView, error) {
 	if limit <= 0 {
 		limit = 1000
 	}
-	q := `SELECT video_id, viewed_at FROM moment_views WHERE username = ?`
-	args := []any{username}
+	q := `SELECT video_id, viewed_at FROM moment_views`
+	var args []any
 	if !since.IsZero() {
-		q += ` AND viewed_at > ?`
+		q += ` WHERE viewed_at > ?`
 		args = append(args, since.UnixMilli())
 	}
 	q += ` ORDER BY viewed_at DESC LIMIT ?`
@@ -66,9 +53,8 @@ func (db *DB) ListMomentViews(username string, since time.Time, limit int) ([]Mo
 	return out, rows.Err()
 }
 
-// CountMomentViews returns the total number of moments viewed by username.
-func (db *DB) CountMomentViews(username string) (int, error) {
+func (db *DB) CountMomentViews() (int, error) {
 	var n int
-	err := db.conn.QueryRow(`SELECT COUNT(*) FROM moment_views WHERE username = ?`, username).Scan(&n)
+	err := db.conn.QueryRow(`SELECT COUNT(*) FROM moment_views`).Scan(&n)
 	return n, err
 }

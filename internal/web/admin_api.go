@@ -347,7 +347,7 @@ func (s *Server) settingsFromForm(r *http.Request) map[string]string {
 	// Checkboxes: present=true, absent=false.
 	checkboxFields := []string{
 		"download_subtitles", "media_only_default",
-		"archive_bookmarks", "backup_enabled", "backup_include_media",
+		"archive_bookmarks", "backup_enabled",
 		"algorithmic_feed_enabled", "moments_include_reposts_default",
 		"instagram_include_tagged_default", "share_embed_friendly_links",
 	}

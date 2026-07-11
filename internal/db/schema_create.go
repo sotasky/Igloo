@@ -4,13 +4,13 @@ func schemaCreateStatements() []string {
 	groups := [][]string{
 		schemaArchiveStatements(),
 		schemaUserStateStatements(),
-		schemaLegacyMigrationStatements(),
 		schemaDiagnosticStatements(),
 		schemaMaintainedStateStatements(),
 		schemaDerivedCacheStatements(),
 		schemaSearchStatements(),
 		schemaQueueStatements(),
 		schemaSecurityStateStatements(),
+		schemaAndroidSyncRevisionStatements(),
 	}
 
 	total := 0

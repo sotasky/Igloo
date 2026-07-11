@@ -139,7 +139,7 @@ func videoTaggedAccounts(v model.Video) []model.RetweeterInfo {
 	accounts = append(accounts, meta.TaggedUsers...)
 	out := make([]model.RetweeterInfo, 0, len(accounts))
 	for _, account := range accounts {
-		handle := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(account.Username), "@"))
+		handle := model.NormalizeInstagramHandle(account.Username)
 		if handle == "" || handle == author {
 			continue
 		}
@@ -147,11 +147,12 @@ func videoTaggedAccounts(v model.Video) []model.RetweeterInfo {
 			continue
 		}
 		seen[handle] = struct{}{}
+		channelID := model.InstagramChannelIDFromHandle(handle)
 		out = append(out, model.RetweeterInfo{
 			Handle:      handle,
 			DisplayName: strings.TrimSpace(account.FullName),
-			ChannelID:   "instagram_" + handle,
-			AvatarURL:   strings.TrimSpace(account.ProfilePicURL),
+			ChannelID:   channelID,
+			AvatarURL:   "/api/media/avatar/" + url.PathEscape(channelID),
 			IsTagged:    true,
 		})
 	}
@@ -337,10 +338,22 @@ func feedRepostedLabel(item model.FeedItem) string {
 	return ""
 }
 
-// mediaGridCount clamps a media count to at most 4 for grid display.
-func mediaGridCount(count int) int {
-	if count > 4 {
-		return 4
+func feedMediaURLAt(urls []string, index int) string {
+	if index < 0 || index >= len(urls) {
+		return ""
+	}
+	return urls[index]
+}
+
+func feedReadyMediaCount(urls []string) int {
+	count := 0
+	for index, url := range urls {
+		if index >= 4 {
+			break
+		}
+		if url != "" {
+			count++
+		}
 	}
 	return count
 }
@@ -1221,51 +1234,30 @@ func ServerRawLogFilterCount(lines []ServerRawLogLine, filter string) int {
 
 // AndroidDashboardData holds data for rendering the Android dashboard panel.
 type AndroidDashboardData struct {
-	SyncAgo           string
-	SyncCompletedHMS  string
-	SyncDuration      string
-	GenerationItems   int
-	GenerationAssets  int
-	GenerationReady   int
-	GenerationMissing int
-	DevicePercent     int
-	DeviceVerified    int
-	DevicePending     int
-	DeviceFailed      int
-	DeviceMissing     int
-	DeviceTotal       int
-	DeviceBytes       string
-	StepsCompleted    int
-	StepsTotal        int
-	FeedItemsTotal    int
-	FeedItemsMedia    int
-	ErrorCount        int
-	WarningCount      int
-	Pipeline          []AndroidPipelineStep
-	PipelineFooter    string
-	CacheHealth       []AndroidCacheRow
-	Activity          []AndroidLogEntry
-	Errors            []AndroidErrorEntry
-	Warnings          []AndroidWarningEntry
-	LogFilter         string // "all", "errors", "warnings"
-	ForceSyncPending  bool
-}
-
-// AndroidPipelineStep is a single sync step row.
-type AndroidPipelineStep struct {
-	Name     string
-	Status   string // "done", "pending", "error", etc.
-	Duration string // pre-formatted ("3.2s" or "45ms")
+	SyncAgo          string
+	SyncCompletedHMS string
+	DevicePercent    int
+	DeviceVerified   int
+	DevicePending    int
+	DeviceMissing    int
+	DeviceTotal      int
+	DeviceBytes      string
+	ErrorCount       int
+	WarningCount     int
+	CacheHealth      []AndroidCacheRow
+	Activity         []AndroidLogEntry
+	Errors           []AndroidErrorEntry
+	Warnings         []AndroidWarningEntry
+	LogFilter        string // "all", "errors", "warnings"
 }
 
 // AndroidCacheRow is a cache category health bar.
 type AndroidCacheRow struct {
-	Label     string
-	Cached    int
-	Total     int
-	Percent   int
-	BarCSS    string // "an-cache-bar-good/ok/bad"
-	Retention string
+	Label   string
+	Cached  int
+	Total   int
+	Percent int
+	BarCSS  string // "an-cache-bar-good/ok/bad"
 }
 
 // AndroidLogEntry is a log console line.
@@ -1609,7 +1601,7 @@ func (p PrefsData) VideoTitle(v model.Video) string {
 // VideoThumbURL returns the thumbnail URL for v, respecting DeArrow mode.
 func (p PrefsData) VideoThumbURL(v model.Video) string {
 	mode := p.DearrowMode()
-	if mode == "off" || v.DearrowThumbPath == nil || *v.DearrowThumbPath == "" {
+	if mode == "off" {
 		if v.ThumbnailURL != "" {
 			return v.ThumbnailURL
 		}

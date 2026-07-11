@@ -2,88 +2,14 @@ package db
 
 import "testing"
 
-func TestAndroidDashboardExpectationsCountInstagramMoments(t *testing.T) {
-	d := openWritableTestDB(t)
-	nowMs := int64(10 * 24 * 60 * 60 * 1000)
-	recent := nowMs - int64(2*24*60*60*1000)
-	old := nowMs - int64(9*24*60*60*1000)
-
-	if err := d.ExecRaw(`
-		INSERT INTO videos (video_id, channel_id, title, file_path, file_size, published_at, sync_seq)
-		VALUES
-			('ig_recent', 'instagram_cinema', 'Recent IG', 'media/instagram/cinema/ig_recent.mp4', 10, ?, 1),
-			('tt_recent', 'tiktok_cinema', 'Recent TT', 'media/tiktok/cinema/tt_recent.mp4', 10, ?, 1),
-			('ig_old', 'instagram_cinema', 'Old IG', 'media/instagram/cinema/ig_old.mp4', 10, ?, 1),
-			('youtube_recent', 'youtube_UCcinema', 'Recent YouTube', 'media/youtube/cinema/youtube_recent.mp4', 10, ?, 1)
-	`, recent, recent, old, recent); err != nil {
-		t.Fatalf("insert videos: %v", err)
-	}
-
-	got, err := d.GetAndroidDashboardExpectations("", AndroidRetentionSettings{
-		FeedDays: 7, YoutubeDays: 7, MomentsDays: 7, StoryHours: 48,
-	}, nowMs)
-	if err != nil {
-		t.Fatalf("expectations: %v", err)
-	}
-	if got.Moments != 2 {
-		t.Fatalf("Moments = %d, want 2", got.Moments)
-	}
-	if got.Videos != 1 {
-		t.Fatalf("Videos = %d, want 1", got.Videos)
-	}
-}
-
-func TestAndroidDashboardExpectationsDoNotProtectViewedOldMoments(t *testing.T) {
-	d := openWritableTestDB(t)
-	settings := AndroidRetentionSettings{FeedDays: 3, YoutubeDays: 2, MomentsDays: 1, StoryHours: 48}
-	nowMs := int64(3 * 24 * 60 * 60 * 1000)
-
-	if err := d.ExecRaw(`
-		INSERT INTO videos (video_id, channel_id, title, file_path, file_size, published_at, sync_seq)
-			VALUES ('old_short', 'tiktok_sample_channel', 'Old short', 'media/tiktok/channel/old_short.mp4', 10, 1, 1)
-	`); err != nil {
-		t.Fatalf("insert old short: %v", err)
-	}
-	if err := d.ExecRaw(`
-		INSERT INTO moment_views (username, video_id, viewed_at)
-			VALUES ('sample_user', 'old_short', ?)
-	`, nowMs); err != nil {
-		t.Fatalf("insert moment view: %v", err)
-	}
-
-	got, err := d.GetAndroidDashboardExpectations("sample_user", settings, nowMs)
-	if err != nil {
-		t.Fatalf("expectations: %v", err)
-	}
-	if got.Moments != 0 {
-		t.Fatalf("Moments = %d, want 0", got.Moments)
-	}
-}
-
 func TestLatestAndroidSyncHealthReportUsesPersistedNewestReport(t *testing.T) {
 	d := openWritableTestDB(t)
-	if err := d.ExecRaw(`
-		INSERT INTO android_sync_generations (
-			generation_id, created_at_ms, status, source_version, retention_json,
-			item_count, asset_count, ready_asset_count, server_missing_asset_count,
-			total_bytes, content_counts_json, asset_counts_json
-		) VALUES (
-			'android-sync-old', 1000, 'ready', 'old-source', '{}',
-			1, 10, 9, 1, 100, '{}', '{}'
-		), (
-			'android-sync-new', 2000, 'ready', 'new-source', '{"feed_days":3,"youtube_days":2,"moments_days":7,"story_hours":24}',
-			2, 20, 18, 2, 200, '{}', '{}'
-		)
-	`); err != nil {
-		t.Fatalf("insert generations: %v", err)
-	}
 	if err := d.RecordAndroidSyncHealth(
-		"android-sync-old",
+		"android-assets-old",
 		3000,
 		[]byte(`{"retention":{"feed_days":7,"youtube_days":7,"moments_days":7,"story_hours":48}}`),
 		8,
 		1,
-		0,
 		1,
 		10,
 		8192,
@@ -91,12 +17,11 @@ func TestLatestAndroidSyncHealthReportUsesPersistedNewestReport(t *testing.T) {
 		t.Fatalf("old health: %v", err)
 	}
 	if err := d.RecordAndroidSyncHealth(
-		"android-sync-new",
+		"android-assets-new",
 		4000,
 		[]byte(`{"retention":{"feed_days":3,"youtube_days":2,"moments_days":7,"story_hours":24}}`),
 		18,
 		1,
-		0,
 		1,
 		20,
 		16384,
@@ -111,7 +36,7 @@ func TestLatestAndroidSyncHealthReportUsesPersistedNewestReport(t *testing.T) {
 	if got == nil {
 		t.Fatal("latest health missing")
 	}
-	if got.GenerationID != "android-sync-new" || got.ReportedAtMs != 4000 {
+	if got.Cursor != "android-assets-new" || got.ReportedAtMs != 4000 {
 		t.Fatalf("latest report = %#v", got)
 	}
 	if got.VerifiedAssets != 18 || got.TotalAssets != 20 || got.VerifiedBytes != 16384 {

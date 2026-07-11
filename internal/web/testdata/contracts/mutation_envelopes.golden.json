@@ -1,12 +1,15 @@
 {
-  "error": {
+  "invalid": {
     "error_code": "invalid_body",
     "error_message": "action must be 'set' or 'clear'",
     "ok": false
   },
+  "stale": {
+    "error_code": "stale_mutation",
+    "error_message": "a newer mutation already owns this state",
+    "ok": false
+  },
   "success": {
-    "ok": true,
-    "sync_stream": "feed",
-    "sync_version": 1
+    "ok": true
   }
 }

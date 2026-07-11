@@ -18,7 +18,7 @@ func TestDownloaderOperationInsertListAndPrune(t *testing.T) {
 	_ = tmp.Close()
 	t.Cleanup(func() { _ = os.Remove(path) })
 
-	d, err := Open(path, t.TempDir())
+	d, err := OpenPath(path, t.TempDir())
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}

@@ -12,7 +12,7 @@ func (m *Manager) runRankedQueueWarmup(ctx context.Context) {
 	start := time.Now()
 	log.Printf("[ranked_queue_warmup] warming feed cache")
 
-	items, err := m.db.ListFeedItemsPage(2000, nil, "")
+	items, err := m.db.ListFeedItemsPage(2000, nil, false)
 	elapsed := time.Since(start).Round(time.Millisecond)
 
 	if err != nil {

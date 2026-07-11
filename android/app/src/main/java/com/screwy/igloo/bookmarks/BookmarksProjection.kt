@@ -5,9 +5,8 @@ import com.screwy.igloo.data.entity.FeedItemEntity
 import com.screwy.igloo.data.entity.VideoEntity
 import com.screwy.igloo.data.stripPlatformPrefix
 import com.screwy.igloo.feed.parseFeedMediaDescriptors
-import com.screwy.igloo.media.MediaUri
 import com.screwy.igloo.media.OwnerKind
-import com.screwy.igloo.ui.component.MediaCellModel
+import com.screwy.igloo.media.ownerKindFromAssetOwnerKind
 import com.screwy.igloo.ui.component.MomentItem
 import com.screwy.igloo.ui.component.mediaTypeFor
 import com.screwy.igloo.ui.component.normalizeHandle
@@ -33,13 +32,12 @@ internal fun opensBookmarkInMomentsOverlay(item: BookmarkItem): Boolean =
     item.video != null || item.assetMediaCount > 0 || item.feedItem?.hasMomentStyleMedia() == true
 
 internal fun bookmarkMomentPlaylistItems(
-    items: List<BookmarkItem>,
-    filter: BookmarkFilter,
-    baseUrl: String = "",
+	items: List<BookmarkItem>,
+	filter: BookmarkFilter,
 ): List<MomentItem> =
-    filterBookmarkItems(items, filter)
-        .filter(::opensBookmarkInMomentsOverlay)
-        .map { item -> toBookmarkMomentItem(item, baseUrl) }
+	filterBookmarkItems(items, filter)
+		.filter(::opensBookmarkInMomentsOverlay)
+		.map(::toBookmarkMomentItem)
 
 internal fun bookmarkPlaylistId(filter: BookmarkFilter): String = when (filter) {
     BookmarkFilter.All -> BookmarkPlaylistAllId
@@ -66,7 +64,7 @@ internal fun bookmarkFilterFromPlaylistId(playlistId: String?): BookmarkFilter {
     return BookmarkFilter.All
 }
 
-internal fun toBookmarkMomentItem(item: BookmarkItem, baseUrl: String = ""): MomentItem {
+internal fun toBookmarkMomentItem(item: BookmarkItem): MomentItem {
     val feedMediaKind = bookmarkFeedMediaKind(item)
     val feedSlideCount = bookmarkFeedSlideCount(item)
     val channelId = bookmarkChannelId(item)
@@ -95,28 +93,14 @@ internal fun toBookmarkMomentItem(item: BookmarkItem, baseUrl: String = ""): Mom
         mediaKind = item.video?.let { video -> bookmarkEffectiveMediaKind(item, video) } ?: feedMediaKind,
         slideCount = item.video?.let { video -> bookmarkEffectiveSlideCount(item, video) } ?: feedSlideCount,
         publishedAt = bookmarkPublishedAt(item),
-        ownerKind = bookmarkOwnerKind(item),
-        fallbackThumbnailUri = item.initialThumbnailUri(baseUrl),
+		ownerKind = bookmarkOwnerKind(item),
         isAuthorFollowed = item.resolvedChannelIsFollowed == 1,
     )
 }
 
-internal fun bookmarkFallbackPlatform(item: BookmarkItem): String {
-    val channelId = item.resolvedChannelId ?: item.video?.channelId ?: item.feedItem?.channelId
-    return channelId
-        ?.substringBefore('_')
-        ?.takeIf { it.isNotBlank() }
-        ?: if (item.feedItem != null) "twitter" else "youtube"
-}
-
 internal fun bookmarkOwnerKind(item: BookmarkItem): OwnerKind {
-    if (item.feedItem != null) return OwnerKind.Tweet
-    return when (bookmarkFallbackPlatform(item)) {
-        "tiktok" -> OwnerKind.TikTokVideo
-        "instagram" -> OwnerKind.InstagramReel
-        "twitter", "x" -> OwnerKind.Tweet
-        else -> OwnerKind.YouTubeVideo
-    }
+	if (item.feedItem != null) return OwnerKind.Tweet
+	return ownerKindFromAssetOwnerKind(requireNotNull(item.video).ownerKind)
 }
 
 internal fun bookmarkMediaOwnerId(item: BookmarkItem): String {
@@ -132,29 +116,24 @@ internal fun bookmarkMediaOwnerId(item: BookmarkItem): String {
 }
 
 internal fun bookmarkChannelId(item: BookmarkItem): String {
-    val channelId = item.resolvedChannelId ?: item.video?.channelId ?: item.feedItem?.channelId
-    if (!channelId.isNullOrBlank()) return channelId
-    val handle = normalizeHandle(
-        item.feedItem?.authorHandle
-            ?: item.resolvedChannelSourceId
-            ?: item.bookmark.videoId,
-    ).ifBlank { item.bookmark.videoId }
-    return "${bookmarkFallbackPlatform(item)}_$handle"
+	val channelId = item.resolvedChannelId ?: item.video?.channelId ?: item.feedItem?.channelId
+	if (!channelId.isNullOrBlank()) return channelId
+	return ""
 }
 
 internal fun bookmarkAuthorDisplayName(item: BookmarkItem): String? =
     preferredBookmarkDisplayName(
-        primary = item.feedItem?.authorDisplayName,
+        primary = item.feedAuthorDisplayName,
         channelName = item.resolvedChannelName,
-        handle = item.feedItem?.authorHandle
-            ?: item.feedItem?.sourceHandle
+        handle = item.feedAuthorHandle
+            ?: item.feedSourceHandle
             ?: item.resolvedChannelSourceId,
     )
 
 internal fun bookmarkAuthorHandle(item: BookmarkItem, channelId: String): String {
     val handle = normalizeHandle(
-        item.feedItem?.authorHandle
-            ?: item.feedItem?.sourceHandle
+        item.feedAuthorHandle
+            ?: item.feedSourceHandle
             ?: item.resolvedChannelSourceId
             ?: stripPlatformPrefix(channelId),
     )
@@ -215,7 +194,7 @@ private fun bookmarkFeedMediaDescriptors(item: BookmarkItem) = item.feedItem?.le
 }.orEmpty()
 
 private fun bookmarkEffectiveMediaKind(item: BookmarkItem, video: VideoEntity): String? {
-    val videoKind = video.mediaMode?.takeIf { it.isNotBlank() } ?: video.mediaKind?.takeIf { it.isNotBlank() }
+    val videoKind = video.mediaKind?.takeIf { it.isNotBlank() }
     val feedKind = bookmarkFeedMediaKind(item)
     val feedSlideCount = bookmarkFeedSlideCount(item)
     val videoSlideCount = video.slideCount.coerceAtLeast(0)
@@ -247,18 +226,6 @@ private fun preferredBookmarkDisplayName(
         .mapNotNull { candidate -> candidate?.trim()?.removePrefix("@")?.takeIf { it.isNotBlank() } }
         .firstOrNull { !it.equals(normalizedHandle, ignoreCase = true) }
         ?: candidates.firstOrNull { !it.isNullOrBlank() }?.trim()?.removePrefix("@")
-}
-
-internal fun BookmarkItem.initialThumbnailUri(baseUrl: String): MediaUri {
-    val ownerKind = bookmarkOwnerKind(this)
-    return MediaCellModel(
-        mediaId = bookmarkMediaOwnerId(this),
-        ownerKind = ownerKind,
-        thumbnailPath = video?.thumbnailPath,
-        mediaKind = video?.let { bookmarkEffectiveMediaKind(this, it) } ?: bookmarkFeedMediaKind(this),
-        slideCount = video?.let { bookmarkEffectiveSlideCount(this, it) } ?: bookmarkFeedSlideCount(this),
-        allowServerThumbnailFallback = true,
-    ).initialThumbnailUri(baseUrl)
 }
 
 private fun FeedItemEntity.hasMomentStyleMedia(): Boolean =

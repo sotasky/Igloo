@@ -11,7 +11,6 @@ import coil3.ImageLoader
 import com.screwy.igloo.media.MediaResolvers
 import com.screwy.igloo.net.IglooHostProvider
 import com.screwy.igloo.net.auth.AuthTokenProvider
-import com.screwy.igloo.perf.PerfProbe
 import kotlinx.coroutines.CoroutineScope
 
 internal class NativeFeedAdapter(
@@ -21,7 +20,6 @@ internal class NativeFeedAdapter(
     private val mediaResolvers: MediaResolvers,
     private val scope: CoroutineScope,
     private val getColors: () -> NativeFeedColors,
-    private val getBaseUrl: () -> String,
     private val getCallbacks: () -> NativeFeedCallbacks,
     private val inlineVideoManager: NativeInlineVideoManager,
 ) : ListAdapter<NativeFeedAdapterItem, RecyclerView.ViewHolder>(Diff) {
@@ -30,51 +28,47 @@ internal class NativeFeedAdapter(
         setHasStableIds(true)
     }
 
-    override fun getItemViewType(position: Int): Int = when (getItem(position)) {
-        is NativeFeedAdapterItem.Header -> ViewTypeHeader
-        is NativeFeedAdapterItem.Post -> ViewTypePost
-    }
+    override fun getItemViewType(position: Int): Int =
+        when (getItem(position)) {
+            is NativeFeedAdapterItem.Header -> ViewTypeHeader
+            is NativeFeedAdapterItem.Post -> ViewTypePost
+        }
 
-    override fun getItemId(position: Int): Long =
-        stableItemId(getItem(position).id)
+    override fun getItemId(position: Int): Long = stableItemId(getItem(position).id)
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): RecyclerView.ViewHolder =
         when (viewType) {
-            ViewTypeHeader -> NativeFeedChannelHeaderViewHolder(
-                context = parent.context,
-                imageLoader = imageLoader,
-                authTokens = authTokens,
-                iglooHostProvider = iglooHostProvider,
-                mediaResolvers = mediaResolvers,
-                scope = scope,
-                getColors = getColors,
-                getBaseUrl = getBaseUrl,
-                getCallbacks = getCallbacks,
-            )
-            else -> NativeFeedViewHolder(
-                context = parent.context,
-                imageLoader = imageLoader,
-                authTokens = authTokens,
-                iglooHostProvider = iglooHostProvider,
-                mediaResolvers = mediaResolvers,
-                scope = scope,
-                getColors = getColors,
-                getBaseUrl = getBaseUrl,
-                getCallbacks = getCallbacks,
-                inlineVideoManager = inlineVideoManager,
-            )
+            ViewTypeHeader ->
+                NativeFeedChannelHeaderViewHolder(
+                    context = parent.context,
+                    imageLoader = imageLoader,
+                    authTokens = authTokens,
+                    iglooHostProvider = iglooHostProvider,
+                    mediaResolvers = mediaResolvers,
+                    scope = scope,
+                    getColors = getColors,
+                    getCallbacks = getCallbacks,
+                )
+            else ->
+                NativeFeedViewHolder(
+                    context = parent.context,
+                    imageLoader = imageLoader,
+                    authTokens = authTokens,
+                    iglooHostProvider = iglooHostProvider,
+                    mediaResolvers = mediaResolvers,
+                    scope = scope,
+                    getColors = getColors,
+                    getCallbacks = getCallbacks,
+                    inlineVideoManager = inlineVideoManager,
+                )
         }
 
     override fun onBindViewHolder(holder: RecyclerView.ViewHolder, position: Int) {
         val viewType = getItemViewType(position)
-        PerfProbe.timed(
-            event = "native_feed_bind",
-            fields = { mapOf("view_type" to viewType) },
-        ) {
-            when (val item = getItem(position)) {
-                is NativeFeedAdapterItem.Header -> (holder as NativeFeedChannelHeaderViewHolder).bind(item.header)
-                is NativeFeedAdapterItem.Post -> (holder as NativeFeedViewHolder).bind(item)
-            }
+        when (val item = getItem(position)) {
+            is NativeFeedAdapterItem.Header ->
+                (holder as NativeFeedChannelHeaderViewHolder).bind(item.header)
+            is NativeFeedAdapterItem.Post -> (holder as NativeFeedViewHolder).bind(item)
         }
     }
 
@@ -99,16 +93,17 @@ internal class NativeFeedAdapter(
         const val ViewTypeHeader = 0
         const val ViewTypePost = 1
 
-        private val Diff = object : DiffUtil.ItemCallback<NativeFeedAdapterItem>() {
-            override fun areItemsTheSame(
-                oldItem: NativeFeedAdapterItem,
-                newItem: NativeFeedAdapterItem,
-            ): Boolean = oldItem.id == newItem.id
+        private val Diff =
+            object : DiffUtil.ItemCallback<NativeFeedAdapterItem>() {
+                override fun areItemsTheSame(
+                    oldItem: NativeFeedAdapterItem,
+                    newItem: NativeFeedAdapterItem,
+                ): Boolean = oldItem.id == newItem.id
 
-            override fun areContentsTheSame(
-                oldItem: NativeFeedAdapterItem,
-                newItem: NativeFeedAdapterItem,
-            ): Boolean = oldItem == newItem
-        }
+                override fun areContentsTheSame(
+                    oldItem: NativeFeedAdapterItem,
+                    newItem: NativeFeedAdapterItem,
+                ): Boolean = oldItem == newItem
+            }
     }
 }

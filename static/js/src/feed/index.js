@@ -490,7 +490,6 @@ function runFeedAction(root, actionType, form) {
     }).then(function (payload) {
       var nextLiked = payload && typeof payload.is_liked === 'boolean' ? payload.is_liked : !currentlyLiked
       applyLikeState(root, tweetId, nextLiked)
-      if (payload && payload.sync_version && window.SyncPoller) window.SyncPoller.advance(payload.sync_version)
     }).catch(function (err) {
       applyLikeState(root, tweetId, currentlyLiked)
       throw err
@@ -507,7 +506,6 @@ function runFeedAction(root, actionType, form) {
       setStateBool(root, 'bookmarked', nextBookmarked)
       syncFeedButtons(root)
       syncSiblingCards(root)
-      if (payload && payload.sync_version && window.SyncPoller) window.SyncPoller.advance(payload.sync_version)
     })
   }
   return Promise.reject(new Error('unsupported feed action'))
@@ -571,7 +569,6 @@ function runQuoteOverlayLike(quoteTweetId, btn) {
     var nextLiked = payload && typeof payload.is_liked === 'boolean' ? payload.is_liked : !isLiked
     propagateLikeState(quoteTweetId, nextLiked)
     showToast(nextLiked ? t('toast_liked', 'Liked') : t('toast_unliked', 'Unliked'))
-    if (payload && payload.sync_version && window.SyncPoller) window.SyncPoller.advance(payload.sync_version)
   }).catch(function () {
     propagateLikeState(quoteTweetId, isLiked)
     showToast(t('logs_status_failed', 'Failed'))
@@ -724,7 +721,6 @@ function unfollowChannel(channelId, label) {
     return apiFetch('/api/unsubscribe/' + encodeURIComponent(cid) + '?delete_files=true', { method: 'DELETE' })
       .then(function (payload) {
         showToast((payload && payload.message) || tf('toast_unfollowed_channel', 'Unfollowed %1$s', String(label || cid)))
-        if (payload && payload.sync_version && window.SyncPoller) window.SyncPoller.advance(payload.sync_version)
         return true
       })
       .catch(function (err) {
@@ -746,7 +742,6 @@ function followChannel(channelId, handle, label) {
     if (payload && payload.success === false) throw Object.assign(new Error('subscribe failed'), { payload: payload })
     syncFollowButtons(cid, true)
     showToast(tf('toast_followed_channel', 'Followed %1$s', String(label || cleanHandle)))
-    if (payload && payload.sync_version && window.SyncPoller) window.SyncPoller.advance(payload.sync_version)
     return true
   }).catch(function (err) {
     showToast((err && err.payload && err.payload.error) ? err.payload.error : t('error_follow_failed', 'Failed to follow'))
@@ -1321,47 +1316,6 @@ document.addEventListener('click', function (e) {
   var op = isFollowing ? unfollowChannel(channelId, handle) : followChannel(channelId, handle, handle)
   op.then(function (ok) { if (ok) window.location.reload(); else btn.disabled = false })
 })
-
-function syncToggleValue(value, keys) {
-  value = value || {}
-  for (var i = 0; i < keys.length; i++) {
-    var raw = value[keys[i]]
-    if (typeof raw === 'boolean') return raw
-    if (typeof raw === 'number') return raw !== 0
-    if (typeof raw === 'string') {
-      var s = raw.toLowerCase()
-      if (s === 'true' || s === '1' || s === 'set') return true
-      if (s === 'false' || s === '0' || s === 'clear') return false
-    }
-  }
-  var action = String(value.action || '').toLowerCase()
-  if (action === 'set') return true
-  if (action === 'clear') return false
-  return null
-}
-
-// ── SyncPoller integration ──
-
-if (window.SyncPoller) {
-  window.SyncPoller.on('like', function (itemId, value) {
-    var liked = syncToggleValue(value, ['liked'])
-    if (liked !== null) propagateLikeState(itemId, liked)
-  })
-  window.SyncPoller.on('bookmark', function (itemId, value) {
-    var root = feedList && feedList.querySelector('[data-feed-item][data-tweet-id="' + cssEscape(itemId) + '"]')
-    if (!root) return
-    var bookmarked = syncToggleValue(value, ['bookmarked'])
-    if (bookmarked === null) return
-    setStateBool(root, 'bookmarked', bookmarked)
-    syncFeedButtons(root)
-  })
-  window.SyncPoller.on('follow', function (itemId, value) {
-    var followed = syncToggleValue(value, ['followed', 'subscribed'])
-    if (followed !== null) syncFollowButtons(itemId, followed)
-  })
-  window.SyncPoller.on('subscribe', function (itemId) { syncFollowButtons(itemId, true) })
-  window.SyncPoller.on('unsubscribe', function (itemId) { syncFollowButtons(itemId, false) })
-}
 
 // ── HTMX event handlers ──
 

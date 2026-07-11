@@ -70,12 +70,10 @@ func TestSchemaTableLifecyclesCoverFreshSchema(t *testing.T) {
 
 func TestSchemaTableLifecycleClassifications(t *testing.T) {
 	want := map[string]schemaTableLifecycle{
-		"assets":              schemaLifecycleMaintainedState,
-		"android_sync_assets": schemaLifecycleDerivedCache,
-		"bookmarks":           schemaLifecycleUserState,
-		"download_queue":      schemaLifecycleQueue,
-		"feed_items":          schemaLifecycleArchive,
-		"schema_migrations":   schemaLifecycleLegacyMigration,
+		"assets":         schemaLifecycleMaintainedState,
+		"bookmarks":      schemaLifecycleUserState,
+		"download_queue": schemaLifecycleQueue,
+		"feed_items":     schemaLifecycleArchive,
 	}
 	for table, lifecycle := range want {
 		if got := schemaTableLifecycles[table]; got != lifecycle {
@@ -84,10 +82,23 @@ func TestSchemaTableLifecycleClassifications(t *testing.T) {
 	}
 }
 
+func TestFreshSchemaOmitsRetiredMediaTables(t *testing.T) {
+	d := openSchemaSnapshotDB(t)
+	for _, table := range []string{"media_files", "feed_media_jobs"} {
+		var count int
+		if err := d.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, table).Scan(&count); err != nil {
+			t.Fatalf("check %s: %v", table, err)
+		}
+		if count != 0 {
+			t.Fatalf("fresh schema created retired table %s", table)
+		}
+	}
+}
+
 func openSchemaSnapshotDB(t *testing.T) *DB {
 	t.Helper()
 	tmpDir := t.TempDir()
-	d, err := Open(filepath.Join(tmpDir, "igloo.db"), filepath.Join(tmpDir, "data"))
+	d, err := OpenPath(filepath.Join(tmpDir, "igloo.db"), filepath.Join(tmpDir, "data"))
 	if err != nil {
 		t.Fatalf("open schema snapshot db: %v", err)
 	}
@@ -135,7 +146,7 @@ func dumpSchemaSnapshot(t *testing.T, d *DB) string {
 	rows, err := d.conn.Query(`
 		SELECT type, name, tbl_name, sql
 		FROM sqlite_master
-		WHERE type IN ('table', 'index', 'trigger')
+		WHERE type IN ('table', 'index', 'trigger', 'view')
 		  AND sql IS NOT NULL
 		  AND name NOT LIKE 'sqlite_%'
 	`)

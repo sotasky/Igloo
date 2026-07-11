@@ -132,24 +132,18 @@ func TestEnforceAuthRequiresSubtitleAuthentication(t *testing.T) {
 
 func TestHandleSubtitleRejectsTraversalTrack(t *testing.T) {
 	srv := newTestServer(t)
-	videoDir := filepath.Join(srv.cfg.DataDir, "videos", "youtube")
-	if err := os.MkdirAll(videoDir, 0o755); err != nil {
-		t.Fatalf("mkdir video dir: %v", err)
-	}
-	videoPath := filepath.Join(videoDir, "clip.mp4")
-	if err := os.WriteFile(videoPath, []byte("video"), 0o644); err != nil {
-		t.Fatalf("write video: %v", err)
-	}
-	secretPath := filepath.Join(srv.cfg.DataDir, "secret.txt")
+	secretPath := filepath.Join(srv.cfg.Storage.StateRoot(), "secret.txt")
 	if err := os.WriteFile(secretPath, []byte("do-not-leak"), 0o600); err != nil {
 		t.Fatalf("write secret: %v", err)
 	}
 	if err := srv.db.ExecRaw(`
-		INSERT INTO videos (video_id, channel_id, title, duration, file_path, published_at)
-		VALUES ('clip', 'youtube_chan', 'Clip', 10, ?, 1)
-	`, videoPath); err != nil {
+		INSERT INTO videos (video_id, channel_id, owner_kind, title, duration, published_at)
+		VALUES ('clip', 'youtube_chan', 'youtube_video', 'Clip', 10, 1)
+	`); err != nil {
 		t.Fatalf("insert video: %v", err)
 	}
+	storeReadyMediaAsset(t, srv, "youtube", "youtube_video", "clip", "subtitle", 0,
+		filepath.Join("media", "youtube", "clip.en.vtt"), "text/vtt", []byte("WEBVTT\n"))
 
 	req := httptest.NewRequest(http.MethodGet, "/api/media/subtitle/clip?track=../../secret.txt", nil)
 	req.SetPathValue("videoID", "clip")
@@ -166,23 +160,8 @@ func TestHandleSubtitleRejectsTraversalTrack(t *testing.T) {
 
 func TestHandleSubtitleServesValidTrack(t *testing.T) {
 	srv := newTestServer(t)
-	videoDir := filepath.Join(srv.cfg.DataDir, "videos", "youtube")
-	if err := os.MkdirAll(videoDir, 0o755); err != nil {
-		t.Fatalf("mkdir video dir: %v", err)
-	}
-	videoPath := filepath.Join(videoDir, "clip.mp4")
-	if err := os.WriteFile(videoPath, []byte("video"), 0o644); err != nil {
-		t.Fatalf("write video: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(videoDir, "clip.en.vtt"), []byte("WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nhello\n"), 0o644); err != nil {
-		t.Fatalf("write subtitle: %v", err)
-	}
-	if err := srv.db.ExecRaw(`
-		INSERT INTO videos (video_id, channel_id, title, duration, file_path, published_at)
-		VALUES ('clip', 'youtube_chan', 'Clip', 10, ?, 1)
-	`, videoPath); err != nil {
-		t.Fatalf("insert video: %v", err)
-	}
+	trackKey := filepath.Join("media", "youtube", "clip.en.vtt")
+	storeReadyMediaAsset(t, srv, "youtube", "youtube_video", "clip", "subtitle", 0, trackKey, "text/vtt", []byte("WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nhello\n"))
 
 	req := httptest.NewRequest(http.MethodGet, "/api/media/subtitle/clip?track=clip.en.vtt", nil)
 	req.SetPathValue("videoID", "clip")
@@ -262,7 +241,7 @@ func TestAdminCanUpdateUsers(t *testing.T) {
 
 func TestNonAdminCannotStageRestoreImport(t *testing.T) {
 	srv := newTestServer(t)
-	body, contentType := multipartBody(t, "file", "restore.tar.gz", []byte{0x1f, 0x8b, 0x00})
+	body, contentType := multipartBody(t, "file", "restore.zip", []byte{0x50, 0x4b, 0x03, 0x04})
 	req := httptest.NewRequest(http.MethodPost, "/api/config/import", body)
 	req.Header.Set("Content-Type", contentType)
 	req = req.WithContext(contextWithUser(req, "bob", "user"))
@@ -273,14 +252,14 @@ func TestNonAdminCannotStageRestoreImport(t *testing.T) {
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403, body = %s", rec.Code, rec.Body.String())
 	}
-	if _, err := os.Stat(filepath.Join(srv.cfg.DataDir, "restore-staging")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(srv.cfg.Storage.StateRoot(), "restore-staging")); !os.IsNotExist(err) {
 		t.Fatalf("restore staging should not be created for non-admin, stat err = %v", err)
 	}
 }
 
 func TestAdminCanImportConfigJSON(t *testing.T) {
 	srv := newTestServer(t)
-	body, contentType := multipartBody(t, "file", "config.json", []byte(`{"version":1,"settings":{"web_theme_id":"dracula"}}`))
+	body, contentType := multipartBody(t, "file", "config.json", []byte(`{"version":2,"settings":{"web_theme_id":"dracula"}}`))
 	req := httptest.NewRequest(http.MethodPost, "/api/config/import", body)
 	req.Header.Set("Content-Type", contentType)
 	req = req.WithContext(contextWithUser(req, "admin", "admin"))

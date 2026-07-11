@@ -55,44 +55,22 @@ func (db *DB) EnsureTikTokChannelForRepost(channelID, handle, displayName string
 		url = "https://www.tiktok.com/@" + handle
 	}
 	now := time.Now().UnixMilli()
-	seq := db.NextSyncSeq()
 	return db.WithWrite(func(tx *sql.Tx) error {
 		if _, err := tx.Exec(`
-			INSERT INTO channels (channel_id, source_id, name, url, platform, sync_seq, created_at)
-			VALUES (?, ?, ?, ?, 'tiktok', ?, ?)
+			INSERT INTO channels (channel_id, source_id, name, url, platform, created_at)
+			VALUES (?, ?, ?, ?, 'tiktok', ?)
 			ON CONFLICT(channel_id) DO UPDATE SET
 				source_id = COALESCE(NULLIF(channels.source_id, ''), excluded.source_id),
 				name = CASE WHEN TRIM(COALESCE(channels.name, '')) = '' THEN excluded.name ELSE channels.name END,
 				url = COALESCE(NULLIF(channels.url, ''), excluded.url),
-				platform = 'tiktok',
-				sync_seq = CASE
-					WHEN TRIM(COALESCE(channels.source_id, '')) = ''
-					  OR TRIM(COALESCE(channels.url, '')) = ''
-					  OR TRIM(COALESCE(channels.name, '')) = ''
-					THEN excluded.sync_seq
-					ELSE channels.sync_seq
-				END
-		`, channelID, nilIfEmpty(handle), name, nilIfEmpty(url), seq, now); err != nil {
+				platform = 'tiktok'
+		`, channelID, nilIfEmpty(handle), name, nilIfEmpty(url), now); err != nil {
 			return err
 		}
-		_, err := tx.Exec(`
-			INSERT INTO channel_profiles (channel_id, platform, handle, display_name, fetched_at)
-			VALUES (?, 'tiktok', ?, ?, 0)
-			ON CONFLICT(channel_id) DO UPDATE SET
-				handle = COALESCE(NULLIF(channel_profiles.handle, ''), excluded.handle),
-				display_name = COALESCE(NULLIF(channel_profiles.display_name, ''), excluded.display_name),
-				fetched_at = CASE
-					WHEN TRIM(COALESCE(channel_profiles.avatar_url, '')) = ''
-					THEN 0
-					ELSE channel_profiles.fetched_at
-				END,
-				next_retry_at = CASE
-					WHEN TRIM(COALESCE(channel_profiles.avatar_url, '')) = ''
-					THEN 0
-					ELSE channel_profiles.next_retry_at
-				END
-		`, channelID, nilIfEmpty(handle), nilIfEmpty(displayName))
-		return err
+		return observeProfileTx(tx, profileObservation{
+			channelID: channelID, platform: "tiktok", handle: handle,
+			displayName: displayName, observedAt: now,
+		})
 	})
 }
 
@@ -123,49 +101,26 @@ func (db *DB) EnsureInstagramChannelForTagged(channelID, handle, displayName, _ 
 		url = "https://www.instagram.com/" + handle + "/"
 	}
 	now := time.Now().UnixMilli()
-	seq := db.NextSyncSeq()
 	return db.WithWrite(func(tx *sql.Tx) error {
 		if _, err := tx.Exec(`
-			INSERT INTO channels (channel_id, source_id, name, url, platform, sync_seq, created_at)
-			VALUES (?, ?, ?, ?, 'instagram', ?, ?)
+			INSERT INTO channels (channel_id, source_id, name, url, platform, created_at)
+			VALUES (?, ?, ?, ?, 'instagram', ?)
 			ON CONFLICT(channel_id) DO UPDATE SET
 				source_id = COALESCE(NULLIF(channels.source_id, ''), excluded.source_id),
 				name = CASE WHEN TRIM(COALESCE(channels.name, '')) = '' THEN excluded.name ELSE channels.name END,
 				url = COALESCE(NULLIF(channels.url, ''), excluded.url),
-				platform = 'instagram',
-				sync_seq = CASE
-					WHEN TRIM(COALESCE(channels.source_id, '')) = ''
-					  OR TRIM(COALESCE(channels.url, '')) = ''
-					  OR TRIM(COALESCE(channels.name, '')) = ''
-					THEN excluded.sync_seq
-					ELSE channels.sync_seq
-				END
-		`, channelID, nilIfEmpty(handle), name, nilIfEmpty(url), seq, now); err != nil {
+				platform = 'instagram'
+		`, channelID, nilIfEmpty(handle), name, nilIfEmpty(url), now); err != nil {
 			return err
 		}
-		_, err := tx.Exec(`
-			INSERT INTO channel_profiles (channel_id, platform, handle, display_name, avatar_url, fetched_at)
-			VALUES (?, 'instagram', ?, ?, ?, 0)
-			ON CONFLICT(channel_id) DO UPDATE SET
-				handle = COALESCE(NULLIF(channel_profiles.handle, ''), excluded.handle),
-				display_name = COALESCE(NULLIF(channel_profiles.display_name, ''), excluded.display_name),
-				fetched_at = CASE
-					WHEN TRIM(COALESCE(channel_profiles.avatar_url, '')) = ''
-					THEN 0
-					ELSE channel_profiles.fetched_at
-				END,
-				next_retry_at = CASE
-					WHEN TRIM(COALESCE(channel_profiles.avatar_url, '')) = ''
-					THEN 0
-					ELSE channel_profiles.next_retry_at
-				END
-		`, channelID, nilIfEmpty(handle), nilIfEmpty(displayName), nil)
-		return err
+		return observeProfileTx(tx, profileObservation{
+			channelID: channelID, platform: "instagram", handle: handle,
+			displayName: displayName, observedAt: now,
+		})
 	})
 }
 
-// UpsertVideoRepostSources stores TikTok repost introducers and bumps the
-// owning video sync_seq when metadata actually changes.
+// UpsertVideoRepostSources stores TikTok repost introducers.
 func (db *DB) UpsertVideoRepostSources(rows []model.VideoRepostSource) (int, error) {
 	if len(rows) == 0 {
 		return 0, nil
@@ -194,26 +149,16 @@ func (db *DB) ReplaceVideoRepostSources(videoID string, rows []model.VideoRepost
 		return nil
 	}
 	return db.WithWrite(func(tx *sql.Tx) error {
-		var existingCount int
-		if err := tx.QueryRow(`SELECT COUNT(*) FROM video_repost_sources WHERE video_id = ?`, videoID).Scan(&existingCount); err != nil {
-			return err
-		}
 		if _, err := tx.Exec(`DELETE FROM video_repost_sources WHERE video_id = ?`, videoID); err != nil {
 			return err
 		}
-		inserted := 0
 		for _, row := range rows {
 			row.VideoID = videoID
 			ok, err := db.upsertVideoRepostSourceTx(tx, row)
 			if err != nil {
 				return err
 			}
-			if ok {
-				inserted++
-			}
-		}
-		if existingCount > 0 || inserted > 0 {
-			return db.bumpVideoSyncSeqTx(tx, videoID)
+			_ = ok
 		}
 		return nil
 	})
@@ -274,9 +219,6 @@ func (db *DB) ReplaceVideoRepostSourcesForReposter(reposterChannelID string, row
 				return err
 			}
 			removed = append(removed, videoID)
-			if err := db.bumpVideoSyncSeqTx(tx, videoID); err != nil {
-				return err
-			}
 		}
 		keys := make([]string, 0, len(nextRows))
 		for videoID := range nextRows {
@@ -300,6 +242,13 @@ func (db *DB) upsertVideoRepostSourceTx(tx *sql.Tx, row model.VideoRepostSource)
 		return false, nil
 	}
 	now := time.Now().UnixMilli()
+	_, _, _, platform := channelDefaultsFromID(row.ReposterChannelID)
+	if err := observeProfileTx(tx, profileObservation{
+		channelID: row.ReposterChannelID, platform: platform, handle: row.ReposterHandle,
+		displayName: row.ReposterDisplayName, observedAt: now,
+	}); err != nil {
+		return false, err
+	}
 	inputFirstSeenAtMs := row.FirstSeenAtMs
 	if inputFirstSeenAtMs <= 0 {
 		row.FirstSeenAtMs = now
@@ -308,13 +257,12 @@ func (db *DB) upsertVideoRepostSourceTx(tx *sql.Tx, row model.VideoRepostSource)
 		row.UpdatedAtMs = now
 	}
 
-	var oldHandle, oldDisplay sql.NullString
 	var oldReposted, oldFirstSeen sql.NullInt64
 	err := tx.QueryRow(`
-		SELECT reposter_handle, reposter_display_name, reposted_at_ms, first_seen_at_ms
+		SELECT reposted_at_ms, first_seen_at_ms
 		FROM video_repost_sources
 		WHERE video_id = ? AND reposter_channel_id = ?
-	`, row.VideoID, row.ReposterChannelID).Scan(&oldHandle, &oldDisplay, &oldReposted, &oldFirstSeen)
+	`, row.VideoID, row.ReposterChannelID).Scan(&oldReposted, &oldFirstSeen)
 	if err != nil && err != sql.ErrNoRows {
 		return false, err
 	}
@@ -322,9 +270,7 @@ func (db *DB) upsertVideoRepostSourceTx(tx *sql.Tx, row model.VideoRepostSource)
 		if inputFirstSeenAtMs <= 0 && oldFirstSeen.Valid {
 			row.FirstSeenAtMs = oldFirstSeen.Int64
 		}
-		if oldHandle.String == row.ReposterHandle &&
-			oldDisplay.String == row.ReposterDisplayName &&
-			oldReposted.Int64 == row.RepostedAtMs &&
+		if oldReposted.Int64 == row.RepostedAtMs &&
 			oldFirstSeen.Int64 == row.FirstSeenAtMs {
 			return false, nil
 		}
@@ -332,25 +278,18 @@ func (db *DB) upsertVideoRepostSourceTx(tx *sql.Tx, row model.VideoRepostSource)
 
 	_, execErr := tx.Exec(`
 		INSERT INTO video_repost_sources (
-			video_id, reposter_channel_id, reposter_handle, reposter_display_name,
-			reposted_at_ms, first_seen_at_ms, updated_at_ms
-		) VALUES (?, ?, ?, ?, ?, ?, ?)
+			video_id, reposter_channel_id, reposted_at_ms, first_seen_at_ms, updated_at_ms
+		) VALUES (?, ?, ?, ?, ?)
 		ON CONFLICT(video_id, reposter_channel_id) DO UPDATE SET
-			reposter_handle = excluded.reposter_handle,
-			reposter_display_name = excluded.reposter_display_name,
 			reposted_at_ms = excluded.reposted_at_ms,
 			first_seen_at_ms = CASE
 				WHEN video_repost_sources.first_seen_at_ms > 0 THEN video_repost_sources.first_seen_at_ms
 				ELSE excluded.first_seen_at_ms
 			END,
 			updated_at_ms = excluded.updated_at_ms
-	`, row.VideoID, row.ReposterChannelID, row.ReposterHandle, nilIfEmpty(row.ReposterDisplayName),
-		row.RepostedAtMs, row.FirstSeenAtMs, row.UpdatedAtMs)
+	`, row.VideoID, row.ReposterChannelID, row.RepostedAtMs, row.FirstSeenAtMs, row.UpdatedAtMs)
 	if execErr != nil {
 		return false, execErr
-	}
-	if err := db.bumpVideoSyncSeqTx(tx, row.VideoID); err != nil {
-		return false, err
 	}
 	return true, nil
 }
@@ -382,11 +321,11 @@ func normalizeReposterIdentity(channelID, handle string) (string, string) {
 }
 
 func (db *DB) GetVideoRepostSources(videoID string) ([]model.VideoRepostSource, error) {
-	rows, err := db.conn.Query(`
+	rows, err := db.reader().Query(`
 		SELECT video_id, reposter_channel_id, COALESCE(reposter_handle, ''),
 		       COALESCE(reposter_display_name, ''), COALESCE(reposted_at_ms, 0),
 		       COALESCE(first_seen_at_ms, 0), COALESCE(updated_at_ms, 0)
-		FROM video_repost_sources
+		FROM video_repost_sources_resolved
 		WHERE video_id = ?
 		ORDER BY COALESCE(NULLIF(reposted_at_ms, 0), first_seen_at_ms) DESC, reposter_channel_id ASC
 	`, videoID)
@@ -409,11 +348,11 @@ func (db *DB) GetVideoRepostSourcesForVideoIDs(videoIDs []string) (map[string][]
 		for i, id := range chunk {
 			args[i] = id
 		}
-		rows, err := db.conn.Query(`
+		rows, err := db.reader().Query(`
 			SELECT video_id, reposter_channel_id, COALESCE(reposter_handle, ''),
 			       COALESCE(reposter_display_name, ''), COALESCE(reposted_at_ms, 0),
 			       COALESCE(first_seen_at_ms, 0), COALESCE(updated_at_ms, 0)
-			FROM video_repost_sources
+			FROM video_repost_sources_resolved
 			WHERE video_id IN (`+placeholders(len(chunk))+`)
 			ORDER BY video_id, COALESCE(NULLIF(reposted_at_ms, 0), first_seen_at_ms) DESC, reposter_channel_id ASC
 		`, args...)

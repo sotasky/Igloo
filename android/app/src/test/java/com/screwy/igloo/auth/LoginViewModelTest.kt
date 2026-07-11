@@ -1,9 +1,6 @@
 package com.screwy.igloo.auth
 
-import android.content.Context
-import androidx.test.core.app.ApplicationProvider
 import com.screwy.igloo.R
-import com.screwy.igloo.data.DatabaseHolder
 import com.screwy.igloo.data.PreferencesRepo
 import com.screwy.igloo.net.AuthApi
 import com.screwy.igloo.net.ServerDiscovery
@@ -32,7 +29,6 @@ import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
 import org.junit.After
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -42,31 +38,27 @@ import org.robolectric.annotation.Config
 
 /**
  * `LoginViewModel` — input editing, submit gating, state transitions on every
- * `AuthRepo.LoginResult` branch. Mirrors the plan's "LoginRoute composable test"
- * at the ViewModel layer (Compose-UI tests run on device via androidTest).
+ * `AuthRepo.LoginResult` branch.
  */
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], manifest = Config.NONE)
 class LoginViewModelTest {
 
-    private lateinit var ctx: Context
     private lateinit var scope: CoroutineScope
     private lateinit var storage: InMemoryAuthStorage
-    private lateinit var databaseHolder: DatabaseHolder
     private val viewModels = ViewModelTestTracker()
 
-    @Before fun setUp() {
+    @Before
+    fun setUp() {
         Dispatchers.setMain(UnconfinedTestDispatcher())
-        ctx = ApplicationProvider.getApplicationContext()
         scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         storage = InMemoryAuthStorage()
-        databaseHolder = DatabaseHolder(ctx)
     }
 
-    @After fun tearDown() {
+    @After
+    fun tearDown() {
         viewModels.clearAll()
-        databaseHolder.username?.let { databaseHolder.closeAndDelete(it) }
         scope.cancel()
         Dispatchers.resetMain()
     }
@@ -75,10 +67,10 @@ class LoginViewModelTest {
         repo: AuthRepo,
         onLoginSuccess: () -> Unit = {},
         serverDiscovery: ServerDiscovery? = null,
-    ): LoginViewModel =
-        viewModels.track(LoginViewModel(repo, onLoginSuccess, serverDiscovery))
+    ): LoginViewModel = viewModels.track(LoginViewModel(repo, onLoginSuccess, serverDiscovery))
 
-    @Test fun initialState_prefillsServerUrlFromAuthStorage() {
+    @Test
+    fun initialState_prefillsServerUrlFromAuthStorage() {
         storage.edit { putString(AuthKeys.SERVER_URL, "https://custom.server:9443") }
         val repo = buildRepo(buildAuthApi())
         val vm = newViewModel(repo)
@@ -87,14 +79,16 @@ class LoginViewModelTest {
         assertTrue(vm.state.value.status is LoginViewModel.Status.Idle)
     }
 
-    @Test fun initialState_usesHttpBuiltinServerUrlWhenStorageBlank() {
+    @Test
+    fun initialState_usesHttpBuiltinServerUrlWhenStorageBlank() {
         storage.edit { putString(AuthKeys.SERVER_URL, "") }
         val vm = newViewModel(buildRepo(buildAuthApi()))
 
         assertEquals(PreferencesRepo.Defaults.SERVER_URL, vm.state.value.serverUrl)
     }
 
-    @Test fun submitEnabled_requiresAllThreeFields() {
+    @Test
+    fun submitEnabled_requiresAllThreeFields() {
         val vm = newViewModel(buildRepo(buildAuthApi()))
         vm.onServerUrlChange("")
         assertTrue(!vm.state.value.submitEnabled)
@@ -106,7 +100,8 @@ class LoginViewModelTest {
         assertTrue(vm.state.value.submitEnabled)
     }
 
-    @Test fun plainHttpUrlAllowsSubmitWhenComplete() {
+    @Test
+    fun plainHttpUrlAllowsSubmitWhenComplete() {
         val vm = newViewModel(buildRepo(buildAuthApi()))
         vm.onServerUrlChange("http://100.64.0.20:5001")
         vm.onUsernameChange("alice")
@@ -115,21 +110,22 @@ class LoginViewModelTest {
         assertTrue(vm.state.value.submitEnabled)
     }
 
-    @Test fun discoverServers_replacesBuiltinServerUrlAndKeepsSuggestions() = runBlocking {
+    @Test
+    fun discoverServers_replacesBuiltinServerUrlAndKeepsSuggestions() = runBlocking {
         storage.edit { putString(AuthKeys.SERVER_URL, PreferencesRepo.Defaults.BUILTIN_SERVER_URL) }
-        val vm = newViewModel(
-            buildRepo(buildAuthApi()),
-            serverDiscovery = object : ServerDiscovery {
-                override suspend fun discover(): List<String> =
-                    listOf("http://192.168.1.20:5001", "https://192.168.1.20:8443")
-            },
-        )
+        val vm =
+            newViewModel(
+                buildRepo(buildAuthApi()),
+                serverDiscovery =
+                    object : ServerDiscovery {
+                        override suspend fun discover(): List<String> =
+                            listOf("http://192.168.1.20:5001", "https://192.168.1.20:8443")
+                    },
+            )
 
         vm.discoverServers()
 
-        withTimeoutOrNull(1_500L) {
-            while (vm.state.value.discoveredServers.isEmpty()) delay(5)
-        }
+        withTimeoutOrNull(1_500L) { while (vm.state.value.discoveredServers.isEmpty()) delay(5) }
         assertEquals("http://192.168.1.20:5001", vm.state.value.serverUrl)
         assertEquals(
             listOf("http://192.168.1.20:5001", "https://192.168.1.20:8443"),
@@ -138,49 +134,59 @@ class LoginViewModelTest {
         assertEquals(LoginViewModel.DiscoveryStatus.Idle, vm.state.value.discoveryStatus)
     }
 
-    @Test fun discoverServers_doesNotReplaceEditedServerUrl() = runBlocking {
-        val vm = newViewModel(
-            buildRepo(buildAuthApi()),
-            serverDiscovery = object : ServerDiscovery {
-                override suspend fun discover(): List<String> = listOf("http://192.168.1.20:5001")
-            },
-        )
+    @Test
+    fun discoverServers_doesNotReplaceEditedServerUrl() = runBlocking {
+        val vm =
+            newViewModel(
+                buildRepo(buildAuthApi()),
+                serverDiscovery =
+                    object : ServerDiscovery {
+                        override suspend fun discover(): List<String> =
+                            listOf("http://192.168.1.20:5001")
+                    },
+            )
         vm.onServerUrlChange("http://manual.local:5001")
 
         vm.discoverServers()
 
-        withTimeoutOrNull(1_500L) {
-            while (vm.state.value.discoveredServers.isEmpty()) delay(5)
-        }
+        withTimeoutOrNull(1_500L) { while (vm.state.value.discoveredServers.isEmpty()) delay(5) }
         assertEquals("http://manual.local:5001", vm.state.value.serverUrl)
         assertEquals(listOf("http://192.168.1.20:5001"), vm.state.value.discoveredServers)
     }
 
-    @Test fun discoverServers_surfacesNoServersWhenProbeFindsNothing() = runBlocking {
-        val vm = newViewModel(
-            buildRepo(buildAuthApi()),
-            serverDiscovery = object : ServerDiscovery {
-                override suspend fun discover(): List<String> = emptyList()
-            },
-        )
+    @Test
+    fun discoverServers_surfacesNoServersWhenProbeFindsNothing() = runBlocking {
+        val vm =
+            newViewModel(
+                buildRepo(buildAuthApi()),
+                serverDiscovery =
+                    object : ServerDiscovery {
+                        override suspend fun discover(): List<String> = emptyList()
+                    },
+            )
 
         vm.discoverServers()
 
         withTimeoutOrNull(1_500L) {
-            while (vm.state.value.discoveryStatus == LoginViewModel.DiscoveryStatus.Scanning) delay(5)
+            while (vm.state.value.discoveryStatus == LoginViewModel.DiscoveryStatus.Scanning) delay(
+                5
+            )
         }
         assertEquals(PreferencesRepo.Defaults.SERVER_URL, vm.state.value.serverUrl)
         assertEquals(LoginViewModel.DiscoveryStatus.NoServers, vm.state.value.discoveryStatus)
     }
 
-    @Test fun submit_success_firesNavigateCallback() = runBlocking {
-        val api = buildAuthApi(
-            loginResponder = respondJson(
-                """{"access_token":"acc","refresh_token":"ref","access_expires_at_ms":1,""" +
-                    """"refresh_expires_at_ms":2,"username":"alice","role":"user","is_admin":false,""" +
-                    """"platforms":[],"ok":true}""",
-            ),
-        )
+    @Test
+    fun submit_success_firesNavigateCallback() = runBlocking {
+        val api =
+            buildAuthApi(
+                loginResponder =
+                    respondJson(
+                        """{"access_token":"acc","refresh_token":"ref","access_expires_at_ms":1,""" +
+                            """"refresh_expires_at_ms":2,"username":"alice","role":"user","is_admin":false,""" +
+                            """"platforms":[],"ok":true}"""
+                    )
+            )
         val navigated = BooleanBox()
         val vm = newViewModel(buildRepo(api), onLoginSuccess = { navigated.value = true })
         vm.onServerUrlChange("https://igloo.local")
@@ -194,13 +200,16 @@ class LoginViewModelTest {
         assertEquals("", vm.state.value.password)
     }
 
-    @Test fun submit_badCredentials_surfacesInlineError() = runBlocking {
-        val api = buildAuthApi(
-            loginResponder = respondJsonStatus(
-                HttpStatusCode.Unauthorized,
-                """{"ok":false,"error_code":"invalid_credentials"}""",
-            ),
-        )
+    @Test
+    fun submit_badCredentials_surfacesInlineError() = runBlocking {
+        val api =
+            buildAuthApi(
+                loginResponder =
+                    respondJsonStatus(
+                        HttpStatusCode.Unauthorized,
+                        """{"ok":false,"error_code":"invalid_credentials"}""",
+                    )
+            )
         val vm = newViewModel(buildRepo(api))
         vm.onServerUrlChange("https://igloo.local")
         vm.onUsernameChange("alice")
@@ -214,13 +223,16 @@ class LoginViewModelTest {
         assertEquals(R.string.login_error_invalid_credentials, err.resId)
     }
 
-    @Test fun typing_clearsExistingError() = runBlocking {
-        val api = buildAuthApi(
-            loginResponder = respondJsonStatus(
-                HttpStatusCode.Unauthorized,
-                """{"ok":false,"error_code":"invalid_credentials"}""",
-            ),
-        )
+    @Test
+    fun typing_clearsExistingError() = runBlocking {
+        val api =
+            buildAuthApi(
+                loginResponder =
+                    respondJsonStatus(
+                        HttpStatusCode.Unauthorized,
+                        """{"ok":false,"error_code":"invalid_credentials"}""",
+                    )
+            )
         val vm = newViewModel(buildRepo(api))
         vm.onServerUrlChange("https://igloo.local")
         vm.onUsernameChange("alice")
@@ -236,29 +248,36 @@ class LoginViewModelTest {
 
     // ─── helpers ─────────────────────────────────────────────────────────────
 
-    private fun buildRepo(api: AuthApi): AuthRepo = AuthRepo(
-        storage = storage,
-        databaseHolder = databaseHolder,
-        uiEffects = UiEffects(),
-        applicationScope = scope,
-        authApiProvider = { api },
-        nowMsProvider = { 0L },
-    )
+    private fun buildRepo(api: AuthApi): AuthRepo =
+        AuthRepo(
+            storage = storage,
+            uiEffects = UiEffects(),
+            applicationScope = scope,
+            authApiProvider = { api },
+            nowMsProvider = { 0L },
+        )
 
-    private fun buildAuthApi(
-        loginResponder: Responder? = null,
-    ): AuthApi {
+    private fun buildAuthApi(loginResponder: Responder? = null): AuthApi {
         val engine = MockEngine { request ->
-            val responder = when (request.url.encodedPath) {
-                "/api/auth/login" -> loginResponder
-                else -> null
-            } ?: error("no responder for ${request.url.encodedPath}")
+            val responder =
+                when (request.url.encodedPath) {
+                    "/api/auth/login" -> loginResponder
+                    else -> null
+                } ?: error("no responder for ${request.url.encodedPath}")
             responder.respond(this)
         }
-        val client = HttpClient(engine) {
-            install(ContentNegotiation) { json(Json { ignoreUnknownKeys = true; isLenient = true }) }
-            expectSuccess = true
-        }
+        val client =
+            HttpClient(engine) {
+                install(ContentNegotiation) {
+                    json(
+                        Json {
+                            ignoreUnknownKeys = true
+                            isLenient = true
+                        }
+                    )
+                }
+                expectSuccess = true
+            }
         return AuthApi(client) { "https://igloo.local" }
     }
 
@@ -274,13 +293,14 @@ class LoginViewModelTest {
         )
     }
 
-    private fun respondJsonStatus(status: HttpStatusCode, body: String): Responder = Responder { scope ->
-        scope.respond(
-            content = ByteReadChannel(body),
-            status = status,
-            headers = headersOf("Content-Type", "application/json"),
-        )
-    }
+    private fun respondJsonStatus(status: HttpStatusCode, body: String): Responder =
+        Responder { scope ->
+            scope.respond(
+                content = ByteReadChannel(body),
+                status = status,
+                headers = headersOf("Content-Type", "application/json"),
+            )
+        }
 
     private class BooleanBox(var value: Boolean = false)
 }

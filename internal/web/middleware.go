@@ -45,13 +45,16 @@ func requestLogger(next http.Handler) http.Handler {
 }
 
 func loggableRequestPath(path string) bool {
-	return !strings.HasPrefix(path, "/api/android/sync/assets/")
+	return !androidSyncAssetBodyPath(path)
 }
 
 func recoverPanic(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			if err := recover(); err != nil {
+				if err == http.ErrAbortHandler {
+					panic(err)
+				}
 				slog.Error("panic", "err", err, "stack", string(debug.Stack()))
 				if apiPath(r.URL.Path) {
 					writeJSONError(w, 500, "internal_error", "Internal Server Error")

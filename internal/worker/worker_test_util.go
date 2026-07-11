@@ -12,10 +12,25 @@ import (
 	"github.com/screwys/igloo/internal/config"
 	"github.com/screwys/igloo/internal/db"
 	"github.com/screwys/igloo/internal/download"
+	"github.com/screwys/igloo/internal/storage"
 )
 
 func newTestWorkerDB(t *testing.T) *db.DB {
+	return newTestWorkerDBAt(t, t.TempDir())
+}
+
+func openWorkerTestDB(t *testing.T) *db.DB {
+	return newTestWorkerDB(t)
+}
+
+func newTestWorkerDBAt(t *testing.T, stateRoot string) *db.DB {
 	t.Helper()
+	if err := os.MkdirAll(stateRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stateRoot, ".igloo-state-root"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
 	f, err := os.CreateTemp("", "igloo-worker-test-*.db")
 	if err != nil {
 		t.Fatalf("create temp db file: %v", err)
@@ -24,7 +39,7 @@ func newTestWorkerDB(t *testing.T) *db.DB {
 	_ = f.Close()
 	t.Cleanup(func() { _ = os.Remove(dbPath) })
 
-	d, err := db.Open(dbPath, t.TempDir())
+	d, err := db.OpenPath(dbPath, stateRoot)
 	if err != nil {
 		t.Fatalf("db.Open: %v", err)
 	}
@@ -33,7 +48,17 @@ func newTestWorkerDB(t *testing.T) *db.DB {
 }
 
 func testCfg(dataDir string) *config.Config {
-	return &config.Config{DataDir: dataDir}
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		panic(err)
+	}
+	if err := os.WriteFile(filepath.Join(dataDir, ".igloo-state-root"), nil, 0o644); err != nil {
+		panic(err)
+	}
+	layout, err := storage.New(dataDir, "")
+	if err != nil {
+		panic(err)
+	}
+	return &config.Config{Storage: layout}
 }
 
 // testDownloader returns a minimal Downloader whose HTTP component uses

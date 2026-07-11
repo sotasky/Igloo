@@ -300,10 +300,6 @@
     <string name="logs_android_device_assets_bytes_detail">%1$d/%2$d doğrulandı · %3$s</string>
     <string name="logs_android_device_assets_detail">%1$d/%2$d doğrulandı · %3$d bekliyor</string>
     <string name="logs_android_device_assets_problem_detail">%1$d/%2$d doğrulandı · %3$d bekliyor · %4$d başarısız · %5$d eksik</string>
-    <string name="logs_android_generation">Eşitleme grubu</string>
-    <string name="logs_android_generation_assets">%1$d medya · %2$d hazır</string>
-    <string name="logs_android_generation_assets_missing">%1$d medya · %2$d hazır · %3$d eksik</string>
-    <string name="logs_android_generation_items">gönderi</string>
     <string name="logs_app_starts">Uygulama açılışları</string>
     <string name="logs_avg_latency">Ort. gecikme</string>
     <string name="logs_cache_health">Önbellek durumu</string>
@@ -328,7 +324,6 @@
     <string name="logs_filter_sync">Eşitleme</string>
     <string name="logs_filter_warnings">Uyarılar</string>
     <string name="logs_force_cycle">Akışı şimdi tara</string>
-    <string name="logs_force_sync">Eşitlemeyi başlat</string>
     <string name="logs_ingest_label">Akış taraması</string>
     <string name="logs_last_seen_first_seen">son görülme %1$s · ilk görülme %2$s</string>
     <string name="logs_last_sync_pipeline">Son eşitleme durumu</string>
@@ -509,8 +504,7 @@
     <string name="settings_backup_dir_placeholder">/path/to/igloo-backups</string>
     <string name="settings_backup_enabled">Otomatik yedekleme</string>
     <string name="settings_backup_folder">Yedekleme klasörü</string>
-    <string name="settings_backup_help">Ayrı bir klasör seçin. Günlük yedekler veritabanını ve gizli olmayan ayarları içerir. Kaydedilen medya ayrıca dahil edilebilir. Saklama sayısı 1-5 ile sınırlıdır.</string>
-    <string name="settings_backup_include_media">Kaydedilen medyayı yedeklere dahil et</string>
+    <string name="settings_backup_help">Ayrı bir klasör seçin. Günlük yedekler veritabanını ve gizli olmayan ayarları içerir. Saklama sayısı 1-5 ile sınırlıdır.</string>
     <string name="settings_backup_keep_count">Saklanacak yedek</string>
     <string name="settings_bookmark_per_category">Kategoriye göre ayarlar</string>
     <string name="settings_clear_muted_help">Sessize alınan tüm hesaplar sessizden çıkarılır.</string>

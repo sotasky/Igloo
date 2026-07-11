@@ -15,6 +15,7 @@ func TestExtractInterestTokens(t *testing.T) {
 		{"no tokens", "just plain text here", nil},
 		{"dedup", "#go #go #go", []string{"#go"}},
 		{"lowercase", "#GoLang @UserA", []string{"#golang", "@usera"}},
+		{"exclude email and URL", "mail user@sample.test https://x.com/@inside/status/1 @outside", []string{"@outside"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

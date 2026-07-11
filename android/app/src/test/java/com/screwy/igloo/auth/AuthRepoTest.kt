@@ -1,11 +1,6 @@
 package com.screwy.igloo.auth
 
-import android.content.Context
-import androidx.test.core.app.ApplicationProvider
 import com.screwy.igloo.R
-import com.screwy.igloo.data.DatabaseHolder
-import com.screwy.igloo.data.IglooDatabase
-import com.screwy.igloo.data.PreferencesRepo
 import com.screwy.igloo.net.AuthApi
 import com.screwy.igloo.ui.UiEffect
 import com.screwy.igloo.ui.UiEffects
@@ -38,7 +33,6 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
-import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -47,19 +41,14 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 /**
- * `AuthRepo` lifecycle: login persists tokens and opens the per-user Room DB,
- * logout wipes auth keys except the server URL, detaches the visible session while
- * preserving local data, refresh rotates token pairs, and refresh failure fires
- * `UiEffect.RequireLogin`.
+ * `AuthRepo` lifecycle across login, logout, refresh, and terminal auth failure.
  */
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], manifest = Config.NONE)
 class AuthRepoTest {
 
-    private lateinit var ctx: Context
     private lateinit var storage: InMemoryAuthStorage
-    private lateinit var databaseHolder: DatabaseHolder
     private var logoutStopCount = 0
     private lateinit var uiEffects: UiEffects
     private lateinit var collectedEffects: MutableList<UiEffect>
@@ -68,9 +57,7 @@ class AuthRepoTest {
 
     @Before fun setUp() = runBlocking {
         Dispatchers.setMain(UnconfinedTestDispatcher())
-        ctx = ApplicationProvider.getApplicationContext()
         storage = InMemoryAuthStorage()
-        databaseHolder = DatabaseHolder(ctx)
         scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         logoutStopCount = 0
 
@@ -91,9 +78,6 @@ class AuthRepoTest {
     }
 
     @After fun tearDown() {
-        databaseHolder.closeCurrent()
-        ctx.deleteDatabase(IglooDatabase.fileNameFor("alice"))
-        ctx.deleteDatabase(IglooDatabase.fileNameFor("bob"))
         effectsScope.cancel()
         scope.cancel()
         Dispatchers.resetMain()
@@ -101,7 +85,7 @@ class AuthRepoTest {
 
     // ─── login ───────────────────────────────────────────────────────────────
 
-    @Test fun login_success_persistsTokensAndOpensDb() = runBlocking {
+    @Test fun login_success_persistsTokensAndStartsBootstrap() = runBlocking {
         val api = buildAuthApi(
             loginResponder = respondJson(LOGIN_RESPONSE_ALICE),
         )
@@ -122,10 +106,8 @@ class AuthRepoTest {
         assertTrue(repo.isAdminSync())
         assertEquals("https://igloo.local:8443", repo.serverUrlSync())
         assertTrue(repo.isLoggedInSync())
-        assertTrue(repo.canOpenLocalSessionSync())
-        assertNotNull("per-user DB should be open", databaseHolder.current)
-        assertEquals("alice", databaseHolder.username)
-        assertTrue("bootstrapPostLogin should fire after openForUser", bootstrapFired.value)
+        assertTrue(repo.hasSessionSync())
+        assertTrue(bootstrapFired.value)
         assertEquals("acc-1", storage.getString(AuthKeys.ACCESS_TOKEN))
         assertEquals(2000L, storage.getLong(AuthKeys.ACCESS_EXPIRES_AT_MS))
         // Prefs mirror runs on the app scope; wait briefly for the launch to complete.
@@ -146,47 +128,27 @@ class AuthRepoTest {
 
         assertEquals(AuthRepo.LoginResult.BadCredentials, result)
         assertNull(repo.accessTokenSync())
-        assertNull(databaseHolder.current)
     }
 
     // ─── logout ──────────────────────────────────────────────────────────────
 
-    @Test fun logout_wipesTokensAndDetachesSessionButKeepsLocalDataAndServerUrl() = runBlocking {
+    @Test fun logout_wipesTokensAndKeepsServerUrl() = runBlocking {
         val api = buildAuthApi(
             loginResponder = respondJson(LOGIN_RESPONSE_BOB),
             logoutResponder = respondJson("""{"ok":true}"""),
         )
         val repo = buildRepo(api)
         repo.login("https://igloo.local", "bob", "pw")
-        val dbBeforeLogout = databaseHolder.current
-        assertNotNull(dbBeforeLogout)
-        databaseHolder.requireCurrent().preferenceDao()
-            .put(PreferencesRepo.Keys.THEME_ID, "occult-umbral", nowMs = 123L)
-
         repo.logout(LogoutReason.UserInitiated)
 
         assertNull(repo.accessTokenSync())
         assertNull(repo.refreshTokenSync())
         assertNull(repo.usernameSync())
         assertEquals("https://igloo.local", repo.serverUrlSync())
-        assertSame(dbBeforeLogout, databaseHolder.current)
-        assertNull(databaseHolder.username)
-        assertEquals(
-            "occult-umbral",
-            databaseHolder.requireCurrent().preferenceDao().getValue(PreferencesRepo.Keys.THEME_ID),
-        )
         // user-initiated logout surfaces no toast
         assertTrue(collectedEffects.isEmpty())
         assertEquals(mapOf(AuthKeys.SERVER_URL to "https://igloo.local"), storage.snapshot())
-
-        repo.login("https://igloo.local", "bob", "pw")
-
-        assertSame(dbBeforeLogout, databaseHolder.current)
-        assertEquals("bob", databaseHolder.username)
-        assertEquals(
-            "occult-umbral",
-            databaseHolder.requireCurrent().preferenceDao().getValue(PreferencesRepo.Keys.THEME_ID),
-        )
+        assertEquals(1, logoutStopCount)
     }
 
     @Test fun logout_withReason_surfacesToast() = runBlocking {
@@ -228,7 +190,7 @@ class AuthRepoTest {
         assertTrue(collectedEffects.none { it is UiEffect.RequireLogin })
     }
 
-    @Test fun expiredAccessWithValidRefresh_canOpenLocalSession() = runBlocking {
+    @Test fun expiredAccessWithValidRefresh_keepsSession() = runBlocking {
         storage.edit {
             putString(AuthKeys.ACCESS_TOKEN, "acc-old")
             putString(AuthKeys.REFRESH_TOKEN, "ref-valid")
@@ -242,8 +204,7 @@ class AuthRepoTest {
         )
 
         assertFalse(repo.isLoggedInSync())
-        assertTrue(repo.hasRestorableSessionSync())
-        assertTrue(repo.canOpenLocalSessionSync())
+        assertTrue(repo.hasSessionSync())
     }
 
     @Test fun onAppStart_transientRefreshFailure_keepsLocalSession() = runBlocking {
@@ -263,7 +224,7 @@ class AuthRepoTest {
 
         assertEquals("acc-old", repo.accessTokenSync())
         assertEquals("ref-valid", repo.refreshTokenSync())
-        assertTrue(repo.canOpenLocalSessionSync())
+        assertTrue(repo.hasSessionSync())
         assertTrue(collectedEffects.none { it is UiEffect.RequireLogin })
     }
 
@@ -329,7 +290,6 @@ class AuthRepoTest {
         assertEquals("acc", repo.accessTokenSync())
         assertEquals("ref", repo.refreshTokenSync())
         assertEquals("bob", repo.usernameSync())
-        assertNotNull(databaseHolder.current)
         assertTrue(collectedEffects.none { it is UiEffect.RequireLogin })
     }
 
@@ -346,7 +306,6 @@ class AuthRepoTest {
         val repo = buildRepo(api)
         assertEquals(AuthRepo.LoginResult.Success, repo.login("https://igloo.local", "bob", "pw"))
         assertEquals("ref", repo.refreshTokenSync())
-        assertNotNull(databaseHolder.current)
         collectedEffects.clear()
 
         val newToken = repo.onAuthExpired(errorCode = "access_token_expired")
@@ -359,8 +318,6 @@ class AuthRepoTest {
         assertNull(repo.accessTokenSync())
         assertNull(repo.refreshTokenSync())
         assertNull(repo.usernameSync())
-        assertNotNull(databaseHolder.current)
-        assertNull(databaseHolder.username)
     }
 
     // ─── URL normalization ───────────────────────────────────────────────────
@@ -381,7 +338,6 @@ class AuthRepoTest {
         nowMsProvider: () -> Long = { 0L },
     ): AuthRepo = AuthRepo(
         storage = storage,
-        databaseHolder = databaseHolder,
         uiEffects = uiEffects,
         applicationScope = scope,
         authApiProvider = { api },

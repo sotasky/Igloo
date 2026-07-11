@@ -13,7 +13,6 @@ import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.VerticalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -40,20 +39,17 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.media3.common.MediaItem
 import com.screwy.igloo.R
 import com.screwy.igloo.data.dao.AndroidSyncDao
-import com.screwy.igloo.data.dao.MediaInventoryDao
-import com.screwy.igloo.data.entity.MediaInventoryEntity
 import com.screwy.igloo.log.Logger
 import com.screwy.igloo.media.MediaUri
 import com.screwy.igloo.media.OwnerKind
+import com.screwy.igloo.media.assetOwnerKind
 import com.screwy.igloo.net.IglooHostProvider
+import com.screwy.igloo.net.Reachability
 import com.screwy.igloo.net.ServerBaseUrlProvider
 import com.screwy.igloo.net.auth.AuthTokenProvider
-import com.screwy.igloo.perf.PerfProbe
 import com.screwy.igloo.player.buildIglooPlayer
 import com.screwy.igloo.ui.nav.LocalDrawerController
-import com.screwy.igloo.ui.theme.iglooColors
 import kotlin.math.abs
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -61,9 +57,8 @@ import org.koin.compose.koinInject
 
 /**
  * UI-layer shape for one moments-player page. Callers map from the Room
- * [com.screwy.igloo.data.entity.MomentItem]
- * projection into this item. Media state is resolved lazily inside the player so
- * a large moments dataset does not block first render.
+ * [com.screwy.igloo.data.entity.MomentItem] projection into this item. Media state is resolved
+ * lazily inside the player so a large moments dataset does not block first render.
  */
 data class MomentItem(
     val videoId: String,
@@ -78,32 +73,28 @@ data class MomentItem(
     val isBookmarked: Boolean,
     val mediaKind: String? = null,
     val slideCount: Int = 0,
-    val ownerKind: OwnerKind? = null,
-    // Raw DB/server thumbnail path carried into the overlay so it can reuse the
-    // same immediate poster the grid already had on screen.
-    val fallbackThumbnailPath: String? = null,
-    val fallbackThumbnailUri: MediaUri = MediaUri.Missing,
+    val ownerKind: OwnerKind,
     val isAuthorFollowed: Boolean = true,
     val repostAuthorLabel: String? = null,
     val repostOtherCount: Int = 0,
     val storyRingState: StoryRingState = StoryRingState.None,
     val storyFirstVideoId: String = "",
     /**
-     * Epoch millis for the "14h ago" muted timestamp above the description in the
-     * collapsed overlay. `0L` → hide the timestamp (unknown publish time).
+     * Epoch millis for the "14h ago" muted timestamp above the description in the collapsed
+     * overlay. `0L` → hide the timestamp (unknown publish time).
      */
     val publishedAt: Long = 0L,
 )
 
 /** Returns `true` iff a horizontal drag should be treated as a left-swipe to-channel. */
-internal fun isLeftSwipe(deltaX: Float, thresholdPx: Float): Boolean =
-    deltaX < -thresholdPx
+internal fun isLeftSwipe(deltaX: Float, thresholdPx: Float): Boolean = deltaX < -thresholdPx
 
-internal fun momentCaptionBaseBottomPaddingDp(mediaMode: MomentMediaMode): Int = when (mediaMode) {
-    MomentMediaMode.Video -> MomentVideoCaptionBaseBottomPaddingDp
-    MomentMediaMode.Image,
-    MomentMediaMode.Slideshow -> MomentCaptionBaseBottomPaddingDp
-}
+internal fun momentCaptionBaseBottomPaddingDp(mediaMode: MomentMediaMode): Int =
+    when (mediaMode) {
+        MomentMediaMode.Video -> MomentVideoCaptionBaseBottomPaddingDp
+        MomentMediaMode.Image,
+        MomentMediaMode.Slideshow -> MomentCaptionBaseBottomPaddingDp
+    }
 
 internal fun momentCollapsedCaptionStartPaddingDp(): Int = MomentCollapsedCaptionStartPaddingDp
 
@@ -113,11 +104,12 @@ internal fun momentCaptionDescriptionMaxLines(expanded: Boolean): Int =
 internal fun momentCaptionExpandedAfterPlainTextClick(
     expanded: Boolean,
     descriptionCanExpand: Boolean,
-): Boolean = when {
-    expanded -> false
-    descriptionCanExpand -> true
-    else -> false
-}
+): Boolean =
+    when {
+        expanded -> false
+        descriptionCanExpand -> true
+        else -> false
+    }
 
 internal fun momentCaptionBackgroundColor(expanded: Boolean): Color =
     if (expanded) Color.Black.copy(alpha = 0.28f) else Color.Transparent
@@ -126,22 +118,13 @@ internal const val MOMENTS_PREPARE_RADIUS = 1
 internal const val AUTO_SWIPE_SCROLL_DURATION_MS = 850
 internal const val MOMENT_STILL_ADVANCE_DELAY_MS = 3_000L
 internal const val MOMENT_SLIDESHOW_ADVANCE_DELAY_MS = 2_000L
-private const val MOMENTS_TRANSITION_POSTER_MIN_MS = 180L
 internal const val MOMENTS_STOP_OLD_PAGE_DELAY_MS = 200L
 internal const val MomentCaptionBaseBottomPaddingDp = 12
 internal const val MomentVideoCaptionBaseBottomPaddingDp = 16
 internal const val MomentCollapsedCaptionStartPaddingDp = 8
 internal const val MomentCollapsedCaptionMaxLines = 2
 
-private data class MomentTransitionPoster(
-    val videoId: String,
-    val uri: MediaUri,
-)
-
-internal data class StoryProgressWindow(
-    val index: Int,
-    val count: Int,
-)
+internal data class StoryProgressWindow(val index: Int, val count: Int)
 
 internal data class StoryAdvanceTarget(
     val nextIndex: Int?,
@@ -168,44 +151,23 @@ internal fun storyAdvanceTarget(
     return StoryAdvanceTarget(nextIndex = nextIndex, shouldExit = false, animate = crossesProfile)
 }
 
-internal fun momentStreamUrl(baseUrl: String, videoId: String): String? {
-    val root = baseUrl.trim().trimEnd('/')
-    if (root.isBlank()) return null
-    return "$root/api/media/stream/$videoId"
-}
+internal fun momentStreamLoadKey(videoId: String, streamUri: MediaUri): String? =
+    when (streamUri) {
+        is MediaUri.Local -> "local:$videoId:${streamUri.file.absolutePath}"
+        is MediaUri.Remote -> "remote:$videoId:${streamUri.url}"
+        MediaUri.Missing -> null
+    }
 
-internal fun resolveInitialMomentStreamUri(
-    rows: List<MediaInventoryEntity>,
-    baseUrl: String,
-    videoId: String,
-): MediaUri {
-    val preferredRow = rows.firstOrNull { it.assetKind == "video_stream" && it.state == "cached" }
-        ?: rows.firstOrNull { it.assetKind == "video_stream" }
-        ?: rows.firstOrNull { it.assetKind == "post_media" && it.state == "cached" }
-        ?: rows.firstOrNull { it.assetKind == "post_media" }
-    if (preferredRow != null) return momentInventoryRowToMediaUri(preferredRow, baseUrl)
-    return momentStreamUrl(baseUrl, videoId)
-        ?.let(MediaUri::Remote)
-        ?: MediaUri.Missing
-}
-
-internal fun momentStreamLoadKey(videoId: String, streamUri: MediaUri): String? = when (streamUri) {
-    is MediaUri.Local -> "local:$videoId:${streamUri.file.absolutePath}"
-    is MediaUri.Remote -> "remote:$videoId:${streamUri.url}"
-    MediaUri.Missing -> null
-}
-
-internal fun momentPlayerMediaItem(videoId: String, streamUri: MediaUri): MediaItem? = when (streamUri) {
-    is MediaUri.Local -> MediaItem.Builder()
-        .setMediaId(videoId)
-        .setUri(streamUri.file.toURI().toString())
-        .build()
-    is MediaUri.Remote -> MediaItem.Builder()
-        .setMediaId(videoId)
-        .setUri(streamUri.url)
-        .build()
-    MediaUri.Missing -> null
-}
+internal fun momentPlayerMediaItem(videoId: String, streamUri: MediaUri): MediaItem? =
+    when (streamUri) {
+        is MediaUri.Local ->
+            MediaItem.Builder()
+                .setMediaId(videoId)
+                .setUri(streamUri.file.toURI().toString())
+                .build()
+        is MediaUri.Remote -> MediaItem.Builder().setMediaId(videoId).setUri(streamUri.url).build()
+        MediaUri.Missing -> null
+    }
 
 internal fun momentStreamLoadKeyVideoId(loadKey: String?): String? {
     if (loadKey.isNullOrBlank()) return null
@@ -219,14 +181,13 @@ internal fun momentStreamLoadKeyVideoId(loadKey: String?): String? {
 internal fun momentSlideshowAdvanceDelayMs(): Long = MOMENT_SLIDESHOW_ADVANCE_DELAY_MS
 
 /**
- * TikTok-style vertical-swipe video player. Used by the moments tab, the
- * bookmarks Twitter-as-TikTok viewer, and TikTok channel pages.
+ * TikTok-style vertical-swipe video player. Used by the moments tab, the bookmarks
+ * Twitter-as-TikTok viewer, and TikTok channel pages.
  */
 @Composable
 fun MomentsPlayer(
     items: List<MomentItem>,
     startIndex: Int = 0,
-    startPositionMs: Long = 0L,
     // Match PreferencesRepo.Defaults: auto-swipe OFF, mute ON. Every real caller
     // now passes a PreferencesRepo-backed value through — these defaults only
     // matter for previews and tests, but keeping them aligned avoids surprises
@@ -247,15 +208,10 @@ fun MomentsPlayer(
     onSwipeLeftToChannel: (channelId: String) -> Unit,
     onOpenAllMomentsGrid: (() -> Unit)? = null,
     onEndReached: () -> Unit = {},
-    cursorTracking: Boolean,
-    onCursorAdvance: (videoId: String, positionMs: Long) -> Unit = { _, _ -> },
     forceAutoSwipe: Boolean = false,
     exitOnEnd: Boolean = false,
     storyCrossProfileAdvance: Boolean = false,
     onStoryClick: (channelId: String, firstVideoId: String) -> Unit = { _, _ -> },
-    initialTransitionPosterVideoId: String? = null,
-    initialTransitionPosterUri: MediaUri = MediaUri.Missing,
-    onTransitionPosterDismissed: (videoId: String) -> Unit = {},
     activeTab: String? = null,
     onTabSelected: ((String) -> Unit)? = null,
     modifier: Modifier = Modifier,
@@ -266,24 +222,17 @@ fun MomentsPlayer(
     val lifecycleOwner = LocalLifecycleOwner.current
     val authTokens: AuthTokenProvider = koinInject()
     val iglooHostProvider: IglooHostProvider = koinInject()
-    val mediaInventoryDao: MediaInventoryDao = koinInject()
     val syncDao: AndroidSyncDao = koinInject()
     val baseUrlProvider: ServerBaseUrlProvider = koinInject()
+    val reachability: Reachability = koinInject()
     val logger: Logger = koinInject()
     val drawerController = LocalDrawerController.current
-    val slideshowAudioPlayer = remember(authTokens.bearerTokenSync()) {
-        buildIglooPlayer(context, authTokens, iglooHostProvider).also {
-            PerfProbe.incrementCounter("igloo_moments_slideshow_audio_build_count")
-            PerfProbe.log(event = "moments_slideshow_audio_build") { mapOf("items" to items.size) }
+    val slideshowAudioPlayer =
+        remember(authTokens.bearerTokenSync()) {
+            buildIglooPlayer(context, authTokens, iglooHostProvider).also {}
         }
-    }
-    DisposableEffect(slideshowAudioPlayer) {
-        onDispose {
-            PerfProbe.incrementCounter("igloo_moments_slideshow_audio_release_count")
-            PerfProbe.log(event = "moments_slideshow_audio_release") { mapOf("items" to items.size) }
-            slideshowAudioPlayer.release()
-        }
-    }
+    DisposableEffect(slideshowAudioPlayer) { onDispose { slideshowAudioPlayer.release() } }
+
     var lifecycleStarted by remember {
         mutableStateOf(lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED))
     }
@@ -293,15 +242,14 @@ fun MomentsPlayer(
     val effectiveAutoSwipe = forceAutoSwipe || autoSwipeState
 
     val safeStart = startIndex.coerceIn(0, items.lastIndex)
-    val pagerState = rememberPagerState(
-        initialPage = safeStart,
-        pageCount = { items.size },
-    )
+    val pagerState = rememberPagerState(initialPage = safeStart, pageCount = { items.size })
     val currentIndex = pagerState.currentPage.coerceIn(0, items.lastIndex)
     val storyMode = exitOnEnd
-    val storyProgressWindow = remember(storyMode, currentIndex, items) {
-        if (storyMode) storyProgressWindow(items, currentIndex) else StoryProgressWindow(index = 0, count = 0)
-    }
+    val storyProgressWindow =
+        remember(storyMode, currentIndex, items) {
+            if (storyMode) storyProgressWindow(items, currentIndex)
+            else StoryProgressWindow(index = 0, count = 0)
+        }
     LaunchedEffect(safeStart, items.size) {
         if (safeStart in items.indices && pagerState.currentPage != safeStart) {
             pagerState.scrollToPage(safeStart)
@@ -337,15 +285,7 @@ fun MomentsPlayer(
             .distinctUntilChanged()
             .collect { page ->
                 if (page !in items.indices) return@collect
-                PerfProbe.log(
-                    event = "moments_pager_page",
-                ) {
-                    mapOf(
-                        "page" to page,
-                        "items" to items.size,
-                        "story_mode" to storyMode,
-                    )
-                }
+
                 if (lastFiredPage != page) {
                     onIndexChange(page)
                     onViewEvent(items[page].videoId)
@@ -356,63 +296,59 @@ fun MomentsPlayer(
 
     var muted by remember { mutableStateOf(muteDefault) }
     LaunchedEffect(muteDefault) { muted = muteDefault }
-    LaunchedEffect(muted) {
-        slideshowAudioPlayer.volume = if (muted) 0f else 1f
-    }
+    LaunchedEffect(muted) { slideshowAudioPlayer.volume = if (muted) 0f else 1f }
     var pendingUnfollowItem by remember { mutableStateOf<MomentItem?>(null) }
 
-    LaunchedEffect(pagerState, items, mediaInventoryDao, syncDao, baseUrlProvider.baseUrl()) {
+    LaunchedEffect(pagerState, items, syncDao, baseUrlProvider.baseUrl()) {
         val baseUrl = baseUrlProvider.baseUrl()
         combine(
-            snapshotFlow { pagerState.currentPage.coerceIn(0, items.lastIndex) },
-            snapshotFlow { pagerState.isScrollInProgress },
-            snapshotFlow { lifecycleStarted },
-        ) { page, scrolling, started ->
-            Triple(page, scrolling, started)
-        }
+                snapshotFlow { pagerState.currentPage.coerceIn(0, items.lastIndex) },
+                snapshotFlow { pagerState.isScrollInProgress },
+                snapshotFlow { lifecycleStarted },
+            ) { page, scrolling, started ->
+                Triple(page, scrolling, started)
+            }
             .distinctUntilChanged()
             .collectLatest { (page, scrolling, started) ->
-                PerfProbe.log(
-                    event = "moments_pager_scroll_state",
-                ) {
-                    mapOf(
-                        "page" to page,
-                        "settled_page" to pagerState.settledPage.coerceIn(0, items.lastIndex),
-                        "target_page" to pagerState.targetPage.coerceIn(0, items.lastIndex),
-                        "offset_x1000" to (pagerState.currentPageOffsetFraction * 1000).toInt(),
-                        "scrolling" to scrolling,
-                        "lifecycle_started" to started,
-                        "items" to items.size,
-                    )
-                }
                 val currentItem = items.getOrNull(page)
                 if (
                     currentItem == null ||
-                    momentMediaMode(currentItem.mediaKind, currentItem.slideCount) != MomentMediaMode.Slideshow
+                        momentMediaMode(currentItem.mediaKind, currentItem.slideCount) !=
+                            MomentMediaMode.Slideshow
                 ) {
                     loadedSlideshowAudioKey = clearMomentAudio(slideshowAudioPlayer)
                     return@collectLatest
                 }
 
                 momentAudioUriFlow(
-                    mediaInventoryDao = mediaInventoryDao,
-                    syncDao = syncDao,
-                    baseUrl = baseUrl,
-                    videoId = currentItem.videoId,
-                ).collect { audioUri ->
-                    loadedSlideshowAudioKey = prepareMomentAudio(
-                        player = slideshowAudioPlayer,
-                        loadedKey = loadedSlideshowAudioKey,
+                        syncDao = syncDao,
+                        baseUrl = baseUrl,
                         videoId = currentItem.videoId,
-                        audioUri = audioUri,
+                        ownerKind = currentItem.ownerKind.assetOwnerKind(),
+                        reachability = reachability,
                     )
-                    if (started && shouldPlayMomentPage(isCurrentPage = true, isScrollInProgress = scrolling) && audioUri !is MediaUri.Missing) {
-                        slideshowAudioPlayer.playWhenReady = true
-                    } else {
-                        slideshowAudioPlayer.playWhenReady = false
-                        slideshowAudioPlayer.pause()
+                    .collect { audioUri ->
+                        loadedSlideshowAudioKey =
+                            prepareMomentAudio(
+                                player = slideshowAudioPlayer,
+                                loadedKey = loadedSlideshowAudioKey,
+                                videoId = currentItem.videoId,
+                                audioUri = audioUri,
+                            )
+                        if (
+                            started &&
+                                shouldPlayMomentPage(
+                                    isCurrentPage = true,
+                                    isScrollInProgress = scrolling,
+                                ) &&
+                                audioUri !is MediaUri.Missing
+                        ) {
+                            slideshowAudioPlayer.playWhenReady = true
+                        } else {
+                            slideshowAudioPlayer.playWhenReady = false
+                            slideshowAudioPlayer.pause()
+                        }
                     }
-                }
             }
     }
 
@@ -421,61 +357,44 @@ fun MomentsPlayer(
         if (advanceTick == 0) return@LaunchedEffect
         val page = currentIndex
         var animateAdvance = false
-        val next = if (storyMode) {
-            val target = storyAdvanceTarget(
-                items = items,
-                currentIndex = page,
-                crossProfile = storyCrossProfileAdvance,
-            )
-            if (target.shouldExit) {
-                onEndReached()
-                return@LaunchedEffect
+        val next =
+            if (storyMode) {
+                val target =
+                    storyAdvanceTarget(
+                        items = items,
+                        currentIndex = page,
+                        crossProfile = storyCrossProfileAdvance,
+                    )
+                if (target.shouldExit) {
+                    onEndReached()
+                    return@LaunchedEffect
+                }
+                animateAdvance = target.animate
+                target.nextIndex
+            } else {
+                animateAdvance = true
+                nextMomentPageForAutoSwipe(
+                    currentPage = page,
+                    lastIndex = items.lastIndex,
+                    autoSwipeEnabled = effectiveAutoSwipe,
+                )
             }
-            animateAdvance = target.animate
-            target.nextIndex
-        } else {
-            animateAdvance = true
-            nextMomentPageForAutoSwipe(
-                currentPage = page,
-                lastIndex = items.lastIndex,
-                autoSwipeEnabled = effectiveAutoSwipe,
-            )
-        }
         next ?: return@LaunchedEffect
         if (animateAdvance) {
             pagerState.animateScrollToPage(
                 page = next,
-                animationSpec = tween(
-                    durationMillis = AUTO_SWIPE_SCROLL_DURATION_MS,
-                    easing = FastOutSlowInEasing,
-                ),
+                animationSpec =
+                    tween(
+                        durationMillis = AUTO_SWIPE_SCROLL_DURATION_MS,
+                        easing = FastOutSlowInEasing,
+                    ),
             )
         } else {
             pagerState.scrollToPage(next)
         }
     }
 
-    var initialSeekConsumed by remember(safeStart, startPositionMs) { mutableStateOf(startPositionMs <= 0L) }
-    var transitionPoster by remember(initialTransitionPosterVideoId, initialTransitionPosterUri) {
-        mutableStateOf(
-            initialTransitionPosterVideoId
-                ?.takeIf { initialTransitionPosterUri !is MediaUri.Missing }
-                ?.let { MomentTransitionPoster(videoId = it, uri = initialTransitionPosterUri) },
-        )
-    }
-    LaunchedEffect(transitionPoster?.videoId, currentIndex, items) {
-        val poster = transitionPoster ?: return@LaunchedEffect
-        if (items.getOrNull(currentIndex)?.videoId != poster.videoId) return@LaunchedEffect
-        delay(MOMENTS_TRANSITION_POSTER_MIN_MS)
-        transitionPoster = null
-        onTransitionPosterDismissed(poster.videoId)
-    }
-
-    Box(
-        modifier = modifier
-            .fillMaxSize()
-            .background(Color.Black),
-    ) {
+    Box(modifier = modifier.fillMaxSize().background(Color.Black)) {
         val pageContent: @Composable (Int) -> Unit = { page ->
             val item = items[page]
             MomentPage(
@@ -497,13 +416,11 @@ fun MomentsPlayer(
                     }
                 },
                 showAutoSwipeControl = !forceAutoSwipe,
-                isActive = lifecycleStarted && shouldPlayMomentPage(page == currentIndex, pagerState.isScrollInProgress),
+                isActive =
+                    lifecycleStarted &&
+                        shouldPlayMomentPage(page == currentIndex, pagerState.isScrollInProgress),
                 pagerScrolling = pagerState.isScrollInProgress,
                 shouldPrepare = abs(page - currentIndex) <= MOMENTS_PREPARE_RADIUS,
-                startPositionMs = if (page == safeStart && !initialSeekConsumed) startPositionMs else 0L,
-                onInitialSeekConsumed = { if (page == safeStart) initialSeekConsumed = true },
-                cursorTracking = cursorTracking,
-                onCursorAdvance = onCursorAdvance,
                 onAutoAdvance = { advanceTick++ },
                 onChannelClick = onChannelClick,
                 onStoryClick = onStoryClick,
@@ -525,13 +442,9 @@ fun MomentsPlayer(
                 beyondViewportPageCount = 0,
                 contentPadding = PaddingValues(0.dp),
                 pageSpacing = 0.dp,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .clipToBounds(),
+                modifier = Modifier.fillMaxSize().clipToBounds(),
             ) { page ->
-                Box(modifier = Modifier.fillMaxSize().clipToBounds()) {
-                    pageContent(page)
-                }
+                Box(modifier = Modifier.fillMaxSize().clipToBounds()) { pageContent(page) }
             }
         } else {
             VerticalPager(
@@ -544,61 +457,42 @@ fun MomentsPlayer(
             }
         }
 
-        val poster = transitionPoster
-        if (poster != null && items.getOrNull(currentIndex)?.videoId == poster.videoId) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(Color.Black),
-            ) {
-                ThumbnailFallback(
-                    thumbnailUri = poster.uri,
-                    alphaOverride = 1f,
-                    brokenIconTint = MaterialTheme.iglooColors.onSurfaceFaint,
-                )
-            }
-        }
         if (storyMode) {
             StoryProgressControl(
                 currentPage = storyProgressWindow.index,
                 pageCount = storyProgressWindow.count,
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .zIndex(3f)
-                    .padding(top = overlayIdentityTopPadding()),
+                modifier =
+                    Modifier.align(Alignment.TopCenter)
+                        .zIndex(3f)
+                        .padding(top = overlayIdentityTopPadding()),
             )
         } else if (activeTab != null && onTabSelected != null) {
             MomentsTabControl(
                 activeTab = activeTab,
                 onTabSelected = onTabSelected,
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .zIndex(2f)
-                    .padding(top = overlayIdentityTopPadding()),
+                modifier =
+                    Modifier.align(Alignment.TopCenter)
+                        .zIndex(2f)
+                        .padding(top = overlayIdentityTopPadding()),
             )
         }
         pendingUnfollowItem?.let { target ->
-            val label = target.authorDisplayName
-                ?.takeIf { it.isNotBlank() }
-                ?: target.authorHandle.takeIf { it.isNotBlank() }
-                ?: target.channelId
+            val label =
+                target.authorDisplayName?.takeIf { it.isNotBlank() }
+                    ?: target.authorHandle.takeIf { it.isNotBlank() }
+                    ?: target.channelId
             AlertDialog(
                 onDismissRequest = { pendingUnfollowItem = null },
                 title = { Text(stringResource(R.string.confirm_unfollow_account_title)) },
                 text = {
-                    Text(
-                        stringResource(
-                            R.string.confirm_unfollow_channel_delete_media_body,
-                            label,
-                        ),
-                    )
+                    Text(stringResource(R.string.confirm_unfollow_channel_delete_media_body, label))
                 },
                 confirmButton = {
                     TextButton(
                         onClick = {
                             pendingUnfollowItem = null
                             onUnfollowChannel(target.channelId)
-                        },
+                        }
                     ) {
                         Text(stringResource(R.string.action_unfollow))
                     }

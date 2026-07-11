@@ -41,10 +41,7 @@ func (m *Manager) youtubeEnrichOnce(ctx context.Context) int {
 		default:
 		}
 		if task.NeedsDearrow {
-			v, err := m.db.GetVideo(task.VideoID)
-			if err == nil && v != nil {
-				m.triggerDearrowFetch(ctx, task.VideoID, v.FilePath, v.Platform)
-			}
+			m.triggerDearrowFetch(ctx, task.VideoID, task.FilePath, "youtube")
 		}
 		if task.NeedsSB {
 			m.fetchSponsorBlockFor(ctx, task.VideoID, task.PublishedAtMs)
@@ -60,14 +57,6 @@ func (m *Manager) youtubeEnrichOnce(ctx context.Context) int {
 		}
 	}
 	return processed
-}
-
-// dearrowOnce is kept as a thin alias so existing tests keep working with
-// the pre-SB worker name.
-//
-// Deprecated: use youtubeEnrichOnce.
-func (m *Manager) dearrowOnce(ctx context.Context) int {
-	return m.youtubeEnrichOnce(ctx)
 }
 
 // runDearrowWorker is the long-lived scan loop. Registered via m.launch so

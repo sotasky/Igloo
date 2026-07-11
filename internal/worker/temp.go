@@ -13,7 +13,6 @@ import (
 
 	"github.com/screwys/igloo/internal/db"
 	"github.com/screwys/igloo/internal/download"
-	"github.com/screwys/igloo/internal/fetchprofile"
 	"github.com/screwys/igloo/internal/model"
 	"github.com/screwys/igloo/internal/subscribe"
 )
@@ -84,6 +83,10 @@ func (m *Manager) DownloadTemp(ctx context.Context, rawURL string, saveChannel b
 	if channelName == "" {
 		channelName = "Temp"
 	}
+	ownerKind, ok := db.VideoOwnerKindForPlatform(platform)
+	if !ok || ownerKind == "tweet" {
+		return TempDownloadResult{Message: fmt.Sprintf("Unsupported platform: %s", platform)}
+	}
 
 	// Normalize channel_id to the platform_id convention used by every other
 	// channel in the DB, so avatar resolution and channel_name stripping helpers
@@ -102,20 +105,33 @@ func (m *Manager) DownloadTemp(ctx context.Context, rawURL string, saveChannel b
 	}
 
 	// Download to temp dir.
-	tempDir := filepath.Join(m.cfg.DataDir, "media", "temp")
+	tempDir, err := m.cfg.Storage.WritePath("media/temp")
+	if err != nil {
+		return TempDownloadResult{Message: fmt.Sprintf("Storage path: %v", err)}
+	}
 	_ = os.MkdirAll(tempDir, 0755)
+	attemptID, err := newDownloadAttemptID(tempDir, videoID)
+	if err != nil {
+		return TempDownloadResult{Message: fmt.Sprintf("Download attempt: %v", err)}
+	}
+	subtitleDir, err := m.cfg.Storage.WritePath("subtitles/" + platform)
+	if err != nil {
+		return TempDownloadResult{Message: fmt.Sprintf("Subtitle storage: %v", err)}
+	}
 
 	opts := download.Opts{
 		OutputDir:          tempDir,
-		ID:                 videoID,
+		ID:                 attemptID,
 		Cookies:            cookiesFile,
 		CookiesFromBrowser: cookiesBrowser,
 		CookieAlternates:   cookieSets,
 		Subtitles:          true,
+		SubtitleDir:        subtitleDir,
 	}
 
-	paths, dlErr := m.downloader.Download(ctx, rawURL, "video", opts)
-	if dlErr != nil || len(paths) == 0 {
+	completed, dlErr := m.downloader.DownloadCompleted(ctx, rawURL, "video", opts)
+	if dlErr != nil || len(completed.MediaPaths) == 0 {
+		(completedVideoFiles{}).removeFailedAttempt(completed)
 		msg := "Download failed"
 		if dlErr != nil {
 			msg = dlErr.Error()
@@ -123,20 +139,25 @@ func (m *Manager) DownloadTemp(ctx context.Context, rawURL string, saveChannel b
 		return TempDownloadResult{Message: msg}
 	}
 
-	filePath := paths[0]
-	relPath := toRelPath(m.cfg.DataDir, filePath)
-	thumbPath := findSiblingThumbnail(filePath, videoID)
-	relThumb := ""
-	if thumbPath != "" {
-		relThumb = toRelPath(m.cfg.DataDir, thumbPath)
+	files, err := m.prepareCompletedVideoFiles(ctx, platform, attemptID, completed)
+	if err != nil {
+		files.removeFailedAttempt(completed)
+		return TempDownloadResult{Message: fmt.Sprintf("Prepare completed outputs: %v", err)}
 	}
 
 	publishedAt := extractPublishedAt(info)
 	description, _ := info["description"].(string)
 	duration := extractDurationFromMetadata(info)
-	fileSize := int64(0)
-	if fi, err := os.Stat(filePath); err == nil {
-		fileSize = fi.Size()
+	if len(files.imageKeys) > 1 {
+		slides := make([]any, len(files.imageKeys))
+		for i, key := range files.imageKeys {
+			slides[i] = map[string]any{"path": key}
+		}
+		if info == nil {
+			info = map[string]any{}
+		}
+		info["slides"] = slides
+		info["vcodec"] = "none"
 	}
 
 	metadataJSON := ""
@@ -153,52 +174,41 @@ func (m *Manager) DownloadTemp(ctx context.Context, rawURL string, saveChannel b
 	if metadataJSON != "" {
 		var meta model.VideoMetadata
 		if err := json.Unmarshal([]byte(metadataJSON), &meta); err == nil {
-			mediaKind, slideCount = model.ComputeMediaKind(&meta, relPath)
+			mediaKind, slideCount = model.ComputeMediaKind(&meta, files.primaryKey)
 		}
 	}
 	if mediaKind == "" {
-		mediaKind, slideCount = model.ComputeMediaKind(nil, relPath)
-	}
-	_ =
-
-		// Upsert channel.
-		m.db.AddChannel(model.Channel{
-			ChannelID:    channelID,
-			SourceID:     strings.TrimPrefix(stringFromMap(info, "uploader_id"), "@"),
-			Name:         channelName,
-			URL:          channelURL,
-			Platform:     platform,
-			IsSubscribed: saveChannel,
-		})
-
-	// Insert video.
-	if err := m.db.InsertVideo(videoID, channelID, title, description,
-		duration, relThumb, relPath, fileSize, publishedAt, metadataJSON, mediaKind, slideCount, true); err != nil {
-		return TempDownloadResult{Message: fmt.Sprintf("DB insert: %v", err)}
+		mediaKind, slideCount = model.ComputeMediaKind(nil, files.primaryKey)
 	}
 
-	// Enqueue preview.
-	absPath := filePath
-	if !filepath.IsAbs(absPath) {
-		absPath = filepath.Join(m.cfg.DataDir, absPath)
-	}
-	m.EnqueuePreview(PreviewRequest{
-		VideoID:  videoID,
-		FilePath: absPath,
-		Duration: float64(duration),
+	// Upsert channel.
+	_ = m.db.AddChannel(model.Channel{
+		ChannelID:    channelID,
+		SourceID:     strings.TrimPrefix(stringFromMap(info, "uploader_id"), "@"),
+		Name:         channelName,
+		URL:          channelURL,
+		Platform:     platform,
+		IsSubscribed: saveChannel,
 	})
 
-	// Synchronously fetch avatar before returning so the player page shows it
-	// on first load. Async RequestAvatar leaves a window where the player page
-	// loads before the file exists — see internal/web/pages.go handlePagePlayer.
-	avatarCtx, avatarCancel := context.WithTimeout(ctx, 20*time.Second)
-	avDir := filepath.Join(m.cfg.DataDir, "thumbnails", "avatars")
-	bnDir := filepath.Join(m.cfg.DataDir, "thumbnails", "banners")
-	if err := os.MkdirAll(avDir, 0o755); err != nil {
-		log.Printf("[temp] mkdir avatar dir: %v", err)
+	if err := m.db.StoreCompletedVideo(db.CompletedVideo{
+		VideoID: videoID, ChannelID: channelID, OwnerKind: ownerKind, Title: title, Description: description,
+		Duration: duration, PublishedAtMs: publishedAt, MetadataJSON: metadataJSON,
+		MediaKind: mediaKind, SlideCount: slideCount, IsTemp: true, Assets: files.assets,
+	}); err != nil {
+		files.removeFailedAttempt(completed)
+		return TempDownloadResult{Message: fmt.Sprintf("DB insert: %v", err)}
 	}
-	m.refreshProfile(avatarCtx, fetchprofile.Fetch, channelID, avDir, bnDir)
-	avatarCancel()
+	if err := m.storeCompletedSubtitles(videoID, files, completed); err != nil {
+		log.Printf("[temp] subtitle publish failed for %s: %v", videoID, err)
+	}
+	files.removeTransientFiles()
+
+	m.enqueueCompletedVideoPreview(videoID, platform, files.primaryPath, float64(duration))
+
+	// Channel creation owns the durable profile job. Wake its consumer without
+	// creating a synchronous render-time identity path.
+	m.KickProfileJobs()
 
 	// Synchronously fetch comments so they appear on first player page load.
 	commentsCtx, commentsCancel := context.WithTimeout(ctx, 2*time.Minute)
@@ -207,16 +217,13 @@ func (m *Manager) DownloadTemp(ctx context.Context, rawURL string, saveChannel b
 	if commentsErr != nil {
 		log.Printf("[temp] comments fetch failed for %s: %v", videoID, commentsErr)
 	} else if len(comments) > 0 {
-		inserted, _ := m.db.AddComments(videoID, comments, platform)
-		// yt-dlp already returns commenter thumbnails with comments; cache those
-		// public image URLs without promoting commenters into channel_profiles.
-		go func(comments []db.CommentInput) {
-			bgCtx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
-			defer cancel()
-			cachedAvatars := m.CacheYouTubeCommentAvatars(bgCtx, comments)
-			log.Printf("[temp] cached %d commenter avatars for %s", cachedAvatars, videoID)
-		}(comments)
-		log.Printf("[temp] fetched %d comments for %s", inserted, videoID)
+		inserted, err := m.db.AddComments(videoID, comments)
+		if err != nil {
+			log.Printf("[temp] store comments for %s: %v", videoID, err)
+		} else {
+			m.KickFeedMedia()
+			log.Printf("[temp] fetched %d comments for %s", inserted, videoID)
+		}
 	}
 
 	return TempDownloadResult{
@@ -242,7 +249,10 @@ func (m *Manager) downloadPlaylist(ctx context.Context, rawURL, playlistID strin
 		playlistTitle = "Playlist " + playlistID
 	}
 
-	targetDir := filepath.Join(m.cfg.DataDir, "media", "playlists", safeFolderName(playlistTitle))
+	targetDir, err := m.cfg.Storage.WritePath("media/playlists/" + safeFolderName(playlistTitle))
+	if err != nil {
+		return TempDownloadResult{Message: fmt.Sprintf("Storage path: %v", err)}
+	}
 	_ = os.MkdirAll(targetDir, 0755)
 
 	playlistChannelID := "playlist_" + playlistID
@@ -269,43 +279,56 @@ func (m *Manager) downloadPlaylist(ctx context.Context, rawURL, playlistID strin
 		}
 
 		videoURL := fmt.Sprintf("https://www.youtube.com/watch?v=%s", videoID)
+		attemptID, attemptErr := newDownloadAttemptID(targetDir, videoID)
+		if attemptErr != nil {
+			log.Printf("[temp] playlist item %s attempt allocation failed: %v", videoID, attemptErr)
+			failed++
+			continue
+		}
 		opts := download.Opts{
 			OutputDir:          targetDir,
-			ID:                 videoID,
+			ID:                 attemptID,
 			Cookies:            authOpts.Cookies,
 			CookiesFromBrowser: authOpts.CookiesFromBrowser,
 		}
-		paths, dlErr := m.downloader.YtDlp.Download(ctx, videoURL, opts)
-		if dlErr != nil || len(paths) == 0 {
+		completed, dlErr := m.downloader.YtDlp.DownloadCompleted(ctx, videoURL, opts)
+		if dlErr != nil || len(completed.MediaPaths) == 0 {
+			(completedVideoFiles{}).removeFailedAttempt(completed)
 			log.Printf("[temp] playlist item %s failed: %v", videoID, dlErr)
 			failed++
 			continue
 		}
 
-		filePath := paths[0]
-		relPath := toRelPath(m.cfg.DataDir, filePath)
-		thumbPath := findSiblingThumbnail(filePath, videoID)
-		relThumb := ""
-		if thumbPath != "" {
-			relThumb = toRelPath(m.cfg.DataDir, thumbPath)
+		files, prepareErr := m.prepareCompletedVideoFiles(ctx, "youtube", attemptID, completed)
+		if prepareErr != nil {
+			files.removeFailedAttempt(completed)
+			log.Printf("[temp] playlist item %s output preparation failed: %v", videoID, prepareErr)
+			failed++
+			continue
 		}
-		metadata := loadInfoJSON(filePath, videoID)
+		metadata := loadInfoJSONFile(completed.InfoJSONPath)
 		publishedAt := extractPublishedAt(metadata)
 		description, _ := metadata["description"].(string)
 		duration := 0
 		if d, ok := metadata["duration"].(float64); ok {
 			duration = int(d)
 		}
-		fileSize := int64(0)
-		if fi, err := os.Stat(filePath); err == nil {
-			fileSize = fi.Size()
-		}
 		metaJSON := ""
 		if b, err := json.Marshal(metadata); err == nil {
 			metaJSON = string(b)
 		}
-		_ = m.db.InsertVideo(videoID, playlistChannelID, entryTitle, description,
-			duration, relThumb, relPath, fileSize, publishedAt, metaJSON, "", 0, false)
+		if err := m.db.StoreCompletedVideo(db.CompletedVideo{
+			VideoID: videoID, ChannelID: playlistChannelID, OwnerKind: "youtube_video", Title: entryTitle, Description: description,
+			Duration: duration, PublishedAtMs: publishedAt, MetadataJSON: metaJSON,
+			Assets: files.assets,
+		}); err != nil {
+			files.removeFailedAttempt(completed)
+			log.Printf("[temp] playlist item %s DB insert failed: %v", videoID, err)
+			failed++
+			continue
+		}
+		files.removeTransientFiles()
+		m.enqueueCompletedVideoPreview(videoID, "youtube", files.primaryPath, float64(duration))
 		downloaded++
 	}
 

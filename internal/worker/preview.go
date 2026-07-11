@@ -10,7 +10,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"time"
+
+	"github.com/screwys/igloo/internal/db"
 )
 
 const (
@@ -21,9 +22,11 @@ const (
 
 // PreviewRequest is a request to generate a sprite sheet preview for a video.
 type PreviewRequest struct {
-	VideoID  string
-	FilePath string  // absolute path to the video file
-	Duration float64 // seconds
+	VideoID     string
+	OwnerKind   string  // exact canonical video owner kind
+	FilePath    string  // absolute path to the canonical video stream
+	InputSHA256 string  // canonical stream fingerprint this preview derives from
+	Duration    float64 // seconds
 }
 
 type PreviewTrack struct {
@@ -62,7 +65,7 @@ func (m *Manager) runPreviewWorker(ctx context.Context) {
 // EnqueuePreview sends a non-blocking preview request.
 // If the channel is full the request is dropped and a warning is logged.
 func (m *Manager) EnqueuePreview(req PreviewRequest) {
-	if req.Duration <= 0 || !previewPathLooksVideo(req.FilePath) {
+	if req.Duration <= 0 || req.OwnerKind == "" || req.InputSHA256 == "" || !previewPathLooksVideo(req.FilePath) {
 		log.Printf("[preview] skipping preview for non-video media %s", req.VideoID)
 		return
 	}
@@ -73,27 +76,18 @@ func (m *Manager) EnqueuePreview(req PreviewRequest) {
 	}
 }
 
-// generatePreview produces sprite.jpg + track.json for a video.
-// Output goes to {DataDir}/thumbnails/previews/{videoID}/.
-// If the output files already exist the call is a no-op.
+// generatePreview publishes an immutable sprite/track pair derived from one
+// exact canonical stream fingerprint.
 func (m *Manager) generatePreview(ctx context.Context, req PreviewRequest) error {
-	if req.Duration <= 0 || !previewPathLooksVideo(req.FilePath) {
+	if req.Duration <= 0 || req.OwnerKind == "" || req.InputSHA256 == "" || !previewPathLooksVideo(req.FilePath) {
 		return nil
 	}
-	outDir := filepath.Join(m.cfg.DataDir, "thumbnails", "previews", req.VideoID)
-
-	spriteDst := filepath.Join(outDir, "sprite.jpg")
-	jsonDst := filepath.Join(outDir, "track.json")
-
-	// Skip if already done.
-	if fileExists(spriteDst) && fileExists(jsonDst) {
-		return m.maintainPreviewAssets(req.VideoID)
+	ready, current, err := m.previewState(req)
+	if err != nil {
+		return err
 	}
-	if fileExists(spriteDst) {
-		if err := ensurePreviewTrackJSON(outDir, req); err != nil {
-			return err
-		}
-		return m.maintainPreviewAssets(req.VideoID)
+	if !current || ready {
+		return nil
 	}
 
 	frameCount := previewFrameCount(req.Duration)
@@ -112,9 +106,16 @@ func (m *Manager) generatePreview(ctx context.Context, req PreviewRequest) error
 	timestamps := previewTimestamps(req.Duration, frameCount)
 
 	// Create temp directory on the same filesystem as the output to allow os.Rename.
-	tmpParent := filepath.Join(m.cfg.DataDir, "tmp")
+	tmpParent, err := m.cfg.Storage.WritePath("tmp")
+	if err != nil {
+		return err
+	}
 	_ = os.MkdirAll(tmpParent, 0o755)
-	tmpDir, err := os.MkdirTemp(tmpParent, "preview_"+req.VideoID+"_")
+	safeVideoID, err := safeVideoFileName(req.VideoID)
+	if err != nil {
+		return err
+	}
+	tmpDir, err := os.MkdirTemp(tmpParent, "preview_"+safeVideoID+"_")
 	if err != nil {
 		return fmt.Errorf("mktemp: %w", err)
 	}
@@ -164,9 +165,29 @@ func (m *Manager) generatePreview(ctx context.Context, req PreviewRequest) error
 		return fmt.Errorf("ffmpeg tile stitch: %w\n%s", err, out)
 	}
 
-	if err := os.MkdirAll(outDir, 0o755); err != nil {
-		return fmt.Errorf("mkdir %s: %w", outDir, err)
+	previewRoot, err := m.cfg.Storage.WritePath("thumbnails/previews")
+	if err != nil {
+		return err
 	}
+	if err := os.MkdirAll(previewRoot, 0o755); err != nil {
+		return err
+	}
+	shaPrefix := req.InputSHA256
+	if len(shaPrefix) > 12 {
+		shaPrefix = shaPrefix[:12]
+	}
+	outDir, err := os.MkdirTemp(previewRoot, safeVideoID+"-"+shaPrefix+"-")
+	if err != nil {
+		return err
+	}
+	published := false
+	defer func() {
+		if !published {
+			_ = os.RemoveAll(outDir)
+		}
+	}()
+	spriteDst := filepath.Join(outDir, "sprite.jpg")
+	jsonDst := filepath.Join(outDir, "track.json")
 	if err := os.Rename(tmpSprite, spriteDst); err != nil {
 		return fmt.Errorf("rename sprite: %w", err)
 	}
@@ -174,55 +195,62 @@ func (m *Manager) generatePreview(ctx context.Context, req PreviewRequest) error
 		return fmt.Errorf("write preview track json: %w", err)
 	}
 
-	log.Printf("[preview] generated preview for %s (%d frames, %dx%d tile)", req.VideoID, frameCount, previewTileColumns, rows)
-	return m.maintainPreviewAssets(req.VideoID)
-}
-
-func (m *Manager) maintainPreviewAssets(videoID string) error {
-	if m == nil || m.db == nil {
-		return nil
-	}
-	return m.db.MaintainVideoAssets(videoID, time.Now().UnixMilli())
-}
-
-// backfillPreviews runs once at startup and enqueues any downloaded videos
-// that are missing sprite previews on disk. This recovers from lost in-memory
-// preview requests caused by server restarts.
-func (m *Manager) backfillPreviews(ctx context.Context) {
-	candidates, err := m.db.GetPreviewCandidates()
+	trackKey, err := m.cfg.Storage.Key(jsonDst)
 	if err != nil {
-		log.Printf("[preview] backfill query: %v", err)
-		return
+		return err
 	}
+	spriteKey, err := m.cfg.Storage.Key(spriteDst)
+	if err != nil {
+		return err
+	}
+	if err := m.db.StoreVideoPreviewAssets(req.VideoID, req.InputSHA256, trackKey, spriteKey, 0); err != nil {
+		return err
+	}
+	published = true
+	log.Printf("[preview] generated preview for %s (%d frames, %dx%d tile)", req.VideoID, frameCount, previewTileColumns, rows)
+	return nil
+}
 
-	previewDir := filepath.Join(m.cfg.DataDir, "thumbnails", "previews")
-	var queued int
-	for _, c := range candidates {
-		if !previewPathLooksVideo(c.FilePath) {
-			continue
-		}
-		sprite := filepath.Join(previewDir, c.VideoID, "sprite.jpg")
-		track := filepath.Join(previewDir, c.VideoID, "track.json")
-		if fileExists(sprite) && fileExists(track) {
-			continue
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case m.previewChan <- PreviewRequest{
-			VideoID:  c.VideoID,
-			FilePath: c.FilePath,
-			Duration: float64(c.Duration),
-		}:
-			queued++
-		default:
-			log.Printf("[preview] backfill: channel full after %d enqueued, stopping", queued)
-			return
+func (m *Manager) previewState(req PreviewRequest) (ready, current bool, err error) {
+	assets, err := m.db.ListReadyAssetsForOwners(
+		[]db.AssetOwnerRef{{OwnerKind: req.OwnerKind, OwnerID: req.VideoID}},
+		[]string{"video_stream", "preview_track_json", "preview_sprite"},
+	)
+	if err != nil {
+		return false, false, err
+	}
+	streamKey, err := m.cfg.Storage.Key(req.FilePath)
+	if err != nil {
+		return false, false, err
+	}
+	previewSource := "sha256:" + req.InputSHA256
+	trackReady, spriteReady := false, false
+	for _, asset := range assets {
+		switch asset.AssetKind {
+		case "video_stream":
+			if asset.MediaIndex == 0 && asset.FilePath == streamKey && asset.SHA256 == req.InputSHA256 {
+				current = true
+			}
+		case "preview_track_json":
+			trackReady = asset.MediaIndex == 0 && asset.SourceURL == previewSource && m.canonicalAssetFileReady(asset)
+		case "preview_sprite":
+			spriteReady = asset.MediaIndex == 0 && asset.SourceURL == previewSource && m.canonicalAssetFileReady(asset)
 		}
 	}
-	if queued > 0 {
-		log.Printf("[preview] backfill: enqueued %d videos missing previews", queued)
+	return trackReady && spriteReady, current, nil
+}
+
+func (m *Manager) canonicalAssetFileReady(asset db.Asset) bool {
+	path, err := m.cfg.Storage.Path(asset.FilePath)
+	if err != nil {
+		return false
 	}
+	info, err := os.Stat(path)
+	if err != nil || !info.Mode().IsRegular() {
+		return false
+	}
+	return (asset.SizeBytes == 0 || asset.SizeBytes == info.Size()) &&
+		(asset.FileMtimeNs == 0 || asset.FileMtimeNs == info.ModTime().UnixNano())
 }
 
 func previewPathLooksVideo(path string) bool {
@@ -232,43 +260,6 @@ func previewPathLooksVideo(path string) bool {
 	default:
 		return false
 	}
-}
-
-// fileExists reports whether path exists and is a regular file.
-func fileExists(path string) bool {
-	fi, err := os.Stat(path)
-	return err == nil && fi.Mode().IsRegular()
-}
-
-func EnsurePreviewTrackJSON(outDir string, req PreviewRequest) error {
-	return ensurePreviewTrackJSON(outDir, req)
-}
-
-func ensurePreviewTrackJSON(outDir string, req PreviewRequest) error {
-	trackDst := filepath.Join(outDir, "track.json")
-	if fileExists(trackDst) {
-		return nil
-	}
-	frameCount := previewFrameCount(req.Duration)
-	interval := int(math.Ceil(req.Duration / float64(frameCount)))
-	raw, err := buildPreviewTrackJSON(
-		req.Duration,
-		frameCount,
-		interval,
-		previewTileColumns,
-		previewTileWidth,
-		previewTileHeight,
-	)
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(outDir, 0o755); err != nil {
-		return fmt.Errorf("mkdir %s: %w", outDir, err)
-	}
-	if err := os.WriteFile(trackDst, raw, 0o644); err != nil {
-		return fmt.Errorf("write preview track json: %w", err)
-	}
-	return nil
 }
 
 // previewFrameCount returns the number of frames to extract for the given duration.

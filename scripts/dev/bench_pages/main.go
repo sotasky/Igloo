@@ -63,12 +63,12 @@ func main() {
 	username := "admin"
 
 	t = time.Now()
-	items, _ := d.ListFeedItemsPage(10000, nil, username)
+	items, _ := d.ListFeedItemsPage(10000, nil, username != "")
 	dur := time.Since(t)
 	fmt.Printf("  ListFeedItemsPage(10000):    %6dms  (%d items)\n", dur.Milliseconds(), len(items))
 
 	t = time.Now()
-	items = feed.EnrichFeedItems(d, items, username)
+	items = feed.EnrichFeedItems(d, items)
 	dur = time.Since(t)
 	fmt.Printf("  EnrichFeedItems:             %6dms  (%d items)\n", dur.Milliseconds(), len(items))
 
@@ -79,7 +79,7 @@ func main() {
 
 	// Fast ranked query (new path)
 	t = time.Now()
-	ranked, _ := d.ListRankedFeedItems("admin", 41, 0)
+	ranked, _ := d.ListRankedFeedItems(41, 0)
 	dur = time.Since(t)
 	fmt.Printf("  ListRankedFeedItems(41):     %6dms  (%d items)  << NEW\n", dur.Milliseconds(), len(ranked))
 
@@ -147,7 +147,7 @@ func main() {
 	// --- Bookmarks page ---
 	fmt.Println("-- Bookmarks Page --")
 
-	bOpts := db.GetBookmarksOpts{UserID: "admin", Limit: 10000}
+	bOpts := db.GetBookmarksOpts{Limit: 10000}
 	t = time.Now()
 	bCount, _ := d.GetBookmarkCount(bOpts)
 	fmt.Printf("  GetBookmarkCount:            %6dms  (%d bookmarks)\n", time.Since(t).Milliseconds(), bCount)
@@ -156,13 +156,13 @@ func main() {
 	bmarks, _ := d.GetBookmarks(bOpts)
 	fmt.Printf("  GetBookmarks:                %6dms  (%d rows)\n", time.Since(t).Milliseconds(), len(bmarks))
 
-	bPageOpts := db.GetBookmarksOpts{UserID: username, Limit: webPageSize}
+	bPageOpts := db.GetBookmarksOpts{Limit: webPageSize}
 	t = time.Now()
 	bmarksPage, _ := d.GetBookmarks(bPageOpts)
 	fmt.Printf("  GetBookmarks(page):          %6dms  (%d rows)\n", time.Since(t).Milliseconds(), len(bmarksPage))
 
-	cats, _ := d.GetBookmarkCategories(username)
-	labelCounts, _ := d.GetBookmarkLabelCounts(username)
+	cats, _ := d.GetBookmarkCategories()
+	labelCounts, _ := d.GetBookmarkLabelCounts()
 	t = time.Now()
 	var bookmarksHTML bytes.Buffer
 	_ = components.BookmarksPage(

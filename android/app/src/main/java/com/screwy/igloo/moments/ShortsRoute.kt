@@ -15,13 +15,11 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavController
 import com.screwy.igloo.data.PreferencesRepo
-import com.screwy.igloo.media.MediaUri
 import com.screwy.igloo.ui.UiStateSwitch
 import com.screwy.igloo.ui.component.BookmarkSheet
 import com.screwy.igloo.ui.component.MomentsPlayer
 import com.screwy.igloo.ui.component.sharePlainText
 import com.screwy.igloo.ui.nav.IglooNavigationSource
-import com.screwy.igloo.ui.nav.consumeFullscreenMediaTransitionFromPrevious
 import com.screwy.igloo.ui.nav.rememberIglooNavigator
 import kotlinx.coroutines.launch
 import org.koin.androidx.compose.koinViewModel
@@ -55,9 +53,6 @@ fun ShortsRoute(
     val useEmbedFriendlyShareLinks by prefs.shareEmbedFriendlyLinks()
         .collectAsStateWithLifecycle(initialValue = PreferencesRepo.Defaults.SHARE_EMBED_FRIENDLY_LINKS)
     var showStoryTray by remember { mutableStateOf(false) }
-    val transition = remember(navController, playlistType, playlistId, videoId) {
-        navController.consumeFullscreenMediaTransitionFromPrevious()
-    }
     val navigator = rememberIglooNavigator(navController)
     val context = LocalContext.current
     val activeMomentsTab = when (spec.type) {
@@ -76,7 +71,6 @@ fun ShortsRoute(
             MomentsPlayer(
                 items = items,
                 startIndex = startIndex,
-                startPositionMs = 0L,
                 autoSwipeDefault = autoplayEnabled,
                 muteDefault = muted,
                 onAutoSwipeChanged = vm::setAutoplayEnabled,
@@ -111,7 +105,6 @@ fun ShortsRoute(
                         navController.popBackStack()
                     }
                 },
-                cursorTracking = false,
                 forceAutoSwipe = storyPlaybackMode,
                 exitOnEnd = storyPlaybackMode,
                 storyCrossProfileAdvance = spec.type == ShortsPlaylistType.StoryTray,
@@ -137,8 +130,6 @@ fun ShortsRoute(
                         }
                     }
                 },
-                initialTransitionPosterVideoId = transition?.mediaId,
-                initialTransitionPosterUri = transition?.posterUri ?: MediaUri.Missing,
                 modifier = Modifier.fillMaxSize(),
             )
         }

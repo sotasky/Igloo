@@ -112,12 +112,12 @@ internal fun CommentRow(
         val avatarSize = if (normalizedDepth > 0) 28.dp else 32.dp
         val authorChannelId = youtubeCommentAuthorChannelId(comment.authorId)
         if (authorChannelId != null) {
-            Avatar(
-                channelId = authorChannelId,
-                size = avatarSize,
-                showPendingBadge = false,
-                remoteFallbackUrl = comment.authorThumbnail,
-            )
+			Avatar(
+				channelId = authorChannelId,
+				size = avatarSize,
+				showPendingBadge = false,
+				assetOwnerKind = "comment_author",
+			)
         } else {
             CommentAvatarFallback(
                 name = comment.authorName,

@@ -4,11 +4,11 @@ import com.screwy.igloo.data.IglooDatabase
 import com.screwy.igloo.data.entity.AndroidSyncAssetEntity
 import com.screwy.igloo.data.entity.FeedItemEntity
 import com.screwy.igloo.data.entity.FeedRow
-import com.screwy.igloo.data.entity.MediaInventoryEntity
 import com.screwy.igloo.media.MediaUri
+import com.screwy.igloo.net.androidSyncAssetPath
 import com.screwy.igloo.ui.component.MediaItem
 import com.screwy.igloo.ui.component.MediaSet
-import java.io.File
+import kotlinx.coroutines.flow.first
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -36,17 +36,7 @@ internal data class FeedMediaDescriptor(
     }
 }
 
-/**
- * Flattened per-cell descriptor used by the feed card's inline grid — drops the
- * parser's type-specific branching so the grid only has to ask "what URL do I
- * paint, and is it a video cell?". For video/gif descriptors the `url` field is
- * an mp4 stream that Coil cannot decode, so [displayUrl] always prefers
- * `thumbnail_url` and falls back to `url` only for photos.
- */
 data class FeedMediaCellDescriptor(
-    val displayUrl: String,
-    val streamUrl: String,
-    val posterUrl: String,
     val isVideo: Boolean,
     val aspectRatio: Float,
     val aspectRatioKnown: Boolean = true,
@@ -62,18 +52,8 @@ internal fun describeFeedMediaCells(rawJson: String?): List<FeedMediaCellDescrip
     parseFeedMediaDescriptors(rawJson).map { descriptor ->
         val type = descriptor.type.lowercase()
         val isVideo = type == "video" || type == "gif" || type == "animated_gif"
-        val thumb = descriptor.thumbnailUrl?.takeIf { it.isNotBlank() }
         val aspectRatio = descriptor.aspectRatioOrNull()
-        val streamUrl = if (isVideo) descriptor.url?.takeIf { it.isNotBlank() }.orEmpty() else ""
-        val display = when {
-            thumb != null -> thumb
-            isVideo -> ""
-            else -> descriptor.url?.takeIf { it.isNotBlank() }.orEmpty()
-        }
         FeedMediaCellDescriptor(
-            displayUrl = display,
-            streamUrl = streamUrl,
-            posterUrl = thumb.orEmpty(),
             isVideo = isVideo,
             aspectRatio = aspectRatio ?: FeedUnknownMediaAspectRatio,
             aspectRatioKnown = aspectRatio != null,
@@ -84,25 +64,28 @@ internal const val FeedUnknownMediaAspectRatio: Float = 1f
 
 internal fun buildFeedMediaSet(
     row: FeedRow,
-    inventoryRows: List<MediaInventoryEntity>,
+    assetRows: List<AndroidSyncAssetEntity>,
     baseUrl: String,
+    allowRemote: Boolean = true,
 ): MediaSet? {
     val parentItems = buildOwnerItems(
         ownerId = row.item.tweetId,
         rawJson = row.item.mediaJson,
-        inventoryRows = inventoryRows.filter { it.ownerId == row.item.tweetId && it.assetKind == "post_media" },
+        assetRows = assetRows.filter { it.ownerId == row.item.tweetId },
         baseUrl = baseUrl,
+        allowRemote = allowRemote,
     )
     val quoteItems = buildOwnerItems(
         ownerId = row.item.quoteTweetId,
         rawJson = row.item.quoteMediaJson,
-        inventoryRows = inventoryRows.filter { it.ownerId == row.item.quoteTweetId && it.assetKind == "post_media" },
+        assetRows = assetRows.filter { it.ownerId == row.item.quoteTweetId },
         baseUrl = baseUrl,
+        allowRemote = allowRemote,
     )
     val items = parentItems + quoteItems
     if (items.isEmpty()) return null
 
-    val displayName = row.item.authorDisplayName
+    val displayName = row.authorDisplayName
         ?.trim()
         ?.takeIf { it.isNotBlank() }
         ?: row.channelName?.trim()?.takeIf { it.isNotBlank() }
@@ -111,7 +94,7 @@ internal fun buildFeedMediaSet(
         items = items,
         parentMediaCount = parentItems.size,
         parentIsTextOnly = parentItems.isEmpty(),
-        authorHandle = row.item.authorHandle,
+        authorHandle = row.authorHandle.orEmpty(),
         authorDisplayName = displayName,
         authorChannelId = row.item.channelId.orEmpty(),
         bodyText = row.item.bodyText.orEmpty(),
@@ -121,29 +104,37 @@ internal fun buildFeedMediaSet(
     )
 }
 
-internal suspend fun loadFeedMediaInventoryRows(
+internal suspend fun loadFeedMediaAssetRows(
     db: IglooDatabase,
     row: FeedRow,
-): List<MediaInventoryEntity> = buildList {
-    addAll(db.mediaInventoryDao().forOwner(row.item.tweetId))
+): List<AndroidSyncAssetEntity> = buildList {
+    addAll(
+        db.androidSyncDao().assetsForOwnerFlow("tweet", row.item.tweetId)
+            .first()
+            .filter { it.assetKind == "post_media" || it.assetKind == "post_thumbnail" },
+    )
     val quoteId = row.item.quoteTweetId
     if (!quoteId.isNullOrBlank()) {
-        addAll(db.mediaInventoryDao().forOwner(quoteId))
+        addAll(
+            db.androidSyncDao().assetsForOwnerFlow("tweet", quoteId)
+                .first()
+                .filter { it.assetKind == "post_media" || it.assetKind == "post_thumbnail" },
+        )
     }
 }
 
-internal fun buildFeedPreviewItems(
+internal fun buildFeedPreviewItemsByIndex(
     ownerId: String?,
     rawJson: String?,
-    inventoryRows: List<MediaInventoryEntity>,
+    assetRows: List<AndroidSyncAssetEntity>,
     baseUrl: String,
-    syncAssetRows: List<AndroidSyncAssetEntity> = emptyList(),
-): List<MediaItem> = buildOwnerItems(
+    allowRemote: Boolean = true,
+): Map<Int, MediaItem> = buildOwnerItemsByIndex(
     ownerId = ownerId,
     rawJson = rawJson,
-    inventoryRows = inventoryRows,
+    assetRows = assetRows,
     baseUrl = baseUrl,
-    syncAssetRows = syncAssetRows,
+    allowRemote = allowRemote,
 )
 
 internal fun canonicalTweetUrl(item: FeedItemEntity): String =
@@ -169,60 +160,74 @@ internal fun countFeedMediaItems(rawJson: String?): Int =
 private fun buildOwnerItems(
     ownerId: String?,
     rawJson: String?,
-    inventoryRows: List<MediaInventoryEntity>,
+    assetRows: List<AndroidSyncAssetEntity>,
     baseUrl: String,
-    syncAssetRows: List<AndroidSyncAssetEntity> = emptyList(),
-): List<MediaItem> {
-    if (ownerId.isNullOrBlank()) return emptyList()
+    allowRemote: Boolean,
+): List<MediaItem> = buildOwnerItemsByIndex(
+    ownerId = ownerId,
+    rawJson = rawJson,
+    assetRows = assetRows,
+    baseUrl = baseUrl,
+    allowRemote = allowRemote,
+).values.toList()
+
+private fun buildOwnerItemsByIndex(
+    ownerId: String?,
+    rawJson: String?,
+    assetRows: List<AndroidSyncAssetEntity>,
+    baseUrl: String,
+    allowRemote: Boolean,
+): Map<Int, MediaItem> {
+    if (ownerId.isNullOrBlank()) return emptyMap()
     val descriptors = parseFeedMediaDescriptors(rawJson)
-    val rowsByIndex = inventoryRows.sortedBy(::assetIndex)
-    val syncRowsByIndex = latestSyncRowsByIndex(syncAssetRows)
+    val rowsByIndex = latestSyncRowsByIndex(assetRows, "post_media")
+    val thumbnailRow = latestSyncRowsByIndex(assetRows, "post_thumbnail")[0]
     val count = if (descriptors.isNotEmpty()) {
         descriptors.size
     } else {
         maxOf(
-            rowsByIndex.size,
-            (syncRowsByIndex.keys.maxOrNull() ?: -1) + 1,
+            (rowsByIndex.keys.maxOrNull() ?: -1) + 1,
         )
     }
-    if (count == 0) return emptyList()
+    if (count == 0) return emptyMap()
 
-    return buildList(count) {
+    return buildMap(count) {
         for (index in 0 until count) {
             val descriptor = descriptors.getOrNull(index)
-            val row = rowsByIndex.getOrNull(index)
-            val syncRow = syncRowsByIndex[index]
-            val item = buildMediaItem(descriptor, row, syncRow, baseUrl)
-            if (item != null) add(item)
+            val row = rowsByIndex[index]
+            val item = buildMediaItem(descriptor, row, thumbnailRow, baseUrl, allowRemote)
+            if (item != null) put(index, item)
         }
     }
 }
 
 private fun buildMediaItem(
     descriptor: FeedMediaDescriptor?,
-    row: MediaInventoryEntity?,
-    syncRow: AndroidSyncAssetEntity?,
+    row: AndroidSyncAssetEntity?,
+    thumbnailRow: AndroidSyncAssetEntity?,
     baseUrl: String,
+    allowRemote: Boolean,
 ): MediaItem? {
-    val type = descriptor?.type.orEmpty()
+    if (row == null) return null
     val aspectRatio = descriptor?.aspectRatio() ?: 1f
-    val mediaUri = syncRow.toMediaUri(baseUrl) ?: row.toMediaUri(baseUrl) ?: descriptor?.remoteUri()
-    if (mediaUri == null) return null
+    val mediaUri = row.toMediaUri(baseUrl, allowRemote) ?: return null
+    val contentType = row.contentType?.trim()?.lowercase().orEmpty()
 
-    return when (type.lowercase()) {
-        "video" -> MediaItem.Video(
+    return when {
+        contentType.startsWith("video/") -> MediaItem.Video(
             streamUri = mediaUri,
-            thumbnailUri = descriptor?.thumbnailUrl?.let(MediaUri::Remote) ?: MediaUri.Missing,
+            thumbnailUri = thumbnailRow.toMediaUri(baseUrl, allowRemote) ?: MediaUri.Missing,
             aspectRatio = aspectRatio,
         )
-        "gif", "animated_gif" -> MediaItem.Gif(
+        contentType == "image/gif" -> MediaItem.Gif(
             streamUri = mediaUri,
             aspectRatio = aspectRatio,
         )
-        else -> MediaItem.Image(
+        contentType.startsWith("image/") -> MediaItem.Image(
             uri = mediaUri,
             aspectRatio = aspectRatio,
         )
+        else -> null
     }
 }
 
@@ -261,36 +266,29 @@ private fun JsonObject.string(key: String): String? =
 private fun JsonObject.int(key: String): Int? =
     get(key)?.jsonPrimitive?.intOrNull
 
-private fun FeedMediaDescriptor.remoteUri(): MediaUri? =
-    url?.takeIf { it.isNotBlank() }?.let(MediaUri::Remote)
-
-private fun MediaInventoryEntity?.toMediaUri(baseUrl: String): MediaUri? {
+private fun AndroidSyncAssetEntity?.toMediaUri(baseUrl: String, allowRemote: Boolean): MediaUri? {
     if (this == null) return null
-    if (state == "cached" && !localPath.isNullOrEmpty()) {
-        val file = File(localPath)
-        if (file.exists()) return MediaUri.Local(file)
+    if (!localPath.isNullOrEmpty()) {
+        return MediaUri.Local(java.io.File(localPath))
     }
-    return MediaUri.Remote(baseUrl + serverUrl)
+    if (state == "server_missing" || !allowRemote) return null
+    val root = baseUrl.trim().trimEnd('/')
+    if (root.isBlank()) return null
+    return MediaUri.Remote(root + androidSyncAssetPath(assetId, revision))
 }
 
-private fun AndroidSyncAssetEntity?.toMediaUri(@Suppress("UNUSED_PARAMETER") baseUrl: String): MediaUri? {
-    if (this == null) return null
-    if (state == "verified" && !localPath.isNullOrEmpty()) {
-        val file = File(localPath)
-        if (file.exists()) return MediaUri.Local(file)
-    }
-    return null
-}
-
-private fun latestSyncRowsByIndex(rows: List<AndroidSyncAssetEntity>): Map<Int, AndroidSyncAssetEntity> {
+private fun latestSyncRowsByIndex(
+    rows: List<AndroidSyncAssetEntity>,
+    assetKind: String,
+): Map<Int, AndroidSyncAssetEntity> {
     if (rows.isEmpty()) return emptyMap()
     val result = LinkedHashMap<Int, AndroidSyncAssetEntity>()
     rows.asSequence()
-        .filter { it.assetKind == "post_media" }
+        .filter { it.assetKind == assetKind }
         .sortedWith(
             compareByDescending<AndroidSyncAssetEntity> { it.verifiedAtMs ?: 0L }
-                .thenByDescending { it.generationId }
-                .thenBy { it.seq },
+                .thenByDescending { it.revision }
+                .thenBy { it.assetId },
         )
         .forEach { row -> result.putIfAbsent(assetIndex(row), row) }
     return result
@@ -311,11 +309,6 @@ private fun aspectRatioFromUrl(rawUrl: String?): Float? {
     val width = match.groupValues.getOrNull(1)?.toIntOrNull() ?: return null
     val height = match.groupValues.getOrNull(2)?.toIntOrNull() ?: return null
     return aspectRatio(width, height)
-}
-
-private fun assetIndex(row: MediaInventoryEntity): Int {
-    val suffix = row.assetId.substringAfterLast('_', missingDelimiterValue = "")
-    return suffix.toIntOrNull() ?: 0
 }
 
 private fun assetIndex(row: AndroidSyncAssetEntity): Int = row.mediaIndex

@@ -12,19 +12,13 @@ import (
 const xDemoSourceID = "x_demo_scweet"
 
 func (s *Server) handlePageXDemo(w http.ResponseWriter, r *http.Request) {
-	user := userFromContext(r.Context())
-	username := ""
-	if user != nil {
-		username = user.Username
-	}
-
 	items, err := s.db.ListFeedItemsBySourceID(xDemoSourceID, 1000)
 	if err != nil {
 		slog.Error("ListFeedItemsBySourceID", "source", xDemoSourceID, "err", err)
 		http.Error(w, "Failed to load X demo feed", http.StatusInternalServerError)
 		return
 	}
-	items = feed.EnrichFeedItems(s.db, items, username)
+	items = feed.EnrichFeedItems(s.db, items)
 	items = feed.SortFeedItemsChronological(items)
 
 	p := s.pageProps(w, r)

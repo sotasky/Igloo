@@ -3,7 +3,7 @@ package com.screwy.igloo.media
 import android.content.Context
 import com.screwy.igloo.net.Reachability
 import com.screwy.igloo.net.ServerBaseUrlProvider
-import com.screwy.igloo.sync.AndroidSyncMirror
+import com.screwy.igloo.sync.SyncCoordinator
 import kotlinx.coroutines.flow.map
 import org.koin.android.ext.koin.androidContext
 import org.koin.core.qualifier.named
@@ -32,24 +32,19 @@ val iglooMediaModule = module {
 
     single {
         MediaResolversImpl(
-            dao = get(),
             syncDao = get(),
-            channelProfileDao = get(),
-            videoDao = get(),
             baseUrlProvider = get<ServerBaseUrlProvider>()::baseUrl,
             prefs = get(),
             remoteFallbackAllowed = get<Reachability>().state.map { it is Reachability.State.Online },
-            logger = get(),
         )
     } bind MediaResolvers::class
 
     single {
         CacheOps(
-            dao = get(),
             syncDao = get(),
             mediaRoot = get(named("mediaRoot")),
             logger = get(),
-            syncTrigger = get<AndroidSyncMirror>()::trigger,
+            syncTrigger = get<SyncCoordinator>()::trigger,
         )
     } bind CacheActions::class
 }

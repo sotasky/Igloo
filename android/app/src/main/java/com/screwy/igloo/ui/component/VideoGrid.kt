@@ -58,7 +58,6 @@ fun VideoGrid(
     items: List<VideoGridItem>,
     columns: Int = 2,
     onVideoClick: (videoId: String) -> Unit,
-    onVideoClickWithPoster: (videoId: String, posterUri: MediaUri) -> Unit = { videoId, _ -> onVideoClick(videoId) },
     onChannelClick: (channelId: String) -> Unit,
     headerContent: (@Composable () -> Unit)? = null,
     showScrollFabs: Boolean = false,
@@ -127,7 +126,7 @@ fun VideoGrid(
                     item = items[index],
                     resolvers = resolvers,
                     dearrowMode = dearrowMode,
-                    onVideoClick = { posterUri -> onVideoClickWithPoster(items[index].video.videoId, posterUri) },
+                    onVideoClick = { onVideoClick(items[index].video.videoId) },
                     onChannelClick = { onChannelClick(items[index].video.channelId) },
                     channelLabel = videoGridChannelLabel(items[index]),
                 )
@@ -185,7 +184,7 @@ private fun VideoCell(
     item: VideoGridItem,
     resolvers: MediaResolvers,
     dearrowMode: String = "off",
-    onVideoClick: (posterUri: MediaUri) -> Unit,
+    onVideoClick: () -> Unit,
     onChannelClick: () -> Unit,
     channelLabel: String,
 ) {
@@ -212,8 +211,6 @@ private fun VideoCell(
                 video.title,
                 video.dearrowTitle,
                 video.dearrowTitleCasual,
-                video.displayTitle,
-                video.displayTitleCasual,
             )
                 .ifEmpty { stringResource(R.string.common_untitled) },
             style = MaterialTheme.typography.bodyMedium,
@@ -223,7 +220,7 @@ private fun VideoCell(
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier
                 .fillMaxWidth()
-                .clickable { onVideoClick(MediaUri.Missing) },
+                .clickable(onClick = onVideoClick),
         )
 
         ChannelAndTimeRow(
@@ -275,7 +272,7 @@ private fun ChannelAndTimeRow(
 }
 
 internal fun videoDurationBadgeLabel(video: VideoEntity): String =
-    video.durationLabel.trim()
+    video.duration?.takeIf { it > 0L }?.let { formatDuration(it * 1_000L) }.orEmpty()
 
 @Composable
 private fun VideoThumbnail(
@@ -283,7 +280,7 @@ private fun VideoThumbnail(
     resolvers: MediaResolvers,
     durationLabel: String,
     progress: Float,
-    onClick: (posterUri: MediaUri) -> Unit,
+    onClick: () -> Unit,
 ) {
     val colors = MaterialTheme.iglooColors
     val uri by resolvers.thumbnailForPostFlow(videoId, OwnerKind.YouTubeVideo)
@@ -298,7 +295,7 @@ private fun VideoThumbnail(
             .aspectRatio(16f / 9f)
             .clip(RoundedCornerShape(6.dp))
             .background(backgroundColor)
-            .clickable { onClick(uri) }
+            .clickable(onClick = onClick)
             .alpha(mediaAlpha(uri)),
         contentAlignment = Alignment.Center,
     ) {

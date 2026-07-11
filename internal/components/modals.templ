@@ -387,16 +387,6 @@ templ prefsGeneralTab(p PageProps, prefs PrefsData) {
 							{ L(p, "settings_backup_enabled", "Enable automatic backups") }
 						</label>
 					</div>
-					<div class="form-group checkbox-group">
-						<label>
-							if prefs.Bool("backup_include_media") {
-								<input type="checkbox" name="backup_include_media" value="true" checked disabled?={ !prefs.Bool("backup_enabled") } data-backup-controlled/>
-							} else {
-								<input type="checkbox" name="backup_include_media" value="true" disabled?={ !prefs.Bool("backup_enabled") } data-backup-controlled/>
-							}
-							{ L(p, "settings_backup_include_media", "Include bookmarked media in automatic backups") }
-						</label>
-					</div>
 					<div class="form-group">
 						<label for="global-setting-backup-dir">{ L(p, "settings_backup_folder", "Backup Folder") }</label>
 						<input type="text" id="global-setting-backup-dir" name="backup_dir" class="input" placeholder={ L(p, "settings_backup_dir_placeholder", "/path/to/igloo-backups") } value={ prefs.Str("backup_dir", "") } disabled?={ !prefs.Bool("backup_enabled") } data-backup-controlled/>
@@ -404,7 +394,7 @@ templ prefsGeneralTab(p PageProps, prefs PrefsData) {
 					<div class="form-group">
 						<label for="global-setting-backup-keep-count">{ L(p, "settings_backup_keep_count", "Backups to keep") }</label>
 						<input type="number" id="global-setting-backup-keep-count" name="backup_keep_count" class="input" min="1" max="5" value={ prefs.Str("backup_keep_count", "5") } disabled?={ !prefs.Bool("backup_enabled") } data-backup-controlled/>
-						<small style="display:block; margin-top:0.35rem; color:var(--text-secondary); font-size:0.75rem;">{ L(p, "settings_backup_help", "Please use a dedicated folder. Daily backups include the database and non-secret config. Bookmarked media can be included separately. Keep count is limited to 1-5.") }</small>
+						<small style="display:block; margin-top:0.35rem; color:var(--text-secondary); font-size:0.75rem;">{ L(p, "settings_backup_help", "Please use a dedicated folder. Daily backups include the database and non-secret config. Keep count is limited to 1-5.") }</small>
 					</div>
 				</div>
 				<div>
@@ -1093,12 +1083,12 @@ templ ImportConfigModal(p PageProps) {
 					hx-swap="innerHTML"
 					hx-encoding="multipart/form-data"
 				>
-					<input type="file" name="file" id="import-config-file" accept=".json,.opml,.xml,.tar.gz,.tgz,application/gzip,application/json,application/xml,text/xml" style="display:none;"/>
+					<input type="file" name="file" id="import-config-file" accept=".json,.opml,.xml,.zip,application/zip,application/json,application/xml,text/xml" style="display:none;"/>
 					<input type="hidden" name="mode" id="import-config-mode" value="merge"/>
 					<p id="import-config-filename" style="margin:0 0 1rem; color:var(--text-secondary); font-size:0.9em;"></p>
 					<p style="margin:0 0 1rem;">{ L(p, "import_config_mode_prompt", "How should existing data be handled?") }</p>
 					<div style="display:flex; flex-direction:column; gap:0.75rem;">
-						<button class="btn btn-primary" type="submit" style="text-align:left; padding:0.75rem 1rem;"
+						<button id="import-config-merge" class="btn btn-primary" type="submit" style="text-align:left; padding:0.75rem 1rem;"
 							onclick="document.getElementById('import-config-mode').value='merge'"
 						>
 							<strong>{ L(p, "action_merge", "Merge") }</strong><br/>
@@ -1609,7 +1599,7 @@ templ logsAndroidPanel(p PageProps) {
 // AndroidDashboard renders the full Android dashboard content (HTMX fragment).
 templ AndroidDashboard(p PageProps, d AndroidDashboardData) {
 	<!-- Stat strip -->
-	<div class="stat-strip" style="grid-template-columns: repeat(5, 1fr);">
+	<div class="stat-strip" style="grid-template-columns: repeat(3, 1fr);">
 		<div class="glass stat-card">
 			<div class="sc-label">{ L(p, "logs_stat_last_sync", "Last Sync") }</div>
 			<div class="sc-value">
@@ -1622,34 +1612,6 @@ templ AndroidDashboard(p PageProps, d AndroidDashboardData) {
 			<div class="sc-detail">{ d.SyncCompletedHMS }</div>
 		</div>
 		<div class="glass stat-card">
-			<div class="sc-label">{ L(p, "logs_stat_sync_duration", "Sync Duration") }</div>
-			<div class="sc-value">
-				if d.SyncDuration != "" {
-					{ d.SyncDuration }
-				} else {
-					&mdash;
-				}
-			</div>
-			<div class="sc-detail">{ fmt.Sprintf(L(p, "logs_steps_completed", "%d/%d steps completed"), d.StepsCompleted, d.StepsTotal) }</div>
-		</div>
-		<div class="glass stat-card">
-			<div class="sc-label">{ L(p, "logs_android_generation", "Generation") }</div>
-			<div class="sc-value">{ fmt.Sprintf("%d", d.GenerationItems) }</div>
-			<div class="sc-detail">
-				if d.GenerationAssets > 0 {
-					if d.GenerationMissing > 0 {
-						{ fmt.Sprintf(L(p, "logs_android_generation_assets_missing", "%d assets · %d ready · %d missing"), d.GenerationAssets, d.GenerationReady, d.GenerationMissing) }
-					} else {
-						{ fmt.Sprintf(L(p, "logs_android_generation_assets", "%d assets · %d ready"), d.GenerationAssets, d.GenerationReady) }
-					}
-				} else if d.GenerationItems > 0 {
-					{ L(p, "logs_android_generation_items", "content items") }
-				} else {
-					{ L(p, "logs_no_sync_data", "no sync data") }
-				}
-			</div>
-		</div>
-		<div class="glass stat-card">
 			<div class="sc-label">{ L(p, "logs_android_device_assets", "Device assets") }</div>
 			<div class="sc-value">
 				if d.DeviceTotal > 0 {
@@ -1660,9 +1622,7 @@ templ AndroidDashboard(p PageProps, d AndroidDashboardData) {
 			</div>
 			<div class="sc-detail">
 				if d.DeviceTotal > 0 {
-					if d.DeviceFailed > 0 || d.DeviceMissing > 0 {
-						{ fmt.Sprintf(L(p, "logs_android_device_assets_problem_detail", "%d/%d verified · %d pending · %d failed · %d missing"), d.DeviceVerified, d.DeviceTotal, d.DevicePending, d.DeviceFailed, d.DeviceMissing) }
-					} else if d.DeviceBytes != "" {
+					if d.DeviceBytes != "" {
 						{ fmt.Sprintf(L(p, "logs_android_device_assets_bytes_detail", "%d/%d verified · %s"), d.DeviceVerified, d.DeviceTotal, d.DeviceBytes) }
 					} else {
 						{ fmt.Sprintf(L(p, "logs_android_device_assets_detail", "%d/%d verified · %d pending"), d.DeviceVerified, d.DeviceTotal, d.DevicePending) }
@@ -1680,37 +1640,18 @@ templ AndroidDashboard(p PageProps, d AndroidDashboardData) {
 	</div>
 	<!-- 3-column body -->
 	<div class="an-body">
-		<!-- Pipeline + Cache Health -->
+		<!-- Cache Health -->
 		<div class="glass glass-col an-col-pipeline">
-			<div class="glass-col-header"><div class="glass-col-title">{ L(p, "logs_last_sync_pipeline", "Last Sync Pipeline") }</div></div>
+			<div class="glass-col-header"><div class="glass-col-title">{ L(p, "logs_android_asset_health", "Asset Health") }</div></div>
 			<div class="glass-col-body an-pipeline-scroll">
-				for _, s := range d.Pipeline {
-					<div class="an-pipeline-step">
-						<span class={ "an-dot an-dot-" + s.Status }></span>
-						<span class="an-step-name">{ s.Name }</span>
-						if s.Duration != "" {
-							<span class="an-step-duration">{ s.Duration }</span>
-						}
-					</div>
-				}
-				if d.PipelineFooter != "" {
-					<div class="an-pipeline-footer">{ d.PipelineFooter }</div>
-				}
 				if len(d.CacheHealth) > 0 {
 					<div class="an-cache-health">
-						<div class="an-cache-title">{ L(p, "logs_android_asset_health", "Asset Health") }</div>
 						for _, c := range d.CacheHealth {
 							<div class="an-cache-row">
 								<span class="an-cache-label">{ c.Label }</span>
 								<span class="an-cache-pct">{ fmt.Sprintf("%d%%", c.Percent) }</span>
 								<div class="an-cache-bar-wrap"><div class={ "an-cache-bar " + c.BarCSS } style={ fmt.Sprintf("width:%d%%", c.Percent) }></div></div>
-								<span class="an-cache-stat">
-									if c.Retention != "" {
-										{ fmt.Sprintf("%d/%d · %s", c.Cached, c.Total, c.Retention) }
-									} else {
-										{ fmt.Sprintf("%d/%d", c.Cached, c.Total) }
-									}
-								</span>
+								<span class="an-cache-stat">{ fmt.Sprintf("%d/%d", c.Cached, c.Total) }</span>
 							</div>
 						}
 					</div>
@@ -1732,19 +1673,7 @@ templ AndroidDashboard(p PageProps, d AndroidDashboardData) {
 					}
 				</div>
 				<div style="display:flex;gap:4px;margin-left:auto;">
-					<button class="glass-btn" type="button" style="color:var(--accent-primary);"
-						hx-post="/api/logs/android/force-sync"
-						hx-swap="none"
-						hx-on::before-request="this.textContent=(window.IglooI18n&&window.IglooI18n.t?window.IglooI18n.t('settings_syncing','Syncing…'):'Syncing…');this.disabled=true"
-						disabled?={ d.ForceSyncPending }
-					>
-						if d.ForceSyncPending {
-							{ L(p, "settings_syncing", "Syncing…") }
-						} else {
-							{ L(p, "logs_force_sync", "Force Sync") }
-						}
-					</button>
-						<button class="copy-log" type="button" onclick="var el=this.closest('.glass-col').querySelector('.glass-col-body');if(el&&window.MpaSiteBase)MpaSiteBase.copyText(el.innerText).then(function(){MpaSiteBase.showToast(window.IglooI18n&&window.IglooI18n.t?window.IglooI18n.t('toast_log_copied','Log copied'):'Log copied')})">{ L(p, "action_copy", "Copy") }</button>
+					<button class="copy-log" type="button" onclick="var el=this.closest('.glass-col').querySelector('.glass-col-body');if(el&&window.MpaSiteBase)MpaSiteBase.copyText(el.innerText).then(function(){MpaSiteBase.showToast(window.IglooI18n&&window.IglooI18n.t?window.IglooI18n.t('toast_log_copied','Log copied'):'Log copied')})">{ L(p, "action_copy", "Copy") }</button>
 				</div>
 			</div>
 			<div class="glass-col-body" style="padding:6px 12px;">

@@ -140,14 +140,15 @@ func TestSafeLoginNextRejectsExternalTargets(t *testing.T) {
 
 func TestResolveDataPathUnderRejectsEscapes(t *testing.T) {
 	dataDir := t.TempDir()
-	if _, ok := resolveDataPathUnder(dataDir, "../outside.jpg"); ok {
+	layout := testWebConfig(t, dataDir).Storage
+	if _, ok := resolveDataPathUnder(layout, "../outside.jpg"); ok {
 		t.Fatal("relative escape path was accepted")
 	}
 	outside := filepath.Join(t.TempDir(), "outside.jpg")
-	if _, ok := resolveDataPathUnder(dataDir, outside); ok {
+	if _, ok := resolveDataPathUnder(layout, outside); ok {
 		t.Fatal("absolute outside path was accepted")
 	}
-	if got, ok := resolveDataPathUnder(dataDir, "feed_media/item.jpg"); !ok || got != filepath.Join(dataDir, "feed_media", "item.jpg") {
+	if got, ok := resolveDataPathUnder(layout, "feed_media/item.jpg"); !ok || got != filepath.Join(dataDir, "feed_media", "item.jpg") {
 		t.Fatalf("valid data path = %q, %v", got, ok)
 	}
 }
@@ -227,7 +228,7 @@ func TestFirstInstallSetupCreatesAdminAndLogsIn(t *testing.T) {
 	}
 }
 
-func TestFirstInstallSetupClaimsBootstrapImportedUserData(t *testing.T) {
+func TestFirstInstallSetupPreservesBootstrapImportedUserData(t *testing.T) {
 	srv := newTestServer(t)
 	authPath := filepath.Join(t.TempDir(), "auth_users.json")
 	platforms, err := config.ParseEnabledPlatforms("none")
@@ -244,7 +245,7 @@ func TestFirstInstallSetupClaimsBootstrapImportedUserData(t *testing.T) {
 	})
 
 	if _, err := srv.db.ImportConfig(db.ConfigExport{
-		Version: 1,
+		Version: db.ConfigExportVersion,
 		BookmarkCategories: []db.BookmarkCatExport{{
 			Name: "Watch Later",
 		}},
@@ -257,7 +258,7 @@ func TestFirstInstallSetupClaimsBootstrapImportedUserData(t *testing.T) {
 			AuthorHandle: "author",
 			BodyText:     "liked text",
 		}},
-	}, "", true); err != nil {
+	}, true); err != nil {
 		t.Fatalf("seed bootstrap import: %v", err)
 	}
 
@@ -284,18 +285,18 @@ func TestFirstInstallSetupClaimsBootstrapImportedUserData(t *testing.T) {
 		t.Fatalf("POST /setup status = %d, body = %s", rec.Code, rec.Body.String())
 	}
 
-	var categoryUser, bookmarkUser, likeUser string
-	if err := srv.db.QueryRow(`SELECT user_id FROM bookmark_categories WHERE name='Watch Later'`).Scan(&categoryUser); err != nil {
+	var categories, bookmarks, likes int
+	if err := srv.db.QueryRow(`SELECT COUNT(*) FROM bookmark_categories WHERE name='Watch Later'`).Scan(&categories); err != nil {
 		t.Fatalf("category missing: %v", err)
 	}
-	if err := srv.db.QueryRow(`SELECT user_id FROM bookmarks WHERE video_id='booked_video'`).Scan(&bookmarkUser); err != nil {
+	if err := srv.db.QueryRow(`SELECT COUNT(*) FROM bookmarks WHERE video_id='booked_video'`).Scan(&bookmarks); err != nil {
 		t.Fatalf("bookmark missing: %v", err)
 	}
-	if err := srv.db.QueryRow(`SELECT username FROM feed_likes WHERE tweet_id='liked_post'`).Scan(&likeUser); err != nil {
+	if err := srv.db.QueryRow(`SELECT COUNT(*) FROM feed_likes WHERE tweet_id='liked_post'`).Scan(&likes); err != nil {
 		t.Fatalf("like missing: %v", err)
 	}
-	if categoryUser != "alice" || bookmarkUser != "alice" || likeUser != "alice" {
-		t.Fatalf("claimed users = category %q bookmark %q like %q, want alice", categoryUser, bookmarkUser, likeUser)
+	if categories != 1 || bookmarks != 1 || likes != 1 {
+		t.Fatalf("bootstrap state = categories %d bookmarks %d likes %d, want one each", categories, bookmarks, likes)
 	}
 }
 

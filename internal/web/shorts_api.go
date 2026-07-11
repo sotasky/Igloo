@@ -60,11 +60,7 @@ func (s *Server) handleShortsCards(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
-	userID := ""
-	if user := userFromContext(r.Context()); user != nil {
-		userID = user.Username
-	}
-	if err := s.db.AttachStoryStatusToVideos(userID, videos, time.Now().UnixMilli()); err != nil {
+	if err := s.db.AttachStoryStatusToVideos(videos, time.Now().UnixMilli()); err != nil {
 		slog.Error("AttachStoryStatusToVideos shorts cards", "err", err, "tab", tab)
 	}
 
@@ -80,12 +76,8 @@ func (s *Server) handleStoryCards(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "channelID required", http.StatusBadRequest)
 		return
 	}
-	userID := ""
-	if user := userFromContext(r.Context()); user != nil {
-		userID = user.Username
-	}
 	nowMs := time.Now().UnixMilli()
-	statuses, err := s.db.GetStoryStatusForChannelIDs(userID, []string{channelID}, nowMs)
+	statuses, err := s.db.GetStoryStatusForChannelIDs([]string{channelID}, nowMs)
 	if err != nil {
 		slog.Error("GetStoryStatusForChannelIDs", "channel", channelID, "err", err)
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
@@ -98,7 +90,7 @@ func (s *Server) handleStoryCards(w http.ResponseWriter, r *http.Request) {
 		_ = components.ShortsCardsPartial(p, nil).Render(r.Context(), w)
 		return
 	}
-	videos, err := s.db.GetStoryVideos(userID, channelID, nowMs)
+	videos, err := s.db.GetStoryVideos(channelID, nowMs)
 	if err != nil {
 		slog.Error("GetStoryVideos", "channel", channelID, "err", err)
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
@@ -125,19 +117,13 @@ func (s *Server) handleShortsWatched(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, err := s.db.UpsertMomentView(user.Username, videoID); err != nil {
+	if _, err := s.db.UpsertMomentView(videoID); err != nil {
 		slog.Error("UpsertMomentView", "user", user.Username, "video", videoID, "err", err)
 		writeJSON(w, 500, map[string]any{"success": false, "error": "db error"})
 		return
 	}
-	if err := s.db.RecordSyncChange("moment_view", videoID, `{"viewed":true}`); err != nil {
-		slog.Error("RecordSyncChange moment_view", "video", videoID, "err", err)
-	}
-	syncVersion, _ := s.db.GetCurrentSyncVersion()
-
 	writeJSON(w, 200, map[string]any{
-		"success":      true,
-		"sync_version": syncVersion,
+		"success": true,
 	})
 }
 
@@ -163,7 +149,7 @@ func (s *Server) handleShortsWatchedList(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
-	rows, err := s.db.ListMomentViews(user.Username, since, limit)
+	rows, err := s.db.ListMomentViews(since, limit)
 	if err != nil {
 		slog.Error("ListMomentViews", "user", user.Username, "err", err)
 		writeJSON(w, 500, map[string]any{"success": false, "error": "db error"})

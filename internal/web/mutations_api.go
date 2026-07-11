@@ -4,18 +4,12 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
-	"strconv"
 	"strings"
 
 	"github.com/screwys/igloo/internal/db"
 )
 
-// #11 — mutation endpoints. One handler per OutboxKind; all share the
-// same dispatcher shape (parse body → apply → respond with envelope
-// carrying sync_version + sync_stream per #10).
-
 func (s *Server) registerMutationAPIRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("GET /api/mutations/delta", s.handleMutationDelta)
 	mux.HandleFunc("POST /api/mutations/like", s.handleMutationLike)
 	mux.HandleFunc("POST /api/mutations/bookmark", s.handleMutationBookmark)
 	mux.HandleFunc("POST /api/mutations/follow", s.handleMutationFollow)
@@ -27,7 +21,6 @@ func (s *Server) registerMutationAPIRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/mutations/channel_setting", s.handleMutationChannelSetting)
 	mux.HandleFunc("PUT /api/mutations/progress", s.handleMutationProgress)
 	mux.HandleFunc("PUT /api/mutations/moments_cursor", s.handleMutationMomentsCursor)
-	mux.HandleFunc("PUT /api/mutations/bookmark_alias", s.handleMutationBookmarkAlias)
 }
 
 func feedHandleFromChannelID(channelID string) string {
@@ -62,86 +55,24 @@ func (s *Server) kickFeedOrderForChannelID(channelID string) {
 	s.workers.KickFeedScoring()
 }
 
-func (s *Server) handleMutationDelta(w http.ResponseWriter, r *http.Request) {
-	user := userFromContext(r.Context())
-	if user == nil {
-		writeJSONError(w, 401, "unauthenticated", "authentication required")
-		return
-	}
-
-	since, _ := strconv.ParseInt(r.URL.Query().Get("since"), 10, 64)
-	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	if limit <= 0 || limit > 500 {
-		limit = 500
-	}
-
-	changes, truncated, err := s.db.GetMutationSyncChanges(user.Username, since, limit)
-	if err != nil {
-		slog.Error("GetMutationSyncChanges", "since", since, "err", err)
-		writeJSONError(w, 500, "db_error", "mutation delta read failed")
-		return
-	}
-	currentVersion, _ := s.db.GetCurrentSyncVersion()
-	nextCursor := strconv.FormatInt(currentVersion, 10)
-
-	result := make([]map[string]any, 0, len(changes))
-	for _, c := range changes {
-		result = append(result, map[string]any{
-			"version":    c.Version,
-			"type":       c.Type,
-			"item_id":    c.ItemID,
-			"value":      c.Value,
-			"created_at": c.CreatedAtMs,
-		})
-	}
-	if truncated && len(changes) > 0 {
-		nextCursor = strconv.FormatInt(changes[len(changes)-1].Version, 10)
-	}
-
-	writeJSON(w, 200, map[string]any{
-		"version":     currentVersion,
-		"next_cursor": nextCursor,
-		"changes":     result,
-		"truncated":   truncated,
-	})
-}
-
-// sync_stream value per kind (track-a intent-pass answer).
-func streamForKind(kind string) string {
-	switch kind {
-	case "like", "seen", "mute":
-		return "feed"
-	case "bookmark":
-		return "feed" // tweet bookmarks land here; video bookmarks bump the video stream too
-	case "follow", "star", "channel_setting":
-		return "channels"
-	case "moment_view":
-		return "shorts"
-	case "progress":
-		return "videos"
-	}
-	// "moments_cursor", "create_category", "bookmark_alias" omit sync_stream —
-	// client doesn't maintain a dedicated cursor for those; the next inbound
-	// sync picks up their changes naturally.
-	return ""
-}
-
-// writeMutation returns the standard mutation envelope.
-func writeMutation(w http.ResponseWriter, status int, kind string, version int64, extra map[string]any) {
-	body := map[string]any{}
-	if version > 0 {
-		body["sync_version"] = version
-		if stream := streamForKind(kind); stream != "" {
-			body["sync_stream"] = stream
-		}
-	}
-	for k, v := range extra {
-		body[k] = v
-	}
-	writeJSON(w, status, body)
-}
-
 // ── handlers ─────────────────────────────────────────────────────────
+
+func writeMutationError(w http.ResponseWriter, operation string, err error) bool {
+	if err == nil {
+		return false
+	}
+	if db.IsStaleMutation(err) {
+		writeJSONError(w, http.StatusConflict, "stale_mutation", err.Error())
+		return true
+	}
+	if db.IsInvalidMutation(err) {
+		writeJSONError(w, http.StatusBadRequest, "invalid_body", err.Error())
+		return true
+	}
+	slog.Error(operation, "err", err)
+	writeJSONError(w, http.StatusInternalServerError, "db_error", "database error")
+	return true
+}
 
 func (s *Server) handleMutationLike(w http.ResponseWriter, r *http.Request) {
 	user := userFromContext(r.Context())
@@ -158,30 +89,19 @@ func (s *Server) handleMutationLike(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, 400, "invalid_body", err.Error())
 		return
 	}
-	var tweetID string
-	var err error
-	if body.Action == "set" {
-		tweetID, err = s.db.ResolveFeedStateIDForWrite(body.TweetID)
-	} else {
-		tweetID, err = s.db.ResolveFeedStateID(body.TweetID)
-	}
-	if err != nil {
-		slog.Error("ResolveFeedStateID", "tweet", body.TweetID, "err", err)
-		writeJSONError(w, 500, "db_error", "database error")
+	result, err := s.db.MutateLike(db.LikeMutation{
+		TweetID: body.TweetID, Action: body.Action, UpdatedAtMs: body.UpdatedAtMs,
+	})
+	if writeMutationError(w, "MutateLike", err) {
 		return
 	}
-	body.TweetID = tweetID
-	res, err := s.db.ApplyLikeMutation(user.Username, body.TweetID, body.Action, body.UpdatedAtMs)
-	if err != nil {
-		slog.Error("ApplyLikeMutation", "err", err)
-		writeJSONError(w, 400, "invalid_body", err.Error())
-		return
+	if result.Applied {
+		if body.Action == "set" {
+			s.requestXStatusRecovery(result.CanonicalID, false)
+		}
+		s.kickFeedOrderForTweetIDs(result.CanonicalID)
 	}
-	if body.Action == "set" {
-		s.requestXStatusRecovery(body.TweetID, false)
-	}
-	s.kickFeedOrderForTweetIDs(body.TweetID)
-	writeMutation(w, 200, "like", res.SyncVersion, nil)
+	writeJSON(w, 200, map[string]any{})
 }
 
 func (s *Server) handleMutationBookmark(w http.ResponseWriter, r *http.Request) {
@@ -191,38 +111,20 @@ func (s *Server) handleMutationBookmark(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	var body struct {
-		VideoID        string `json:"video_id"`
-		Action         string `json:"action"`
-		CategoryID     *int64 `json:"category_id,omitempty"`
-		CustomTitle    string `json:"custom_title,omitempty"`
-		AccountHandles string `json:"account_handles,omitempty"`
-		MediaIndices   string `json:"media_indices,omitempty"`
-		UpdatedAtMs    int64  `json:"updated_at_ms"`
+		VideoID        string  `json:"video_id"`
+		Action         string  `json:"action"`
+		CategoryID     *int64  `json:"category_id,omitempty"`
+		CustomTitle    *string `json:"custom_title,omitempty"`
+		AccountHandles *string `json:"account_handles,omitempty"`
+		MediaIndices   *string `json:"media_indices,omitempty"`
+		UpdatedAtMs    int64   `json:"updated_at_ms"`
 	}
 	if err := decodeMutation(r, &body); err != nil {
 		writeJSONError(w, 400, "invalid_body", err.Error())
 		return
 	}
-	var videoID string
-	var err error
-	if body.Action == "set" {
-		videoID, err = s.db.ResolveFeedStateIDForWrite(body.VideoID)
-	} else {
-		videoID, err = s.db.ResolveFeedStateID(body.VideoID)
-	}
-	if err != nil {
-		slog.Error("ResolveFeedStateID", "video", body.VideoID, "err", err)
-		writeJSONError(w, 500, "db_error", "database error")
-		return
-	}
-	body.VideoID = videoID
-	var archivePath string
-	if body.Action == "set" {
-		requestedCategoryID := int64(0)
-		if body.CategoryID != nil {
-			requestedCategoryID = *body.CategoryID
-		}
-		category, ok, err := s.resolveOwnedBookmarkCategory(user.Username, requestedCategoryID)
+	if body.Action == "set" && body.CategoryID != nil {
+		category, ok, err := s.resolveBookmarkCategory(*body.CategoryID)
 		if err != nil {
 			slog.Error("GetBookmarkCategories", "err", err)
 			writeJSONError(w, 500, "db_error", "database error")
@@ -234,26 +136,8 @@ func (s *Server) handleMutationBookmark(w http.ResponseWriter, r *http.Request) 
 		}
 		categoryID := category.ID
 		body.CategoryID = &categoryID
-		if bookmarkArchivePathsAllowed(user) {
-			archivePath = category.ArchivePath
-		}
 	}
-	alreadyCurrent := false
-	if body.Action == "set" && body.CategoryID != nil {
-		current, err := s.bookmarkPayloadIsCurrent(
-			user.Username,
-			body.VideoID,
-			*body.CategoryID,
-			body.CustomTitle,
-			body.AccountHandles,
-			body.MediaIndices,
-		)
-		if err != nil {
-			slog.Warn("bookmark mutation current-state check failed", "video", body.VideoID, "err", err)
-		}
-		alreadyCurrent = current
-	}
-	res, err := s.db.ApplyBookmarkMutation(user.Username, db.BookmarkMutation{
+	result, err := s.db.MutateBookmark(db.BookmarkMutation{
 		VideoID:        body.VideoID,
 		Action:         body.Action,
 		CategoryID:     body.CategoryID,
@@ -262,24 +146,42 @@ func (s *Server) handleMutationBookmark(w http.ResponseWriter, r *http.Request) 
 		MediaIndices:   body.MediaIndices,
 		UpdatedAtMs:    body.UpdatedAtMs,
 	})
-	if err != nil {
-		writeJSONError(w, 400, "invalid_body", err.Error())
+	if writeMutationError(w, "MutateBookmark", err) {
 		return
 	}
-	if body.Action == "set" {
-		s.requestXStatusRecovery(body.VideoID, true)
+	if result.Applied {
+		if body.Action == "set" {
+			s.requestXStatusRecovery(result.CanonicalID, true)
+			if result.Affected > 0 {
+				s.startMutationBookmarkArchive(user, result.CanonicalID)
+			}
+		}
+		s.kickFeedOrderForTweetIDs(result.CanonicalID)
 	}
-	s.kickFeedOrderForTweetIDs(body.VideoID)
-	if body.Action == "set" && body.CategoryID != nil && !alreadyCurrent {
-		s.startBookmarkArchive(
-			body.VideoID,
-			archivePath,
-			body.CustomTitle,
-			body.AccountHandles,
-			parseBookmarkMediaIndices(body.MediaIndices),
-		)
+	writeJSON(w, 200, map[string]any{})
+}
+
+func (s *Server) startMutationBookmarkArchive(user *userInfo, videoID string) {
+	var categoryID int64
+	var customTitle, accountHandles, mediaIndices string
+	err := s.db.QueryRow(`
+		SELECT category_id, COALESCE(custom_title, ''),
+		       COALESCE(account_handles, ''), COALESCE(media_indices, '')
+		FROM bookmarks WHERE video_id = ?
+	`, videoID).Scan(&categoryID, &customTitle, &accountHandles, &mediaIndices)
+	if err != nil {
+		slog.Warn("bookmark mutation archive state read failed", "video", videoID, "err", err)
+		return
 	}
-	writeMutation(w, 200, "bookmark", res.SyncVersion, nil)
+	category, ok, err := s.resolveBookmarkCategory(categoryID)
+	if err != nil || !ok {
+		return
+	}
+	archivePath := ""
+	if bookmarkArchivePathsAllowed(user) {
+		archivePath = category.ArchivePath
+	}
+	s.startBookmarkArchive(videoID, archivePath, customTitle, accountHandles, parseBookmarkMediaIndices(mediaIndices))
 }
 
 func (s *Server) handleMutationFollow(w http.ResponseWriter, r *http.Request) {
@@ -300,38 +202,25 @@ func (s *Server) handleMutationFollow(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, 400, "invalid_body", "channel_id required")
 		return
 	}
-	res, err := s.db.ApplyFollowMutation(channelID, action, ts)
-	if err != nil {
-		writeJSONError(w, 400, "invalid_body", err.Error())
+	result, err := s.db.MutateFollow(channelID, action, ts)
+	if writeMutationError(w, "MutateFollow", err) {
 		return
 	}
-	if action == "clear" {
-		deletedVideos, err := s.db.PurgeUnfollowedChannelContent(channelID, user.Username)
-		if err != nil {
-			slog.Error("PurgeUnfollowedChannelContent", "channel", channelID, "err", err)
-			writeJSONError(w, 500, "db_error", "channel purge failed")
-			return
+	if result.Applied {
+		if action == "clear" {
+			s.removeCanonicalAssetFiles(result.DeletedFileKeys)
 		}
-		for _, v := range deletedVideos {
-			s.deleteVideoFiles(v)
-		}
+		s.kickFeedOrderForChannelID(result.CanonicalID)
 	}
-	s.kickFeedOrderForChannelID(channelID)
-	writeMutation(w, 200, "follow", res.SyncVersion, nil)
+	writeJSON(w, 200, map[string]any{})
 }
 
 func (s *Server) handleMutationStar(w http.ResponseWriter, r *http.Request) {
-	s.applyToggleMutation(w, r, "star", func(_, id, action string, ts int64) (int64, error) {
-		res, err := s.db.ApplyStarMutation(id, action, ts)
-		return res.SyncVersion, err
-	}, "channel_id", s.kickFeedOrderForChannelID)
+	s.applyToggleMutation(w, r, s.db.MutateStar, "channel_id", s.kickFeedOrderForChannelID)
 }
 
 func (s *Server) handleMutationMute(w http.ResponseWriter, r *http.Request) {
-	s.applyToggleMutation(w, r, "mute", func(_, id, action string, ts int64) (int64, error) {
-		res, err := s.db.ApplyMuteMutation(id, action, ts)
-		return res.SyncVersion, err
-	}, "handle", s.kickFeedOrderForHandle)
+	s.applyToggleMutation(w, r, s.db.MutateMute, "channel_id", s.kickFeedOrderForChannelID)
 }
 
 // applyToggleMutation shares the body-shape for the three simple
@@ -339,8 +228,7 @@ func (s *Server) handleMutationMute(w http.ResponseWriter, r *http.Request) {
 func (s *Server) applyToggleMutation(
 	w http.ResponseWriter,
 	r *http.Request,
-	kind string,
-	apply func(user, id, action string, ts int64) (int64, error),
+	apply func(id, action string, ts int64) (db.MutationResult, error),
 	idField string,
 	after func(id string),
 ) {
@@ -361,15 +249,14 @@ func (s *Server) applyToggleMutation(
 		writeJSONError(w, 400, "invalid_body", idField+" required")
 		return
 	}
-	version, err := apply(user.Username, id, action, ts)
-	if err != nil {
-		writeJSONError(w, 400, "invalid_body", err.Error())
+	result, err := apply(id, action, ts)
+	if writeMutationError(w, "toggle mutation", err) {
 		return
 	}
-	if after != nil {
-		after(id)
+	if result.Applied && after != nil {
+		after(result.CanonicalID)
 	}
-	writeMutation(w, 200, kind, version, nil)
+	writeJSON(w, 200, map[string]any{})
 }
 
 func (s *Server) handleMutationSeen(w http.ResponseWriter, r *http.Request) {
@@ -389,12 +276,11 @@ func (s *Server) handleMutationSeen(w http.ResponseWriter, r *http.Request) {
 	if len(body.TweetIDs) > 500 {
 		body.TweetIDs = body.TweetIDs[:500]
 	}
-	res, err := s.db.ApplySeenMutation(user.Username, body.TweetIDs, body.UpdatedAtMs)
-	if err != nil {
-		writeJSONError(w, 400, "invalid_body", err.Error())
+	_, err := s.db.MutateSeen(body.TweetIDs, body.UpdatedAtMs)
+	if writeMutationError(w, "MutateSeen", err) {
 		return
 	}
-	writeMutation(w, 200, "seen", res.SyncVersion, map[string]any{"marked": len(body.TweetIDs)})
+	writeJSON(w, 200, map[string]any{})
 }
 
 func (s *Server) handleMutationMomentView(w http.ResponseWriter, r *http.Request) {
@@ -411,12 +297,11 @@ func (s *Server) handleMutationMomentView(w http.ResponseWriter, r *http.Request
 		writeJSONError(w, 400, "invalid_body", err.Error())
 		return
 	}
-	res, err := s.db.ApplyMomentViewMutation(user.Username, body.VideoID, body.UpdatedAtMs)
-	if err != nil {
-		writeJSONError(w, 400, "invalid_body", err.Error())
+	_, err := s.db.MutateMomentView(body.VideoID, body.UpdatedAtMs)
+	if writeMutationError(w, "MutateMomentView", err) {
 		return
 	}
-	writeMutation(w, 200, "moment_view", res.SyncVersion, nil)
+	writeJSON(w, 200, map[string]any{})
 }
 
 func (s *Server) handleMutationCreateCategory(w http.ResponseWriter, r *http.Request) {
@@ -428,18 +313,18 @@ func (s *Server) handleMutationCreateCategory(w http.ResponseWriter, r *http.Req
 	var body struct {
 		Name          string `json:"name"`
 		ProvisionalID string `json:"provisional_id"`
+		RequestID     string `json:"request_id"`
 		UpdatedAtMs   int64  `json:"updated_at_ms"`
 	}
 	if err := decodeMutation(r, &body); err != nil {
 		writeJSONError(w, 400, "invalid_body", err.Error())
 		return
 	}
-	cat, err := s.db.ApplyCreateCategoryMutation(user.Username, body.Name, body.ProvisionalID, body.UpdatedAtMs)
-	if err != nil {
-		writeJSONError(w, 400, "invalid_body", err.Error())
+	cat, err := s.db.ApplyCreateCategoryMutation(body.Name, body.ProvisionalID, body.RequestID, body.UpdatedAtMs)
+	if writeMutationError(w, "ApplyCreateCategoryMutation", err) {
 		return
 	}
-	writeMutation(w, 200, "create_category", cat.SyncVersion, map[string]any{
+	writeJSON(w, 200, map[string]any{
 		"category_id":    cat.CategoryID,
 		"provisional_id": cat.ProvisionalID,
 	})
@@ -461,13 +346,14 @@ func (s *Server) handleMutationChannelSetting(w http.ResponseWriter, r *http.Req
 		writeJSONError(w, 400, "invalid_body", err.Error())
 		return
 	}
-	res, err := s.db.ApplyChannelSettingMutation(body.ChannelID, body.Field, body.Value, body.UpdatedAtMs)
-	if err != nil {
-		writeJSONError(w, 400, "invalid_body", err.Error())
+	result, err := s.db.MutateChannelSetting(body.ChannelID, body.Field, body.Value, body.UpdatedAtMs)
+	if writeMutationError(w, "MutateChannelSetting", err) {
 		return
 	}
-	s.kickFeedOrderForChannelID(body.ChannelID)
-	writeMutation(w, 200, "channel_setting", res.SyncVersion, nil)
+	if result.Applied {
+		s.kickFeedOrderForChannelID(result.CanonicalID)
+	}
+	writeJSON(w, 200, map[string]any{})
 }
 
 func (s *Server) handleMutationProgress(w http.ResponseWriter, r *http.Request) {
@@ -480,19 +366,17 @@ func (s *Server) handleMutationProgress(w http.ResponseWriter, r *http.Request) 
 		VideoID     string  `json:"video_id"`
 		Position    float64 `json:"position"`
 		Duration    float64 `json:"duration"`
-		Source      string  `json:"source"`
 		UpdatedAtMs int64   `json:"updated_at_ms"`
 	}
 	if err := decodeMutation(r, &body); err != nil {
 		writeJSONError(w, 400, "invalid_body", err.Error())
 		return
 	}
-	res, err := s.db.ApplyProgressMutation(user.Username, body.VideoID, body.Position, body.Duration, body.Source, body.UpdatedAtMs)
-	if err != nil {
-		writeJSONError(w, 400, "invalid_body", err.Error())
+	_, err := s.db.MutateProgress(body.VideoID, body.Position, body.Duration, body.UpdatedAtMs)
+	if writeMutationError(w, "MutateProgress", err) {
 		return
 	}
-	writeMutation(w, 200, "progress", res.SyncVersion, nil)
+	writeJSON(w, 200, map[string]any{})
 }
 
 func (s *Server) handleMutationMomentsCursor(w http.ResponseWriter, r *http.Request) {
@@ -512,35 +396,11 @@ func (s *Server) handleMutationMomentsCursor(w http.ResponseWriter, r *http.Requ
 		writeJSONError(w, 400, "invalid_body", err.Error())
 		return
 	}
-	res, err := s.db.ApplyMomentsCursorMutationWithSortAt(user.Username, body.VideoID, body.PositionMs, body.UpdatedAtMs, body.Scope, body.SortAtMs)
-	if err != nil {
-		writeJSONError(w, 400, "invalid_body", err.Error())
+	_, err := s.db.MutateMomentsCursor(body.VideoID, body.PositionMs, body.UpdatedAtMs, body.Scope, body.SortAtMs)
+	if writeMutationError(w, "MutateMomentsCursor", err) {
 		return
 	}
-	writeMutation(w, 200, "moments_cursor", res.SyncVersion, nil)
-}
-
-func (s *Server) handleMutationBookmarkAlias(w http.ResponseWriter, r *http.Request) {
-	user := userFromContext(r.Context())
-	if user == nil {
-		writeJSONError(w, 401, "unauthenticated", "authentication required")
-		return
-	}
-	var body struct {
-		OriginalHandle string `json:"original_handle"`
-		DisplayAlias   string `json:"display_alias"`
-		UpdatedAtMs    int64  `json:"updated_at_ms"`
-	}
-	if err := decodeMutation(r, &body); err != nil {
-		writeJSONError(w, 400, "invalid_body", err.Error())
-		return
-	}
-	res, err := s.db.ApplyBookmarkAliasMutation(body.OriginalHandle, body.DisplayAlias, body.UpdatedAtMs)
-	if err != nil {
-		writeJSONError(w, 400, "invalid_body", err.Error())
-		return
-	}
-	writeMutation(w, 200, "bookmark_alias", res.SyncVersion, nil)
+	writeJSON(w, 200, map[string]any{})
 }
 
 // ── body helpers ─────────────────────────────────────────────────────

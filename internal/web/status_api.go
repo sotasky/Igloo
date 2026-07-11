@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -102,7 +101,7 @@ func (s *Server) handleSidebarStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Queue
-	queued, processing, _ := s.db.CountPendingFeedMediaJobs()
+	queued, processing, _ := s.db.CountPendingXContentDownloads()
 	queueTotal := queued + processing
 
 	data := components.SidebarStatusData{
@@ -133,7 +132,7 @@ func (s *Server) handleSidebarChannels(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleQueue(w http.ResponseWriter, r *http.Request) {
-	processing, pending, err := s.db.GetFeedMediaJobsByStatus()
+	processing, pending, err := s.db.ListPendingXContentDownloads()
 	if err != nil {
 		writeJSON(w, 500, map[string]any{"success": false, "error": "db error"})
 		return
@@ -145,9 +144,9 @@ func (s *Server) handleQueue(w http.ResponseWriter, r *http.Request) {
 			"tweet_id":      j.TweetID,
 			"source_handle": j.SourceHandle,
 			"media_kind":    j.MediaKind,
-			"slide_count":   j.SlideCount,
-			"retry_count":   j.RetryCount,
-			"priority":      j.Priority,
+			"slide_count":   j.AssetCount,
+			"retry_count":   j.Attempts,
+			"priority":      0,
 		}
 		if j.LastError != "" {
 			entry["last_error"] = j.LastError
@@ -160,9 +159,9 @@ func (s *Server) handleQueue(w http.ResponseWriter, r *http.Request) {
 			"tweet_id":      j.TweetID,
 			"source_handle": j.SourceHandle,
 			"media_kind":    j.MediaKind,
-			"slide_count":   j.SlideCount,
-			"retry_count":   j.RetryCount,
-			"priority":      j.Priority,
+			"slide_count":   j.AssetCount,
+			"retry_count":   j.Attempts,
+			"priority":      0,
 		}
 		if j.LastError != "" {
 			entry["last_error"] = j.LastError
@@ -187,7 +186,7 @@ func (s *Server) handleQueue(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	stats, _ := s.db.GetStats()
 	unwatched, totalBytes, _ := s.db.GetVideoStats()
-	_, processing, _ := s.db.CountPendingFeedMediaJobs()
+	_, processing, _ := s.db.CountPendingXContentDownloads()
 
 	totalGB := float64(totalBytes) / (1024 * 1024 * 1024)
 
@@ -213,11 +212,7 @@ func (s *Server) handleFeedHead(w http.ResponseWriter, r *http.Request) {
 
 		var avatars []model.NewPosterAvatar
 		if hasNew {
-			username := ""
-			if user := userFromContext(r.Context()); user != nil {
-				username = user.Username
-			}
-			candidates, _ := s.db.GetNewPosterAvatars(username, knownHead, 12)
+			candidates, _ := s.db.GetNewPosterAvatars(knownHead, 12)
 			avatars = s.filterNewPosterAvatars(candidates, 3)
 		}
 
@@ -280,7 +275,7 @@ func (s *Server) filterNewPosterAvatars(candidates []model.NewPosterAvatar, limi
 
 func (s *Server) handleFeedStatus(w http.ResponseWriter, r *http.Request) {
 	count, _ := s.db.CountFeedItems()
-	queued, processing, _ := s.db.CountPendingFeedMediaJobs()
+	queued, processing, _ := s.db.CountPendingXContentDownloads()
 	coolingSources, _ := s.db.IngestCoverageCounts()
 	totalTwitterChannels := s.db.CountSubscribedTwitterChannels()
 	cycleAt, failures, cooling, notDue, lastReady := s.workers.IngestCycleStats()
@@ -444,7 +439,7 @@ func (s *Server) handleFeedStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleDownloadsStatus(w http.ResponseWriter, r *http.Request) {
-	queued, processing, _ := s.db.CountPendingFeedMediaJobs()
+	queued, processing, _ := s.db.CountPendingXContentDownloads()
 	total := queued + processing
 	completed, failed := s.workers.DownloadSessionCounts()
 	_, tzOffset := time.Now().Zone()
@@ -567,7 +562,7 @@ func (s *Server) handleServerStatus(w http.ResponseWriter, r *http.Request) {
 			MemoryHistory: memHistCopy,
 			TableCount:    toInt(tableCount),
 			LogFilter:     filter,
-			AvatarCount:   countAvatars(s.cfg.DataDir),
+			AvatarCount:   s.countReadyAvatars(),
 			DBSizeMB:      parseFloatFromAny(dbSizeMB),
 			WALSizeMB:     parseFloatFromAny(walSizeMB),
 		}
@@ -665,7 +660,7 @@ func (s *Server) handleServerStatus(w http.ResponseWriter, r *http.Request) {
 		"table_count":    tableCount,
 		"errors_24h":     len(s.workers.Activity().ByStatus("error")),
 		"errors_delta":   0,
-		"avatar_count":   countAvatars(s.cfg.DataDir),
+		"avatar_count":   s.countReadyAvatars(),
 		"activity":       reverseActivityEvents(s.workers.Activity().Last(100)),
 		"errors":         s.workers.Activity().ByStatus("error"),
 		"warnings":       s.workers.Activity().ByStatus("warning"),
@@ -813,17 +808,14 @@ func getMemoryRSSMB() float64 {
 	return 0
 }
 
-func countAvatars(dataDir string) int {
-	dir := filepath.Join(dataDir, "thumbnails", "avatars")
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return 0
-	}
-	count := 0
-	for _, e := range entries {
-		if !e.IsDir() {
-			count++
-		}
-	}
+func (s *Server) countReadyAvatars() int {
+	var count int
+	_ = s.db.QueryRow(`
+		SELECT COUNT(*)
+		FROM assets
+		WHERE asset_kind = 'avatar'
+		  AND owner_kind = 'channel'
+		  AND state = 'ready'
+	`).Scan(&count)
 	return count
 }

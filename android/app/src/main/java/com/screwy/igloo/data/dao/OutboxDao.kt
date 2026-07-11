@@ -1,18 +1,21 @@
 package com.screwy.igloo.data.dao
 
 import androidx.room.Dao
+import androidx.room.ColumnInfo
 import androidx.room.Insert
 import androidx.room.Query
 import androidx.room.Transaction
 import com.screwy.igloo.data.entity.OutboxEntity
 import kotlinx.coroutines.flow.Flow
 
+data class PendingOutboxKey(
+    val kind: String,
+    @ColumnInfo(name = "item_id") val itemId: String?,
+    val field: String?,
+)
+
 /**
  * Outbox DAO: drain queue, coalescing, and state transitions.
- *
- * Rows live in one of two states:
- *  - `pending` — eligible for drain once `next_attempt_at_ms <= now`.
- *  - `dead`   — terminal; rollback already fired. Swept by the 24h TTL clause.
  *
  * Indexes live on (state, next_attempt_at_ms) for the claim query and
  * (kind, field, item_id) for coalesce deletes — entity config carries them.
@@ -50,16 +53,6 @@ interface OutboxDao {
     )
     suspend fun deleteCoalesceMatch(kind: String, field: String?, itemId: String?)
 
-    /**
-     * Singleton coalesce — delete every prior pending row of the kind (regardless of
-     * item_id / field), then insert. Used by `moments_cursor`.
-     */
-    @Transaction
-    suspend fun coalesceAndInsertSingleton(row: OutboxEntity) {
-        deleteAllPendingOfKind(kind = row.kind)
-        insert(row)
-    }
-
     @Query("DELETE FROM outbox WHERE state = 'pending' AND kind = :kind")
     suspend fun deleteAllPendingOfKind(kind: String): Int
 
@@ -94,6 +87,9 @@ interface OutboxDao {
     )
     suspend fun claimKind(kind: String, nowMs: Long, limit: Int = 500): List<OutboxEntity>
 
+    @Query("SELECT * FROM outbox WHERE state = 'pending' ORDER BY created_at_ms, id")
+    suspend fun pendingRows(): List<OutboxEntity>
+
     // ─── Result application ───────────────────────────────────────────────────
 
     @Query("DELETE FROM outbox WHERE id = :id")
@@ -106,8 +102,8 @@ interface OutboxDao {
      * Log-inspector retention: log kinds land in `state='acked'` after a successful
      * drain instead of being deleted, so the Logs screen can render shipped events.
      */
-    @Query("UPDATE outbox SET state = 'acked', last_error_code = NULL, last_error_body = NULL WHERE id = :id")
-    suspend fun markAcked(id: Long)
+    @Query("UPDATE outbox SET state = 'acked', last_error_code = NULL, last_error_body = NULL WHERE id IN (:ids)")
+    suspend fun markAcked(ids: List<Long>)
 
     /** Trim the oldest acked log rows beyond [keep] so outbox doesn't grow unbounded. */
     @Query(
@@ -137,17 +133,6 @@ interface OutboxDao {
     )
     suspend fun markPending(id: Long, attemptCount: Int, nextAttemptAtMs: Long, errorCode: Int?, errorBody: String?)
 
-    @Query(
-        """
-        UPDATE outbox
-        SET state = 'dead',
-            last_error_code = :errorCode,
-            last_error_body = :errorBody
-        WHERE id = :id
-        """
-    )
-    suspend fun markDead(id: Long, errorCode: Int?, errorBody: String?)
-
     // ─── Preserve-local filter ───────────────────────────────────────────────
 
     @Query(
@@ -162,38 +147,14 @@ interface OutboxDao {
     )
     suspend fun hasPending(kind: String, itemId: String?, field: String?): Boolean
 
-    // ─── TTL sweeps ──────────────────────────────────────────────────────────
-
-    /** Pending rows old enough to expire, regardless of retry backoff eligibility. */
     @Query(
         """
-        SELECT * FROM outbox
-        WHERE state = 'pending' AND created_at_ms < :cutoffMs
-        ORDER BY created_at_ms
-        LIMIT :limit
+        SELECT DISTINCT kind, item_id, field
+        FROM outbox
+        WHERE state = 'pending'
         """
     )
-    suspend fun stuckPending(cutoffMs: Long, limit: Int): List<OutboxEntity>
-
-    /** Clause 1: perpetually-failing pending rows flip to dead after 24h. */
-    @Query(
-        """
-        UPDATE outbox
-        SET state = 'dead',
-            last_error_code = COALESCE(last_error_code, -1),
-            last_error_body = COALESCE(last_error_body, 'TTL exceeded 24h pending')
-        WHERE state = 'pending' AND created_at_ms < :cutoffMs
-        """
-    )
-    suspend fun markStuckPendingDead(cutoffMs: Long): Int
-
-    /** Clause 2: dead rows older than 24h get swept so the table doesn't grow unbounded. */
-    @Query("DELETE FROM outbox WHERE state = 'dead' AND created_at_ms < :cutoffMs")
-    suspend fun deleteOldDead(cutoffMs: Long): Int
-
-    /** Dead-row feed for the in-app Logs view — oldest-first is fine; UI may re-order. */
-    @Query("SELECT * FROM outbox WHERE state = 'dead' ORDER BY created_at_ms DESC LIMIT :limit")
-    fun deadRowsFlow(limit: Int = 200): Flow<List<OutboxEntity>>
+    suspend fun pendingKeys(): List<PendingOutboxKey>
 
     // ─── Logs inspector ──────────────────────────────────────────────────────
 

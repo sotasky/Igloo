@@ -14,9 +14,10 @@ import com.screwy.igloo.data.entity.FeedItemEntity
 import com.screwy.igloo.data.entity.FeedLikeEntity
 import com.screwy.igloo.data.entity.FeedRankEntity
 import com.screwy.igloo.data.entity.FeedSeenEntity
-import com.screwy.igloo.data.entity.FeedThreadContextEntity
 import com.screwy.igloo.data.entity.MomentViewEntity
-import com.screwy.igloo.data.entity.MutedAccountEntity
+import com.screwy.igloo.data.entity.MomentsCursorEntity
+import com.screwy.igloo.data.entity.MutedChannelEntity
+import com.screwy.igloo.data.entity.MutedChannelDisplay
 import com.screwy.igloo.data.entity.RetweetSourceEntity
 import com.screwy.igloo.data.entity.SponsorBlockCheckedEntity
 import com.screwy.igloo.data.entity.SponsorBlockSegmentEntity
@@ -25,7 +26,6 @@ import com.screwy.igloo.data.entity.VideoEntity
 import com.screwy.igloo.data.entity.VideoRepostSourceEntity
 import com.screwy.igloo.data.entity.WatchHistoryEntity
 import com.screwy.igloo.data.entity.BookmarkEntity
-import com.screwy.igloo.data.entity.BookmarkLabelEntity
 import kotlinx.coroutines.flow.Flow
 
 /**
@@ -37,8 +37,7 @@ import kotlinx.coroutines.flow.Flow
  *  - `upsert` takes either one row or a list (vararg would force boxed allocations).
  *  - `*Flow` methods return `Flow<...>` for reactive consumption. Room invalidates on
  *    any write to the table; UI re-emits automatically.
- *  - `deleteAll` is the logout/wipe primitive — belt-and-suspenders on top of the
- *    per-user DB file delete in DatabaseHolder.
+ *  - `deleteAll` supports exact table replacement where the caller owns the transaction.
  */
 
 @Dao
@@ -55,46 +54,15 @@ interface FeedItemDao {
     @Query("DELETE FROM feed_items WHERE tweet_id IN (:tweetIds)")
     suspend fun deleteByIds(tweetIds: List<String>)
 
+    @Query("SELECT tweet_id FROM feed_items")
+    suspend fun allIds(): List<String>
+
     @Query("DELETE FROM feed_items")
     suspend fun deleteAll()
 
     @Query("SELECT COUNT(*) FROM feed_items")
     suspend fun count(): Int
 
-    @Query("SELECT COALESCE(MAX(sync_seq), 0) FROM feed_items")
-    suspend fun maxSyncSeq(): Long
-
-    /**
-     * Prune Twitter posts past retention, respecting side-table protection.
-     * Feed likes OR bookmarks save the row. Retention cutoff is server-signaled via the inbound delta; the client
-     * just applies this predicate.
-     */
-    @Query(
-        """
-        DELETE FROM feed_items
-        WHERE published_at < :cutoffMs
-          AND NOT EXISTS (SELECT 1 FROM feed_likes WHERE tweet_id = feed_items.tweet_id)
-          AND NOT EXISTS (SELECT 1 FROM bookmarks  WHERE video_id = feed_items.tweet_id)
-        """
-    )
-    suspend fun pruneExpired(cutoffMs: Long): Int
-}
-
-@Dao
-interface FeedThreadContextDao {
-    @Upsert suspend fun upsert(rows: List<FeedThreadContextEntity>)
-
-    @Query("DELETE FROM feed_thread_context WHERE leaf_tweet_id = :leafTweetId")
-    suspend fun deleteForLeaf(leafTweetId: String)
-
-    @Query("DELETE FROM feed_thread_context")
-    suspend fun deleteAll()
-
-    @Transaction
-    suspend fun replaceForLeaf(leafTweetId: String, rows: List<FeedThreadContextEntity>) {
-        deleteForLeaf(leafTweetId)
-        if (rows.isNotEmpty()) upsert(rows)
-    }
 }
 
 @Dao
@@ -111,17 +79,14 @@ interface VideoDao {
     @Query("DELETE FROM videos WHERE video_id IN (:videoIds)")
     suspend fun deleteByIds(videoIds: List<String>)
 
+    @Query("SELECT video_id FROM videos")
+    suspend fun allIds(): List<String>
+
     @Query("DELETE FROM videos")
     suspend fun deleteAll()
 
     @Query("SELECT COUNT(*) FROM videos")
     suspend fun count(): Int
-
-    @Query("SELECT COALESCE(MAX(sync_seq), 0) FROM videos WHERE channel_id LIKE 'youtube_%'")
-    suspend fun maxYoutubeSyncSeq(): Long
-
-    @Query("SELECT COALESCE(MAX(sync_seq), 0) FROM videos WHERE channel_id NOT LIKE 'youtube_%'")
-    suspend fun maxShortsSyncSeq(): Long
 
     @Query(
         """
@@ -157,20 +122,6 @@ interface VideoDao {
     )
     suspend fun getPreviousVideoId(videoId: String): String?
 
-    /**
-     * Prune shorts rows (TikTok / Instagram) past retention, respecting saved-item
-     * protection. YouTube rows are excluded so the Videos tab can render faded
-     * placeholders.
-     */
-    @Query(
-        """
-        DELETE FROM videos
-        WHERE channel_id NOT LIKE 'youtube_%'
-          AND published_at < :cutoffMs
-          AND NOT EXISTS (SELECT 1 FROM bookmarks    WHERE video_id = videos.video_id)
-        """
-    )
-    suspend fun pruneShorts(cutoffMs: Long): Int
 }
 
 @Dao
@@ -183,6 +134,12 @@ interface ChannelDao {
 
     @Query("SELECT * FROM channels WHERE channel_id = :channelId")
     suspend fun getById(channelId: String): ChannelEntity?
+
+    @Query("SELECT channel_id FROM channels")
+    suspend fun allIds(): List<String>
+
+    @Query("DELETE FROM channels WHERE channel_id IN (:channelIds)")
+    suspend fun deleteByIds(channelIds: List<String>)
 
     @Query("SELECT * FROM channels WHERE LOWER(COALESCE(source_id, '')) = LOWER(:sourceId) LIMIT 1")
     suspend fun findBySourceId(sourceId: String): ChannelEntity?
@@ -203,7 +160,41 @@ interface ChannelDao {
 
 @Dao
 interface ChannelProfileDao {
+    @Upsert suspend fun upsert(rows: List<ChannelProfileEntity>)
     @Upsert suspend fun upsert(row: ChannelProfileEntity)
+
+    @Query("DELETE FROM channel_profiles WHERE channel_id = :channelId")
+    suspend fun delete(channelId: String)
+
+    @Query("DELETE FROM channel_profiles WHERE channel_id IN (:channelIds)")
+    suspend fun deleteByIds(channelIds: List<String>)
+
+    @Query(
+        """
+        DELETE FROM channel_profiles
+        WHERE channel_id NOT IN (
+            SELECT channel_id FROM channels
+            UNION SELECT channel_id FROM channel_follows
+            UNION SELECT channel_id FROM channel_stars
+            UNION SELECT channel_id FROM muted_channels
+            UNION SELECT channel_id FROM channel_settings
+                  WHERE media_only IS NOT NULL
+                     OR include_reposts IS NOT NULL
+                     OR media_download_limit IS NOT NULL
+                     OR max_videos IS NOT NULL
+                     OR download_subtitles IS NOT NULL
+            UNION SELECT channel_id FROM videos
+            UNION SELECT channel_id FROM feed_items WHERE channel_id IS NOT NULL
+            UNION SELECT source_channel_id FROM feed_items WHERE source_channel_id IS NOT NULL
+            UNION SELECT quote_channel_id FROM feed_items WHERE quote_channel_id IS NOT NULL
+            UNION SELECT reply_channel_id FROM feed_items WHERE reply_channel_id IS NOT NULL
+            UNION SELECT reposter_channel_id FROM feed_items WHERE reposter_channel_id IS NOT NULL
+            UNION SELECT reposter_channel_id FROM video_repost_sources
+            UNION SELECT retweeter_channel_id FROM retweet_sources
+        )
+        """,
+    )
+    suspend fun deleteUnreferenced()
 
     @Query("SELECT * FROM channel_profiles WHERE channel_id = :channelId")
     suspend fun getById(channelId: String): ChannelProfileEntity?
@@ -245,16 +236,19 @@ interface VideoCommentDao {
         """
         SELECT * FROM video_comments
         WHERE video_id = :videoId
-        ORDER BY
-            CASE WHEN thread_order > 0 THEN 0 ELSE 1 END ASC,
-            thread_order ASC,
-            published_at DESC
+        ORDER BY published_at DESC, comment_id ASC
         """
     )
     fun forVideoFlow(videoId: String): Flow<List<VideoCommentEntity>>
 
     @Query("DELETE FROM video_comments WHERE video_id = :videoId")
     suspend fun deleteForVideo(videoId: String)
+
+    @Query("DELETE FROM video_comments WHERE video_id IN (:videoIds)")
+    suspend fun deleteForVideos(videoIds: List<String>)
+
+    @Query("DELETE FROM video_comments WHERE video_id NOT IN (SELECT video_id FROM videos)")
+    suspend fun deleteOrphans()
 
     @Query("DELETE FROM video_comments")
     suspend fun deleteAll()
@@ -280,6 +274,12 @@ interface RetweetSourceDao {
     @Query("DELETE FROM retweet_sources WHERE content_hash = :contentHash")
     suspend fun deleteForContentHash(contentHash: String)
 
+    @Query("DELETE FROM retweet_sources WHERE content_hash IN (:contentHashes)")
+    suspend fun deleteForContentHashes(contentHashes: List<String>)
+
+    @Query("DELETE FROM retweet_sources WHERE content_hash NOT IN (SELECT content_hash FROM feed_items WHERE content_hash IS NOT NULL)")
+    suspend fun deleteOrphans()
+
     @Query("DELETE FROM retweet_sources")
     suspend fun deleteAll()
 }
@@ -290,6 +290,12 @@ interface VideoRepostSourceDao {
 
     @Query("DELETE FROM video_repost_sources WHERE video_id = :videoId")
     suspend fun deleteForVideo(videoId: String)
+
+    @Query("DELETE FROM video_repost_sources WHERE video_id IN (:videoIds)")
+    suspend fun deleteForVideos(videoIds: List<String>)
+
+    @Query("DELETE FROM video_repost_sources WHERE video_id NOT IN (SELECT video_id FROM videos)")
+    suspend fun deleteOrphans()
 
     @Query("SELECT * FROM video_repost_sources WHERE video_id = :videoId ORDER BY reposted_at_ms DESC, first_seen_at_ms DESC, reposter_channel_id ASC")
     suspend fun forVideo(videoId: String): List<VideoRepostSourceEntity>
@@ -317,16 +323,32 @@ interface SponsorBlockSegmentDao {
     @Query("DELETE FROM sponsorblock_segments WHERE video_id = :videoId")
     suspend fun deleteForVideo(videoId: String)
 
+    @Query("DELETE FROM sponsorblock_segments WHERE video_id IN (:videoIds)")
+    suspend fun deleteForVideos(videoIds: List<String>)
+
+    @Query("DELETE FROM sponsorblock_segments WHERE video_id NOT IN (SELECT video_id FROM videos)")
+    suspend fun deleteOrphans()
+
     @Query("DELETE FROM sponsorblock_segments")
     suspend fun deleteAll()
 }
 
 @Dao
 interface SponsorBlockCheckedDao {
+    @Upsert suspend fun upsert(rows: List<SponsorBlockCheckedEntity>)
     @Upsert suspend fun upsert(row: SponsorBlockCheckedEntity)
 
     @Query("SELECT * FROM sponsorblock_checked WHERE video_id = :videoId")
     suspend fun forVideo(videoId: String): SponsorBlockCheckedEntity?
+
+    @Query("DELETE FROM sponsorblock_checked WHERE video_id = :videoId")
+    suspend fun deleteForVideo(videoId: String)
+
+    @Query("DELETE FROM sponsorblock_checked WHERE video_id IN (:videoIds)")
+    suspend fun deleteForVideos(videoIds: List<String>)
+
+    @Query("DELETE FROM sponsorblock_checked WHERE video_id NOT IN (SELECT video_id FROM videos)")
+    suspend fun deleteOrphans()
 
     @Query("DELETE FROM sponsorblock_checked")
     suspend fun deleteAll()
@@ -334,6 +356,7 @@ interface SponsorBlockCheckedDao {
 
 @Dao
 interface FeedLikeDao {
+    @Upsert suspend fun upsert(rows: List<FeedLikeEntity>)
     @Upsert suspend fun upsert(row: FeedLikeEntity)
 
     @Query("DELETE FROM feed_likes WHERE tweet_id = :tweetId")
@@ -341,6 +364,9 @@ interface FeedLikeDao {
 
     @Query("SELECT EXISTS(SELECT 1 FROM feed_likes WHERE tweet_id = :tweetId)")
     suspend fun exists(tweetId: String): Boolean
+
+    @Query("SELECT * FROM feed_likes WHERE tweet_id = :tweetId")
+    suspend fun getById(tweetId: String): FeedLikeEntity?
 
     @Query("SELECT * FROM feed_likes WHERE tweet_id = :tweetId")
     fun getByIdFlow(tweetId: String): Flow<FeedLikeEntity?>
@@ -359,12 +385,19 @@ interface FeedRankDao {
     @Query("SELECT COUNT(*) FROM feed_rank")
     suspend fun count(): Int
 
+    @Query("DELETE FROM feed_rank WHERE tweet_id IN (:tweetIds)")
+    suspend fun deleteForTweets(tweetIds: List<String>)
+
+    @Query("DELETE FROM feed_rank WHERE tweet_id NOT IN (SELECT tweet_id FROM feed_items)")
+    suspend fun deleteOrphans()
+
     @Query("DELETE FROM feed_rank")
     suspend fun deleteAll()
 }
 
 @Dao
 interface BookmarkDao {
+    @Upsert suspend fun upsert(rows: List<BookmarkEntity>)
     @Upsert suspend fun upsert(row: BookmarkEntity)
 
     @Query("DELETE FROM bookmarks WHERE video_id = :videoId")
@@ -372,6 +405,9 @@ interface BookmarkDao {
 
     @Query("SELECT * FROM bookmarks WHERE video_id = :videoId")
     suspend fun getById(videoId: String): BookmarkEntity?
+
+    @Query("SELECT * FROM bookmarks WHERE category_id = :categoryId")
+    suspend fun forCategory(categoryId: Long): List<BookmarkEntity>
 
     @Query("SELECT * FROM bookmarks WHERE video_id = :videoId")
     fun getByIdFlow(videoId: String): Flow<BookmarkEntity?>
@@ -391,6 +427,16 @@ interface BookmarkDao {
 
     @Query("DELETE FROM bookmarks")
     suspend fun deleteAll()
+
+    @Query(
+        """
+        SELECT DISTINCT TRIM(custom_title)
+        FROM bookmarks
+        WHERE NULLIF(TRIM(COALESCE(custom_title, '')), '') IS NOT NULL
+        ORDER BY LOWER(TRIM(custom_title)) ASC
+        """
+    )
+    fun labelSuggestionsFlow(): Flow<List<String>>
 }
 
 @Dao
@@ -418,42 +464,18 @@ interface BookmarkCategoryDao {
 }
 
 @Dao
-interface BookmarkLabelDao {
-    @Upsert suspend fun upsert(row: BookmarkLabelEntity)
-    @Upsert suspend fun upsert(rows: List<BookmarkLabelEntity>)
-
-    @Query(
-        """
-        WITH merged_labels AS (
-            SELECT label
-            FROM bookmark_labels
-            WHERE TRIM(label) != ''
-            UNION
-            SELECT custom_title AS label
-            FROM bookmarks
-            WHERE custom_title IS NOT NULL
-              AND TRIM(custom_title) != ''
-        )
-        SELECT label
-        FROM merged_labels
-        ORDER BY LOWER(label) ASC
-        """
-    )
-    fun labelSuggestionsFlow(): Flow<List<String>>
-
-    @Query("SELECT * FROM bookmark_labels ORDER BY LOWER(label) ASC")
-    suspend fun all(): List<BookmarkLabelEntity>
-
-    @Query("DELETE FROM bookmark_labels")
-    suspend fun deleteAll()
-}
-
-@Dao
 interface FeedSeenDao {
+    @Upsert suspend fun upsert(rows: List<FeedSeenEntity>)
     @Upsert suspend fun upsert(row: FeedSeenEntity)
 
     @Query("SELECT EXISTS(SELECT 1 FROM feed_seen WHERE tweet_id = :tweetId)")
     suspend fun exists(tweetId: String): Boolean
+
+    @Query("SELECT * FROM feed_seen WHERE tweet_id = :tweetId")
+    suspend fun getById(tweetId: String): FeedSeenEntity?
+
+    @Query("DELETE FROM feed_seen WHERE tweet_id = :tweetId")
+    suspend fun delete(tweetId: String)
 
     @Query("DELETE FROM feed_seen")
     suspend fun deleteAll()
@@ -461,10 +483,17 @@ interface FeedSeenDao {
 
 @Dao
 interface MomentViewDao {
+    @Upsert suspend fun upsert(rows: List<MomentViewEntity>)
     @Upsert suspend fun upsert(row: MomentViewEntity)
 
     @Query("SELECT EXISTS(SELECT 1 FROM moment_views WHERE video_id = :videoId)")
     suspend fun exists(videoId: String): Boolean
+
+    @Query("SELECT * FROM moment_views WHERE video_id = :videoId")
+    suspend fun getById(videoId: String): MomentViewEntity?
+
+    @Query("DELETE FROM moment_views WHERE video_id = :videoId")
+    suspend fun delete(videoId: String)
 
     @Query("DELETE FROM moment_views")
     suspend fun deleteAll()
@@ -472,6 +501,7 @@ interface MomentViewDao {
 
 @Dao
 interface WatchHistoryDao {
+    @Upsert suspend fun upsert(rows: List<WatchHistoryEntity>)
     @Upsert suspend fun upsert(row: WatchHistoryEntity)
 
     @Query("SELECT * FROM watch_history WHERE video_id = :videoId")
@@ -488,24 +518,58 @@ interface WatchHistoryDao {
 }
 
 @Dao
-interface MutedAccountDao {
-    @Upsert suspend fun upsert(row: MutedAccountEntity)
+interface MomentsCursorDao {
+    @Upsert suspend fun upsert(row: MomentsCursorEntity)
+    @Upsert suspend fun upsert(rows: List<MomentsCursorEntity>)
 
-    @Query("DELETE FROM muted_accounts WHERE handle = :handle")
-    suspend fun delete(handle: String)
+    @Query("SELECT * FROM moments_cursors WHERE scope = :scope")
+    suspend fun get(scope: String): MomentsCursorEntity?
 
-    @Query("SELECT EXISTS(SELECT 1 FROM muted_accounts WHERE handle = :handle)")
-    suspend fun exists(handle: String): Boolean
+    @Query("SELECT * FROM moments_cursors WHERE scope = :scope")
+    fun flow(scope: String): Flow<MomentsCursorEntity?>
 
-    @Query("SELECT * FROM muted_accounts ORDER BY handle ASC")
-    fun allFlow(): Flow<List<MutedAccountEntity>>
+    @Query("DELETE FROM moments_cursors WHERE scope = :scope")
+    suspend fun delete(scope: String)
 
-    @Query("DELETE FROM muted_accounts")
+    @Query("DELETE FROM moments_cursors")
+    suspend fun deleteAll()
+}
+
+@Dao
+interface MutedChannelDao {
+    @Upsert suspend fun upsert(rows: List<MutedChannelEntity>)
+    @Upsert suspend fun upsert(row: MutedChannelEntity)
+
+    @Query("DELETE FROM muted_channels WHERE channel_id = :channelId")
+    suspend fun delete(channelId: String)
+
+    @Query("SELECT EXISTS(SELECT 1 FROM muted_channels WHERE channel_id = :channelId)")
+    suspend fun exists(channelId: String): Boolean
+
+    @Query("SELECT * FROM muted_channels WHERE channel_id = :channelId")
+    suspend fun getById(channelId: String): MutedChannelEntity?
+
+    @Query("SELECT * FROM muted_channels ORDER BY channel_id ASC")
+    fun allFlow(): Flow<List<MutedChannelEntity>>
+
+    @Query(
+        """
+        SELECT mc.*, cp.handle, COALESCE(NULLIF(cp.display_name, ''), c.name) AS display_name
+        FROM muted_channels mc
+        LEFT JOIN channel_profiles cp ON cp.channel_id = mc.channel_id
+        LEFT JOIN channels c ON c.channel_id = mc.channel_id
+        ORDER BY COALESCE(NULLIF(cp.display_name, ''), cp.handle, c.name, mc.channel_id) COLLATE NOCASE
+        """
+    )
+    fun displayFlow(): Flow<List<MutedChannelDisplay>>
+
+    @Query("DELETE FROM muted_channels")
     suspend fun deleteAll()
 }
 
 @Dao
 interface ChannelFollowDao {
+    @Upsert suspend fun upsert(rows: List<ChannelFollowEntity>)
     @Upsert suspend fun upsert(row: ChannelFollowEntity)
 
     @Query("DELETE FROM channel_follows WHERE channel_id = :channelId")
@@ -513,6 +577,9 @@ interface ChannelFollowDao {
 
     @Query("SELECT EXISTS(SELECT 1 FROM channel_follows WHERE channel_id = :channelId)")
     suspend fun exists(channelId: String): Boolean
+
+    @Query("SELECT * FROM channel_follows WHERE channel_id = :channelId")
+    suspend fun getById(channelId: String): ChannelFollowEntity?
 
     @Query("SELECT * FROM channel_follows")
     fun allFlow(): Flow<List<ChannelFollowEntity>>
@@ -523,6 +590,7 @@ interface ChannelFollowDao {
 
 @Dao
 interface ChannelStarDao {
+    @Upsert suspend fun upsert(rows: List<ChannelStarEntity>)
     @Upsert suspend fun upsert(row: ChannelStarEntity)
 
     @Query("DELETE FROM channel_stars WHERE channel_id = :channelId")
@@ -530,6 +598,9 @@ interface ChannelStarDao {
 
     @Query("SELECT EXISTS(SELECT 1 FROM channel_stars WHERE channel_id = :channelId)")
     suspend fun exists(channelId: String): Boolean
+
+    @Query("SELECT * FROM channel_stars WHERE channel_id = :channelId")
+    suspend fun getById(channelId: String): ChannelStarEntity?
 
     @Query("SELECT * FROM channel_stars")
     fun allFlow(): Flow<List<ChannelStarEntity>>
@@ -540,6 +611,7 @@ interface ChannelStarDao {
 
 @Dao
 interface ChannelSettingDao {
+    @Upsert suspend fun upsert(rows: List<ChannelSettingEntity>)
     @Upsert suspend fun upsert(row: ChannelSettingEntity)
 
     @Query("SELECT * FROM channel_settings WHERE channel_id = :channelId")

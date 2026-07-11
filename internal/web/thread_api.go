@@ -40,12 +40,8 @@ func (s *Server) handleGetThread(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	username := ""
-	if user := userFromContext(r.Context()); user != nil {
-		username = user.Username
-	}
 	// Use the no-collapse variant so every row in the reply tree is returned.
-	items = feed.EnrichFeedItemsPreserveRows(s.db, items, username)
+	items = feed.EnrichFeedItemsPreserveRows(s.db, items)
 
 	var allIDs []string
 	for _, item := range items {

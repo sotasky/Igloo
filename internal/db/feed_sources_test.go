@@ -51,12 +51,12 @@ func TestFeedSourcesPersistAndTrackAttribution(t *testing.T) {
 		t.Fatalf("source = %#v", got)
 	}
 
-	var storedSourceHandle string
-	if err := d.QueryRow(`SELECT source_handle FROM feed_items WHERE tweet_id = 'tweet_list_1'`).Scan(&storedSourceHandle); err != nil {
-		t.Fatalf("read source_handle: %v", err)
+	var storedSourceID string
+	if err := d.QueryRow(`SELECT source_channel_id FROM feed_items WHERE tweet_id = 'tweet_list_1'`).Scan(&storedSourceID); err != nil {
+		t.Fatalf("read source_channel_id: %v", err)
 	}
-	if storedSourceHandle != "real_author" {
-		t.Fatalf("source_handle = %q, want real author handle", storedSourceHandle)
+	if storedSourceID != "twitter_real_author" {
+		t.Fatalf("source_channel_id = %q", storedSourceID)
 	}
 }
 

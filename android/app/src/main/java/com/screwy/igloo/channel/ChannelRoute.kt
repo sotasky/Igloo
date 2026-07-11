@@ -26,10 +26,7 @@ import com.screwy.igloo.data.entity.FeedRow
 import com.screwy.igloo.data.entity.ThreadedFeedRow
 import com.screwy.igloo.feed.FeedMediaGridModel
 import com.screwy.igloo.feed.SocialPostModel
-import com.screwy.igloo.feed.buildFeedMediaOpenSnapshot
 import com.screwy.igloo.feed.buildProfileOpenSnapshot
-import com.screwy.igloo.media.MediaUri
-import com.screwy.igloo.net.ServerBaseUrlProvider
 import com.screwy.igloo.ui.UiState
 import com.screwy.igloo.ui.UiStateSwitch
 import com.screwy.igloo.ui.component.BookmarkCategoryDisplay
@@ -45,14 +42,12 @@ import com.screwy.igloo.ui.component.VideoGrid
 import com.screwy.igloo.ui.component.channelProfileHeaderUiModel
 import com.screwy.igloo.ui.component.normalizeHandle
 import com.screwy.igloo.ui.component.parsePlatform
-import com.screwy.igloo.ui.component.resolveInitialMomentThumbnailUri
 import com.screwy.igloo.ui.nav.ApplyOverlayChrome
 import com.screwy.igloo.ui.nav.IglooNavigationSource
 import com.screwy.igloo.ui.nav.OverlayChromeState
 import com.screwy.igloo.ui.nav.ProfileOpenSnapshot
 import com.screwy.igloo.ui.nav.rememberIglooNavigator
 import org.koin.androidx.compose.koinViewModel
-import org.koin.compose.koinInject
 import org.koin.core.parameter.parametersOf
 
 /**
@@ -74,8 +69,6 @@ fun ChannelRoute(
     initialSnapshot: ProfileOpenSnapshot? = null,
 ) {
     val uriHandler = LocalUriHandler.current
-    val baseUrlProvider: ServerBaseUrlProvider = koinInject()
-    val baseUrl = baseUrlProvider.baseUrl()
     val vm: ChannelViewModel = koinViewModel(
         parameters = { parametersOf(channelId) },
     )
@@ -85,7 +78,7 @@ fun ChannelRoute(
     val uiState by vm.uiState.collectAsStateWithLifecycle()
     val pendingBookmark by vm.pendingBookmark.collectAsStateWithLifecycle()
     val bookmarkCategories by vm.bookmarkCategories.collectAsStateWithLifecycle()
-    val mutedHandles by vm.mutedHandles.collectAsStateWithLifecycle()
+    val mutedChannelIds by vm.mutedChannelIds.collectAsStateWithLifecycle()
     var confirmUnfollow by remember { mutableStateOf(false) }
     val navigator = rememberIglooNavigator(navController)
 
@@ -119,14 +112,11 @@ fun ChannelRoute(
                 sourceHandle = profileForHeader?.handle ?: display.channel.sourceId,
                 twitterAuthorDisplayNames = authorDisplayNames,
             )
-            return channelProfileHeaderUiModel(
-                baseUrl = baseUrl,
-                channel = display,
-                profile = profileForHeader,
-                displayNameOverride = displayNameOverride,
-                initialAvatarUri = matchingSnapshot?.avatarUri ?: MediaUri.Missing,
-                initialBannerUri = matchingSnapshot?.bannerUri ?: MediaUri.Missing,
-                labels = headerLabels,
+			return channelProfileHeaderUiModel(
+				channel = display,
+				profile = profileForHeader,
+				displayNameOverride = displayNameOverride,
+				labels = headerLabels,
             ).copy(
                 storyRingState = storyStatus.ringState,
                 storyFirstVideoId = storyStatus.firstVideoId,
@@ -166,12 +156,12 @@ fun ChannelRoute(
                 val twitterRows by vm.twitterRows.collectAsStateWithLifecycle()
                 val mediaModels by vm.mediaModels.collectAsStateWithLifecycle()
                 val profileHeader = buildProfileHeader(
-                    authorDisplayNames = twitterRows.mapNotNull { it.row.item.authorDisplayName },
+                    authorDisplayNames = twitterRows.mapNotNull { it.row.authorDisplayName },
                 )
                 ChannelTwitterBody(
                     vm = vm,
                     rows = twitterRows,
-                    mutedHandles = mutedHandles,
+                    mutedChannelIds = mutedChannelIds,
                     mediaModels = mediaModels,
                     pendingBookmark = pendingBookmark,
                     bookmarkCategories = bookmarkCategories,
@@ -196,23 +186,15 @@ fun ChannelRoute(
                             channelId = post.author.channelId,
                             source = IglooNavigationSource.Channel,
                             originItemId = post.row.item.tweetId,
-                            snapshot = buildProfileOpenSnapshot(post, baseUrl),
+							snapshot = buildProfileOpenSnapshot(post),
                         )
                     },
-                    onMediaOpen = { row, mediaIndex, visibleMediaModel ->
-                        val snapshot = buildFeedMediaOpenSnapshot(
-                            row = row,
-                            mediaIndex = mediaIndex,
-                            mediaModels = mediaModels,
-                            visibleMediaModel = visibleMediaModel,
-                        )
+                    onMediaOpen = { row, mediaIndex, _ ->
                         navigator.openMedia(
                             ownerKind = "tweet",
                             ownerId = row.item.tweetId,
                             index = mediaIndex,
                             source = IglooNavigationSource.Channel,
-                            posterUri = snapshot.posterUri,
-                            snapshot = snapshot,
                         )
                     },
                     onQuoteOpen = { tweetId ->
@@ -232,7 +214,6 @@ fun ChannelRoute(
                             playlistId = channelId,
                             videoId = item.videoId,
                             source = IglooNavigationSource.Channel,
-                            posterUri = item.routePosterUri(baseUrl),
                         )
                     },
                     onChannelClick = { cid ->
@@ -247,9 +228,6 @@ fun ChannelRoute(
                     headerContent = headerContent(profileHeader),
                     onVideoClick = { vid ->
                         navigator.openVideo(vid, IglooNavigationSource.Channel)
-                    },
-                    onVideoClickWithPoster = { vid, posterUri ->
-                        navigator.openVideo(vid, IglooNavigationSource.Channel, posterUri)
                     },
                     onChannelClick = { cid ->
                         navigator.openChannel(cid, IglooNavigationSource.Channel)
@@ -305,7 +283,7 @@ fun ChannelRoute(
 private fun ChannelTwitterBody(
     vm: ChannelViewModel,
     rows: List<ThreadedFeedRow>,
-    mutedHandles: Set<String>,
+    mutedChannelIds: Set<String>,
     mediaModels: Map<String, FeedMediaGridModel>,
     pendingBookmark: BookmarkTarget?,
     bookmarkCategories: List<BookmarkCategoryDisplay>,
@@ -325,7 +303,7 @@ private fun ChannelTwitterBody(
         isRefreshing = false,
         pendingBookmark = pendingBookmark,
         bookmarkCategories = bookmarkCategories,
-        mutedHandles = mutedHandles,
+        mutedChannelIds = mutedChannelIds,
         mediaModels = mediaModels,
         onRefresh = vm::refresh,
         onChannelClick = onChannelClick,
@@ -343,7 +321,7 @@ private fun ChannelTwitterBody(
         onRemoveBookmark = vm::removePendingBookmark,
         onDismissBookmarkSheet = vm::dismissBookmarkSheet,
         onCreateCategory = vm::createCategory,
-        onWarmMediaRows = vm::warmMediaModels,
+        onMediaRowsChanged = vm::setMediaModelRows,
         channelHeader = header,
         onHeaderFollowToggle = onHeaderFollowToggle,
         onHeaderStarToggle = onHeaderStarToggle,
@@ -375,28 +353,13 @@ private fun ChannelMomentsBody(
     )
 }
 
-private fun MomentThumbnailItem.routePosterUri(baseUrl: String): MediaUri =
-    resolveInitialMomentThumbnailUri(
-        videoId = videoId,
-        thumbnailPath = thumbnailPath,
-        mediaKind = mediaKind,
-        slideCount = slideCount,
-        ownerKind = ownerKind,
-        baseUrl = baseUrl,
-    )
-
 private fun ProfileOpenSnapshot.toChannelProfileEntity(): ChannelProfileEntity =
-    ChannelProfileEntity(
-        channelId = channelId,
-        platform = platform,
-        handle = handle.takeIf { it.isNotBlank() },
-        displayName = displayName.takeIf { it.isNotBlank() },
-        avatarUrl = avatarUri.remoteUrlOrNull(),
-        bannerUrl = bannerUri.remoteUrlOrNull(),
-    )
-
-private fun MediaUri.remoteUrlOrNull(): String? =
-    (this as? MediaUri.Remote)?.url?.takeIf { it.isNotBlank() }
+	ChannelProfileEntity(
+		channelId = channelId,
+		platform = platform,
+		handle = handle.takeIf { it.isNotBlank() },
+		displayName = displayName.takeIf { it.isNotBlank() },
+	)
 
 internal fun resolveChannelRoutePlatform(
     profile: ChannelProfileEntity?,
@@ -426,16 +389,11 @@ internal fun channelRouteDisplayNameOverride(
             null
         }
 
-/**
- * YouTube body. Faded-but-tappable for not-yet-downloaded entries is already
- * handled inside [VideoGrid] via `video.filePath.isNullOrEmpty()`.
- */
 @Composable
 private fun ChannelVideosBody(
     vm: ChannelViewModel,
     headerContent: @Composable () -> Unit,
     onVideoClick: (String) -> Unit,
-    onVideoClickWithPoster: (String, MediaUri) -> Unit,
     onChannelClick: (String) -> Unit,
 ) {
     val videos by vm.videos.collectAsStateWithLifecycle()
@@ -443,7 +401,6 @@ private fun ChannelVideosBody(
         items = videos,
         columns = 2,
         onVideoClick = onVideoClick,
-        onVideoClickWithPoster = onVideoClickWithPoster,
         onChannelClick = onChannelClick,
         headerContent = headerContent,
     )

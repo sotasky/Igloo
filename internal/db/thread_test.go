@@ -194,10 +194,10 @@ func TestFindUnresolvedReplies(t *testing.T) {
 	})
 	if err := d.ExecRaw(`
 		INSERT INTO feed_rank_snapshot (
-			username, tweet_id, rank_position, base_score, decay_factor,
+			tweet_id, rank_position, base_score, decay_factor,
 			freshness_bonus, jitter, diversity_demoted_by, final_score, computed_at
 		)
-		VALUES ('sample_user', 'sample_unresolved_missing', 1, 0, 0, 0, 0, 0, 1, 123)
+		VALUES ('sample_unresolved_missing', 1, 0, 0, 0, 0, 0, 1, 123)
 	`); err != nil {
 		t.Fatalf("rank snapshot: %v", err)
 	}

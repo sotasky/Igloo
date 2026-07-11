@@ -61,7 +61,7 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import com.screwy.igloo.R
-import com.screwy.igloo.data.DatabaseHolder
+import com.screwy.igloo.data.IglooDatabase
 import com.screwy.igloo.data.PreferencesRepo
 import com.screwy.igloo.data.stripPlatformPrefix
 import com.screwy.igloo.data.entity.BookmarkEntity
@@ -153,14 +153,13 @@ fun BookmarkSheet(
     )
     val isEditing = target.currentBookmark != null
     val prefs: PreferencesRepo = koinInject()
-    val dbHolder: DatabaseHolder = koinInject()
-    val db = remember(dbHolder) { dbHolder.requireCurrent() }
+    val db: IglooDatabase = koinInject()
     val focusRequester = remember { FocusRequester() }
     val keyboardController = LocalSoftwareKeyboardController.current
     val createCategoryBringIntoView = remember { BringIntoViewRequester() }
     val scope = rememberCoroutineScope()
 
-    val labelSuggestions by db.bookmarkLabelDao().labelSuggestionsFlow().collectAsState(initial = emptyList())
+    val labelSuggestions by db.bookmarkDao().labelSuggestionsFlow().collectAsState(initial = emptyList())
     val followedChannels by db.channelReadDao().allFlow().collectAsState(initial = emptyList())
     val bookmarkedHandleSet by produceState(initialValue = emptySet<String>(), key1 = target.itemId) {
         value = runCatching {

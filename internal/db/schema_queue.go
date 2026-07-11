@@ -14,28 +14,6 @@ func schemaQueueStatements() []string {
 			updated_at      INTEGER NOT NULL DEFAULT 0
 		)`,
 
-		`CREATE TABLE IF NOT EXISTS feed_media_jobs (
-			tweet_id      TEXT PRIMARY KEY,
-			tweet_url     TEXT,
-			source_handle TEXT,
-			status        TEXT    DEFAULT 'queued',
-			media_kind    TEXT,
-			slide_count   INTEGER DEFAULT 0,
-			retry_count   INTEGER DEFAULT 0,
-			priority      INTEGER DEFAULT 0,
-			last_error    TEXT,
-			lease_owner   TEXT    NOT NULL DEFAULT '',
-			lease_until_ms INTEGER NOT NULL DEFAULT 0,
-			next_attempt_at_ms INTEGER NOT NULL DEFAULT 0,
-			last_error_kind TEXT NOT NULL DEFAULT '',
-			tool          TEXT    NOT NULL DEFAULT '',
-			cookie_label  TEXT    NOT NULL DEFAULT '',
-			started_at_ms INTEGER NOT NULL DEFAULT 0,
-			completed_at_ms INTEGER NOT NULL DEFAULT 0,
-			created_at    INTEGER NOT NULL DEFAULT 0,
-			updated_at    INTEGER NOT NULL DEFAULT 0
-		)`,
-
 		`CREATE TABLE IF NOT EXISTS translation_jobs (
 			tweet_id        TEXT NOT NULL,
 			field           TEXT NOT NULL,

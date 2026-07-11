@@ -48,8 +48,8 @@ func TestSnapshotTop10_Empty(t *testing.T) {
 // Smoke test: BuildSnapshot integrates cleanly with the db.SnapshotRow shape.
 func TestBuildSnapshot_ReturnsSnapshotRowType(t *testing.T) {
 	pre := []db.PreDiversitySnapshotRow{
-		{TweetID: "a", AuthorHandle: "u", BaseScore: 3, DecayFactor: 1, FreshnessBonus: 1},
-		{TweetID: "b", AuthorHandle: "v", BaseScore: 2, DecayFactor: 1, FreshnessBonus: 1},
+		{TweetID: "a", ChannelID: "twitter_sample_alpha", BaseScore: 3, DecayFactor: 1, FreshnessBonus: 1},
+		{TweetID: "b", ChannelID: "twitter_sample_beta", BaseScore: 2, DecayFactor: 1, FreshnessBonus: 1},
 	}
 	got := feed.BuildSnapshot(pre, time.Unix(0, 0))
 	if len(got) != 2 {

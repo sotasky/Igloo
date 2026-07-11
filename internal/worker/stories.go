@@ -6,10 +6,10 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/screwys/igloo/internal/db"
 	"github.com/screwys/igloo/internal/download"
 	"github.com/screwys/igloo/internal/model"
 )
@@ -102,62 +102,57 @@ func (m *Manager) refreshNativeStoriesForChannel(ctx context.Context, channelID,
 }
 
 func (m *Manager) downloadNativeStory(ctx context.Context, platform, handle string, ref download.StoryRef) error {
-	videoDir := filepath.Join(m.cfg.DataDir, "media", platform, handle, "stories")
+	ownerKind, ok := db.VideoOwnerKindForPlatform(platform)
+	if !ok || ownerKind == "tweet" {
+		return fmt.Errorf("unsupported story platform %q", platform)
+	}
+	videoDir, err := m.cfg.Storage.WritePath("media/" + platform + "/" + handle + "/stories")
+	if err != nil {
+		return fmt.Errorf("storage path: %w", err)
+	}
 	if err := os.MkdirAll(videoDir, 0o755); err != nil {
 		return fmt.Errorf("mkdir: %w", err)
+	}
+	attemptID, err := newDownloadAttemptID(videoDir, ref.VideoID)
+	if err != nil {
+		return fmt.Errorf("allocate download attempt: %w", err)
 	}
 	cookiesFile, cookiesBrowser := m.cookiesFor(platform)
 	opts := download.Opts{
 		OutputDir:          videoDir,
-		ID:                 ref.VideoID,
+		ID:                 attemptID,
 		Cookies:            cookiesFile,
 		CookiesFromBrowser: cookiesBrowser,
 		CookieAlternates:   m.cookieSetsFor(platform),
 		Format:             resolveFormatString(platform, ""),
 	}
-	paths, err := m.downloader.Download(ctx, ref.URL, "video", opts)
+	completed, err := m.downloader.DownloadCompleted(ctx, ref.URL, "video", opts)
 	if err != nil {
+		(completedVideoFiles{}).removeFailedAttempt(completed)
 		return err
 	}
-	if len(paths) == 0 {
+	if len(completed.MediaPaths) == 0 {
+		(completedVideoFiles{}).removeFailedAttempt(completed)
 		return fmt.Errorf("no files returned")
 	}
 
-	videoPath := paths[0]
-	relVideoPath := toRelPath(m.cfg.DataDir, videoPath)
-	var fileSize int64
-	if fi, err := os.Stat(videoPath); err == nil {
-		fileSize = fi.Size()
+	files, err := m.prepareCompletedVideoFiles(ctx, platform, attemptID, completed)
+	if err != nil {
+		files.removeFailedAttempt(completed)
+		return fmt.Errorf("prepare completed outputs: %w", err)
 	}
-	thumbPath := findSiblingThumbnail(videoPath, ref.VideoID)
-	metadata := loadInfoJSON(videoPath, ref.VideoID)
-	if thumbPath == "" {
-		thumbPath = m.downloadSiblingThumbnailFromMetadata(ctx, videoPath, ref.VideoID, metadata)
-	}
-	relThumbPath := ""
-	if thumbPath != "" {
-		relThumbPath = toRelPath(m.cfg.DataDir, thumbPath)
-	}
+	metadata := loadInfoJSONFile(completed.InfoJSONPath)
 
-	if (platform == "tiktok" || platform == "instagram") && len(paths) > 1 {
-		var imagePaths []string
-		for _, p := range paths {
-			switch strings.ToLower(filepath.Ext(p)) {
-			case ".jpg", ".jpeg", ".png", ".webp":
-				imagePaths = append(imagePaths, p)
-			}
+	if (platform == "tiktok" || platform == "instagram") && len(files.imageKeys) > 1 {
+		slides := make([]any, len(files.imageKeys))
+		for i, key := range files.imageKeys {
+			slides[i] = map[string]any{"path": key}
 		}
-		if len(imagePaths) > 1 {
-			slides := make([]any, len(imagePaths))
-			for i, p := range imagePaths {
-				slides[i] = map[string]any{"path": toRelPath(m.cfg.DataDir, p)}
-			}
-			if metadata == nil {
-				metadata = map[string]any{}
-			}
-			metadata["slides"] = slides
-			metadata["vcodec"] = "none"
+		if metadata == nil {
+			metadata = map[string]any{}
 		}
+		metadata["slides"] = slides
+		metadata["vcodec"] = "none"
 	}
 
 	publishedAt := ref.PublishedAtMs
@@ -185,11 +180,11 @@ func (m *Manager) downloadNativeStory(ctx context.Context, platform, handle stri
 	if metadataJSON != "" {
 		var meta model.VideoMetadata
 		if err := json.Unmarshal([]byte(metadataJSON), &meta); err == nil {
-			mediaKind, slideCount = model.ComputeMediaKind(&meta, relVideoPath)
+			mediaKind, slideCount = model.ComputeMediaKind(&meta, files.primaryKey)
 		}
 	}
 	if mediaKind == "" {
-		mediaKind, slideCount = model.ComputeMediaKind(nil, relVideoPath)
+		mediaKind, slideCount = model.ComputeMediaKind(nil, files.primaryKey)
 	}
 	title := videoTitleFromMetadata(metadata, ref.Title)
 	if title == "" {
@@ -198,9 +193,16 @@ func (m *Manager) downloadNativeStory(ctx context.Context, platform, handle stri
 	if title == "" {
 		title = platform + " story"
 	}
-	return m.db.InsertVideoWithSourceKind(
-		ref.VideoID, ref.ChannelID, title, description,
-		duration, relThumbPath, relVideoPath, fileSize,
-		publishedAt, metadataJSON, mediaKind, slideCount, false, "story",
-	)
+	err = m.db.StoreCompletedVideo(db.CompletedVideo{
+		VideoID: ref.VideoID, ChannelID: ref.ChannelID, OwnerKind: ownerKind, Title: title, Description: description,
+		Duration: duration, PublishedAtMs: publishedAt, MetadataJSON: metadataJSON,
+		MediaKind: mediaKind, SlideCount: slideCount, SourceKind: "story", Assets: files.assets,
+	})
+	if err == nil {
+		files.removeTransientFiles()
+		m.enqueueCompletedVideoPreview(ref.VideoID, platform, files.primaryPath, float64(duration))
+	} else {
+		files.removeFailedAttempt(completed)
+	}
+	return err
 }

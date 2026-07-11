@@ -57,6 +57,7 @@ COPY --from=build /out/locales /app/locales
 COPY --from=build /out/static /app/static
 
 RUN mkdir -p /igloo/data /igloo/config \
+    && : > /igloo/data/.igloo-state-root \
     && chown -R 10001:10001 /igloo
 
 VOLUME ["/igloo"]

@@ -21,7 +21,6 @@ import (
 	"github.com/screwys/igloo/internal/config"
 	"github.com/screwys/igloo/internal/db"
 	"github.com/screwys/igloo/internal/download"
-	"github.com/screwys/igloo/internal/exportbundle"
 	"github.com/screwys/igloo/internal/model"
 )
 
@@ -54,22 +53,6 @@ func TestSettingsFromForm_PersistsShareEmbedFriendlyLinks(t *testing.T) {
 	body := srv.settingsFromForm(req)
 	if got := body["share_embed_friendly_links"]; got != "true" {
 		t.Errorf("share_embed_friendly_links = %q, want true", got)
-	}
-}
-
-func TestSettingsFromForm_PersistsBackupIncludeMedia(t *testing.T) {
-	srv := newTestServer(t)
-	form := url.Values{}
-	form.Set("backup_include_media", "true")
-	req := httptest.NewRequest("POST", "/api/settings", strings.NewReader(form.Encode()))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	if err := req.ParseForm(); err != nil {
-		t.Fatalf("ParseForm: %v", err)
-	}
-
-	body := srv.settingsFromForm(req)
-	if got := body["backup_include_media"]; got != "true" {
-		t.Errorf("backup_include_media = %q, want true", got)
 	}
 }
 
@@ -188,13 +171,13 @@ func TestHandleUpdateSettingsClampsBackupKeepCount(t *testing.T) {
 
 func TestHandleUpdateSettingsRejectsNonAdmin(t *testing.T) {
 	srv := newTestServer(t)
-	if err := srv.db.SetSetting("", "web_theme_id", "dracula"); err != nil {
+	if err := srv.db.SetSetting("web_theme_id", "dracula"); err != nil {
 		t.Fatal(err)
 	}
-	if err := srv.db.SetSetting("", "web_theme_accent", "#50fa7b"); err != nil {
+	if err := srv.db.SetSetting("web_theme_accent", "#50fa7b"); err != nil {
 		t.Fatal(err)
 	}
-	if err := srv.db.SetSetting("", "web_custom_css", ".before { color: red; }"); err != nil {
+	if err := srv.db.SetSetting("web_custom_css", ".before { color: red; }"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -225,7 +208,7 @@ func TestHandleUpdateSettingsRejectsNonAdmin(t *testing.T) {
 
 func TestHandleGetSettingsRequiresAdmin(t *testing.T) {
 	srv := newTestServer(t)
-	if err := srv.db.SetSetting("", "translate_api_key", "sample-secret-key"); err != nil {
+	if err := srv.db.SetSetting("translate_api_key", "sample-secret-key"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -262,7 +245,7 @@ func TestHandleGetSettingsRequiresAdmin(t *testing.T) {
 
 func TestHandleSettingsFormRequiresAdmin(t *testing.T) {
 	srv := newTestServer(t)
-	if err := srv.db.SetSetting("", "translate_api_key", "sample-secret-key"); err != nil {
+	if err := srv.db.SetSetting("translate_api_key", "sample-secret-key"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -283,13 +266,13 @@ func TestHandleSettingsFormRequiresAdmin(t *testing.T) {
 
 func TestHandleThemeCSSServesPersistedThemeAsNoStoreCSS(t *testing.T) {
 	srv := newTestServer(t)
-	if err := srv.db.SetSetting("", "web_theme_id", "dracula"); err != nil {
+	if err := srv.db.SetSetting("web_theme_id", "dracula"); err != nil {
 		t.Fatal(err)
 	}
-	if err := srv.db.SetSetting("", "web_theme_accent", "#50fa7b"); err != nil {
+	if err := srv.db.SetSetting("web_theme_accent", "#50fa7b"); err != nil {
 		t.Fatal(err)
 	}
-	if err := srv.db.SetSetting("", "web_custom_css", ".feed-card { border-color: hotpink; }"); err != nil {
+	if err := srv.db.SetSetting("web_custom_css", ".feed-card { border-color: hotpink; }"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -320,13 +303,13 @@ func TestHandleThemeCSSServesPersistedThemeAsNoStoreCSS(t *testing.T) {
 
 func TestHandleThemeJSONServesPersistedThemeTokens(t *testing.T) {
 	srv := newTestServer(t)
-	if err := srv.db.SetSetting("", "web_theme_id", "dracula"); err != nil {
+	if err := srv.db.SetSetting("web_theme_id", "dracula"); err != nil {
 		t.Fatal(err)
 	}
-	if err := srv.db.SetSetting("", "web_theme_accent", "#50fa7b"); err != nil {
+	if err := srv.db.SetSetting("web_theme_accent", "#50fa7b"); err != nil {
 		t.Fatal(err)
 	}
-	if err := srv.db.SetSetting("", "web_custom_css", ".feed-card { border-color: hotpink; }"); err != nil {
+	if err := srv.db.SetSetting("web_custom_css", ".feed-card { border-color: hotpink; }"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -368,35 +351,8 @@ func TestHandleThemeJSONServesPersistedThemeTokens(t *testing.T) {
 	}
 }
 
-func TestHandleConfigExportFullIncludesBookmarkedMediaAndAvatars(t *testing.T) {
+func TestHandleConfigExportFullIncludesDatabaseStateWithoutMediaPayload(t *testing.T) {
 	srv := newTestServer(t)
-
-	avatarRelPath := filepath.Join("thumbnails", "avatars", "channel_alpha.jpg")
-	avatarAbsPath := filepath.Join(srv.cfg.DataDir, avatarRelPath)
-	if err := os.MkdirAll(filepath.Dir(avatarAbsPath), 0o755); err != nil {
-		t.Fatalf("MkdirAll avatar: %v", err)
-	}
-	if err := os.WriteFile(avatarAbsPath, []byte("avatar-bytes"), 0o644); err != nil {
-		t.Fatalf("WriteFile avatar: %v", err)
-	}
-
-	mediaRelPath := filepath.Join("media", "youtube", "channel_alpha", "booked_video.mp4")
-	mediaAbsPath := filepath.Join(srv.cfg.DataDir, mediaRelPath)
-	if err := os.MkdirAll(filepath.Dir(mediaAbsPath), 0o755); err != nil {
-		t.Fatalf("MkdirAll media: %v", err)
-	}
-	if err := os.WriteFile(mediaAbsPath, []byte("bookmarked-video-bytes"), 0o644); err != nil {
-		t.Fatalf("WriteFile media: %v", err)
-	}
-
-	feedRelPath := filepath.Join("media", "twitter", "author", "post_1_0.jpg")
-	feedAbsPath := filepath.Join(srv.cfg.DataDir, feedRelPath)
-	if err := os.MkdirAll(filepath.Dir(feedAbsPath), 0o755); err != nil {
-		t.Fatalf("MkdirAll feed media: %v", err)
-	}
-	if err := os.WriteFile(feedAbsPath, []byte("bookmarked-feed-image"), 0o644); err != nil {
-		t.Fatalf("WriteFile feed media: %v", err)
-	}
 
 	if err := srv.db.WithWrite(func(tx *sql.Tx) error {
 		statements := []struct {
@@ -404,25 +360,25 @@ func TestHandleConfigExportFullIncludesBookmarkedMediaAndAvatars(t *testing.T) {
 			args []any
 		}{
 			{`INSERT INTO channels (channel_id, name, url, platform)
-				VALUES ('channel_alpha', 'Channel Alpha', 'https://example.com/channel', 'youtube')`, nil},
-			{`INSERT INTO videos (video_id, channel_id, title, duration, file_path, published_at)
-				VALUES ('booked_video', 'channel_alpha', 'Booked Video', 12, ?, 1000)`, []any{mediaAbsPath}},
-			{`INSERT INTO videos (video_id, channel_id, title, duration, published_at)
-				VALUES ('post_1', 'twitter_author', 'X post author', 0, 1000)`, nil},
-			{`INSERT INTO media_files (owner_type, owner_id, media_index, file_path, media_type)
-				VALUES ('feed_media', 'post_1', 0, ?, 'photo')`, []any{feedRelPath}},
-			{`INSERT INTO bookmark_categories (id, user_id, name, created_at)
-				VALUES (7, 'admin', 'Saved', 1000)`, nil},
-			{`INSERT INTO bookmarks (user_id, video_id, category_id, custom_title, bookmarked_at)
-				VALUES ('admin', 'booked_video', 7, 'Watch Later', 2000)`, nil},
-			{`INSERT INTO bookmarks (user_id, video_id, category_id, custom_title, bookmarked_at)
-				VALUES ('admin', 'post_1', 7, 'Reference', 3000)`, nil},
-			{`INSERT INTO muted_accounts (handle, muted_at)
-				VALUES ('muted_sample', 4000)`, nil},
-			{`INSERT INTO watch_history (user_id, video_id, last_watched)
-				VALUES ('admin', 'booked_video', 5000)`, nil},
-			{`INSERT INTO moment_views (username, video_id, viewed_at)
-				VALUES ('admin', 'booked_video', 6000)`, nil},
+				VALUES ('test_channel_alpha', 'Channel Alpha', 'https://example.com/channel', 'youtube')`, nil},
+			{`INSERT INTO videos (video_id, channel_id, owner_kind, title, duration, published_at)
+				VALUES ('test_bookmarked_video', 'test_channel_alpha', 'youtube_video', 'Booked Video', 12, 1000)`, nil},
+			{`INSERT INTO videos (video_id, channel_id, owner_kind, title, duration, published_at)
+				VALUES ('test_post_1', 'twitter_sample_author', 'tweet', 'X post author', 0, 1000)`, nil},
+			{`INSERT INTO feed_items (tweet_id, channel_id, published_at, fetched_at)
+				VALUES ('test_post_1', 'twitter_sample_author', 1000, 1000)`, nil},
+			{`INSERT INTO bookmark_categories (id, name, created_at)
+				VALUES (7, 'Saved', 1000)`, nil},
+			{`INSERT INTO bookmarks (video_id, category_id, custom_title, bookmarked_at)
+				VALUES ('test_bookmarked_video', 7, 'Watch Later', 2000)`, nil},
+			{`INSERT INTO bookmarks (video_id, category_id, custom_title, bookmarked_at)
+				VALUES ('test_post_1', 7, 'Reference', 3000)`, nil},
+			{`INSERT INTO muted_channels (channel_id, muted_at)
+				VALUES ('twitter_sample_muted', 4000)`, nil},
+			{`INSERT INTO watch_history (video_id, playback_position, duration, updated_at_ms)
+				VALUES ('test_bookmarked_video', 12, 12, 5000)`, nil},
+			{`INSERT INTO moment_views (video_id, viewed_at)
+				VALUES ('test_bookmarked_video', 6000)`, nil},
 		}
 		for _, stmt := range statements {
 			if _, err := tx.Exec(stmt.sql, stmt.args...); err != nil {
@@ -433,7 +389,6 @@ func TestHandleConfigExportFullIncludesBookmarkedMediaAndAvatars(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("seed export fixture: %v", err)
 	}
-
 	req := httptest.NewRequest("GET", "/api/config/export-full", nil)
 	req = req.WithContext(contextWithUser(req, "admin", "admin"))
 	rec := httptest.NewRecorder()
@@ -475,7 +430,7 @@ func TestHandleConfigExportFullIncludesBookmarkedMediaAndAvatars(t *testing.T) {
 	defer func() {
 		_ = snapshotDB.Close()
 	}()
-	for _, table := range []string{"muted_accounts", "watch_history", "moment_views"} {
+	for _, table := range []string{"muted_channels", "watch_history", "moment_views"} {
 		var count int
 		if err := snapshotDB.QueryRow(`SELECT COUNT(*) FROM ` + table).Scan(&count); err != nil {
 			t.Fatalf("snapshot count %s: %v", table, err)
@@ -485,18 +440,9 @@ func TestHandleConfigExportFullIncludesBookmarkedMediaAndAvatars(t *testing.T) {
 		}
 	}
 
-	wantMedia := map[string]string{
-		"media/avatars/channel_alpha.jpg":      "avatar-bytes",
-		"media/bookmarks/booked_video/000.mp4": "bookmarked-video-bytes",
-		"media/bookmarks/post_1/000.jpg":       "bookmarked-feed-image",
-	}
-	for name, want := range wantMedia {
-		got, ok := entries[name]
-		if !ok {
-			t.Fatalf("missing media entry %s; entries=%v", name, mapKeys(entries))
-		}
-		if string(got) != want {
-			t.Fatalf("%s content = %q, want %q", name, string(got), want)
+	for name := range entries {
+		if strings.HasPrefix(name, "assets/") {
+			t.Fatalf("full export included media payload %s", name)
 		}
 	}
 }
@@ -584,8 +530,48 @@ func TestHandleConfigExportFullIncludesRuntimeConfigFiles(t *testing.T) {
 	if err := json.Unmarshal(rawJSON, &payload); err != nil {
 		t.Fatalf("export.json invalid: %v", err)
 	}
-	if got := payload["user_id"]; got != "admin" {
-		t.Fatalf("export user_id = %v, want admin", got)
+	if _, ok := payload["user_id"]; ok {
+		t.Fatalf("single-user export carried retired user_id: %v", payload["user_id"])
+	}
+}
+
+func TestWriteFullExportFailsWhenSelectedRuntimeConfigCannotBeRead(t *testing.T) {
+	var output bytes.Buffer
+	err := writeFullExportZip(
+		&output,
+		db.ConfigExport{Version: db.ConfigExportVersion},
+		"",
+		[]fullExportRuntimeFile{{SourcePath: filepath.Join(t.TempDir(), "missing"), ArchivePath: "config/auth_secret"}},
+		fullExportRuntimeManifest{Version: 2},
+	)
+	if err == nil {
+		t.Fatal("writeFullExportZip accepted a missing selected runtime config file")
+	}
+}
+
+func TestCollectFullExportRuntimeConfigRejectsInvalidRoot(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "config")
+	if err := os.WriteFile(root, []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	server := &Server{cfg: &config.Config{ConfDir: root}}
+	if _, err := server.collectFullExportRuntimeConfigFiles(); err == nil {
+		t.Fatal("collectFullExportRuntimeConfigFiles accepted a non-directory config root")
+	}
+}
+
+func TestCollectFullExportRuntimeConfigRejectsSymlink(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "target")
+	if err := os.WriteFile(target, []byte("config"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(root, "auth_secret")); err != nil {
+		t.Fatal(err)
+	}
+	server := &Server{cfg: &config.Config{ConfDir: root}}
+	if _, err := server.collectFullExportRuntimeConfigFiles(); err == nil {
+		t.Fatal("collectFullExportRuntimeConfigFiles accepted a config symlink")
 	}
 }
 
@@ -636,9 +622,6 @@ func TestHandleConfigExportSubscriptionsDownloadsDBSubscriptions(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
 		t.Fatalf("response invalid config payload: %v", err)
 	}
-	if payload.UserID != "admin" {
-		t.Fatalf("user_id = %q, want admin", payload.UserID)
-	}
 	if payload.Scope != "subscriptions" {
 		t.Fatalf("scope = %q, want subscriptions", payload.Scope)
 	}
@@ -654,13 +637,13 @@ func TestHandleConfigExportSubscriptionsDownloadsDBSubscriptions(t *testing.T) {
 func TestHandleConfigExportSavesToBackupDirWhenConfigured(t *testing.T) {
 	srv := newTestServer(t)
 	backupDir := t.TempDir()
-	if err := srv.db.SetSetting("", "backup_dir", backupDir); err != nil {
+	if err := srv.db.SetSetting("backup_dir", backupDir); err != nil {
 		t.Fatalf("SetSetting backup_dir: %v", err)
 	}
-	if err := srv.db.SetSetting("", "backup_enabled", "true"); err != nil {
+	if err := srv.db.SetSetting("backup_enabled", "true"); err != nil {
 		t.Fatalf("SetSetting backup_enabled: %v", err)
 	}
-	if err := srv.db.SetSetting("", "export_test_key", "export_test_val"); err != nil {
+	if err := srv.db.SetSetting("export_test_key", "export_test_val"); err != nil {
 		t.Fatalf("SetSetting export key: %v", err)
 	}
 
@@ -702,7 +685,7 @@ func TestHandleConfigExportSavesToBackupDirWhenConfigured(t *testing.T) {
 func TestHandleConfigExportDownloadsWhenBackupDirConfiguredButDisabled(t *testing.T) {
 	srv := newTestServer(t)
 	backupDir := t.TempDir()
-	if err := srv.db.SetSetting("", "backup_dir", backupDir); err != nil {
+	if err := srv.db.SetSetting("backup_dir", backupDir); err != nil {
 		t.Fatalf("SetSetting backup_dir: %v", err)
 	}
 
@@ -743,42 +726,11 @@ func TestWriteExportFileRejectsRelativeDir(t *testing.T) {
 func TestHandleConfigExportFullSavesZipToBackupDirWhenConfigured(t *testing.T) {
 	srv := newTestServer(t)
 	backupDir := t.TempDir()
-	if err := srv.db.SetSetting("", "backup_dir", backupDir); err != nil {
+	if err := srv.db.SetSetting("backup_dir", backupDir); err != nil {
 		t.Fatalf("SetSetting backup_dir: %v", err)
 	}
-	if err := srv.db.SetSetting("", "backup_enabled", "true"); err != nil {
+	if err := srv.db.SetSetting("backup_enabled", "true"); err != nil {
 		t.Fatalf("SetSetting backup_enabled: %v", err)
-	}
-
-	mediaRelPath := filepath.Join("media", "youtube", "channel_alpha", "booked_video.mp4")
-	mediaAbsPath := filepath.Join(srv.cfg.DataDir, mediaRelPath)
-	if err := os.MkdirAll(filepath.Dir(mediaAbsPath), 0o755); err != nil {
-		t.Fatalf("MkdirAll media: %v", err)
-	}
-	if err := os.WriteFile(mediaAbsPath, []byte("bookmarked-video-bytes"), 0o644); err != nil {
-		t.Fatalf("WriteFile media: %v", err)
-	}
-	if err := srv.db.WithWrite(func(tx *sql.Tx) error {
-		for _, stmt := range []struct {
-			sql  string
-			args []any
-		}{
-			{`INSERT INTO channels (channel_id, name, url, platform)
-				VALUES ('channel_alpha', 'Channel Alpha', 'https://example.com/channel', 'youtube')`, nil},
-			{`INSERT INTO videos (video_id, channel_id, title, duration, file_path, published_at)
-				VALUES ('booked_video', 'channel_alpha', 'Booked Video', 12, ?, 1000)`, []any{mediaAbsPath}},
-			{`INSERT INTO bookmark_categories (id, user_id, name, created_at)
-				VALUES (7, 'admin', 'Saved', 1000)`, nil},
-			{`INSERT INTO bookmarks (user_id, video_id, category_id, custom_title, bookmarked_at)
-				VALUES ('admin', 'booked_video', 7, 'Watch Later', 2000)`, nil},
-		} {
-			if _, err := tx.Exec(stmt.sql, stmt.args...); err != nil {
-				return err
-			}
-		}
-		return nil
-	}); err != nil {
-		t.Fatalf("seed export fixture: %v", err)
 	}
 
 	req := httptest.NewRequest("GET", "/api/config/export-full", nil)
@@ -808,8 +760,10 @@ func TestHandleConfigExportFullSavesZipToBackupDirWhenConfigured(t *testing.T) {
 	if _, ok := entries[config.DatabaseFilename]; !ok {
 		t.Fatalf("saved full export missing %s; entries=%v", config.DatabaseFilename, mapKeys(entries))
 	}
-	if string(entries["media/bookmarks/booked_video/000.mp4"]) != "bookmarked-video-bytes" {
-		t.Fatalf("saved full export missing bookmarked media; entries=%v", mapKeys(entries))
+	for name := range entries {
+		if strings.HasPrefix(name, "assets/") {
+			t.Fatalf("saved full export included media payload %s", name)
+		}
 	}
 	var body map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
@@ -820,111 +774,18 @@ func TestHandleConfigExportFullSavesZipToBackupDirWhenConfigured(t *testing.T) {
 	}
 }
 
-func TestHandleConfigImportFullZipRestoresMetadataBookmarkedMediaAndAvatars(t *testing.T) {
-	src := newTestServer(t)
-	dst := newTestServer(t)
+func TestHandleConfigImportRequiresReplaceForRestoreArchive(t *testing.T) {
+	srv := newTestServer(t)
+	body, contentType := multipartBody(t, "file", "backup.zip", []byte{0x50, 0x4b, 0x03, 0x04})
+	req := httptest.NewRequest(http.MethodPost, "/api/config/import", body)
+	req.Header.Set("Content-Type", contentType)
+	req = req.WithContext(contextWithUser(req, "admin", "admin"))
+	rec := httptest.NewRecorder()
 
-	mediaRelPath := filepath.Join("media", "youtube", "channel_alpha", "booked_video.mp4")
-	mediaAbsPath := filepath.Join(src.cfg.DataDir, mediaRelPath)
-	if err := os.MkdirAll(filepath.Dir(mediaAbsPath), 0o755); err != nil {
-		t.Fatalf("MkdirAll media: %v", err)
-	}
-	if err := os.WriteFile(mediaAbsPath, []byte("bookmarked-video-bytes"), 0o644); err != nil {
-		t.Fatalf("WriteFile media: %v", err)
-	}
-	avatarPath := filepath.Join(src.cfg.DataDir, "thumbnails", "avatars", "channel_alpha.jpg")
-	if err := os.MkdirAll(filepath.Dir(avatarPath), 0o755); err != nil {
-		t.Fatalf("MkdirAll avatar: %v", err)
-	}
-	if err := os.WriteFile(avatarPath, []byte("avatar-bytes"), 0o644); err != nil {
-		t.Fatalf("WriteFile avatar: %v", err)
-	}
-	if err := src.db.WithWrite(func(tx *sql.Tx) error {
-		for _, stmt := range []struct {
-			sql  string
-			args []any
-		}{
-			{`INSERT INTO channels (channel_id, name, url, platform)
-				VALUES ('channel_alpha', 'Channel Alpha', 'https://example.com/channel', 'youtube')`, nil},
-			{`INSERT INTO videos (video_id, channel_id, title, duration, file_path, published_at)
-				VALUES ('booked_video', 'channel_alpha', 'Booked Video', 12, ?, 1000)`, []any{mediaAbsPath}},
-			{`INSERT INTO bookmark_categories (id, user_id, name, created_at)
-				VALUES (7, 'admin', 'Saved', 1000)`, nil},
-			{`INSERT INTO bookmarks (user_id, video_id, category_id, custom_title, bookmarked_at)
-				VALUES ('admin', 'booked_video', 7, 'Watch Later', 2000)`, nil},
-		} {
-			if _, err := tx.Exec(stmt.sql, stmt.args...); err != nil {
-				return err
-			}
-		}
-		return nil
-	}); err != nil {
-		t.Fatalf("seed export fixture: %v", err)
-	}
+	srv.handleConfigImport(rec, req)
 
-	cfg, err := src.db.ExportFullData("admin")
-	if err != nil {
-		t.Fatalf("ExportFullData: %v", err)
-	}
-	mediaFiles := exportbundle.CollectBookmarkMedia(src.db, src.cfg.DataDir, cfg.Bookmarks)
-	mediaFiles = append(mediaFiles, exportbundle.CollectAvatarMedia(src.cfg.DataDir)...)
-	var exportBuf bytes.Buffer
-	if err := writeFullExportZip(&exportBuf, cfg, "", mediaFiles, src.collectFullExportRuntimeConfigFiles(), src.fullExportRuntimeManifest()); err != nil {
-		t.Fatalf("write legacy full export zip: %v", err)
-	}
-
-	body, contentType := multipartBody(t, "file", "igloo-full.zip", exportBuf.Bytes())
-	importReq := httptest.NewRequest(http.MethodPost, "/api/config/import", body)
-	importReq.Header.Set("Content-Type", contentType)
-	importReq = importReq.WithContext(contextWithUser(importReq, "admin", "admin"))
-	importRec := httptest.NewRecorder()
-
-	dst.handleConfigImport(importRec, importReq)
-
-	if importRec.Code != http.StatusOK {
-		t.Fatalf("import status = %d, body = %s", importRec.Code, importRec.Body.String())
-	}
-	var response map[string]any
-	if err := json.Unmarshal(importRec.Body.Bytes(), &response); err != nil {
-		t.Fatalf("import response JSON: %v; body=%s", err, importRec.Body.String())
-	}
-	if response["format"] != "full_export_zip" {
-		t.Fatalf("format = %v, want full_export_zip; response=%#v", response["format"], response)
-	}
-	if got := int(response["restored_media"].(float64)); got != 2 {
-		t.Fatalf("restored_media = %d, want 2; response=%#v", got, response)
-	}
-
-	video, err := dst.db.GetVideo("booked_video")
-	if err != nil {
-		t.Fatalf("GetVideo imported: %v", err)
-	}
-	if video == nil || video.FilePath == "" {
-		t.Fatalf("imported video file_path missing: %#v", video)
-	}
-	restored, err := os.ReadFile(video.FilePath)
-	if err != nil {
-		t.Fatalf("read restored media %q: %v", video.FilePath, err)
-	}
-	if string(restored) != "bookmarked-video-bytes" {
-		t.Fatalf("restored media = %q", string(restored))
-	}
-	if got, err := dst.db.GetMediaFilePath("feed_media", "booked_video", 0); err != nil || got == "" {
-		t.Fatalf("feed_media row missing: path=%q err=%v", got, err)
-	}
-	restoredAvatar, err := os.ReadFile(filepath.Join(dst.cfg.DataDir, "thumbnails", "avatars", "channel_alpha.jpg"))
-	if err != nil {
-		t.Fatalf("read restored avatar: %v", err)
-	}
-	if string(restoredAvatar) != "avatar-bytes" {
-		t.Fatalf("restored avatar = %q", string(restoredAvatar))
-	}
-	labels, err := dst.db.GetBookmarkLabels("admin", "")
-	if err != nil {
-		t.Fatalf("GetBookmarkLabels: %v", err)
-	}
-	if len(labels) != 1 || labels[0] != "Watch Later" {
-		t.Fatalf("labels = %#v, want Watch Later", labels)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "replace mode required") {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 	}
 }
 

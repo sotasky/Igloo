@@ -2,8 +2,6 @@ package db
 
 import (
 	"database/sql"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -681,13 +679,13 @@ func (db *DB) PruneSourceWindowDownloadQueue(sourceChannelID string, allowedIDs 
 	return affected, err
 }
 
-// IsVideoDownloaded returns true if the video exists in the videos table with a non-empty file_path.
+// IsVideoDownloaded returns true when the video has canonical ready media.
 func (db *DB) IsVideoDownloaded(videoID string) (bool, error) {
 	var exists int
 	err := db.conn.QueryRow(`
 		SELECT EXISTS(
-			SELECT 1 FROM videos
-			WHERE video_id=? AND file_path IS NOT NULL AND file_path <> ''
+			SELECT 1 FROM videos v
+			WHERE v.video_id = ? AND `+readyVideoMediaExistsSQL("v")+`
 		)
 	`, videoID).Scan(&exists)
 	return exists == 1, err
@@ -712,7 +710,6 @@ func (db *DB) ClearPlatformChecked(platform string) (int, error) {
 			  AND channel_id IN (
 			      SELECT channel_id
 			      FROM channel_follows
-			      WHERE user_id = ''
 			  )
 		`, platform)
 		if err != nil {
@@ -809,7 +806,7 @@ func (db *DB) GetSourceWindowPrunableVideoIDs(sourceChannelID string, allowedIDs
 		  AND NOT EXISTS (
 		      SELECT 1
 		      FROM video_repost_sources other
-		      INNER JOIN channel_follows cf ON cf.channel_id = other.reposter_channel_id AND cf.user_id = ''
+		      INNER JOIN channel_follows cf ON cf.channel_id = other.reposter_channel_id
 		      LEFT JOIN channel_settings cs ON cs.channel_id = other.reposter_channel_id
 		      WHERE other.video_id = v.video_id
 		        AND other.reposter_channel_id != ?
@@ -845,7 +842,6 @@ func (db *DB) GetSourceWindowPrunableVideoIDs(sourceChannelID string, allowedIDs
 		      SELECT 1
 		      FROM channel_follows owner_follow
 		      WHERE owner_follow.channel_id = v.channel_id
-		        AND owner_follow.user_id = ''
 		        AND v.channel_id != ?
 		  )
 		ORDER BY COALESCE(v.published_at, 0) ASC, v.id ASC
@@ -876,7 +872,7 @@ func activeRepostProtectionClause(videoAlias string, includeTikTokSources, inclu
 		  AND NOT EXISTS (
 		      SELECT 1
 		      FROM video_repost_sources vrs
-		      INNER JOIN channel_follows cf ON cf.channel_id = vrs.reposter_channel_id AND cf.user_id = ''
+		      INNER JOIN channel_follows cf ON cf.channel_id = vrs.reposter_channel_id
 		      LEFT JOIN channel_settings cs ON cs.channel_id = vrs.reposter_channel_id
 		      WHERE vrs.video_id = ` + videoAlias + `.video_id
 		        AND COALESCE(cs.include_reposts, 1) != 0
@@ -885,29 +881,13 @@ func activeRepostProtectionClause(videoAlias string, includeTikTokSources, inclu
 }
 
 // DeleteVideoWithFile deletes a video record and its associated files from disk.
-func (db *DB) DeleteVideoWithFile(videoID, dataDir string) error {
-	v, err := db.GetVideo(videoID)
-	if err != nil || v == nil {
-		return db.DeleteVideo(videoID)
+func (db *DB) DeleteVideoWithFile(videoID string) error {
+	keys, err := db.DeleteVideoAssetsTx(videoID)
+	if err != nil {
+		return err
 	}
-	if v.FilePath != "" {
-		absPath := v.FilePath
-		if !filepath.IsAbs(absPath) {
-			absPath = filepath.Join(dataDir, absPath)
-		}
-		_ = os.Remove(absPath)
-		// Remove sibling files (thumbnail, info.json).
-		dir := filepath.Dir(absPath)
-		base := strings.TrimSuffix(filepath.Base(absPath), filepath.Ext(absPath))
-		if entries, err := os.ReadDir(dir); err == nil {
-			for _, e := range entries {
-				if strings.HasPrefix(e.Name(), base) && e.Name() != filepath.Base(absPath) {
-					_ = os.Remove(filepath.Join(dir, e.Name()))
-				}
-			}
-		}
-	}
-	return db.DeleteVideo(videoID)
+	db.removeRetiredCanonicalFiles(keys, nil)
+	return nil
 }
 
 // GetPinnedVideos returns temp videos that are pinned (kept indefinitely),
@@ -954,7 +934,7 @@ func (db *DB) queryTempVideosByPin(pinned bool) ([]model.Video, error) {
 }
 
 // GetCurrentlyWatchingVideos returns the most recently watched videos with
-// in-progress watch history (not yet finished), ordered by last_watched DESC.
+// in-progress watch history (not yet finished), ordered by updated_at_ms DESC.
 // Each video is annotated with playback position + duration.
 func (db *DB) GetCurrentlyWatchingVideos(limit int) ([]model.Video, error) {
 	if limit <= 0 {
@@ -967,8 +947,8 @@ func (db *DB) GetCurrentlyWatchingVideos(limit int) ([]model.Video, error) {
 		FROM watch_history wh
 		JOIN videos v ON v.video_id = wh.video_id
 		WHERE wh.playback_position > 0
-		  AND (wh.duration = 0 OR wh.playback_position < wh.duration * 0.95)
-		ORDER BY wh.last_watched DESC
+		  AND (COALESCE(wh.duration, 0) = 0 OR wh.playback_position < wh.duration * 0.95)
+		ORDER BY wh.updated_at_ms DESC
 		LIMIT ?
 	`, limit)
 	if err != nil {
@@ -991,7 +971,7 @@ func (db *DB) GetCurrentlyWatchingVideos(limit int) ([]model.Video, error) {
 // GetTempVideos returns all temp video records.
 func (db *DB) GetTempVideos() ([]model.Video, error) {
 	rows, err := db.conn.Query(`
-		SELECT video_id, COALESCE(file_path,''), COALESCE(is_pinned,0), downloaded_at
+		SELECT video_id, COALESCE(is_pinned,0), downloaded_at
 		FROM videos WHERE is_temp = 1
 	`)
 	if err != nil {
@@ -1005,7 +985,7 @@ func (db *DB) GetTempVideos() ([]model.Video, error) {
 	for rows.Next() {
 		var v model.Video
 		var downloadedAt sql.NullInt64
-		if err := rows.Scan(&v.VideoID, &v.FilePath, &v.IsPinned, &downloadedAt); err != nil {
+		if err := rows.Scan(&v.VideoID, &v.IsPinned, &downloadedAt); err != nil {
 			return nil, err
 		}
 		if t := millisToTimePtr(downloadedAt); t != nil {

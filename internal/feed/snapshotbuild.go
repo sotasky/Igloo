@@ -52,8 +52,8 @@ func BuildSnapshot(in []db.PreDiversitySnapshotRow, now time.Time) []db.Snapshot
 		}
 		cands[i] = cand{
 			row:          r,
-			authorLower:  strings.ToLower(r.AuthorHandle),
-			sourceLower:  strings.ToLower(r.SourceHandle),
+			authorLower:  strings.ToLower(r.ChannelID),
+			sourceLower:  strings.ToLower(r.SourceChannelID),
 			relatedLower: strings.ToLower(r.RelatedContentKey),
 			jitter:       j,
 			base:         score + j,

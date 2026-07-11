@@ -196,11 +196,7 @@ func (m *Manager) runDiscoveryMaintenance() {
 	}
 
 	m.cleanupTempVideos()
-	dataDir := ""
-	if m.cfg != nil {
-		dataDir = m.cfg.DataDir
-	}
-	if n, err := m.db.DeleteExpiredStoryVideos(time.Now().UnixMilli(), dataDir); err != nil {
+	if n, err := m.db.DeleteExpiredStoryVideos(time.Now().UnixMilli()); err != nil {
 		log.Printf("[scheduler] DeleteExpiredStoryVideos: %v", err)
 	} else if n > 0 {
 		log.Printf("[scheduler] deleted %d expired native stories", n)
@@ -309,9 +305,6 @@ func (m *Manager) processDiscoveryJob(ctx context.Context, workerID int, job db.
 		_ = m.db.CompleteChannelQueue(ch.ChannelID)
 		m.setStatus("scheduler", workerStatus("scheduler", true, fmt.Sprintf("worker %d failed %s", workerID, ch.ChannelID), err.Error()))
 		return
-	}
-	if ch.Platform == "instagram" {
-		m.rememberInstagramProfileFromRefs(*ch, refs)
 	}
 	if ch.Platform == "tiktok" || ch.Platform == "instagram" {
 		handle := tiktokHandleForChannel(*ch)
@@ -569,88 +562,13 @@ func (m *Manager) ensureIntroducedOwner(ref download.VideoRef) {
 			log.Printf("[scheduler] ensure repost author %s: %v", ref.ChannelID, err)
 			return
 		}
-		m.RequestAvatar(ref.ChannelID)
+		m.KickProfileJobs()
 	case strings.HasPrefix(ref.ChannelID, "instagram_"):
 		if err := m.db.EnsureInstagramChannelForTagged(ref.ChannelID, ref.AuthorHandle, ref.AuthorDisplayName, ""); err != nil {
 			log.Printf("[scheduler] ensure tagged owner %s: %v", ref.ChannelID, err)
 			return
 		}
-		m.RequestAvatar(ref.ChannelID)
-	}
-}
-
-func (m *Manager) rememberInstagramProfileFromRefs(ch model.Channel, refs []download.VideoRef) {
-	if len(refs) == 0 {
-		return
-	}
-	handle := instagramHandleForChannel(ch)
-	profile := model.ChannelProfile{
-		ChannelID:   ch.ChannelID,
-		Platform:    "instagram",
-		Handle:      handle,
-		DisplayName: ch.Name,
-	}
-	if existing, err := m.db.GetChannelProfile(ch.ChannelID); err != nil {
-		log.Printf("[scheduler] get instagram profile %s: %v", ch.ChannelID, err)
-	} else if existing != nil {
-		profile.Bio = existing.Bio
-		profile.Website = existing.Website
-		profile.Followers = existing.Followers
-		profile.Following = existing.Following
-		profile.Verified = existing.Verified
-		profile.VerifiedType = existing.VerifiedType
-		profile.Protected = existing.Protected
-		profile.AvatarURL = existing.AvatarURL
-		profile.BannerURL = existing.BannerURL
-		profile.FetchedAt = existing.FetchedAt
-		profile.FailCount = existing.FailCount
-		profile.NextRetryAt = existing.NextRetryAt
-		profile.Tombstone = existing.Tombstone
-	}
-	for _, ref := range refs {
-		if ref.IsRepost && ref.ReposterChannelID == ch.ChannelID {
-			if ref.ReposterHandle != "" {
-				profile.Handle = ref.ReposterHandle
-			}
-			if ref.ReposterDisplayName != "" {
-				profile.DisplayName = ref.ReposterDisplayName
-			}
-			if ref.ReposterAvatarURL != "" {
-				profile.AvatarURL = ref.ReposterAvatarURL
-			}
-			if profile.Handle != "" && profile.DisplayName != "" && profile.AvatarURL != "" {
-				break
-			}
-			continue
-		}
-		if ref.IsRepost && ref.ChannelID != "" && ref.ChannelID != ch.ChannelID {
-			continue
-		}
-		if ref.AuthorHandle != "" {
-			profile.Handle = ref.AuthorHandle
-		}
-		if ref.AuthorDisplayName != "" {
-			profile.DisplayName = ref.AuthorDisplayName
-		}
-		if ref.AuthorAvatarURL != "" {
-			profile.AvatarURL = ref.AuthorAvatarURL
-		}
-		if profile.Handle != "" && profile.DisplayName != "" && profile.AvatarURL != "" {
-			break
-		}
-	}
-	if profile.Handle == "" {
-		profile.Handle = strings.TrimPrefix(ch.ChannelID, "instagram_")
-	}
-	if profile.DisplayName == "" {
-		profile.DisplayName = profile.Handle
-	}
-	if err := m.db.UpsertChannelProfile(profile); err != nil {
-		log.Printf("[scheduler] upsert instagram profile %s: %v", ch.ChannelID, err)
-		return
-	}
-	if profile.AvatarURL != "" {
-		m.RequestAvatar(ch.ChannelID)
+		m.KickProfileJobs()
 	}
 }
 
@@ -762,8 +680,6 @@ func (m *Manager) reconcileSourceWindow(ch model.Channel, refs []download.VideoR
 	if len(refs) == 0 {
 		return 0
 	}
-	m.primeShortFormMentionProfiles(ch.Platform, refs)
-
 	allowedIDs := make([]string, 0, len(refs))
 	var ownerAllowedIDs []string
 	for _, r := range refs {
@@ -815,34 +731,6 @@ func (m *Manager) reconcileSourceWindow(ch model.Channel, refs []download.VideoR
 	return added
 }
 
-func (m *Manager) primeShortFormMentionProfiles(platform string, refs []download.VideoRef) {
-	if m == nil || m.db == nil || len(refs) == 0 {
-		return
-	}
-	platform = strings.ToLower(strings.TrimSpace(platform))
-	if platform != "tiktok" && platform != "instagram" {
-		return
-	}
-	texts := make([]string, 0, len(refs))
-	for _, ref := range refs {
-		if text := strings.TrimSpace(ref.Title); text != "" && strings.Contains(text, "@") {
-			texts = append(texts, text)
-		}
-	}
-	if len(texts) == 0 {
-		return
-	}
-	channelIDs, n, err := m.db.SeedShortFormMentionProfileRowsForTextsWithIDs(platform, texts)
-	if err != nil {
-		log.Printf("[scheduler] seed %s mention profiles: %v", platform, err)
-	} else if n > 0 {
-		log.Printf("[scheduler] seeded %d %s mention profile rows", n, platform)
-	}
-	for _, channelID := range channelIDs {
-		m.RequestAvatar(channelID)
-	}
-}
-
 func (m *Manager) syncIntroducedSourceWindow(ch model.Channel, refs []download.VideoRef, allowedIDs []string) {
 	if m == nil || m.db == nil {
 		return
@@ -867,7 +755,7 @@ func (m *Manager) syncIntroducedSourceWindow(ch model.Channel, refs []download.V
 	}
 	deleted := 0
 	for _, videoID := range prunable {
-		if err := m.db.DeleteVideoWithFile(videoID, m.cfg.DataDir); err != nil {
+		if err := m.db.DeleteVideoWithFile(videoID); err != nil {
 			log.Printf("[scheduler] delete source-window excess %s: %v", videoID, err)
 			continue
 		}
@@ -926,7 +814,7 @@ func (m *Manager) enforceChannelLimit(ch model.Channel) {
 		return
 	}
 	for _, videoID := range excess {
-		if err := m.db.DeleteVideoWithFile(videoID, m.cfg.DataDir); err != nil {
+		if err := m.db.DeleteVideoWithFile(videoID); err != nil {
 			log.Printf("[scheduler] delete excess %s: %v", videoID, err)
 		}
 	}
@@ -947,7 +835,7 @@ func (m *Manager) cleanupTempVideos() {
 		if v.DownloadedAt.IsZero() || time.Since(v.DownloadedAt) < 24*time.Hour {
 			continue
 		}
-		if err := m.db.DeleteVideoWithFile(v.VideoID, m.cfg.DataDir); err != nil {
+		if err := m.db.DeleteVideoWithFile(v.VideoID); err != nil {
 			log.Printf("[scheduler] cleanup temp %s: %v", v.VideoID, err)
 		} else {
 			cleaned++

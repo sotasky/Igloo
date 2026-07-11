@@ -13,8 +13,6 @@ func TestUsage(t *testing.T) {
 	}
 	for _, want := range []string{
 		"Usage: igloo-dev <command> [args]",
-		"android-sync-maintenance",
-		"asset-inventory-reconcile",
 		"lifecycle-audit",
 		"persistence-audit",
 		"query-audit",

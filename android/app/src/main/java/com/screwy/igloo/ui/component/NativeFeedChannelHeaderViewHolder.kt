@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.ui.unit.dp
 import androidx.recyclerview.widget.RecyclerView
 import coil3.ImageLoader
+import coil3.request.Disposable
 import coil3.target.ImageViewTarget
 import com.screwy.igloo.R
 import com.screwy.igloo.media.MediaResolvers
@@ -21,10 +22,9 @@ import com.screwy.igloo.media.MediaUri
 import com.screwy.igloo.net.IglooHostProvider
 import com.screwy.igloo.net.auth.AuthTokenProvider
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
 internal class NativeFeedChannelHeaderViewHolder(
     context: Context,
@@ -34,35 +34,28 @@ internal class NativeFeedChannelHeaderViewHolder(
     private val mediaResolvers: MediaResolvers,
     private val scope: CoroutineScope,
     private val getColors: () -> NativeFeedColors,
-    private val getBaseUrl: () -> String,
     private val getCallbacks: () -> NativeFeedCallbacks,
 ) : RecyclerView.ViewHolder(NativeFeedChannelHeaderViews(context).root) {
     private val views: NativeFeedChannelHeaderViews = itemView.tag as NativeFeedChannelHeaderViews
     private var avatarJob: Job? = null
     private var bannerJob: Job? = null
+    private var avatarRequest: Disposable? = null
+    private var bannerRequest: Disposable? = null
 
     fun bind(header: ChannelProfileHeaderUiModel) {
         val colors = getColors()
         val callbacks = getCallbacks()
         views.applyColors(colors)
 
-        views.bannerFrame.visibility = if (header.hasBannerSlot) {
-            View.VISIBLE
-        } else {
-            View.GONE
-        }
-        if (views.bannerFrame.visibility == View.VISIBLE) {
-            loadBanner(header)
-            views.bannerAvatar.visibility = View.VISIBLE
-            views.inlineAvatar.visibility = View.GONE
-            loadAvatar(views.bannerAvatar, header)
-        } else {
-            bannerJob?.cancel()
-            views.banner.setImageDrawable(null)
-            views.bannerAvatar.visibility = View.GONE
-            views.inlineAvatar.visibility = View.VISIBLE
-            loadAvatar(views.inlineAvatar, header)
-        }
+        avatarJob?.cancel()
+        avatarRequest?.dispose()
+        avatarRequest = null
+        views.bannerFrame.visibility = View.GONE
+        views.banner.setImageDrawable(null)
+        views.bannerAvatar.visibility = View.GONE
+        views.inlineAvatar.visibility = View.VISIBLE
+        views.inlineAvatar.setImageDrawable(null)
+        loadBanner(header)
 
         views.name.text = header.displayName
         views.verified.visibility = if (header.isVerified) View.VISIBLE else View.GONE
@@ -143,6 +136,10 @@ internal class NativeFeedChannelHeaderViewHolder(
     fun recycle() {
         avatarJob?.cancel()
         bannerJob?.cancel()
+        avatarRequest?.dispose()
+        bannerRequest?.dispose()
+        avatarRequest = null
+        bannerRequest = null
         views.banner.setImageDrawable(null)
         views.bannerAvatar.setImageDrawable(null)
         views.inlineAvatar.setImageDrawable(null)
@@ -183,9 +180,12 @@ internal class NativeFeedChannelHeaderViewHolder(
     }
 
     private fun loadAvatar(imageView: ImageView, header: ChannelProfileHeaderUiModel) {
-        val requestKey = "channel-avatar:${header.channelId}:${header.initialAvatarUri}"
+		val requestKey = "channel-avatar:${header.channelId}"
         imageView.tag = requestKey
         avatarJob?.cancel()
+        avatarRequest?.dispose()
+        avatarRequest = null
+        imageView.setImageDrawable(null)
         val colors = getColors()
         val isBannerAvatar = imageView == views.bannerAvatar
         imageView.setPadding(0, 0, 0, 0)
@@ -193,42 +193,55 @@ internal class NativeFeedChannelHeaderViewHolder(
         imageView.translationZ = if (isBannerAvatar) dp(6).toFloat() else 0f
         imageView.background = roundedFill(colors.surfaceVariant, dp(999))
         avatarJob = scope.launch {
-            val resolved = withContext(Dispatchers.IO) {
-                mediaResolvers.avatarForChannel(header.channelId)
+            mediaResolvers.avatarForChannelFlow(header.channelId).collect { resolved ->
+                if (imageView.tag != requestKey) return@collect
+                avatarRequest?.dispose()
+                imageView.setImageDrawable(null)
+                avatarRequest = loadImage(
+                    imageView = imageView,
+					uri = resolved,
+                    widthPx = imageView.layoutParams?.width ?: dp(92),
+                    heightPx = imageView.layoutParams?.height ?: dp(92),
+                )
             }
-            if (imageView.tag != requestKey) return@launch
-            loadImage(
-                imageView = imageView,
-                uri = resolved.takeUnless { it is MediaUri.Missing } ?: header.initialAvatarUri,
-                widthPx = imageView.layoutParams?.width ?: dp(92),
-                heightPx = imageView.layoutParams?.height ?: dp(92),
-            )
         }
     }
 
     private fun loadBanner(header: ChannelProfileHeaderUiModel) {
-        val requestKey = "channel-banner:${header.channelId}:${header.initialBannerUri}:${header.fallbackBannerUrl}"
+		val requestKey = "channel-banner:${header.channelId}"
         views.banner.tag = requestKey
         bannerJob?.cancel()
+        bannerRequest?.dispose()
+        bannerRequest = null
         views.banner.setImageDrawable(null)
         bannerJob = scope.launch {
-            val resolved = withContext(Dispatchers.IO) {
-                mediaResolvers.bannerForChannel(header.channelId)
+            mediaResolvers.bannerForChannelFlow(header.channelId).collect { resolved ->
+                if (views.banner.tag != requestKey) return@collect
+                bannerRequest?.dispose()
+                bannerRequest = null
+                views.banner.setImageDrawable(null)
+                if (resolved is MediaUri.Missing) {
+                    views.bannerFrame.visibility = View.GONE
+                    views.bannerAvatar.visibility = View.GONE
+                    views.inlineAvatar.visibility = View.VISIBLE
+                    loadAvatar(views.inlineAvatar, header)
+                    return@collect
+                }
+				views.bannerFrame.visibility = View.VISIBLE
+				views.bannerAvatar.visibility = View.VISIBLE
+				views.inlineAvatar.visibility = View.GONE
+				bannerRequest = loadImage(
+					imageView = views.banner,
+					uri = resolved,
+                    widthPx = views.banner.resources.displayMetrics.widthPixels,
+                    heightPx = dp(NativeChannelHeaderBannerHeightDp),
+                )
+				loadAvatar(views.bannerAvatar, header)
             }
-            if (views.banner.tag != requestKey) return@launch
-            val fallback = header.initialBannerUri.takeUnless { it is MediaUri.Missing }
-                ?: header.fallbackBannerUrl?.let { remoteUriFor(it, getBaseUrl()) }
-                ?: MediaUri.Missing
-            loadImage(
-                imageView = views.banner,
-                uri = resolved.takeUnless { it is MediaUri.Missing } ?: fallback,
-                widthPx = views.banner.resources.displayMetrics.widthPixels,
-                heightPx = dp(NativeChannelHeaderBannerHeightDp),
-            )
         }
     }
 
-    private fun loadImage(imageView: ImageView, uri: MediaUri, widthPx: Int, heightPx: Int) {
+    private fun loadImage(imageView: ImageView, uri: MediaUri, widthPx: Int, heightPx: Int): Disposable? {
         val request = buildMediaImageRequest(
             context = imageView.context,
             uri = uri,
@@ -239,6 +252,6 @@ internal class NativeFeedChannelHeaderViewHolder(
         )?.newBuilder(imageView.context)
             ?.target(ImageViewTarget(imageView))
             ?.build()
-        if (request != null) imageLoader.enqueue(request)
+        return request?.let(imageLoader::enqueue)
     }
 }

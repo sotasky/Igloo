@@ -410,85 +410,12 @@
     if (fallback) fallback.style.display = 'none';
   }
 
-  function clearAvatarRetry(img) {
-    if (!img || !img._avatarRetryTimer) return;
-    clearTimeout(img._avatarRetryTimer);
-    img._avatarRetryTimer = null;
-  }
-
-  function avatarBaseSrc(src) {
-    src = String(src || '').trim();
-    if (!src) return '';
-    try {
-      var url = new URL(src, window.location.origin);
-      url.searchParams.delete('avatar_retry');
-      url.searchParams.delete('avatar_refresh');
-      return url.pathname + url.search + url.hash;
-    } catch (_) {
-      return src
-        .replace(/([?&])avatar_retry=\d+(&|$)/, '$1')
-        .replace(/([?&])avatar_refresh=\d+(&|$)/, '$1')
-        .replace(/[?&]$/, '');
-    }
-  }
-
-  function avatarImageBaseSrc(img) {
-    if (!img) return '';
-    return avatarBaseSrc(img.dataset.avatarBaseSrc || img.getAttribute('src') || img.src || '');
-  }
-
-  function retryAvatarNow(img, baseSrc) {
-    if (!img || !baseSrc || !img.isConnected) return;
-    clearAvatarRetry(img);
-    img.dataset.avatarBaseSrc = baseSrc;
-    delete img.dataset.avatarRetryCount;
-    var sep = baseSrc.indexOf('?') === -1 ? '?' : '&';
-    img.src = baseSrc + sep + 'avatar_refresh=' + Date.now();
-  }
-
-  function recoverableProfileMediaSrc(src) {
-    src = String(src || '');
-    return src.indexOf('/api/media/avatar/') !== -1 || src.indexOf('/api/media/banner/') !== -1;
-  }
-
-  function refreshMatchingAvatars(loadedImg) {
-    var baseSrc = avatarImageBaseSrc(loadedImg);
-    if (!recoverableProfileMediaSrc(baseSrc)) return;
-    qa('img').forEach(function (img) {
-      if (img === loadedImg) return;
-      if (avatarImageBaseSrc(img) !== baseSrc) return;
-      if (img.complete && img.naturalWidth > 0 && img.style.display !== 'none') return;
-      retryAvatarNow(img, baseSrc);
-    });
-  }
-
   function avatarLoad(img) {
-    clearAvatarRetry(img);
-    if (img) delete img.dataset.avatarRetryCount;
     hideAvatarFallback(img);
-    refreshMatchingAvatars(img);
   }
 
   function avatarError(img) {
     showAvatarFallback(img);
-    if (!img) return true;
-
-    var src = String(img.getAttribute('src') || img.src || '').trim();
-    if (!recoverableProfileMediaSrc(src)) return true;
-
-    var retryCount = Number(img.dataset.avatarRetryCount || '0');
-    var delays = [1200, 3500, 8000, 16000];
-    if (retryCount >= delays.length) return true;
-
-    var baseSrc = avatarBaseSrc(img.dataset.avatarBaseSrc || src);
-    img.dataset.avatarBaseSrc = baseSrc;
-    img.dataset.avatarRetryCount = String(retryCount + 1);
-    clearAvatarRetry(img);
-    img._avatarRetryTimer = setTimeout(function () {
-      if (!img.isConnected) return;
-      var sep = baseSrc.indexOf('?') === -1 ? '?' : '&';
-      img.src = baseSrc + sep + 'avatar_retry=' + Date.now();
-    }, delays[retryCount]);
     return true;
   }
 
@@ -2015,6 +1942,8 @@
   var importConfigFile = q('#import-config-file');
   var importConfigModal = q('#import-config-modal');
   var importConfigFilename = q('#import-config-filename');
+  var importConfigMode = q('#import-config-mode');
+  var importConfigMerge = q('#import-config-merge');
 
   if (importConfigBtn && importConfigFile) {
     importConfigBtn.addEventListener('click', function () {
@@ -2023,7 +1952,12 @@
     });
     importConfigFile.addEventListener('change', function () {
       if (!importConfigFile.files || !importConfigFile.files[0]) return;
-      if (importConfigFilename) importConfigFilename.textContent = t('label_file_colon', 'File:') + ' ' + importConfigFile.files[0].name;
+      var filename = importConfigFile.files[0].name;
+      var lowerName = filename.toLowerCase();
+      var isRestoreArchive = lowerName.endsWith('.zip');
+      if (importConfigMode) importConfigMode.value = isRestoreArchive ? 'replace' : 'merge';
+      if (importConfigMerge) importConfigMerge.classList.toggle('hidden', isRestoreArchive);
+      if (importConfigFilename) importConfigFilename.textContent = t('label_file_colon', 'File:') + ' ' + filename;
       if (importConfigModal) openModal(importConfigModal);
     });
   }

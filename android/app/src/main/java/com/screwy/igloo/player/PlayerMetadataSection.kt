@@ -81,8 +81,6 @@ internal fun VideoMetaBlock(
                 video?.title,
                 video?.dearrowTitle,
                 video?.dearrowTitleCasual,
-                video?.displayTitle,
-                video?.displayTitleCasual,
             ),
             style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
             color = colors.onSurface,

@@ -1,6 +1,5 @@
 package com.screwy.igloo.net
 
-import com.screwy.igloo.data.DatabaseHolder
 import com.screwy.igloo.data.PreferencesRepo
 import androidx.lifecycle.eventFlow
 import io.ktor.http.HttpStatusCode
@@ -41,15 +40,7 @@ val iglooNetModule = module {
     // truth for server URL + bearer token.
 
     single {
-        // Passing DB-backed prefs as a lambda keeps the HTTP client constructible
-        // pre-login: `PreferencesRepo` transits `DatabaseHolder.requireCurrent()`,
-        // which throws until a user logs in. Once login opens the DB it resolves
-        // normally; the shared envelope parser only applies the server-time side effect.
-        // Stream cursors stay owned by inbound `next_marker` loops.
-        val holder: DatabaseHolder = get()
-        val prefsProvider: () -> PreferencesRepo? = {
-            if (holder.current != null) runCatching { get<PreferencesRepo>() }.getOrNull() else null
-        }
+        val prefsProvider: () -> PreferencesRepo? = { get<PreferencesRepo>() }
         buildIglooClient(
             prefsProvider = prefsProvider,
             tokenProvider = get(),
@@ -63,14 +54,8 @@ val iglooNetModule = module {
     // ─── API surface ────────────────────────────────────────────────────────
     single { HealthApi(client = get(), baseUrlProvider = get<ServerBaseUrlProvider>()::baseUrl) }
     single { AuthApi(client = get(), baseUrlProvider = get<ServerBaseUrlProvider>()::baseUrl) }
-    single { FeedApi(client = get(), baseUrlProvider = get<ServerBaseUrlProvider>()::baseUrl) }
-    single { VideoApi(client = get(), baseUrlProvider = get<ServerBaseUrlProvider>()::baseUrl) }
-    single { ShortsApi(client = get(), baseUrlProvider = get<ServerBaseUrlProvider>()::baseUrl) }
-    single { ChannelsApi(client = get(), baseUrlProvider = get<ServerBaseUrlProvider>()::baseUrl) }
     single { AndroidSyncApi(client = get(), baseUrlProvider = get<ServerBaseUrlProvider>()::baseUrl) }
     single { OutboxApi(client = get(), baseUrlProvider = get<ServerBaseUrlProvider>()::baseUrl) }
-    single { MutationDeltaApi(client = get(), baseUrlProvider = get<ServerBaseUrlProvider>()::baseUrl) }
-
     // ─── Reachability ───────────────────────────────────────────────────────
     single {
         Reachability(

@@ -17,7 +17,7 @@ const serverTimeHeader = "X-Igloo-Server-Time-Ms"
 // Response envelope contract: every /api/* JSON response carries
 // {ok, server_time_ms} alongside endpoint fields. The same server time is
 // also exposed in X-Igloo-Server-Time-Ms so clients can update clock offset
-// without parsing large response bodies twice. sync_version + sync_stream
+// without parsing large response bodies twice.
 // land with mutation endpoints.
 // HTML pages, HTMX fragments, binary media, and file downloads are exempt.
 
@@ -75,7 +75,7 @@ func apiPath(path string) bool {
 	// raw file body (image/video/text), not a JSON envelope.
 	case strings.HasPrefix(path, "/api/media/"):
 		return false
-	case strings.HasPrefix(path, "/api/android/sync/assets/"):
+	case androidSyncAssetBodyPath(path):
 		return false
 	case strings.HasPrefix(path, "/api/download/video/"):
 		return false
@@ -83,4 +83,13 @@ func apiPath(path string) bool {
 		return false
 	}
 	return true
+}
+
+func androidSyncAssetBodyPath(path string) bool {
+	const prefix = "/api/android/sync/assets/"
+	if !strings.HasPrefix(path, prefix) {
+		return false
+	}
+	parts := strings.Split(strings.Trim(strings.TrimPrefix(path, prefix), "/"), "/")
+	return len(parts) == 2 && parts[0] != "" && parts[1] == "file"
 }

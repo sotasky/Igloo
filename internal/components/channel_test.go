@@ -111,7 +111,7 @@ func TestVideoCardRendersInstagramCoauthorsAsTaggedAccounts(t *testing.T) {
 	if len(tagged) != 2 || tagged[0].Handle != "collab.one" || tagged[0].ChannelID != "instagram_collab.one" || tagged[1].Handle != "tagged.two" {
 		t.Fatalf("videoTaggedAccounts = %+v", tagged)
 	}
-	if tagged[1].AvatarURL != "https://cdn.example/tagged.jpg" {
+	if tagged[1].AvatarURL != "/api/media/avatar/instagram_tagged.two" {
 		t.Fatalf("tagged account avatar = %q", tagged[1].AvatarURL)
 	}
 
@@ -128,6 +128,9 @@ func TestVideoCardRendersInstagramCoauthorsAsTaggedAccounts(t *testing.T) {
 	}
 	if !strings.Contains(html, `tagged.two`) {
 		t.Fatalf("expected tagged account in tagged data, got %s", html)
+	}
+	if strings.Contains(html, `cdn.example/tagged.jpg`) {
+		t.Fatalf("rendered tagged account retained raw avatar URL: %s", html)
 	}
 	if !strings.Contains(html, `data-original-url="https://www.instagram.com/p/POST123/"`) {
 		t.Fatalf("expected instagram canonical original URL, got %s", html)

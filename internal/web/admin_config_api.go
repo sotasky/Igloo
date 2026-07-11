@@ -16,12 +16,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/screwys/igloo/internal/auth"
 	"github.com/screwys/igloo/internal/config"
 	"github.com/screwys/igloo/internal/db"
-	"github.com/screwys/igloo/internal/exportbundle"
-	"github.com/screwys/igloo/internal/fullimport"
 	"github.com/screwys/igloo/internal/restore"
+	"github.com/screwys/igloo/internal/storage"
 )
 
 // ── Config export / import ────────────────────────────────────────────────────
@@ -36,11 +34,7 @@ func (s *Server) handleConfigExport(w http.ResponseWriter, r *http.Request) {
 	if !requireAdmin(w, r) {
 		return
 	}
-	userID := ""
-	if user := userFromContext(r.Context()); user != nil {
-		userID = user.Username
-	}
-	cfg, err := s.db.ExportConfig(userID)
+	cfg, err := s.db.ExportConfig()
 	if err != nil {
 		slog.Error("ExportConfig", "err", err)
 		writeJSON(w, 500, map[string]any{"error": "export error"})
@@ -80,11 +74,7 @@ func (s *Server) handleConfigExportSubscriptions(w http.ResponseWriter, r *http.
 	if !requireAdmin(w, r) {
 		return
 	}
-	userID := ""
-	if user := userFromContext(r.Context()); user != nil {
-		userID = user.Username
-	}
-	cfg, err := s.db.ExportSubscriptions(userID)
+	cfg, err := s.db.ExportSubscriptions()
 	if err != nil {
 		slog.Error("ExportSubscriptions", "err", err)
 		writeJSON(w, 500, map[string]any{"error": "export error"})
@@ -122,20 +112,12 @@ func (s *Server) handleConfigExportFull(w http.ResponseWriter, r *http.Request) 
 	if !requireAdmin(w, r) {
 		return
 	}
-	userID := ""
-	if user := userFromContext(r.Context()); user != nil {
-		userID = user.Username
-	}
-	cfg, err := s.db.ExportFullData(userID)
+	runtimeFiles, err := s.collectFullExportRuntimeConfigFiles()
 	if err != nil {
-		slog.Error("ExportFullData", "err", err)
-		writeJSON(w, 500, map[string]any{"error": "export error"})
+		slog.Error("ExportFullData runtime config", "err", err)
+		writeJSON(w, 500, map[string]any{"error": "export config error"})
 		return
 	}
-
-	mediaFiles := exportbundle.CollectBookmarkMedia(s.db, s.cfg.DataDir, cfg.Bookmarks)
-	mediaFiles = append(mediaFiles, exportbundle.CollectAvatarMedia(s.cfg.DataDir)...)
-	runtimeFiles := s.collectFullExportRuntimeConfigFiles()
 	runtimeManifest := s.fullExportRuntimeManifest()
 	dbSnapshotPath, cleanupSnapshot, err := s.createFullExportDatabaseSnapshot()
 	if err != nil {
@@ -144,10 +126,16 @@ func (s *Server) handleConfigExportFull(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	defer cleanupSnapshot()
+	cfg, err := exportFullDataSnapshot(dbSnapshotPath, s.cfg.Storage)
+	if err != nil {
+		slog.Error("ExportFullData snapshot", "err", err)
+		writeJSON(w, 500, map[string]any{"error": "export snapshot error"})
+		return
+	}
 
 	if dir := s.configuredExportDir(); dir != "" {
 		path, err := writeExportFile(dir, "igloo-full", ".zip", func(dst io.Writer) error {
-			return writeFullExportZip(dst, cfg, dbSnapshotPath, mediaFiles, runtimeFiles, runtimeManifest)
+			return writeFullExportZip(dst, cfg, dbSnapshotPath, runtimeFiles, runtimeManifest)
 		})
 		if err != nil {
 			slog.Error("ExportFullData save", "dir", dir, "err", err)
@@ -167,8 +155,9 @@ func (s *Server) handleConfigExportFull(w http.ResponseWriter, r *http.Request) 
 		fmt.Sprintf(`attachment; filename="igloo-full-%s.zip"`,
 			time.Now().UTC().Format("2006-01-02")))
 	w.WriteHeader(200)
-	if err := writeFullExportZip(w, cfg, dbSnapshotPath, mediaFiles, runtimeFiles, runtimeManifest); err != nil {
+	if err := writeFullExportZip(w, cfg, dbSnapshotPath, runtimeFiles, runtimeManifest); err != nil {
 		slog.Error("ExportFullData zip write", "err", err)
+		panic(http.ErrAbortHandler)
 	}
 }
 
@@ -179,14 +168,13 @@ func writeConfigExportJSON(w io.Writer, cfg db.ConfigExport) error {
 type subscriptionsExportDocument struct {
 	Version       int                `json:"version"`
 	Scope         string             `json:"scope"`
-	UserID        string             `json:"user_id,omitempty"`
 	ExportedAt    time.Time          `json:"exported_at"`
 	Subscriptions []db.ChannelExport `json:"subscriptions"`
 }
 
 func subscriptionsExportPayload(cfg db.ConfigExport) subscriptionsExportDocument {
 	if cfg.Version == 0 {
-		cfg.Version = 1
+		cfg.Version = db.ConfigExportVersion
 	}
 	if cfg.ExportedAt.IsZero() {
 		cfg.ExportedAt = time.Now().UTC()
@@ -198,7 +186,6 @@ func subscriptionsExportPayload(cfg db.ConfigExport) subscriptionsExportDocument
 	return subscriptionsExportDocument{
 		Version:       cfg.Version,
 		Scope:         "subscriptions",
-		UserID:        cfg.UserID,
 		ExportedAt:    cfg.ExportedAt,
 		Subscriptions: subs,
 	}
@@ -208,7 +195,15 @@ func writeSubscriptionsExportJSON(w io.Writer, cfg db.ConfigExport) error {
 	return json.NewEncoder(w).Encode(subscriptionsExportPayload(cfg))
 }
 
-func writeFullExportZip(w io.Writer, cfg db.ConfigExport, databasePath string, mediaFiles []exportbundle.MediaFile, runtimeFiles []fullExportRuntimeFile, runtimeManifest fullimport.RuntimeManifest) error {
+type fullExportRuntimeManifest struct {
+	Version   int    `json:"version"`
+	DataDir   string `json:"data_dir,omitempty"`
+	MediaDir  string `json:"media_dir,omitempty"`
+	ConfigDir string `json:"config_dir,omitempty"`
+	RepoDir   string `json:"repo_dir,omitempty"`
+}
+
+func writeFullExportZip(w io.Writer, cfg db.ConfigExport, databasePath string, runtimeFiles []fullExportRuntimeFile, runtimeManifest fullExportRuntimeManifest) error {
 	zw := zip.NewWriter(w)
 	if strings.TrimSpace(databasePath) != "" {
 		if err := writeFullExportDatabaseFile(zw, databasePath); err != nil {
@@ -230,15 +225,20 @@ func writeFullExportZip(w io.Writer, cfg db.ConfigExport, databasePath string, m
 	}
 	for _, file := range runtimeFiles {
 		if err := writeFullExportRuntimeConfigFile(zw, file); err != nil {
-			slog.Warn("ExportFullData runtime config file skipped", "path", file.SourcePath, "err", err)
-		}
-	}
-	for _, file := range mediaFiles {
-		if err := writeFullExportMediaFile(zw, file); err != nil {
-			slog.Warn("ExportFullData media file skipped", "path", file.SourcePath, "err", err)
+			return fmt.Errorf("write runtime config %s: %w", file.ArchivePath, err)
 		}
 	}
 	return zw.Close()
+}
+
+func exportFullDataSnapshot(path string, layout storage.Layout) (db.ConfigExport, error) {
+	store, err := db.OpenReadOnlyLayout(path, layout)
+	if err != nil {
+		return db.ConfigExport{}, err
+	}
+	cfg, exportErr := store.ExportFullData()
+	closeErr := store.Close()
+	return cfg, errors.Join(exportErr, closeErr)
 }
 
 func (s *Server) createFullExportDatabaseSnapshot() (string, func(), error) {
@@ -247,12 +247,12 @@ func (s *Server) createFullExportDatabaseSnapshot() (string, func(), error) {
 	}
 	dir := ""
 	if s.cfg != nil {
-		dir = strings.TrimSpace(s.cfg.DataDir)
+		dir = strings.TrimSpace(s.cfg.Storage.StateRoot())
 	}
 	if dir == "" {
 		dir = os.TempDir()
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := storage.EnsureDirectory(dir, 0o755); err != nil {
 		return "", func() {}, fmt.Errorf("create database snapshot dir: %w", err)
 	}
 	tmp, err := os.CreateTemp(dir, ".igloo-full-export-db-*.db")
@@ -295,7 +295,7 @@ func writeExportFile(dir, prefix, ext string, write func(io.Writer) error) (stri
 	if !filepath.IsAbs(dir) {
 		return "", fmt.Errorf("export dir must be absolute: %s", dir)
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := storage.EnsureDirectory(dir, 0o755); err != nil {
 		return "", fmt.Errorf("create export dir: %w", err)
 	}
 	stamp := time.Now().UTC().Format("2006-01-02-150405")
@@ -315,6 +315,9 @@ func writeExportFile(dir, prefix, ext string, write func(io.Writer) error) (stri
 	if err := write(tmp); err != nil {
 		return "", err
 	}
+	if err := tmp.Sync(); err != nil {
+		return "", fmt.Errorf("sync export: %w", err)
+	}
 	if err := tmp.Close(); err != nil {
 		closed = true
 		return "", err
@@ -323,6 +326,9 @@ func writeExportFile(dir, prefix, ext string, write func(io.Writer) error) (stri
 	finalPath := filepath.Join(dir, name)
 	if err := os.Rename(tmpPath, finalPath); err != nil {
 		return "", fmt.Errorf("rename export: %w", err)
+	}
+	if err := storage.SyncDirectory(dir); err != nil {
+		return "", fmt.Errorf("sync export directory: %w", err)
 	}
 	return finalPath, nil
 }
@@ -352,7 +358,7 @@ func writeFullExportSubscriptionsJSON(zw *zip.Writer, cfg db.ConfigExport) error
 	return enc.Encode(subscriptionsExportPayload(cfg))
 }
 
-func writeFullExportRuntimeManifest(zw *zip.Writer, manifest fullimport.RuntimeManifest) error {
+func writeFullExportRuntimeManifest(zw *zip.Writer, manifest fullExportRuntimeManifest) error {
 	f, err := zw.Create("runtime.json")
 	if err != nil {
 		return err
@@ -420,42 +426,14 @@ func writeFullExportRuntimeConfigFile(zw *zip.Writer, file fullExportRuntimeFile
 	return err
 }
 
-func writeFullExportMediaFile(zw *zip.Writer, file exportbundle.MediaFile) error {
-	src, err := os.Open(file.SourcePath)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		_ = src.Close()
-	}()
-	info, err := src.Stat()
-	if err != nil {
-		return err
-	}
-	if info.IsDir() {
-		return fmt.Errorf("media path is directory")
-	}
-	hdr, err := zip.FileInfoHeader(info)
-	if err != nil {
-		return err
-	}
-	hdr.Name = file.ArchivePath
-	hdr.Method = zip.Deflate
-	dst, err := zw.CreateHeader(hdr)
-	if err != nil {
-		return err
-	}
-	_, err = io.Copy(dst, src)
-	return err
-}
-
-func (s *Server) fullExportRuntimeManifest() fullimport.RuntimeManifest {
+func (s *Server) fullExportRuntimeManifest() fullExportRuntimeManifest {
 	if s == nil || s.cfg == nil {
-		return fullimport.RuntimeManifest{Version: 1}
+		return fullExportRuntimeManifest{Version: 2}
 	}
-	return fullimport.RuntimeManifest{
-		Version:   1,
-		DataDir:   s.cfg.DataDir,
+	return fullExportRuntimeManifest{
+		Version:   2,
+		DataDir:   s.cfg.Storage.StateRoot(),
+		MediaDir:  s.cfg.Storage.MediaRoot(),
 		ConfigDir: s.cfg.ConfDir,
 		RepoDir:   s.repoDirForRuntimeExport(),
 	}
@@ -474,24 +452,29 @@ func (s *Server) repoDirForRuntimeExport() string {
 	return ""
 }
 
-func (s *Server) collectFullExportRuntimeConfigFiles() []fullExportRuntimeFile {
+func (s *Server) collectFullExportRuntimeConfigFiles() ([]fullExportRuntimeFile, error) {
 	if s == nil || s.cfg == nil || strings.TrimSpace(s.cfg.ConfDir) == "" {
-		return nil
+		return nil, nil
 	}
 	root := filepath.Clean(s.cfg.ConfDir)
+	info, err := os.Stat(root)
+	if err != nil {
+		return nil, fmt.Errorf("stat runtime config root %s: %w", root, err)
+	}
+	if !info.IsDir() {
+		return nil, fmt.Errorf("runtime config root is not a directory: %s", root)
+	}
 	var files []fullExportRuntimeFile
 	if err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
 		if err != nil {
-			slog.Warn("ExportFullData runtime config path skipped", "path", path, "err", err)
-			return nil
+			return fmt.Errorf("walk runtime config %s: %w", path, err)
 		}
 		if path == root {
 			return nil
 		}
 		rel, err := filepath.Rel(root, path)
 		if err != nil {
-			slog.Warn("ExportFullData runtime config rel path skipped", "path", path, "err", err)
-			return nil
+			return fmt.Errorf("resolve runtime config path %s: %w", path, err)
 		}
 		if skipFullExportRuntimeConfigPath(rel) {
 			if entry.IsDir() {
@@ -503,15 +486,14 @@ func (s *Server) collectFullExportRuntimeConfigFiles() []fullExportRuntimeFile {
 			return nil
 		}
 		if entry.Type()&os.ModeSymlink != 0 {
-			return nil
+			return fmt.Errorf("runtime config symlink is unsupported: %s", path)
 		}
 		info, err := entry.Info()
 		if err != nil {
-			slog.Warn("ExportFullData runtime config stat skipped", "path", path, "err", err)
-			return nil
+			return fmt.Errorf("stat runtime config %s: %w", path, err)
 		}
 		if !info.Mode().IsRegular() {
-			return nil
+			return fmt.Errorf("runtime config entry is not a regular file: %s", path)
 		}
 		files = append(files, fullExportRuntimeFile{
 			SourcePath:  path,
@@ -519,12 +501,12 @@ func (s *Server) collectFullExportRuntimeConfigFiles() []fullExportRuntimeFile {
 		})
 		return nil
 	}); err != nil {
-		slog.Warn("ExportFullData runtime config walk failed", "dir", root, "err", err)
+		return nil, err
 	}
 	sort.Slice(files, func(i, j int) bool {
 		return files[i].ArchivePath < files[j].ArchivePath
 	})
-	return files
+	return files, nil
 }
 
 func skipFullExportRuntimeConfigPath(rel string) bool {
@@ -603,19 +585,24 @@ func (s *Server) handleConfigImport(w http.ResponseWriter, r *http.Request) {
 		importErr(500, "read error")
 		return
 	}
+	replace := r.FormValue("mode") == "replace"
 
-	if isGzipPrefix(prefix) {
-		if err := restore.StageTarball(file, s.cfg.DataDir); err != nil {
-			slog.Error("StageTarball", "err", err)
-			importErr(400, "tarball error: "+err.Error())
+	if isZipPrefix(prefix) {
+		if !replace {
+			importErr(400, "replace mode required for restore")
 			return
 		}
-		slog.Info("restore: staged, exiting for systemd restart")
+		if err := restore.StageZip(file, header.Size, s.cfg.Storage); err != nil {
+			slog.Error("StageZip", "err", err)
+			importErr(400, "zip backup error: "+err.Error())
+			return
+		}
+		slog.Info("restore: staged zip backup, exiting for systemd restart")
 		if isHTMX {
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
 			_, _ = fmt.Fprint(w, `<span class="status-message success">Restore staged. Igloo is restarting…</span><script>setTimeout(function(){window.location.reload()},12000)</script>`)
 		} else {
-			writeJSON(w, 200, map[string]any{"success": true, "format": "tarball", "restart": true})
+			writeJSON(w, 200, map[string]any{"success": true, "format": "zip_backup", "restart": true})
 		}
 		if f, ok := w.(http.Flusher); ok {
 			f.Flush()
@@ -624,74 +611,6 @@ func (s *Server) handleConfigImport(w http.ResponseWriter, r *http.Request) {
 			time.Sleep(500 * time.Millisecond)
 			os.Exit(1)
 		}()
-		return
-	}
-
-	if fullimport.IsZipPrefix(prefix) {
-		if err := restore.StageZip(file, header.Size, s.cfg.DataDir); err == nil {
-			slog.Info("restore: staged zip backup, exiting for systemd restart")
-			if isHTMX {
-				w.Header().Set("Content-Type", "text/html; charset=utf-8")
-				_, _ = fmt.Fprint(w, `<span class="status-message success">Restore staged. Igloo is restarting…</span><script>setTimeout(function(){window.location.reload()},12000)</script>`)
-			} else {
-				writeJSON(w, 200, map[string]any{"success": true, "format": "zip_backup", "restart": true})
-			}
-			if f, ok := w.(http.Flusher); ok {
-				f.Flush()
-			}
-			go func() {
-				time.Sleep(500 * time.Millisecond)
-				os.Exit(1)
-			}()
-			return
-		} else if !errors.Is(err, restore.ErrMissingDatabase) {
-			slog.Error("StageZip", "err", err)
-			importErr(400, "zip backup error: "+err.Error())
-			return
-		}
-		userID := ""
-		if user := userFromContext(r.Context()); user != nil {
-			userID = user.Username
-		}
-		replace := r.FormValue("mode") == "replace"
-		result, restoredMedia, restoredConfig, err := fullimport.ImportFullExportZipReaderAt(s.db, s.cfg.DataDir, s.cfg.ConfDir, s.repoDirForRuntimeExport(), file, header.Size, userID, replace)
-		if err != nil {
-			slog.Error("ImportFullExportZip", "err", err)
-			importErr(400, "zip import error: "+err.Error())
-			return
-		}
-		if restoredConfig > 0 {
-			auth.InvalidateCache()
-		}
-		var parts []string
-		if result.AddedChannels > 0 {
-			parts = append(parts, fmt.Sprintf("%d subscriptions", result.AddedChannels))
-		}
-		if result.AddedBookmarks > 0 {
-			parts = append(parts, fmt.Sprintf("%d bookmarks", result.AddedBookmarks))
-		}
-		if result.AddedCategories > 0 {
-			parts = append(parts, fmt.Sprintf("%d categories", result.AddedCategories))
-		}
-		if restoredMedia > 0 {
-			parts = append(parts, fmt.Sprintf("%d media files", restoredMedia))
-		}
-		if restoredConfig > 0 {
-			parts = append(parts, fmt.Sprintf("%d config files", restoredConfig))
-		}
-		summary := "Import complete"
-		if len(parts) > 0 {
-			summary = "Imported: " + strings.Join(parts, ", ")
-		}
-		importOK(summary)
-		if !isHTMX {
-			writeJSON(w, 200, map[string]any{
-				"success": true, "format": "full_export_zip",
-				"added_channels": result.AddedChannels, "added_bookmarks": result.AddedBookmarks,
-				"added_categories": result.AddedCategories, "updated_settings": result.UpdatedSettings,
-				"restored_media": restoredMedia, "restored_config_files": restoredConfig, "skipped": result.Skipped,
-			})
-		}
 		return
 	}
 
@@ -710,12 +629,6 @@ func (s *Server) handleConfigImport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	userID := ""
-	if user := userFromContext(r.Context()); user != nil {
-		userID = user.Username
-	}
-	replace := r.FormValue("mode") == "replace"
-
 	switch trimmed[0] {
 	case '{':
 		var cfgExport db.ConfigExport
@@ -723,7 +636,7 @@ func (s *Server) handleConfigImport(w http.ResponseWriter, r *http.Request) {
 			importErr(400, "invalid config JSON")
 			return
 		}
-		result, err := s.db.ImportConfig(cfgExport, userID, replace)
+		result, err := s.db.ImportConfig(cfgExport, replace)
 		if err != nil {
 			slog.Error("ImportConfig", "err", err)
 			importErr(500, "import error")
@@ -793,6 +706,6 @@ func readUploadPrefix(file io.ReadSeeker, n int) ([]byte, error) {
 	return buf[:read], nil
 }
 
-func isGzipPrefix(data []byte) bool {
-	return len(data) >= 2 && data[0] == 0x1f && data[1] == 0x8b
+func isZipPrefix(data []byte) bool {
+	return len(data) >= 4 && data[0] == 'P' && data[1] == 'K' && data[2] == 0x03 && data[3] == 0x04
 }

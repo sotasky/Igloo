@@ -24,7 +24,7 @@ fun FeedRoute(
     val uiState by vm.uiState.collectAsStateWithLifecycle()
     val pendingBookmark by vm.pendingBookmark.collectAsStateWithLifecycle()
     val categories by vm.bookmarkCategories.collectAsStateWithLifecycle()
-    val mutedHandles by vm.mutedHandles.collectAsStateWithLifecycle()
+    val mutedChannelIds by vm.mutedChannelIds.collectAsStateWithLifecycle()
     val newPostsAvailable by vm.newPostsAvailable.collectAsStateWithLifecycle()
     val newPostPosters by vm.newPostPosters.collectAsStateWithLifecycle()
     val mediaModels by vm.mediaModels.collectAsStateWithLifecycle()
@@ -40,7 +40,7 @@ fun FeedRoute(
         newPostPosters = newPostPosters,
         pendingBookmark = pendingBookmark,
         bookmarkCategories = categories,
-        mutedHandles = mutedHandles,
+        mutedChannelIds = mutedChannelIds,
         mediaModels = mediaModels,
         onRefresh = vm::refresh,
         onNewPostsClick = vm::showNewPosts,
@@ -52,7 +52,7 @@ fun FeedRoute(
                 channelId = post.author.channelId,
                 source = IglooNavigationSource.Feed,
                 originItemId = post.row.item.tweetId,
-                snapshot = buildProfileOpenSnapshot(post, baseUrl),
+				snapshot = buildProfileOpenSnapshot(post),
             )
         },
         onMentionClick = vm::resolveMentionAndNavigate,
@@ -61,20 +61,12 @@ fun FeedRoute(
         onFollowToggle = vm::toggleFollow,
         onStarToggle = vm::toggleStar,
         onMuteToggle = vm::toggleMute,
-        onMediaOpen = { row, mediaIndex, visibleMediaModel ->
-            val snapshot = buildFeedMediaOpenSnapshot(
-                row = row,
-                mediaIndex = mediaIndex,
-                mediaModels = mediaModels,
-                visibleMediaModel = visibleMediaModel,
-            )
+        onMediaOpen = { row, mediaIndex, _ ->
             navigator.openMedia(
                 ownerKind = "tweet",
                 ownerId = row.item.tweetId,
                 index = mediaIndex,
                 source = IglooNavigationSource.Feed,
-                posterUri = snapshot.posterUri,
-                snapshot = snapshot,
             )
         },
         onSeenReached = vm::markSeen,
@@ -82,7 +74,7 @@ fun FeedRoute(
         onRemoveBookmark = vm::removePendingBookmark,
         onDismissBookmarkSheet = vm::dismissBookmarkSheet,
         onCreateCategory = vm::createCategory,
-        onWarmMediaRows = vm::warmMediaModels,
+        onMediaRowsChanged = vm::setMediaModelRows,
         onRowClick = { row ->
             if (row.item.isReply) {
                 navigator.openThread(row.item.tweetId, IglooNavigationSource.Feed)

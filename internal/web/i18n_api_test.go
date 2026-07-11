@@ -42,7 +42,7 @@ func TestRequestLanguageAutoUsesAcceptLanguage(t *testing.T) {
 	srv := newTestServer(t)
 	srv.i18n = i18n.NewCatalog()
 	_ = srv.i18n.LoadTOMLFile(testTOMLFile(t, "tr", map[string]string{"search_global_placeholder": "Ara"}))
-	if err := srv.db.SetSetting("", "ui_language", "auto"); err != nil {
+	if err := srv.db.SetSetting("ui_language", "auto"); err != nil {
 		t.Fatalf("SetSetting: %v", err)
 	}
 
@@ -74,7 +74,7 @@ func TestSettingsFormPreviewLanguageUsesCatalogWithoutChangingPersistedSelection
 		"action_save_preferences": "Tercihleri kaydet",
 		"settings_tab_general":    "Genel",
 	}))
-	if err := srv.db.SetSetting("", "ui_language", "en"); err != nil {
+	if err := srv.db.SetSetting("ui_language", "en"); err != nil {
 		t.Fatalf("SetSetting: %v", err)
 	}
 

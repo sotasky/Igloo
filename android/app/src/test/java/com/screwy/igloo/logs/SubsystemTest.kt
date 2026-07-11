@@ -8,7 +8,7 @@ class SubsystemTest {
     @Test fun `event subsystem field wins over prefix`() {
         assertEquals(
             Subsystem.Outbox,
-            deriveSubsystem("mutation_delta_page_applied", mapOf("subsystem" to "outbox")),
+            deriveSubsystem("android_sync_metadata_retry", mapOf("subsystem" to "outbox")),
         )
     }
 
@@ -18,8 +18,8 @@ class SubsystemTest {
     }
 
     @Test fun `sync-family prefixes map to Sync`() {
-        assertEquals(Subsystem.Sync, deriveSubsystem("mutation_delta_page_applied", emptyMap()))
-        assertEquals(Subsystem.Sync, deriveSubsystem("stream_page_applied", emptyMap()))
+        assertEquals(Subsystem.Sync, deriveSubsystem("android_sync_metadata_retry", emptyMap()))
+        assertEquals(Subsystem.Sync, deriveSubsystem("sync_pass_failed", emptyMap()))
         assertEquals(Subsystem.Sync, deriveSubsystem("periodic_sync_triggered", emptyMap()))
     }
 

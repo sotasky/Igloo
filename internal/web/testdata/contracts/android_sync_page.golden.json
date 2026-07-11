@@ -1,0 +1,243 @@
+{
+  "changes": [
+    {
+      "operation": "upsert",
+      "owner_id": "sample_tweet_sync",
+      "owner_kind": "feed",
+      "payload": {
+        "item": {
+          "body_source_lang": "",
+          "body_text": "android sync contract body",
+          "body_translation": "",
+          "canonical_tweet_id": "",
+          "canonical_url": "https://x.com/sample_channel/status/sample_tweet_sync",
+          "channel_id": "twitter_sample_channel",
+          "content_hash": "",
+          "is_ghost": false,
+          "is_reply": false,
+          "is_retweet": false,
+          "lang": "",
+          "likes": 0,
+          "media_json": "",
+          "published_at": 1700000001000,
+          "quote_body_text": "",
+          "quote_canonical_url": "",
+          "quote_channel_id": "",
+          "quote_lang": "",
+          "quote_media_json": "",
+          "quote_published_at": 0,
+          "quote_source_lang": "",
+          "quote_translation": "",
+          "quote_tweet_id": "",
+          "reply_channel_id": "",
+          "reply_to_status": "",
+          "reposter_channel_id": "",
+          "retweets": 0,
+          "source_channel_id": "twitter_sample_source",
+          "tweet_id": "sample_tweet_sync",
+          "views": 0
+        }
+      },
+      "retain_at_ms": 1700000001000,
+      "retention_bucket": "feed"
+    },
+    {
+      "operation": "upsert",
+      "owner_id": "tiktok_sample_video_sync",
+      "owner_kind": "video",
+      "payload": {
+        "comments": [],
+        "item": {
+          "canonical_url": "https://www.tiktok.com/@sample_channel/video/sample_video_sync",
+          "channel_id": "tiktok_sample_channel",
+          "dearrow_title": null,
+          "dearrow_title_casual": null,
+          "description": "video contract body",
+          "duration": 90,
+          "media_kind": "video",
+          "metadata_json": "",
+          "owner_kind": "tiktok_video",
+          "published_at": 1700000001000,
+          "slide_count": 0,
+          "source_kind": "",
+          "title": "Contract Video",
+          "video_id": "tiktok_sample_video_sync"
+        },
+        "repost_sources": [],
+        "sponsorblock_checked": null,
+        "sponsorblock_segments": []
+      },
+      "retain_at_ms": 1700000001000,
+      "retention_bucket": "moments"
+    },
+    {
+      "operation": "upsert",
+      "owner_id": "sample_tweet_sync",
+      "owner_kind": "bookmark",
+      "payload": {
+        "account_handles": null,
+        "bookmarked_at": 1700000002500,
+        "category_id": 0,
+        "custom_title": null,
+        "media_indices": null,
+        "video_id": "sample_tweet_sync"
+      },
+      "retain_at_ms": 0,
+      "retention_bucket": ""
+    },
+    {
+      "operation": "upsert",
+      "owner_id": "tiktok_sample_video_sync",
+      "owner_kind": "bookmark",
+      "payload": {
+        "account_handles": null,
+        "bookmarked_at": 1700000002500,
+        "category_id": 0,
+        "custom_title": null,
+        "media_indices": null,
+        "video_id": "tiktok_sample_video_sync"
+      },
+      "retain_at_ms": 0,
+      "retention_bucket": ""
+    },
+    {
+      "operation": "upsert",
+      "owner_id": "tiktok_sample_channel",
+      "owner_kind": "channel_follow",
+      "payload": {
+        "channel_id": "tiktok_sample_channel",
+        "followed_at": 1700000001000
+      },
+      "retain_at_ms": 0,
+      "retention_bucket": ""
+    },
+    {
+      "operation": "upsert",
+      "owner_id": "twitter_sample_channel",
+      "owner_kind": "channel_follow",
+      "payload": {
+        "channel_id": "twitter_sample_channel",
+        "followed_at": 1700000001000
+      },
+      "retain_at_ms": 0,
+      "retention_bucket": ""
+    },
+    {
+      "operation": "upsert",
+      "owner_id": "sample_tweet_sync",
+      "owner_kind": "feed_rank",
+      "payload": {
+        "rank_position": 1,
+        "snapshot_at": 1700000002000,
+        "tweet_id": "sample_tweet_sync"
+      },
+      "retain_at_ms": 0,
+      "retention_bucket": ""
+    },
+    {
+      "operation": "upsert",
+      "owner_id": "tiktok_sample_channel",
+      "owner_kind": "channel",
+      "payload": {
+        "channel": {
+          "channel_id": "tiktok_sample_channel",
+          "name": "Contract TikTok Channel",
+          "platform": "tiktok",
+          "source_id": "sample_channel",
+          "url": "https://www.tiktok.com/@sample_channel"
+        },
+        "profile": {
+          "bio": "",
+          "channel_id": "tiktok_sample_channel",
+          "display_name": "Contract TikTok Profile",
+          "followers": 0,
+          "following": 0,
+          "handle": "sample_channel",
+          "platform": "tiktok",
+          "protected": false,
+          "verified": false,
+          "verified_type": "",
+          "website": ""
+        }
+      },
+      "retain_at_ms": 0,
+      "retention_bucket": ""
+    },
+    {
+      "operation": "upsert",
+      "owner_id": "twitter_sample_channel",
+      "owner_kind": "channel",
+      "payload": {
+        "channel": {
+          "channel_id": "twitter_sample_channel",
+          "name": "Contract Channel",
+          "platform": "twitter",
+          "source_id": "sample_channel",
+          "url": "https://x.com/sample_channel"
+        },
+        "profile": {
+          "bio": "",
+          "channel_id": "twitter_sample_channel",
+          "display_name": "Contract Channel Profile",
+          "followers": 1200,
+          "following": 0,
+          "handle": "sample_channel",
+          "platform": "twitter",
+          "protected": false,
+          "verified": false,
+          "verified_type": "",
+          "website": ""
+        }
+      },
+      "retain_at_ms": 0,
+      "retention_bucket": ""
+    },
+    {
+      "operation": "upsert",
+      "owner_id": "twitter_sample_source",
+      "owner_kind": "channel",
+      "payload": {
+        "channel": null,
+        "profile": {
+          "bio": "",
+          "channel_id": "twitter_sample_source",
+          "display_name": "",
+          "followers": 0,
+          "following": 0,
+          "handle": "sample_source",
+          "platform": "twitter",
+          "protected": false,
+          "verified": false,
+          "verified_type": "",
+          "website": ""
+        }
+      },
+      "retain_at_ms": 0,
+      "retention_bucket": ""
+    },
+    {
+      "operation": "upsert",
+      "owner_id": "twitter_channel_twitter_sample_channel_avatar",
+      "owner_kind": "asset",
+      "payload": {
+        "asset_id": "twitter_channel_twitter_sample_channel_avatar",
+        "asset_kind": "avatar",
+        "bucket": "avatars",
+        "content_type": "image/jpeg",
+        "is_auto": null,
+        "media_index": 0,
+        "owner_id": "twitter_sample_channel",
+        "owner_kind": "channel",
+        "revision": 1,
+        "sha256": "bda445477ef30dc1be0f7d7399c9528a55787091dcb58e15494f3a9a624894c6",
+        "size_bytes": 15,
+        "state": "ready"
+      },
+      "retain_at_ms": 0,
+      "retention_bucket": ""
+    }
+  ],
+  "end_of_stream": true,
+  "next_cursor": "\u003ccursor\u003e",
+  "ok": true
+}

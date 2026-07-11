@@ -1,7 +1,6 @@
 package web
 
 import (
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -20,7 +19,7 @@ func TestHandleShortsWatched_RequiresAuth(t *testing.T) {
 	}
 }
 
-func TestHandleShortsWatched_WritesMomentViewAndSyncChange(t *testing.T) {
+func TestHandleShortsWatchedUsesMomentViewOwner(t *testing.T) {
 	srv := newTestServer(t)
 
 	req := httptest.NewRequest("POST", "/api/shorts/watched/9000000000000000001", nil)
@@ -32,21 +31,9 @@ func TestHandleShortsWatched_WritesMomentViewAndSyncChange(t *testing.T) {
 		t.Fatalf("status: got %d, want 200 — body: %s", rr.Code, rr.Body.String())
 	}
 
-	var body struct {
-		Success     bool  `json:"success"`
-		SyncVersion int64 `json:"sync_version"`
-	}
-	if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if !body.Success {
-		t.Error("success=false")
-	}
-	if body.SyncVersion <= 0 {
-		t.Errorf("sync_version: got %d, want > 0", body.SyncVersion)
-	}
+	_ = mutationOwnerRevision(t, srv, "moment_view", "9000000000000000001")
 
-	n, err := srv.db.CountMomentViews("alice")
+	n, err := srv.db.CountMomentViews()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,11 +42,10 @@ func TestHandleShortsWatched_WritesMomentViewAndSyncChange(t *testing.T) {
 	}
 }
 
-func TestHandleShortsWatchedList_ReturnsUserRowsOnly(t *testing.T) {
+func TestHandleShortsWatchedList_ReturnsRows(t *testing.T) {
 	srv := newTestServer(t)
-	_, _ = srv.db.UpsertMomentView("alice", "A1")
-	_, _ = srv.db.UpsertMomentView("alice", "A2")
-	_, _ = srv.db.UpsertMomentView("bob", "B1")
+	_, _ = srv.db.UpsertMomentView("A1")
+	_, _ = srv.db.UpsertMomentView("A2")
 
 	req := httptest.NewRequest("GET", "/api/shorts/watched", nil)
 	req = attachTestAuth(req, "alice")
@@ -71,9 +57,6 @@ func TestHandleShortsWatchedList_ReturnsUserRowsOnly(t *testing.T) {
 	}
 	got := rr.Body.String()
 	if !strings.Contains(got, "A1") || !strings.Contains(got, "A2") {
-		t.Errorf("missing alice's rows: %s", got)
-	}
-	if strings.Contains(got, "B1") {
-		t.Errorf("leaked bob's row: %s", got)
+		t.Errorf("missing watched rows: %s", got)
 	}
 }

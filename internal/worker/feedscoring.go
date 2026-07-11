@@ -68,10 +68,6 @@ func (m *Manager) runFeedScoringWorker(ctx context.Context) {
 	}
 }
 
-// scoringUsername is the single user that owns scored + snapshotted state.
-// The codebase is single-user today; this constant makes the assumption explicit
-// and gives future multi-user work a grep anchor.
-const scoringUsername = "admin"
 const feedSnapshotBuildTimeout = 30 * time.Second
 const feedScoringKickMinInterval = 30 * time.Second
 
@@ -83,7 +79,7 @@ func (m *Manager) scoreFeedItems(ctx context.Context) {
 
 	// Rebuild the snapshot on every tick so time-decay drift stays fresh even
 	// when no items needed re-scoring.
-	snap := m.runSnapshotPhaseStats(ctx, scoringUsername)
+	snap := m.runSnapshotPhaseStats(ctx)
 
 	totalElapsed := time.Since(start).Round(time.Millisecond)
 	detail := fmt.Sprintf("scored=%d snap=%d/%s query=%s build=%s write=%s total=%s top=%s",
@@ -129,10 +125,9 @@ func (m *Manager) runScoringPhase() int {
 		tokenList = append(tokenList, t)
 	}
 
-	// Build scoring context — single-user system
-	accountRows, _ := m.db.GetAccountAffinityScores(scoringUsername, handleList)
-	tokenRows, _ := m.db.GetTokenAffinityScores(scoringUsername, tokenList)
-	stateScores, _ := m.db.BuildStateAccountScores(scoringUsername)
+	accountRows, _ := m.db.GetAccountAffinityScores(handleList)
+	tokenRows, _ := m.db.GetTokenAffinityScores(tokenList)
+	stateScores, _ := m.db.BuildStateAccountScores()
 
 	// Channel flags
 	starredIDs, _ := m.db.GetStarredChannelIDs()
@@ -173,12 +168,12 @@ func (m *Manager) runScoringPhase() int {
 	return len(scores)
 }
 
-// runSnapshotPhase rebuilds the feed_rank_snapshot for the given user. Returns
+// runSnapshotPhase rebuilds the feed_rank_snapshot. Returns
 // (row_count, elapsed_rounded_ms, compact_top_10_string). On error, logs and
 // returns zero values — the prior snapshot is preserved because
 // ReplaceFeedRankSnapshot is a no-op on empty rows.
-func (m *Manager) runSnapshotPhase(ctx context.Context, username string) (int, time.Duration, string) {
-	stats := m.runSnapshotPhaseStats(ctx, username)
+func (m *Manager) runSnapshotPhase(ctx context.Context) (int, time.Duration, string) {
+	stats := m.runSnapshotPhaseStats(ctx)
 	return stats.count, stats.totalDur, stats.top
 }
 
@@ -191,14 +186,14 @@ type snapshotPhaseStats struct {
 	top      string
 }
 
-func (m *Manager) runSnapshotPhaseStats(ctx context.Context, username string) snapshotPhaseStats {
+func (m *Manager) runSnapshotPhaseStats(ctx context.Context) snapshotPhaseStats {
 	stats := snapshotPhaseStats{top: "[]"}
 	snapStart := time.Now()
 	snapCtx, cancel := context.WithTimeout(ctx, feedSnapshotBuildTimeout)
 	defer cancel()
 
 	queryStart := time.Now()
-	pre, err := m.db.ListPreDiversityRankedContext(snapCtx, username)
+	pre, err := m.db.ListPreDiversityRankedContext(snapCtx)
 	stats.queryDur = time.Since(queryStart).Round(time.Millisecond)
 	if err != nil {
 		log.Printf("[feed_scoring] ListPreDiversityRanked: %v", err)
@@ -211,7 +206,7 @@ func (m *Manager) runSnapshotPhaseStats(ctx context.Context, username string) sn
 	stats.buildDur = time.Since(buildStart).Round(time.Millisecond)
 
 	writeStart := time.Now()
-	if err := m.db.ReplaceFeedRankSnapshot(username, snapshot); err != nil {
+	if err := m.db.ReplaceFeedRankSnapshot(snapshot); err != nil {
 		log.Printf("[feed_scoring] ReplaceFeedRankSnapshot: %v", err)
 		stats.writeDur = time.Since(writeStart).Round(time.Millisecond)
 		stats.totalDur = time.Since(snapStart).Round(time.Millisecond)

@@ -2,125 +2,228 @@ package db
 
 import (
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"strconv"
+	"sort"
 	"strings"
 	"time"
+
+	"github.com/screwys/igloo/internal/model"
 )
-
-// #11 — mutation apply-fns. Each writes to its side table + emits a
-// sync_changes row in one transaction and returns the new
-// sync_changes.version. Handlers surface that version as
-// envelope.sync_version (plan #10 + #11).
-
-// MutationResult is what every apply-fn returns to the handler.
-type MutationResult struct {
-	SyncVersion int64
-}
 
 // errInvalidAction fires when a toggle endpoint receives action not in
 // {"set", "clear"}. Handlers translate to envelope error_code=invalid_body.
 var errInvalidAction = errors.New("action must be 'set' or 'clear'")
 
-// applyMutation wraps the common pattern: write in a tx, emit
-// sync_changes with (type, item_id, valueJSON), read back max(version)
-// from the same tx, return it.
-func (db *DB) applyMutation(kind, itemID string, value any, writes func(tx *sql.Tx) error) (MutationResult, error) {
-	var version int64
-	err := db.WithWrite(func(tx *sql.Tx) error {
-		if err := writes(tx); err != nil {
-			return err
-		}
-		valueJSON := "{}"
-		if value != nil {
-			if b, err := json.Marshal(value); err == nil {
-				valueJSON = string(b)
+type invalidMutationError struct {
+	message string
+}
+
+func (e *invalidMutationError) Error() string { return e.message }
+
+func invalidMutation(message string) error {
+	return &invalidMutationError{message: message}
+}
+
+func IsInvalidMutation(err error) bool {
+	var invalid *invalidMutationError
+	return errors.Is(err, errInvalidAction) || errors.As(err, &invalid)
+}
+
+type StaleMutationError struct {
+	Kind               string
+	ItemKey            string
+	UpdatedAtMs        int64
+	CurrentUpdatedAtMs int64
+}
+
+func (e *StaleMutationError) Error() string {
+	return "a newer mutation already owns this state"
+}
+
+func IsStaleMutation(err error) bool {
+	var stale *StaleMutationError
+	return errors.As(err, &stale)
+}
+
+type MutationResult struct {
+	CanonicalID     string
+	Applied         bool
+	Affected        int
+	DeletedFileKeys []string
+}
+
+func mutationTimestamp(updatedAtMs int64) int64 {
+	if updatedAtMs > 0 {
+		return updatedAtMs
+	}
+	return time.Now().UnixMilli()
+}
+
+func claimMutationClockTx(tx *sql.Tx, kind, itemKey, action string, updatedAtMs int64) (bool, error) {
+	if action != "set" && action != "clear" {
+		return false, errInvalidAction
+	}
+	itemKey = strings.TrimSpace(itemKey)
+	if itemKey == "" {
+		return false, invalidMutation("mutation key required")
+	}
+	var currentAction string
+	var currentUpdatedAtMs int64
+	err := tx.QueryRow(`
+		SELECT action, updated_at_ms
+		FROM mutation_clocks
+		WHERE kind = ? AND item_key = ?
+	`, kind, itemKey).Scan(&currentAction, &currentUpdatedAtMs)
+	if err != nil && err != sql.ErrNoRows {
+		return false, err
+	}
+	if err == nil {
+		switch {
+		case updatedAtMs < currentUpdatedAtMs:
+			return false, &StaleMutationError{
+				Kind: kind, ItemKey: itemKey, UpdatedAtMs: updatedAtMs,
+				CurrentUpdatedAtMs: currentUpdatedAtMs,
+			}
+		case updatedAtMs == currentUpdatedAtMs && action == currentAction:
+			return false, nil
+		case updatedAtMs == currentUpdatedAtMs && action == "set":
+			return false, &StaleMutationError{
+				Kind: kind, ItemKey: itemKey, UpdatedAtMs: updatedAtMs,
+				CurrentUpdatedAtMs: currentUpdatedAtMs,
 			}
 		}
-		if err := db.recordSyncChangeTx(tx, kind, itemID, valueJSON); err != nil {
-			return err
-		}
-		return tx.QueryRow("SELECT COALESCE(MAX(version), 0) FROM sync_changes").Scan(&version)
-	})
-	if err != nil {
-		return MutationResult{}, err
 	}
-	return MutationResult{SyncVersion: version}, nil
+	_, err = tx.Exec(`
+		INSERT INTO mutation_clocks (kind, item_key, action, updated_at_ms)
+		VALUES (?, ?, ?, ?)
+		ON CONFLICT(kind, item_key) DO UPDATE SET
+		  action = excluded.action,
+		  updated_at_ms = excluded.updated_at_ms
+	`, kind, itemKey, action, updatedAtMs)
+	return err == nil, err
+}
+
+func advanceMutationClockTx(tx *sql.Tx, kind, itemKey, action string, updatedAtMs int64) (int64, error) {
+	if action != "set" && action != "clear" {
+		return 0, errInvalidAction
+	}
+	itemKey = strings.TrimSpace(itemKey)
+	if itemKey == "" {
+		return 0, invalidMutation("mutation key required")
+	}
+	updatedAtMs = mutationTimestamp(updatedAtMs)
+	var resolved int64
+	err := tx.QueryRow(`
+		INSERT INTO mutation_clocks (kind, item_key, action, updated_at_ms)
+		VALUES (?, ?, ?, ?)
+		ON CONFLICT(kind, item_key) DO UPDATE SET
+		  action = excluded.action,
+		  updated_at_ms = CASE
+		    WHEN mutation_clocks.updated_at_ms >= excluded.updated_at_ms
+		    THEN mutation_clocks.updated_at_ms + 1
+		    ELSE excluded.updated_at_ms
+		  END
+		RETURNING updated_at_ms
+	`, kind, itemKey, action, updatedAtMs).Scan(&resolved)
+	return resolved, err
+}
+
+func advanceMutationClocksTx(tx *sql.Tx, kind, action, itemsQuery string, args ...any) error {
+	if action != "set" && action != "clear" {
+		return errInvalidAction
+	}
+	query := `
+		INSERT INTO mutation_clocks (kind, item_key, action, updated_at_ms)
+		SELECT ?, TRIM(item_key), ?,
+		       CASE WHEN updated_at_ms > 0 THEN updated_at_ms ELSE 1 END
+		FROM (` + itemsQuery + `) AS mutation_items
+		WHERE TRIM(item_key) != ''
+		ON CONFLICT(kind, item_key) DO UPDATE SET
+		  action = excluded.action,
+		  updated_at_ms = CASE
+		    WHEN mutation_clocks.updated_at_ms >= excluded.updated_at_ms
+		    THEN mutation_clocks.updated_at_ms + 1
+		    ELSE excluded.updated_at_ms
+		  END
+	`
+	queryArgs := make([]any, 0, len(args)+2)
+	queryArgs = append(queryArgs, kind, action)
+	queryArgs = append(queryArgs, args...)
+	_, err := tx.Exec(query, queryArgs...)
+	return err
 }
 
 // ── like (toggle) ────────────────────────────────────────────────────
 
-func (db *DB) ApplyLikeMutation(username, tweetID, action string, updatedAtMs int64) (MutationResult, error) {
-	var err error
-	if action == "set" {
-		tweetID, err = db.ResolveFeedStateIDForWrite(tweetID)
-	} else {
-		tweetID, err = db.ResolveFeedStateID(tweetID)
-	}
-	if err != nil {
-		return MutationResult{}, err
-	}
-	if updatedAtMs == 0 {
-		updatedAtMs = time.Now().UnixMilli()
-	}
-	if action != "set" && action != "clear" {
-		return MutationResult{}, errInvalidAction
-	}
+type LikeMutation struct {
+	TweetID     string
+	Action      string
+	Fields      map[string]string
+	UpdatedAtMs int64
+}
 
-	value := map[string]any{"action": action, "liked": action == "set", "updated_at_ms": updatedAtMs}
-	var version int64
-	err = db.WithWrite(func(tx *sql.Tx) error {
-		switch action {
+func (db *DB) MutateLike(m LikeMutation) (MutationResult, error) {
+	var result MutationResult
+	rawTweetID := strings.TrimSpace(m.TweetID)
+	m.UpdatedAtMs = mutationTimestamp(m.UpdatedAtMs)
+	err := db.WithWrite(func(tx *sql.Tx) error {
+		if m.Action == "set" && len(m.Fields) > 0 {
+			if err := db.ensureFeedItemStubFromLikeTx(tx, rawTweetID, m.Fields); err != nil {
+				return err
+			}
+		}
+		var err error
+		if m.Action == "set" {
+			result.CanonicalID, err = db.resolveFeedStateIDForWriteTx(tx, rawTweetID)
+		} else {
+			result.CanonicalID, err = resolveFeedStateIDTx(tx, rawTweetID)
+		}
+		if err != nil {
+			return err
+		}
+		result.Applied, err = claimMutationClockTx(tx, "like", result.CanonicalID, m.Action, m.UpdatedAtMs)
+		if err != nil || !result.Applied {
+			return err
+		}
+		switch m.Action {
 		case "set":
 			if _, err := tx.Exec(
-				`INSERT OR IGNORE INTO feed_likes (username, tweet_id, liked_at) VALUES (?, ?, ?)`,
-				username, tweetID, updatedAtMs,
+				`INSERT INTO feed_likes (tweet_id, liked_at) VALUES (?, ?)
+				 ON CONFLICT(tweet_id) DO UPDATE SET liked_at = excluded.liked_at`,
+				result.CanonicalID, m.UpdatedAtMs,
 			); err != nil {
 				return err
 			}
 			if _, err := tx.Exec(
-				`INSERT OR IGNORE INTO feed_seen (username, tweet_id, seen_at) VALUES (?, ?, ?)`,
-				username, tweetID, updatedAtMs,
+				`INSERT INTO feed_seen (tweet_id, seen_at) VALUES (?, ?)
+				 ON CONFLICT(tweet_id) DO UPDATE SET seen_at = MAX(feed_seen.seen_at, excluded.seen_at)`,
+				result.CanonicalID, m.UpdatedAtMs,
 			); err != nil {
 				return err
 			}
-			if err := db.bumpFeedItemAndSiblingsSyncSeqTx(tx, tweetID); err != nil {
-				return err
-			}
-			valueJSON, _ := json.Marshal(value)
-			if err := db.recordSyncChangeTx(tx, "like", tweetID, string(valueJSON)); err != nil {
-				return err
-			}
-			seenValueJSON, _ := json.Marshal(map[string]any{
-				"tweet_ids":     []string{tweetID},
-				"updated_at_ms": updatedAtMs,
-			})
-			if err := db.recordSyncChangeTx(tx, "seen", tweetID, string(seenValueJSON)); err != nil {
+			if err := requireXContentAssetsForUserStateTx(tx, []string{rawTweetID, result.CanonicalID}, "like", m.UpdatedAtMs); err != nil {
 				return err
 			}
 		case "clear":
 			if _, err := tx.Exec(
-				`DELETE FROM feed_likes WHERE username = ? AND tweet_id = ?`,
-				username, tweetID,
+				`DELETE FROM feed_likes WHERE tweet_id = ?`,
+				result.CanonicalID,
 			); err != nil {
 				return err
 			}
-			if err := db.bumpFeedItemAndSiblingsSyncSeqTx(tx, tweetID); err != nil {
-				return err
-			}
-			valueJSON, _ := json.Marshal(value)
-			if err := db.recordSyncChangeTx(tx, "like", tweetID, string(valueJSON)); err != nil {
+			if err := refreshXContentUserStateRequirementTx(tx, []string{rawTweetID, result.CanonicalID}, m.UpdatedAtMs); err != nil {
 				return err
 			}
 		}
-		return tx.QueryRow("SELECT COALESCE(MAX(version), 0) FROM sync_changes").Scan(&version)
+		return nil
 	})
-	if err != nil {
-		return MutationResult{}, err
-	}
-	return MutationResult{SyncVersion: version}, nil
+	return result, err
+}
+
+func (db *DB) ApplyLikeMutation(tweetID, action string, updatedAtMs int64) error {
+	_, err := db.MutateLike(LikeMutation{TweetID: tweetID, Action: action, UpdatedAtMs: updatedAtMs})
+	return err
 }
 
 // ── bookmark (toggle + metadata) ─────────────────────────────────────
@@ -129,118 +232,188 @@ type BookmarkMutation struct {
 	VideoID        string
 	Action         string // "set" | "clear"
 	CategoryID     *int64
-	CustomTitle    string
-	AccountHandles string
-	MediaIndices   string
+	CustomTitle    *string
+	AccountHandles *string
+	MediaIndices   *string
 	UpdatedAtMs    int64
 }
 
-func (db *DB) ApplyBookmarkMutation(userID string, m BookmarkMutation) (MutationResult, error) {
-	resolvedID, err := db.ResolveFeedStateID(m.VideoID)
-	if m.Action == "set" {
-		resolvedID, err = db.ResolveFeedStateIDForWrite(m.VideoID)
-	}
-	if err != nil {
-		return MutationResult{}, err
-	}
-	m.VideoID = resolvedID
-	bookmarkedAt := m.UpdatedAtMs
-	if bookmarkedAt <= 0 {
-		bookmarkedAt = time.Now().UnixMilli()
-	}
-	value := map[string]any{
-		"video_id":        m.VideoID,
-		"action":          m.Action,
-		"bookmarked":      m.Action == "set",
-		"category_id":     m.CategoryID,
-		"custom_title":    m.CustomTitle,
-		"account_handles": m.AccountHandles,
-		"media_indices":   m.MediaIndices,
-		"updated_at_ms":   bookmarkedAt,
-	}
-	if m.Action == "set" {
-		value["bookmarked_at"] = bookmarkedAt
-	}
-	return db.applyMutation("bookmark", m.VideoID, value, func(tx *sql.Tx) error {
+func (db *DB) MutateBookmark(m BookmarkMutation) (MutationResult, error) {
+	var result MutationResult
+	rawVideoID := strings.TrimSpace(m.VideoID)
+	m.UpdatedAtMs = mutationTimestamp(m.UpdatedAtMs)
+	err := db.WithWrite(func(tx *sql.Tx) error {
+		var err error
+		if m.Action == "set" {
+			result.CanonicalID, err = db.resolveFeedStateIDForWriteTx(tx, rawVideoID)
+		} else {
+			result.CanonicalID, err = resolveFeedStateIDTx(tx, rawVideoID)
+		}
+		if err != nil {
+			return err
+		}
+		result.Applied, err = claimMutationClockTx(tx, "bookmark", result.CanonicalID, m.Action, m.UpdatedAtMs)
+		if err != nil || !result.Applied {
+			return err
+		}
 		switch m.Action {
 		case "set":
-			var catID int64
-			if m.CategoryID != nil {
-				catID = *m.CategoryID
-			}
-			if err := db.ensureBookmarkTargetStubsTx(tx, m.VideoID); err != nil {
+			if err := db.ensureBookmarkTargetStubsTx(tx, result.CanonicalID); err != nil {
 				return err
 			}
-			_, err := tx.Exec(`
-				INSERT INTO bookmarks (user_id, video_id, category_id,
+			var categoryID int64
+			var customTitle, accountHandles, mediaIndices sql.NullString
+			err := tx.QueryRow(`
+				SELECT category_id, custom_title, account_handles, media_indices
+				FROM bookmarks WHERE video_id = ?
+			`, result.CanonicalID).Scan(&categoryID, &customTitle, &accountHandles, &mediaIndices)
+			if err != nil && err != sql.ErrNoRows {
+				return err
+			}
+			hadBookmark := err == nil
+			oldCategoryID := categoryID
+			oldCustomTitle := customTitle
+			oldAccountHandles := accountHandles
+			oldMediaIndices := mediaIndices
+			if m.CategoryID != nil {
+				categoryID = *m.CategoryID
+			}
+			if m.CustomTitle != nil {
+				customTitle = sql.NullString{String: *m.CustomTitle, Valid: true}
+			}
+			if m.AccountHandles != nil {
+				accountHandles = sql.NullString{String: *m.AccountHandles, Valid: true}
+			}
+			if m.MediaIndices != nil {
+				mediaIndices = sql.NullString{String: *m.MediaIndices, Valid: true}
+			}
+			if !hadBookmark || categoryID != oldCategoryID || customTitle != oldCustomTitle ||
+				accountHandles != oldAccountHandles || mediaIndices != oldMediaIndices {
+				result.Affected = 1
+			}
+			_, err = tx.Exec(`
+				INSERT INTO bookmarks (video_id, category_id,
 				  custom_title, account_handles, media_indices, bookmarked_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?)
-				ON CONFLICT(user_id, video_id) DO UPDATE SET
+				VALUES (?, ?, ?, ?, ?, ?)
+				ON CONFLICT(video_id) DO UPDATE SET
 				  category_id = excluded.category_id,
 				  custom_title = excluded.custom_title,
 				  account_handles = excluded.account_handles,
-				  media_indices = excluded.media_indices`,
-				userID, m.VideoID, catID, m.CustomTitle, m.AccountHandles, m.MediaIndices, bookmarkedAt,
+				  media_indices = excluded.media_indices,
+				  bookmarked_at = excluded.bookmarked_at`,
+				result.CanonicalID, categoryID, customTitle, accountHandles, mediaIndices, m.UpdatedAtMs,
 			)
 			if err != nil {
 				return err
 			}
-			return db.bumpBookmarkTargetSyncSeqTx(tx, m.VideoID)
+			if err := requireXContentAssetsForUserStateTx(tx, []string{rawVideoID, result.CanonicalID}, "bookmark", m.UpdatedAtMs); err != nil {
+				return err
+			}
 		case "clear":
-			_, err := tx.Exec(
-				`DELETE FROM bookmarks WHERE user_id = ? AND video_id = ?`,
-				userID, m.VideoID,
+			res, err := tx.Exec(
+				`DELETE FROM bookmarks WHERE video_id = ?`,
+				result.CanonicalID,
 			)
 			if err != nil {
 				return err
 			}
-			return db.bumpBookmarkTargetSyncSeqTx(tx, m.VideoID)
+			if n, rowsErr := res.RowsAffected(); rowsErr == nil {
+				result.Affected = int(n)
+			}
+			if err := refreshXContentUserStateRequirementTx(tx, []string{rawVideoID, result.CanonicalID}, m.UpdatedAtMs); err != nil {
+				return err
+			}
 		}
-		return errInvalidAction
+		return nil
 	})
+	return result, err
+}
+
+func (db *DB) ApplyBookmarkMutation(m BookmarkMutation) error {
+	_, err := db.MutateBookmark(m)
+	return err
 }
 
 // ── follow / star / mute (toggles) ──────────────────────────────────
 
-// Follow / star are single-user channel state — like FollowChannel and
-// ToggleChannelStar, they always write user_id=''. The mutation API
-// signatures drop the username arg to match ApplyMuteMutation.
-
-func (db *DB) ApplyFollowMutation(channelID, action string, updatedAtMs int64) (MutationResult, error) {
-	if updatedAtMs == 0 {
-		updatedAtMs = time.Now().UnixMilli()
-	}
+func (db *DB) MutateFollow(channelID, action string, updatedAtMs int64) (MutationResult, error) {
+	channelID = strings.TrimSpace(channelID)
+	updatedAtMs = mutationTimestamp(updatedAtMs)
+	result := MutationResult{CanonicalID: channelID}
 	if action == "set" {
 		if looksLikeBareYouTubeChannelID(channelID) {
-			return MutationResult{}, fmt.Errorf("invalid channel_id")
+			return result, invalidMutation("invalid channel_id")
 		}
 		sourceID, _, _, platform := channelDefaultsFromID(channelID)
 		if platform != "" && !isSafeChannelDerivedID(sourceID) {
-			return MutationResult{}, fmt.Errorf("invalid channel_id")
+			return result, invalidMutation("invalid channel_id")
 		}
 	}
-	return db.applyMutation("follow", channelID,
-		map[string]any{"action": action, "followed": action == "set", "updated_at_ms": updatedAtMs},
-		func(tx *sql.Tx) error {
-			switch action {
-			case "set":
-				if err := db.ensureChannelStubForFollowTx(tx, channelID, updatedAtMs); err != nil {
-					return err
-				}
-				_, err := tx.Exec(
-					`INSERT OR IGNORE INTO channel_follows (user_id, channel_id, followed_at) VALUES ('', ?, ?)`,
-					channelID, updatedAtMs,
-				)
-				return err
-			case "clear":
-				_, err := tx.Exec(
-					`DELETE FROM channel_follows WHERE user_id = '' AND channel_id = ?`,
-					channelID,
-				)
+	err := db.WithWrite(func(tx *sql.Tx) error {
+		var err error
+		result.Applied, err = claimMutationClockTx(tx, "follow", channelID, action, updatedAtMs)
+		if err != nil || !result.Applied {
+			return err
+		}
+		switch action {
+		case "set":
+			if err := db.ensureChannelStubForFollowTx(tx, channelID, updatedAtMs); err != nil {
 				return err
 			}
-			return errInvalidAction
-		})
+			res, err := tx.Exec(`
+				INSERT INTO channel_follows (channel_id, followed_at) VALUES (?, ?)
+				ON CONFLICT(channel_id) DO UPDATE SET followed_at = excluded.followed_at
+			`, channelID, updatedAtMs)
+			if err != nil {
+				return err
+			}
+			if n, rowsErr := res.RowsAffected(); rowsErr == nil {
+				result.Affected = int(n)
+			}
+		case "clear":
+			var platform string
+			err := tx.QueryRow(`SELECT COALESCE(platform, '') FROM channels WHERE channel_id = ?`, channelID).Scan(&platform)
+			if err != nil && err != sql.ErrNoRows {
+				return err
+			}
+			res, err := tx.Exec(`DELETE FROM channel_follows WHERE channel_id = ?`, channelID)
+			if err != nil {
+				return err
+			}
+			if n, rowsErr := res.RowsAffected(); rowsErr == nil {
+				result.Affected = int(n)
+			}
+
+			starApplied, starErr := claimMutationClockTx(tx, "star", channelID, "clear", updatedAtMs)
+			if starErr != nil && !IsStaleMutation(starErr) {
+				return starErr
+			}
+			if starApplied {
+				if _, err := tx.Exec(`DELETE FROM channel_stars WHERE channel_id = ?`, channelID); err != nil {
+					return err
+				}
+			}
+
+			if platform == "" {
+				_, _, _, platform = channelDefaultsFromID(channelID)
+			}
+			if strings.EqualFold(platform, "twitter") || strings.HasPrefix(strings.ToLower(channelID), "twitter_") {
+				result.DeletedFileKeys, err = db.purgeTwitterAfterUnfollowTx(tx, channelID)
+			} else {
+				result.DeletedFileKeys, err = db.purgeVideoChannelAfterUnfollowTx(tx, channelID)
+			}
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	return result, err
+}
+
+func (db *DB) ApplyFollowMutation(channelID, action string, updatedAtMs int64) error {
+	_, err := db.MutateFollow(channelID, action, updatedAtMs)
+	return err
 }
 
 func looksLikeBareYouTubeChannelID(channelID string) bool {
@@ -278,78 +451,174 @@ func (db *DB) ensureChannelStubForFollowTx(tx *sql.Tx, channelID string, updated
 		updatedAtMs = time.Now().UnixMilli()
 	}
 
-	_, err := tx.Exec(`
+	if _, err := tx.Exec(`
 		INSERT OR IGNORE INTO channels
-			(channel_id, source_id, name, url, platform, sync_seq, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
-	`, channelID, nilIfEmpty(sourceID), name, nilIfEmpty(urlValue), nilIfEmpty(platform), db.NextSyncSeq(), updatedAtMs)
+			(channel_id, source_id, name, url, platform, created_at)
+		VALUES (?, ?, ?, ?, ?, ?)
+	`, channelID, nilIfEmpty(sourceID), name, nilIfEmpty(urlValue), nilIfEmpty(platform), updatedAtMs); err != nil {
+		return err
+	}
+	return observeChannelProfileTx(tx, model.Channel{
+		ChannelID:   channelID,
+		SourceID:    sourceID,
+		Name:        name,
+		URL:         urlValue,
+		Platform:    platform,
+		Handle:      profileHandle,
+		DisplayName: profileName,
+	}, updatedAtMs)
+}
+
+func mutateToggleTx(tx *sql.Tx, kind, table, keyColumn, itemKey, action string, updatedAtMs int64) (MutationResult, error) {
+	result := MutationResult{CanonicalID: itemKey}
+	var err error
+	result.Applied, err = claimMutationClockTx(tx, kind, itemKey, action, updatedAtMs)
+	if err != nil || !result.Applied {
+		return result, err
+	}
+	var res sql.Result
+	switch action {
+	case "set":
+		timestampColumn := "muted_at"
+		if kind == "star" {
+			timestampColumn = "starred_at"
+		}
+		res, err = tx.Exec(fmt.Sprintf(`
+			INSERT INTO %s (%s, %s) VALUES (?, ?)
+			ON CONFLICT(%s) DO UPDATE SET %s = excluded.%s
+		`, table, keyColumn, timestampColumn, keyColumn, timestampColumn, timestampColumn), itemKey, updatedAtMs)
+	case "clear":
+		res, err = tx.Exec(fmt.Sprintf(`DELETE FROM %s WHERE %s = ?`, table, keyColumn), itemKey)
+	}
+	if err != nil {
+		return result, err
+	}
+	if n, rowsErr := res.RowsAffected(); rowsErr == nil {
+		result.Affected = int(n)
+	}
+	return result, nil
+}
+
+func (db *DB) mutateToggle(kind, table, keyColumn, itemKey, action string, updatedAtMs int64) (MutationResult, error) {
+	itemKey = strings.TrimSpace(itemKey)
+	updatedAtMs = mutationTimestamp(updatedAtMs)
+	var result MutationResult
+	err := db.WithWrite(func(tx *sql.Tx) error {
+		var err error
+		result, err = mutateToggleTx(tx, kind, table, keyColumn, itemKey, action, updatedAtMs)
+		if err != nil || !result.Applied {
+			return err
+		}
+		return nil
+	})
+	return result, err
+}
+
+func (db *DB) MutateStar(channelID, action string, updatedAtMs int64) (MutationResult, error) {
+	return db.mutateToggle("star", "channel_stars", "channel_id", channelID, action, updatedAtMs)
+}
+
+func (db *DB) ApplyStarMutation(channelID, action string, updatedAtMs int64) error {
+	_, err := db.MutateStar(channelID, action, updatedAtMs)
 	return err
 }
 
-func (db *DB) ApplyStarMutation(channelID, action string, updatedAtMs int64) (MutationResult, error) {
-	return db.applyMutation("star", channelID,
-		map[string]any{"action": action, "starred": action == "set", "updated_at_ms": updatedAtMs},
-		func(tx *sql.Tx) error {
-			switch action {
-			case "set":
-				_, err := tx.Exec(
-					`INSERT OR IGNORE INTO channel_stars (user_id, channel_id, starred_at) VALUES ('', ?, ?)`,
-					channelID, updatedAtMs,
-				)
-				return err
-			case "clear":
-				_, err := tx.Exec(
-					`DELETE FROM channel_stars WHERE user_id = '' AND channel_id = ?`,
-					channelID,
-				)
-				return err
-			}
-			return errInvalidAction
-		})
+func (db *DB) MutateMute(channelID, action string, updatedAtMs int64) (MutationResult, error) {
+	return db.mutateToggle("mute", "muted_channels", "channel_id", channelID, action, updatedAtMs)
 }
 
-func (db *DB) ApplyMuteMutation(handle, action string, updatedAtMs int64) (MutationResult, error) {
-	return db.applyMutation("mute", handle,
-		map[string]any{"action": action, "muted": action == "set", "updated_at_ms": updatedAtMs},
-		func(tx *sql.Tx) error {
-			switch action {
-			case "set":
-				_, err := tx.Exec(
-					`INSERT OR IGNORE INTO muted_accounts (handle, muted_at) VALUES (?, ?)`,
-					handle, updatedAtMs,
-				)
-				return err
-			case "clear":
-				_, err := tx.Exec(
-					`DELETE FROM muted_accounts WHERE handle = ?`, handle,
-				)
-				return err
-			}
-			return errInvalidAction
-		})
+func (db *DB) ApplyMuteMutation(channelID, action string, updatedAtMs int64) error {
+	_, err := db.MutateMute(channelID, action, updatedAtMs)
+	return err
 }
 
 // ── channel_setting (PUT) ────────────────────────────────────────────
 
-func (db *DB) ApplyChannelSettingMutation(channelID, field string, value any, updatedAtMs int64) (MutationResult, error) {
-	column, ok := channelSettingMutationColumn(field)
-	if !ok {
-		return MutationResult{}, fmt.Errorf("unknown channel_setting field: %s", field)
+func (db *DB) MutateChannelSetting(channelID, field string, value any, updatedAtMs int64) (MutationResult, error) {
+	result := MutationResult{CanonicalID: strings.TrimSpace(channelID)}
+	if _, ok := channelSettingMutationColumn(field); !ok {
+		return result, invalidMutation(fmt.Sprintf("unknown channel_setting field: %s", field))
 	}
-	return db.applyMutation("channel_setting", channelID,
-		map[string]any{"field": field, "value": value, "updated_at_ms": updatedAtMs},
-		func(tx *sql.Tx) error {
-			// NULL-means-inherit sentinel: nil value clears the override.
-			query := fmt.Sprintf(
-				`INSERT INTO channel_settings (channel_id, %s, updated_at) VALUES (?, ?, ?)
-				ON CONFLICT(channel_id) DO UPDATE SET
-				  %s = excluded.%s,
-				  updated_at = excluded.updated_at`,
-				column, column, column,
-			)
-			_, err := tx.Exec(query, channelID, value, updatedAtMs)
+	updatedAtMs = mutationTimestamp(updatedAtMs)
+	err := db.WithWrite(func(tx *sql.Tx) error {
+		changed, err := mutateChannelSettingsTx(tx, result.CanonicalID, map[string]any{field: value}, updatedAtMs, true)
+		if err != nil {
 			return err
-		})
+		}
+		if !changed {
+			return nil
+		}
+		result.Applied = true
+		result.Affected = 1
+		return nil
+	})
+	return result, err
+}
+
+func (db *DB) ApplyChannelSettingMutation(channelID, field string, value any, updatedAtMs int64) error {
+	_, err := db.MutateChannelSetting(channelID, field, value, updatedAtMs)
+	return err
+}
+
+func mutateChannelSettingsTx(tx *sql.Tx, channelID string, fields map[string]any, updatedAtMs int64, strictTimestamp bool) (bool, error) {
+	columns := make([]string, 0, len(fields))
+	for field := range fields {
+		column, ok := channelSettingMutationColumn(field)
+		if !ok {
+			return false, invalidMutation(fmt.Sprintf("unknown channel_setting field: %s", field))
+		}
+		columns = append(columns, column)
+	}
+	if len(columns) == 0 {
+		return false, nil
+	}
+	sort.Strings(columns)
+
+	var currentUpdatedAt int64
+	err := tx.QueryRow(`SELECT updated_at FROM channel_settings WHERE channel_id = ?`, channelID).Scan(&currentUpdatedAt)
+	if err != nil && err != sql.ErrNoRows {
+		return false, err
+	}
+	if err == nil && updatedAtMs <= currentUpdatedAt {
+		same := updatedAtMs == currentUpdatedAt
+		for _, column := range columns {
+			var matches int
+			query := fmt.Sprintf(`SELECT %s IS ? FROM channel_settings WHERE channel_id = ?`, column)
+			if queryErr := tx.QueryRow(query, fields[column], channelID).Scan(&matches); queryErr != nil {
+				return false, queryErr
+			}
+			same = same && matches != 0
+		}
+		if same {
+			return false, nil
+		}
+		if !strictTimestamp {
+			updatedAtMs = currentUpdatedAt + 1
+		} else {
+			return false, &StaleMutationError{
+				Kind: "channel_setting", ItemKey: channelID,
+				UpdatedAtMs: updatedAtMs, CurrentUpdatedAtMs: currentUpdatedAt,
+			}
+		}
+	}
+
+	placeholders := make([]string, len(columns))
+	updates := make([]string, len(columns))
+	args := make([]any, 0, len(columns)+2)
+	args = append(args, channelID)
+	for i, column := range columns {
+		placeholders[i] = "?"
+		updates[i] = column + " = excluded." + column
+		args = append(args, fields[column])
+	}
+	args = append(args, updatedAtMs)
+	query := fmt.Sprintf(`
+		INSERT INTO channel_settings (channel_id, %s, updated_at)
+		VALUES (?, %s, ?)
+		ON CONFLICT(channel_id) DO UPDATE SET %s, updated_at = excluded.updated_at
+	`, strings.Join(columns, ", "), strings.Join(placeholders, ", "), strings.Join(updates, ", "))
+	_, err = tx.Exec(query, args...)
+	return err == nil, err
 }
 
 func channelSettingMutationColumn(field string) (string, bool) {
@@ -371,55 +640,103 @@ func channelSettingMutationColumn(field string) (string, bool) {
 
 // ── seen (batched) ───────────────────────────────────────────────────
 
-func (db *DB) ApplySeenMutation(username string, tweetIDs []string, updatedAtMs int64) (MutationResult, error) {
+func (db *DB) MutateSeen(tweetIDs []string, updatedAtMs int64) (MutationResult, error) {
+	var result MutationResult
 	if len(tweetIDs) == 0 {
-		v, err := db.GetCurrentSyncVersion()
-		return MutationResult{SyncVersion: v}, err
+		return result, nil
 	}
-	// One apply-call, one sync_changes row keyed on the first tweet id
-	// (value carries the full list so Android can mirror in one pass).
-	return db.applyMutation("seen", tweetIDs[0],
-		map[string]any{"tweet_ids": tweetIDs, "updated_at_ms": updatedAtMs},
-		func(tx *sql.Tx) error {
-			stmt, err := tx.Prepare(
-				`INSERT OR IGNORE INTO feed_seen (username, tweet_id, seen_at) VALUES (?, ?, ?)`,
-			)
+	updatedAtMs = mutationTimestamp(updatedAtMs)
+	err := db.WithWrite(func(tx *sql.Tx) error {
+		cleanIDs := make([]string, 0, len(tweetIDs))
+		seen := make(map[string]struct{}, len(tweetIDs))
+		for _, id := range tweetIDs {
+			id = strings.TrimSpace(id)
+			if id == "" {
+				continue
+			}
+			if _, ok := seen[id]; ok {
+				continue
+			}
+			seen[id] = struct{}{}
+			cleanIDs = append(cleanIDs, id)
+		}
+		expandedIDs, err := expandSeenConversationIDsTx(tx, cleanIDs)
+		if err != nil {
+			return err
+		}
+		stmt, err := tx.Prepare(
+			`INSERT INTO feed_seen (tweet_id, seen_at) VALUES (?, ?)
+				 ON CONFLICT(tweet_id) DO UPDATE SET seen_at = excluded.seen_at
+				 WHERE excluded.seen_at > feed_seen.seen_at`,
+		)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = stmt.Close() }()
+		for _, id := range expandedIDs {
+			res, err := stmt.Exec(id, updatedAtMs)
 			if err != nil {
 				return err
 			}
-			defer func() {
-				_ = stmt.Close()
-			}()
-			for _, id := range tweetIDs {
-				if _, err := stmt.Exec(username, id, updatedAtMs); err != nil {
-					return err
-				}
+			if n, rowsErr := res.RowsAffected(); rowsErr == nil {
+				result.Affected += int(n)
 			}
+		}
+		if result.Affected == 0 {
 			return nil
-		})
+		}
+		result.Applied = true
+		return nil
+	})
+	return result, err
+}
+
+func (db *DB) ApplySeenMutation(tweetIDs []string, updatedAtMs int64) error {
+	_, err := db.MutateSeen(tweetIDs, updatedAtMs)
+	return err
 }
 
 // ── moment_view ──────────────────────────────────────────────────────
 
-func (db *DB) ApplyMomentViewMutation(username, videoID string, updatedAtMs int64) (MutationResult, error) {
-	return db.applyMutation("moment_view", videoID,
-		map[string]any{"updated_at_ms": updatedAtMs},
-		func(tx *sql.Tx) error {
-			_, err := tx.Exec(
-				`INSERT INTO moment_views (username, video_id, viewed_at) VALUES (?, ?, ?)
-				 ON CONFLICT(username, video_id) DO UPDATE SET viewed_at = excluded.viewed_at`,
-				username, videoID, updatedAtMs,
-			)
+func (db *DB) MutateMomentView(videoID string, updatedAtMs int64) (MutationResult, error) {
+	result := MutationResult{CanonicalID: strings.TrimSpace(videoID)}
+	updatedAtMs = mutationTimestamp(updatedAtMs)
+	err := db.WithWrite(func(tx *sql.Tx) error {
+		res, err := tx.Exec(
+			`INSERT INTO moment_views (video_id, viewed_at) VALUES (?, ?)
+				 ON CONFLICT(video_id) DO UPDATE SET viewed_at = excluded.viewed_at
+				 WHERE excluded.viewed_at > moment_views.viewed_at`,
+			result.CanonicalID, updatedAtMs,
+		)
+		if err != nil {
 			return err
-		})
+		}
+		if n, rowsErr := res.RowsAffected(); rowsErr == nil {
+			result.Affected = int(n)
+		}
+		if result.Affected == 0 {
+			return nil
+		}
+		result.Applied = true
+		return nil
+	})
+	return result, err
+}
+
+func (db *DB) ApplyMomentViewMutation(videoID string, updatedAtMs int64) error {
+	_, err := db.MutateMomentView(videoID, updatedAtMs)
+	return err
 }
 
 // ── progress (PUT — LWW) ─────────────────────────────────────────────
 
-func (db *DB) ApplyProgressMutation(username, videoID string, position, duration float64, source string, updatedAtMs int64) (MutationResult, error) {
-	if updatedAtMs == 0 {
-		updatedAtMs = time.Now().UnixMilli()
-	}
+func (db *DB) MutateProgress(videoID string, position, duration float64, updatedAtMs int64) (ProgressResult, error) {
+	return db.mutateProgress(videoID, position, duration, "set", updatedAtMs, false)
+}
+
+func (db *DB) mutateProgress(videoID string, position, duration float64, action string, updatedAtMs int64, force bool) (ProgressResult, error) {
+	videoID = strings.TrimSpace(videoID)
+	updatedAtMs = mutationTimestamp(updatedAtMs)
 	if position < 0 {
 		position = 0
 	}
@@ -427,179 +744,183 @@ func (db *DB) ApplyProgressMutation(username, videoID string, position, duration
 		duration = 0
 	}
 
-	value := map[string]any{
-		"position": position, "duration": duration,
-		"source": source, "updated_at_ms": updatedAtMs,
-	}
-
-	var version int64
+	var result ProgressResult
 	err := db.WithWrite(func(tx *sql.Tx) error {
+		var existingPosition float64
 		var existingTs int64
-		err := tx.QueryRow(
-			`SELECT COALESCE(progress_updated_at_ms, 0) FROM watch_history WHERE user_id = ? AND video_id = ?`,
-			username, videoID,
-		).Scan(&existingTs)
-		if err != nil && err != sql.ErrNoRows {
-			return err
+		var existingDuration sql.NullFloat64
+		rowErr := tx.QueryRow(
+			`SELECT playback_position, duration, updated_at_ms FROM watch_history WHERE video_id = ?`,
+			videoID,
+		).Scan(&existingPosition, &existingDuration, &existingTs)
+		if rowErr != nil && rowErr != sql.ErrNoRows {
+			return rowErr
 		}
-		if err == nil && existingTs >= updatedAtMs {
-			return tx.QueryRow("SELECT COALESCE(MAX(version), 0) FROM sync_changes").Scan(&version)
+		if action == "set" && duration <= 0 && existingDuration.Valid {
+			duration = existingDuration.Float64
 		}
 
-		_, err = tx.Exec(`
-				INSERT INTO watch_history (user_id, video_id, playback_position, duration, progress_source, progress_updated_at_ms, last_watched)
-				VALUES (?, ?, ?, ?, ?, ?, ?)
-				ON CONFLICT(user_id, video_id) DO UPDATE SET
-				  playback_position      = excluded.playback_position,
-				  duration               = excluded.duration,
-				  progress_source        = excluded.progress_source,
-				  progress_updated_at_ms = excluded.progress_updated_at_ms,
-				  last_watched           = excluded.last_watched`,
-			username, videoID, position, duration, source, updatedAtMs, updatedAtMs,
-		)
+		applied := true
+		var err error
+		if force {
+			updatedAtMs, err = advanceMutationClockTx(tx, "progress", videoID, action, updatedAtMs)
+		} else {
+			applied, err = claimMutationClockTx(tx, "progress", videoID, action, updatedAtMs)
+		}
 		if err != nil {
 			return err
 		}
-		valueJSON, _ := json.Marshal(value)
-		if err := db.recordSyncChangeTx(tx, "progress", videoID, string(valueJSON)); err != nil {
+		if !applied {
+			if action == "set" && rowErr == nil && updatedAtMs == existingTs &&
+				position == existingPosition && duration == existingDuration.Float64 {
+				result.Accepted = true
+				result.ResolvedPosition = existingPosition
+				result.ResolvedUpdatedAtMs = existingTs
+				return nil
+			}
+			if action == "clear" && rowErr == sql.ErrNoRows {
+				result.Accepted = true
+				result.ResolvedUpdatedAtMs = updatedAtMs
+				return nil
+			}
+			return &StaleMutationError{
+				Kind: "progress", ItemKey: videoID, UpdatedAtMs: updatedAtMs,
+				CurrentUpdatedAtMs: updatedAtMs,
+			}
+		}
+
+		switch action {
+		case "set":
+			durationValue := sql.NullFloat64{Float64: duration, Valid: duration > 0}
+			_, err = tx.Exec(`
+					INSERT INTO watch_history (video_id, playback_position, duration, updated_at_ms)
+					VALUES (?, ?, ?, ?)
+				ON CONFLICT(video_id) DO UPDATE SET
+				  playback_position = excluded.playback_position,
+				  duration          = excluded.duration,
+				  updated_at_ms     = excluded.updated_at_ms`,
+				videoID, position, durationValue, updatedAtMs,
+			)
+		case "clear":
+			_, err = tx.Exec(`DELETE FROM watch_history WHERE video_id = ?`, videoID)
+		default:
+			return errInvalidAction
+		}
+		if err != nil {
 			return err
 		}
-		return tx.QueryRow("SELECT COALESCE(MAX(version), 0) FROM sync_changes").Scan(&version)
+		result.Accepted = true
+		if action == "set" {
+			result.ResolvedPosition = position
+		}
+		result.ResolvedUpdatedAtMs = updatedAtMs
+		return nil
 	})
-	if err != nil {
-		return MutationResult{}, err
-	}
-	return MutationResult{SyncVersion: version}, nil
+	return result, err
+}
+
+func (db *DB) ApplyProgressMutation(videoID string, position, duration float64, updatedAtMs int64) error {
+	_, err := db.MutateProgress(videoID, position, duration, updatedAtMs)
+	return err
+}
+
+func (db *DB) writeWebProgress(videoID string, position, duration float64, action string, updatedAtMs int64) error {
+	_, err := db.mutateProgress(videoID, position, duration, action, updatedAtMs, true)
+	return err
 }
 
 // ── moments_cursor (PUT — LWW) ──────────────────────────────────────
 
-func (db *DB) ApplyMomentsCursorMutation(username, videoID string, positionMs, updatedAtMs int64, scope string) (MutationResult, error) {
-	return db.ApplyMomentsCursorMutationWithSortAt(username, videoID, positionMs, updatedAtMs, scope, 0)
+func (db *DB) ApplyMomentsCursorMutation(videoID string, positionMs, updatedAtMs int64, scope string) error {
+	return db.ApplyMomentsCursorMutationWithSortAt(videoID, positionMs, updatedAtMs, scope, 0)
 }
 
-func (db *DB) ApplyMomentsCursorMutationWithSortAt(username, videoID string, positionMs, updatedAtMs int64, scope string, sortAtMs int64) (MutationResult, error) {
-	if updatedAtMs == 0 {
-		updatedAtMs = time.Now().UnixMilli()
-	}
+func (db *DB) ApplyMomentsCursorMutationWithSortAt(videoID string, positionMs, updatedAtMs int64, scope string, sortAtMs int64) error {
+	_, err := db.MutateMomentsCursor(videoID, positionMs, updatedAtMs, scope, sortAtMs)
+	return err
+}
+
+func (db *DB) MutateMomentsCursor(videoID string, positionMs, updatedAtMs int64, scope string, sortAtMs int64) (MutationResult, error) {
+	updatedAtMs = mutationTimestamp(updatedAtMs)
+	result := MutationResult{CanonicalID: strings.TrimSpace(videoID)}
 	normalizedScope, ok := NormalizeMomentsCursorScope(scope)
 	if !ok {
-		version, err := db.GetCurrentSyncVersion()
-		if err != nil {
-			return MutationResult{}, err
-		}
-		return MutationResult{SyncVersion: version}, nil
+		return result, invalidMutation("invalid moments cursor scope")
 	}
 	scope = normalizedScope
 
 	if sortAtMs <= 0 {
 		var err error
-		sortAtMs, _, err = db.GetShortsCursorSortAt(videoID, scope)
+		sortAtMs, _, err = db.GetShortsCursorSortAt(result.CanonicalID, scope)
 		if err != nil {
-			return MutationResult{}, err
+			return result, err
 		}
 	}
-	value := map[string]any{"video_id": videoID, "position_ms": positionMs, "updated_at_ms": updatedAtMs, "scope": scope}
-	if sortAtMs > 0 {
-		value["sort_at_ms"] = sortAtMs
-	}
-
-	var version int64
 	err := db.WithWrite(func(tx *sql.Tx) error {
-		var existingRaw string
-		updatedKey := "shorts_cursor_updated_at_ms_" + username + "_" + scope
-		err := tx.QueryRow(`SELECT value FROM settings WHERE key = ?`, updatedKey).Scan(&existingRaw)
+		var existingVideoID string
+		var existingPositionMs, existingSortAtMs, existingUpdatedAtMs int64
+		err := tx.QueryRow(`
+			SELECT video_id, position_ms, sort_at_ms, updated_at_ms
+			FROM moments_cursors WHERE scope = ?
+		`, scope).Scan(&existingVideoID, &existingPositionMs, &existingSortAtMs, &existingUpdatedAtMs)
 		if err != nil && err != sql.ErrNoRows {
 			return err
 		}
-		if err == sql.ErrNoRows && scope == "all" {
-			err = tx.QueryRow(`SELECT value FROM settings WHERE key = ?`, "shorts_cursor_updated_at_ms").Scan(&existingRaw)
-			if err != nil && err != sql.ErrNoRows {
-				return err
+		if err == nil && updatedAtMs <= existingUpdatedAtMs {
+			same := updatedAtMs == existingUpdatedAtMs && result.CanonicalID == existingVideoID &&
+				positionMs == existingPositionMs && sortAtMs == existingSortAtMs
+			if same {
+				return nil
+			}
+			return &StaleMutationError{
+				Kind: "moments_cursor", ItemKey: scope, UpdatedAtMs: updatedAtMs,
+				CurrentUpdatedAtMs: existingUpdatedAtMs,
 			}
 		}
-		if err == nil {
-			if existingMs, parseErr := strconv.ParseInt(existingRaw, 10, 64); parseErr == nil && existingMs >= updatedAtMs {
-				return tx.QueryRow("SELECT COALESCE(MAX(version), 0) FROM sync_changes").Scan(&version)
-			}
-		}
-
-		// The shorts cursor still has a legacy global setting read by web
-		// page-load plus user-scoped settings consumed by newer clients.
-		if scope == "all" {
-			if _, err := tx.Exec(
-				`INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)`,
-				"shorts_cursor_video_id", videoID,
-			); err != nil {
-				return err
-			}
-			if _, err := tx.Exec(
-				`INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)`,
-				"shorts_cursor_updated_at_ms", fmt.Sprintf("%d", updatedAtMs),
-			); err != nil {
-				return err
-			}
-			if sortAtMs > 0 {
-				if _, err := tx.Exec(
-					`INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)`,
-					"shorts_cursor_sort_at_ms", fmt.Sprintf("%d", sortAtMs),
-				); err != nil {
-					return err
-				}
-			}
-		}
-		key := "shorts_cursor_video_id_" + username + "_" + scope
-		if _, err := tx.Exec(
-			`INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)`,
-			key, videoID,
-		); err != nil {
+		if _, err := tx.Exec(`
+			INSERT INTO moments_cursors (scope, video_id, position_ms, sort_at_ms, updated_at_ms)
+			VALUES (?, ?, ?, ?, ?)
+			ON CONFLICT(scope) DO UPDATE SET
+			  video_id = excluded.video_id,
+			  position_ms = excluded.position_ms,
+			  sort_at_ms = excluded.sort_at_ms,
+			  updated_at_ms = excluded.updated_at_ms
+		`, scope, result.CanonicalID, positionMs, sortAtMs, updatedAtMs); err != nil {
 			return err
 		}
-		posKey := "shorts_cursor_position_ms_" + username + "_" + scope
-		if _, err := tx.Exec(
-			`INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)`,
-			posKey, fmt.Sprintf("%d", positionMs),
-		); err != nil {
-			return err
-		}
-		if _, err := tx.Exec(
-			`INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)`,
-			updatedKey, fmt.Sprintf("%d", updatedAtMs),
-		); err != nil {
-			return err
-		}
-		if sortAtMs > 0 {
-			sortKey := "shorts_cursor_sort_at_ms_" + username + "_" + scope
-			if _, err := tx.Exec(`INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)`, sortKey, fmt.Sprintf("%d", sortAtMs)); err != nil {
-				return err
-			}
-		}
-		if scope == "all" {
-			legacyUserKey := "shorts_cursor_video_id_" + username
-			if _, err := tx.Exec(`INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)`, legacyUserKey, videoID); err != nil {
-				return err
-			}
-			legacyPosKey := "shorts_cursor_position_ms_" + username
-			if _, err := tx.Exec(`INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)`, legacyPosKey, fmt.Sprintf("%d", positionMs)); err != nil {
-				return err
-			}
-			if sortAtMs > 0 {
-				legacySortKey := "shorts_cursor_sort_at_ms_" + username
-				if _, err := tx.Exec(`INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)`, legacySortKey, fmt.Sprintf("%d", sortAtMs)); err != nil {
-					return err
-				}
-			}
-		}
-		valueJSON, _ := json.Marshal(value)
-		if err := db.recordSyncChangeTx(tx, "moments_cursor", videoID, string(valueJSON)); err != nil {
-			return err
-		}
-		return tx.QueryRow("SELECT COALESCE(MAX(version), 0) FROM sync_changes").Scan(&version)
+		result.Applied = true
+		result.Affected = 1
+		return nil
 	})
-	if err != nil {
-		return MutationResult{}, err
+	return result, err
+}
+
+type MutationMomentsCursor struct {
+	Scope       string `json:"scope"`
+	VideoID     string `json:"video_id"`
+	PositionMs  int64  `json:"position_ms"`
+	SortAtMs    int64  `json:"sort_at_ms"`
+	UpdatedAtMs int64  `json:"updated_at_ms"`
+}
+
+func (db *DB) GetMomentsCursor(scope string) (MutationMomentsCursor, bool, error) {
+	var cursor MutationMomentsCursor
+	normalizedScope, ok := NormalizeMomentsCursorScope(scope)
+	if !ok {
+		return cursor, false, invalidMutation("invalid moments cursor scope")
 	}
-	return MutationResult{SyncVersion: version}, nil
+	err := db.conn.QueryRow(`
+		SELECT scope, video_id, position_ms, sort_at_ms, updated_at_ms
+		FROM moments_cursors
+		WHERE scope = ?
+	`, normalizedScope).Scan(
+		&cursor.Scope, &cursor.VideoID, &cursor.PositionMs,
+		&cursor.SortAtMs, &cursor.UpdatedAtMs,
+	)
+	if err == sql.ErrNoRows {
+		return cursor, false, nil
+	}
+	return cursor, err == nil, err
 }
 
 // ── create_category (provisional → real ID) ─────────────────────────
@@ -607,18 +928,30 @@ func (db *DB) ApplyMomentsCursorMutationWithSortAt(username, videoID string, pos
 type CategoryCreated struct {
 	CategoryID    int64
 	ProvisionalID string
-	SyncVersion   int64
 }
 
-func (db *DB) ApplyCreateCategoryMutation(userID, name, provisionalID string, updatedAtMs int64) (CategoryCreated, error) {
-	if updatedAtMs == 0 {
-		updatedAtMs = time.Now().UnixMilli()
-	}
+func (db *DB) ApplyCreateCategoryMutation(name, provisionalID, requestID string, updatedAtMs int64) (CategoryCreated, error) {
+	updatedAtMs = mutationTimestamp(updatedAtMs)
 	var out CategoryCreated
+	requestID = strings.TrimSpace(requestID)
+	if requestID == "" {
+		return out, invalidMutation("request_id required")
+	}
 	err := db.WithWrite(func(tx *sql.Tx) error {
+		err := tx.QueryRow(`
+			SELECT category_id, provisional_id
+			FROM category_create_receipts
+			WHERE request_id = ?
+		`, requestID).Scan(&out.CategoryID, &out.ProvisionalID)
+		if err == nil {
+			return nil
+		}
+		if err != sql.ErrNoRows {
+			return err
+		}
 		res, err := tx.Exec(
-			`INSERT INTO bookmark_categories (user_id, name, created_at) VALUES (?, ?, ?)`,
-			userID, name, updatedAtMs,
+			`INSERT INTO bookmark_categories (name, created_at) VALUES (?, ?)`,
+			name, updatedAtMs,
 		)
 		if err != nil {
 			return err
@@ -629,32 +962,15 @@ func (db *DB) ApplyCreateCategoryMutation(userID, name, provisionalID string, up
 		}
 		out.CategoryID = categoryID
 		out.ProvisionalID = provisionalID
+		if _, err := tx.Exec(`
+			INSERT INTO category_create_receipts
+				(request_id, category_id, provisional_id, created_at_ms)
+			VALUES (?, ?, ?, ?)
+		`, requestID, categoryID, provisionalID, updatedAtMs); err != nil {
+			return err
+		}
 
-		valueJSON, _ := json.Marshal(map[string]any{
-			"name":           name,
-			"provisional_id": provisionalID,
-			"category_id":    categoryID,
-			"user_id":        userID,
-			"updated_at_ms":  updatedAtMs,
-		})
-		if err := db.recordSyncChangeTx(tx, "create_category", fmt.Sprintf("%d", categoryID), string(valueJSON)); err != nil {
-			return err
-		}
-		if err := db.recordBookmarkCategorySyncChangeTx(tx, userID, "set", categoryID, name, "", updatedAtMs); err != nil {
-			return err
-		}
-		return tx.QueryRow("SELECT COALESCE(MAX(version), 0) FROM sync_changes").Scan(&out.SyncVersion)
+		return nil
 	})
 	return out, err
-}
-
-// ── bookmark_alias (PUT) ────────────────────────────────────────────
-
-func (db *DB) ApplyBookmarkAliasMutation(originalHandle, displayAlias string, updatedAtMs int64) (MutationResult, error) {
-	// bookmark_aliases is out-of-scope for single-user deployment, but
-	// the sync_changes row still propagates the rename to Android's
-	// alias store.
-	return db.applyMutation("bookmark_alias", originalHandle,
-		map[string]any{"display_alias": displayAlias, "updated_at_ms": updatedAtMs},
-		func(tx *sql.Tx) error { return nil })
 }

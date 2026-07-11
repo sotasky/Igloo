@@ -17,14 +17,13 @@ import (
 )
 
 type Options struct {
-	DBPath   string        `json:"db_path,omitempty"`
-	JSON     bool          `json:"-"`
-	Limit    int           `json:"limit"`
-	Username string        `json:"username"`
-	Search   string        `json:"search"`
-	Probe    string        `json:"probe,omitempty"`
-	Timeout  time.Duration `json:"timeout"`
-	NowMs    int64         `json:"now_ms"`
+	DBPath  string        `json:"db_path,omitempty"`
+	JSON    bool          `json:"-"`
+	Limit   int           `json:"limit"`
+	Search  string        `json:"search"`
+	Probe   string        `json:"probe,omitempty"`
+	Timeout time.Duration `json:"timeout"`
+	NowMs   int64         `json:"now_ms"`
 }
 
 type Report struct {
@@ -57,7 +56,6 @@ func parseOptions(args []string) (Options, error) {
 	fs.StringVar(&opts.DBPath, "db", "", "database path; defaults to configured Igloo database")
 	fs.BoolVar(&opts.JSON, "json", false, "print JSON output")
 	fs.IntVar(&opts.Limit, "limit", opts.Limit, "maximum rows to read for each probe")
-	fs.StringVar(&opts.Username, "username", opts.Username, "username used for user-scoped probes")
 	fs.StringVar(&opts.Search, "search", opts.Search, "search term used for search probes")
 	fs.StringVar(&opts.Probe, "probe", "", "run one named probe")
 	fs.DurationVar(&opts.Timeout, "timeout", opts.Timeout, "per-probe timeout")
@@ -82,10 +80,9 @@ func parseOptions(args []string) (Options, error) {
 
 func defaultOptions() Options {
 	return Options{
-		Limit:    50,
-		Username: "",
-		Search:   "sample",
-		Timeout:  5 * time.Second,
+		Limit:   50,
+		Search:  "sample",
+		Timeout: 5 * time.Second,
 	}
 }
 
@@ -102,7 +99,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 			_, _ = fmt.Fprintf(stderr, "query audit: invalid configuration: %v\n", cfg.ConfigError)
 			return 1
 		}
-		dbPath = cfg.DatabasePath
+		dbPath = cfg.Storage.DatabasePath()
 	}
 	opts.DBPath = dbPath
 
@@ -299,17 +296,15 @@ func probeSpecs() []probeSpec {
 					SELECT s.tweet_id, s.rank_position
 					FROM feed_rank_snapshot s
 					JOIN feed_items fi ON fi.tweet_id = s.tweet_id
-					WHERE s.username = ?
-					  AND s.rank_position > 0
+					WHERE s.rank_position > 0
 					  AND NOT EXISTS (
 					    SELECT 1
 					    FROM feed_seen fs
-					    WHERE fs.username = s.username
-					      AND fs.tweet_id = fi.tweet_id
+					    WHERE fs.tweet_id = fi.tweet_id
 					  )
 					ORDER BY s.rank_position ASC
 					LIMIT ?
-				`, []any{opts.Username, opts.Limit}
+				`, []any{opts.Limit}
 			},
 		},
 		{
@@ -320,7 +315,7 @@ func probeSpecs() []probeSpec {
 				return `
 					SELECT v.video_id, v.published_at
 					FROM videos v
-					JOIN channel_follows cf ON cf.channel_id = v.channel_id AND cf.user_id = ''
+					JOIN channel_follows cf ON cf.channel_id = v.channel_id
 					WHERE (v.channel_id LIKE 'tiktok_%' OR v.channel_id LIKE 'instagram_%')
 					  AND COALESCE(v.source_kind, '') != 'story'
 					ORDER BY v.published_at DESC, v.video_id DESC
@@ -338,8 +333,7 @@ func probeSpecs() []probeSpec {
 					SELECT v.video_id
 					FROM channel_follows cf
 					JOIN videos v ON v.channel_id = cf.channel_id
-					WHERE cf.user_id = ''
-					  AND (
+					WHERE (
 					    v.channel_id LIKE 'youtube_%'
 					    OR v.channel_id LIKE 'tiktok_%'
 					    OR v.channel_id LIKE 'instagram_%'
@@ -351,8 +345,7 @@ func probeSpecs() []probeSpec {
 					SELECT v.video_id
 					FROM bookmarks b
 					JOIN videos v ON v.video_id = b.video_id
-					WHERE (b.user_id = '' OR b.user_id = ?)
-					  AND (
+					WHERE (
 					    v.channel_id LIKE 'youtube_%'
 					    OR v.channel_id LIKE 'tiktok_%'
 					    OR v.channel_id LIKE 'instagram_%'
@@ -362,19 +355,18 @@ func probeSpecs() []probeSpec {
 					SELECT v.video_id
 					FROM feed_likes fl
 					JOIN videos v ON v.video_id = fl.tweet_id
-					WHERE fl.username = ?
-					  AND (
+					WHERE (
 					    v.channel_id LIKE 'youtube_%'
 					    OR v.channel_id LIKE 'tiktok_%'
 					    OR v.channel_id LIKE 'instagram_%'
 					  )
 					LIMIT ?
-				`, []any{cutoff, cutoff, opts.Username, opts.Username, opts.Limit}
+				`, []any{cutoff, cutoff, opts.Limit}
 			},
 		},
 		{
-			name:        "asset_repair_claim_candidates",
-			description: "asset repair lease candidate read",
+			name:        "asset_download_claim_candidates",
+			description: "asset download lease candidate read",
 			lifecycle:   "maintained_state",
 			build: func(opts Options) (string, []any) {
 				return `
@@ -392,37 +384,6 @@ func probeSpecs() []probeSpec {
 					ORDER BY attempts ASC, updated_at_ms ASC, id ASC
 					LIMIT ?
 				`, []any{opts.NowMs, opts.NowMs, opts.Limit}
-			},
-		},
-		{
-			name:        "profile_refresh_candidate",
-			description: "profile refresh candidate read",
-			lifecycle:   "archive",
-			build: func(opts Options) (string, []any) {
-				cutoff := opts.NowMs - int64(24*time.Hour/time.Millisecond)
-				return `
-					SELECT channel_id
-					FROM channel_profiles
-					WHERE tombstone = 0
-					  AND (next_retry_at = 0 OR next_retry_at < ?)
-					  AND (
-					    fetched_at = 0
-					    OR fetched_at < ?
-					    OR (
-					      platform IN ('tiktok', 'instagram')
-					      AND COALESCE(banner_url, '') = ''
-					      AND EXISTS (
-					        SELECT 1
-					        FROM videos v
-					        WHERE v.channel_id = channel_profiles.channel_id
-					          AND COALESCE(v.file_path, '') != ''
-					          AND COALESCE(v.is_temp, 0) = 0
-					      )
-					    )
-					  )
-					ORDER BY fetched_at ASC, channel_id ASC
-					LIMIT ?
-				`, []any{opts.NowMs, cutoff, opts.Limit}
 			},
 		},
 		{
@@ -456,27 +417,6 @@ func probeSpecs() []probeSpec {
 					ORDER BY rank
 					LIMIT ?
 				`, []any{compileSearchFTSQuery(opts.Search), opts.Limit}
-			},
-		},
-		{
-			name:        "mutation_delta_candidates",
-			description: "Android inbound mutation delta candidate read",
-			lifecycle:   "user_state",
-			build: func(opts Options) (string, []any) {
-				return `
-					SELECT version, type, item_id
-					FROM sync_changes
-					WHERE version > ?
-					  AND type IN (
-					    'like', 'bookmark', 'seen', 'mute',
-					    'follow', 'subscribe', 'unsubscribe', 'star', 'channel_setting',
-					    'moment_view', 'moments_cursor',
-					    'progress', 'watch_progress', 'video_watched',
-					    'create_category', 'bookmark_category', 'bookmark_alias'
-					  )
-					ORDER BY version ASC
-					LIMIT ?
-				`, []any{int64(0), opts.Limit}
 			},
 		},
 	}

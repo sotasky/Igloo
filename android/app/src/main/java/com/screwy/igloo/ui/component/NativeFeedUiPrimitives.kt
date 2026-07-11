@@ -26,7 +26,6 @@ import androidx.compose.ui.unit.dp
 import com.screwy.igloo.R
 import com.screwy.igloo.data.entity.FeedItemEntity
 import com.screwy.igloo.feed.SocialPostModel
-import com.screwy.igloo.media.MediaUri
 import java.util.Locale
 
 internal fun clickableText(
@@ -131,15 +130,6 @@ internal fun <T> nativeThreadPreviewAncestors(chain: List<T>): List<T> =
 
 internal fun <T> nativeThreadCapsuleVisible(chain: List<T>): Boolean =
     chain.size > nativeThreadPreviewAncestors(chain).size
-
-internal fun remoteUriFor(url: String, baseUrl: String): MediaUri.Remote {
-    val resolved = when {
-        url.startsWith("http://") || url.startsWith("https://") -> url
-        url.startsWith("/") -> baseUrl.trim().trimEnd('/') + url
-        else -> url
-    }
-    return MediaUri.Remote(resolved)
-}
 
 internal fun NativeFeedPrimaryAction.iconRes(selected: Boolean): Int = when (this) {
     NativeFeedPrimaryAction.Share -> R.drawable.ic_feed_share_24

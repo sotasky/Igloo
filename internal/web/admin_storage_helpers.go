@@ -2,7 +2,6 @@ package web
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -40,50 +39,13 @@ func atomicWrite(dest string, data []byte, perm os.FileMode) error {
 	return os.Rename(tmpPath, dest)
 }
 
-// deleteVideoFiles removes video file and sibling thumbnails from disk when no
-// remaining DB row references the same data path.
-func (s *Server) deleteVideoFiles(v model.Video) {
-	dataDir := ""
-	if s != nil && s.cfg != nil {
-		dataDir = s.cfg.DataDir
+func (s *Server) removeCanonicalAssetFiles(keys []string) {
+	if s == nil || s.db == nil {
+		return
 	}
-	removePath := func(p string) {
-		if p == "" {
-			return
-		}
-		if s != nil && s.db != nil {
-			refs, err := s.db.DataFileReferenceCount(p)
-			if err != nil {
-				slog.Warn("check file references before delete", "path", p, "err", err)
-				return
-			}
-			if refs > 0 {
-				return
-			}
-		}
-		if !filepath.IsAbs(p) {
-			p = filepath.Join(dataDir, p)
-		}
-		if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
-			slog.Warn("delete video file", "path", p, "err", err)
-		}
-	}
-
-	removePath(v.FilePath)
-	removePath(v.ThumbnailPath)
-
-	// Remove sibling thumbnail files (same base name, any extension)
-	if v.FilePath != "" {
-		absPath := v.FilePath
-		if !filepath.IsAbs(absPath) {
-			absPath = filepath.Join(dataDir, absPath)
-		}
-		base := strings.TrimSuffix(absPath, filepath.Ext(absPath))
-		for _, ext := range []string{".jpg", ".jpeg", ".png", ".webp", ".avif"} {
-			sibling := base + ext
-			if sibling != absPath {
-				removePath(sibling)
-			}
+	for _, key := range keys {
+		if _, err := s.db.RemoveAssetFileIfUnreferenced(key); err != nil {
+			slog.Warn("remove retired canonical asset", "key", key, "err", err)
 		}
 	}
 }
@@ -116,9 +78,6 @@ func (s *Server) importSubscriptionList(ctx context.Context, urls []string) (int
 			skipped++
 			continue
 		}
-		s.workers.RequestAvatar(ch.ChannelID)
-		valueJSON := fmt.Sprintf(`{"channel_id":%q,"platform":%q}`, ch.ChannelID, ch.Platform)
-		_ = s.db.RecordSyncChange("subscribe", ch.ChannelID, valueJSON)
 		added++
 	}
 	return added, skipped
@@ -137,9 +96,6 @@ func (s *Server) importChannelList(ctx context.Context, channels []model.Channel
 			skipped++
 			continue
 		}
-		s.workers.RequestAvatar(ch.ChannelID)
-		valueJSON := fmt.Sprintf(`{"channel_id":%q,"platform":%q}`, ch.ChannelID, ch.Platform)
-		_ = s.db.RecordSyncChange("subscribe", ch.ChannelID, valueJSON)
 		added++
 	}
 	return added, skipped

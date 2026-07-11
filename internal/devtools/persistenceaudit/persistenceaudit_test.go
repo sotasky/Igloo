@@ -31,7 +31,7 @@ func TestRunReportsLifecycles(t *testing.T) {
 		"unclassified:",
 		"feed_items",
 		"assets",
-		"android_sync_items",
+		"feed_rank_snapshot",
 		"custom_table",
 	} {
 		if !strings.Contains(out, want) {
@@ -90,11 +90,11 @@ func createAuditFixture(t *testing.T) string {
 	for _, stmt := range []string{
 		`CREATE TABLE feed_items (tweet_id TEXT PRIMARY KEY, body TEXT)`,
 		`CREATE TABLE assets (asset_id TEXT PRIMARY KEY, state TEXT)`,
-		`CREATE TABLE android_sync_items (generation_id TEXT, seq INTEGER, payload_json TEXT, PRIMARY KEY (generation_id, seq))`,
+		`CREATE TABLE feed_rank_snapshot (item_id TEXT, seq INTEGER, payload_json TEXT, PRIMARY KEY (item_id, seq))`,
 		`CREATE TABLE custom_table (id INTEGER PRIMARY KEY, value TEXT)`,
 		`INSERT INTO feed_items (tweet_id, body) VALUES ('sample_post_1', 'body'), ('sample_post_2', 'body')`,
 		`INSERT INTO assets (asset_id, state) VALUES ('sample_asset_1', 'ready')`,
-		`INSERT INTO android_sync_items (generation_id, seq, payload_json) VALUES ('sample_generation', 1, '{}'), ('sample_generation', 2, '{}'), ('sample_generation', 3, '{}')`,
+		`INSERT INTO feed_rank_snapshot (item_id, seq, payload_json) VALUES ('sample_item', 1, '{}'), ('sample_item', 2, '{}'), ('sample_item', 3, '{}')`,
 		`INSERT INTO custom_table (value) VALUES ('sample')`,
 	} {
 		if _, err := conn.Exec(stmt); err != nil {

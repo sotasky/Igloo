@@ -43,8 +43,6 @@ type Channel struct {
 	// conventional thumbnails/avatars/ disk cache.
 	VideoCount int
 	AvatarURL  string
-	// SyncSeq advances when AddChannel writes the row (#6 bundle delta).
-	SyncSeq int64
 }
 
 // Pager holds pagination state.
@@ -121,23 +119,22 @@ type Flash struct {
 	Message  string
 }
 
-// Video represents a downloaded video/media file.
+// Video represents stored video/post metadata. Binary availability and storage
+// details belong to canonical assets.
 type Video struct {
-	ID            int64
-	VideoID       string
-	ChannelID     string
-	Title         string
-	Description   string
-	Duration      int // seconds
-	ThumbnailPath string
-	FilePath      string
-	FileSize      int64
-	PublishedAt   *time.Time
-	DownloadedAt  time.Time
-	Watched       bool
-	IsTemp        bool
-	IsPinned      bool
-	MetadataJSON  string
+	ID           int64
+	VideoID      string
+	ChannelID    string
+	OwnerKind    string
+	Title        string
+	Description  string
+	Duration     int // seconds
+	PublishedAt  *time.Time
+	DownloadedAt time.Time
+	Watched      bool
+	IsTemp       bool
+	IsPinned     bool
+	MetadataJSON string
 	// Joined/computed fields
 	ChannelName        string
 	Platform           string
@@ -154,8 +151,6 @@ type Video struct {
 	PlaybackPosition   float64
 	EagerLoad          bool // skip loading="lazy" for above-the-fold images
 	Metadata           *VideoMetadata
-	// SyncSeq advances on InsertVideo (#6 bundle delta).
-	SyncSeq int64
 	// Repost fields are joined for Moments. A repost-introduced video still
 	// appears once; RepostCount tells the UI how many followed sources surfaced it.
 	ReposterChannelID   string
@@ -172,7 +167,6 @@ type Video struct {
 	// DeArrow fields — nullable pointers distinguish "unchecked" from "checked, no data".
 	DearrowTitle       *string
 	DearrowTitleCasual *string
-	DearrowThumbPath   *string
 	DearrowCheckedAtMs *int64
 }
 
@@ -294,7 +288,6 @@ func (m *VideoMetadata) SlidePath(index int) string {
 // Relative time ("2h ago") is computed client-side from PublishedAt — no
 // pre-formatted `time_text` string is carried.
 type Comment struct {
-	ID              int64      `json:"-"`
 	VideoID         string     `json:"video_id"`
 	CommentID       string     `json:"id"`
 	ParentID        string     `json:"parent"`
@@ -341,30 +334,12 @@ func (v *Video) EnrichForCard() {
 		v.AvatarURL = "/api/media/avatar/" + v.ChannelID
 	}
 
-	if v.MediaKind != "" {
-		// Pre-computed from DB — still need IsShortForm from metadata for player UI
-		if m := v.ParseMetadata(); m != nil {
-			if m.Duration > 0 && m.Duration <= 90 {
-				v.IsShortForm = true
-			}
-			if m.Width > 0 && m.Height > 0 && float64(m.Height)/float64(m.Width) > 1.3 {
-				v.IsShortForm = true
-			}
+	if m := v.ParseMetadata(); m != nil {
+		if m.Duration > 0 && m.Duration <= 90 {
+			v.IsShortForm = true
 		}
-	} else {
-		// Legacy path: compute media_kind from metadata
-		m := v.ParseMetadata()
-		if m != nil {
-			if m.Duration > 0 && m.Duration <= 90 {
-				v.IsShortForm = true
-			}
-			if m.Width > 0 && m.Height > 0 && float64(m.Height)/float64(m.Width) > 1.3 {
-				v.IsShortForm = true
-			}
-			v.MediaKind, v.MediaSlideCount = ComputeMediaKind(m, v.FilePath)
-		}
-		if v.MediaKind == "" {
-			v.MediaKind, v.MediaSlideCount = ComputeMediaKind(nil, v.FilePath)
+		if m.Width > 0 && m.Height > 0 && float64(m.Height)/float64(m.Width) > 1.3 {
+			v.IsShortForm = true
 		}
 	}
 
@@ -450,6 +425,7 @@ func MediaMode(mediaKind string, slideCount int) string {
 type FeedItem struct {
 	TweetID                string
 	SourceHandle           string
+	SourceChannelID        string
 	AuthorHandle           string
 	AuthorDisplayName      string
 	AuthorAvatarURL        string
@@ -479,22 +455,24 @@ type FeedItem struct {
 	FetchedAt              time.Time
 	ContentHash            string
 	CanonicalTweetID       string
-	SyncSeq                int64
 	// Parsed at runtime
 	Media      []MediaRef
 	QuoteMedia []MediaRef
+	// Persisted role identities. Enrichment may attach follow/star state, but
+	// these IDs are assigned transactionally when the feed row is ingested.
+	ChannelID         string
+	ReposterChannelID string
+	QuoteChannelID    string
+	ReplyChannelID    string
 	// Enrichment fields (populated by feed.Enrich, not DB)
 	IsLiked              bool
 	IsSeen               bool
 	IsBookmarked         bool
 	QuoteIsLiked         bool
 	QuoteIsBookmarked    bool
-	ChannelID            string
 	ChannelIsFollowed    bool
 	ChannelIsStarred     bool
 	FollowTargetFollowed bool // whether the follow-button target is already followed (not inherited)
-	ReposterChannelID    string
-	QuoteChannelID       string
 	QuoteChannelFollowed bool
 	// ThreadChain is conversation-chain presentation data, ordered root → parent.
 	// The leaf (this FeedItem itself) is NOT included. Populated by
@@ -511,6 +489,7 @@ type FeedItem struct {
 	MediaPreviewURL     string
 	MediaSlideURLs      []string
 	QuoteMediaStreamURL string
+	QuoteMediaSlideURLs []string
 	QuoteCanonicalURL   string
 	// Translation
 	BodyTranslation  string
@@ -544,9 +523,8 @@ type MediaRef struct {
 	Height       int    `json:"height"`
 }
 
-// FeedLike represents a liked post with denormalized snapshot.
+// FeedLike represents a liked post projected from canonical feed content.
 type FeedLike struct {
-	Username          string
 	TweetID           string
 	LikedAt           time.Time
 	SourceHandle      string
@@ -561,26 +539,6 @@ type FeedLike struct {
 	MediaJSON         string
 	Platform          string
 	QuotePayloadJSON  string
-}
-
-// FeedMediaJob holds media download job status (minimal for enrichment).
-type FeedMediaJob struct {
-	TweetID    string
-	Status     string // queued|processing|completed|failed|pruned
-	MediaKind  string // video|image|unknown
-	SlideCount int
-}
-
-// MediaFile is a single source of truth for all media paths on disk.
-type MediaFile struct {
-	OwnerType  string // feed_media|avatar|thumbnail|preview_sprite
-	OwnerID    string // tweet_id, channel_id, or video_id
-	MediaIndex int    // 0 for single files, 0-N for multi-image
-	FilePath   string // relative to DataDir
-	MediaType  string // photo|video|gif|avatar|thumbnail|preview_sprite
-	SourceURL  string // original CDN URL
-	FileSize   int64
-	CreatedAt  time.Time
 }
 
 // IngestState tracks per-handle X fetch health.
@@ -604,36 +562,6 @@ func (f *FeedItem) ParseMedia() {
 	if f.QuoteMediaJSON != "" && f.QuoteMedia == nil {
 		_ = json.Unmarshal([]byte(f.QuoteMediaJSON), &f.QuoteMedia)
 	}
-}
-
-// ManifestEntry is a single asset identity from the #9 media manifest.
-// Each entry tells Android where to download one binary (thumbnail,
-// post media, avatar, video stream, subtitle, …). asset_id is stable
-// across requests until the underlying asset is replaced.
-type ManifestEntry struct {
-	AssetID     string `json:"asset_id"`
-	AssetKind   string `json:"asset_kind"`
-	OwnerID     string `json:"owner_id"`
-	OwnerKind   string `json:"owner_kind"`
-	Scope       string `json:"scope"`
-	ServerURL   string `json:"server_url"`
-	Bucket      string `json:"bucket"`
-	SizeHint    int64  `json:"size_hint,omitempty"`
-	ContentType string `json:"content_type,omitempty"`
-	IsAuto      *bool  `json:"is_auto,omitempty"`
-	// AudioLanguage is the BCP-47 audio language of the underlying video
-	// (e.g. "en-US", "tr"). Only populated for subtitle entries. Clients
-	// auto-enable subtitles when this is non-English.
-	AudioLanguage      string `json:"audio_language,omitempty"`
-	EffectiveRecencyMs int64  `json:"effective_recency_ms"`
-	// ManifestSeq is the server-internal monotonic used for cursor
-	// pagination — opaque to clients.
-	ManifestSeq int64 `json:"-"`
-
-	// ── legacy fields retained for the v1 media_files query helpers;
-	// not emitted on the wire (json tag "-"). Remove with v1 cleanup.
-	MediaType  string `json:"-"`
-	MediaIndex int    `json:"-"`
 }
 
 // NewPosterAvatar represents one unique new poster surfaced in the

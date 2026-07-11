@@ -12,10 +12,13 @@ import (
 
 func TestDoctorStatusReportsLocalHealthAndMasksSecrets(t *testing.T) {
 	tmp := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmp, ".igloo-state-root"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
 	t.Setenv("IGLOO_DATA_DIR", tmp)
 	resetTestServerDB(t)
 
-	d, err := igloodb.Open(filepath.Join(tmp, "igloo.db"), tmp)
+	d, err := igloodb.OpenPath(filepath.Join(tmp, "igloo.db"), tmp)
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
@@ -25,66 +28,30 @@ func TestDoctorStatusReportsLocalHealthAndMasksSecrets(t *testing.T) {
 
 	now := time.Now().UnixMilli()
 	if err := d.ExecRaw(`
-		INSERT INTO android_sync_generations (
-			generation_id, created_at_ms, status, source_version, retention_json,
-			item_count, asset_count, ready_asset_count, server_missing_asset_count,
-			total_bytes, content_counts_json, asset_counts_json
-		) VALUES ('android-sync-doctor', ?, 'ready', 'doctor-source', '{}', 1, 2, 1, 1, 1024, '{}', '{}')
-	`, now); err != nil {
-		t.Fatalf("insert generation: %v", err)
-	}
-	for i, generationID := range []string{"android-sync-doctor-old-1", "android-sync-doctor-old-2"} {
-		createdAtMs := now - int64(48-i)*int64(time.Hour/time.Millisecond)
-		if err := d.ExecRaw(`
-			INSERT INTO android_sync_generations (
-				generation_id, created_at_ms, status, source_version, retention_json,
-				item_count, asset_count, ready_asset_count, server_missing_asset_count,
-				total_bytes, content_counts_json, asset_counts_json
-			) VALUES (?, ?, 'ready', ?, '{}', 1, 1, 1, 0, 1, '{}', '{}')
-		`, generationID, createdAtMs, generationID+"-source"); err != nil {
-			t.Fatalf("insert old generation %s: %v", generationID, err)
-		}
-	}
-	if err := d.ExecRaw(`
-		INSERT INTO android_sync_items (generation_id, seq, item_kind, item_id, payload_json)
-		VALUES ('android-sync-doctor-old-1', 1, 'videos', 'doctor-video-old', '{}')
-	`); err != nil {
-		t.Fatalf("insert old sync item: %v", err)
-	}
-	if err := d.ExecRaw(`
-		INSERT INTO android_sync_assets (
-			generation_id, seq, asset_id, asset_kind, owner_id, owner_kind,
-			bucket, server_url, content_type, size_bytes, sha256, state,
-			required_reason, effective_recency_ms
-		) VALUES ('android-sync-doctor-old-1', 1, 'doctor-asset-old', 'video_stream',
-			'doctor-video-old', 'video', 'videos', '/asset', 'video/mp4', 1, 'sha',
-			'ready', 'retention', 1)
-	`); err != nil {
-		t.Fatalf("insert old sync asset: %v", err)
-	}
-	if err := d.ExecRaw(`
 		INSERT INTO android_sync_health_reports (
-			generation_id, reported_at_ms, payload_json, verified_assets,
-			pending_assets, failed_assets, missing_assets, total_assets, verified_bytes
-		) VALUES ('android-sync-doctor-old-1', 1, '{}', 1, 0, 0, 0, 1, 1)
+			cursor, reported_at_ms, payload_json, verified_assets,
+			pending_assets, missing_assets, total_assets, verified_bytes
+		) VALUES ('sample-cursor-doctor', 1, '{}', 1, 0, 1, 2, 1)
 	`); err != nil {
-		t.Fatalf("insert old sync health: %v", err)
+		t.Fatalf("insert sync health: %v", err)
 	}
 	if err := d.ExecRaw(`
-		INSERT INTO channel_profiles (channel_id, platform, handle, display_name, avatar_url, banner_url)
-		VALUES ('twitter_sample_profile', 'twitter', 'sample_profile', 'Doctor', 'https://cdn.example.invalid/avatar.jpg', 'https://cdn.example.invalid/banner.jpg')
+		INSERT INTO channel_profiles (channel_id, platform, handle, display_name)
+		VALUES ('twitter_sample_profile', 'twitter', 'sample_profile', 'Doctor')
 	`); err != nil {
 		t.Fatalf("insert profile: %v", err)
 	}
 	if err := d.ExecRaw(`
-		INSERT INTO media_files (owner_type, owner_id, media_index, file_path, media_type)
-		VALUES ('feed_media', 'sample_post', 0, 'media/sample_post_0.jpg', 'photo')
-	`); err != nil {
-		t.Fatalf("insert media file: %v", err)
+		INSERT INTO profile_jobs (
+			channel_id, requested_revision, completed_revision, requested_at_ms,
+			attempts, next_attempt_at_ms, last_error, updated_at_ms
+		) VALUES ('twitter_sample_profile', 2, 1, ?, 1, ?, 'sample failure', ?)
+	`, now, now+1000, now); err != nil {
+		t.Fatalf("insert profile job: %v", err)
 	}
 	if err := d.ExecRaw(`
-		INSERT INTO videos (video_id, channel_id, title, thumbnail_path, file_path, dearrow_thumb_path, published_at)
-		VALUES ('sample_video', 'youtube_sample_channel', 'Doctor Video', 'videos/sample_video.jpg', 'videos/sample_video.mp4', 'thumbnails/dearrow/sample_video.jpg', ?)
+		INSERT INTO videos (video_id, channel_id, owner_kind, title, published_at)
+		VALUES ('sample_video', 'youtube_sample_channel', 'youtube_video', 'Doctor Video', ?)
 	`, now); err != nil {
 		t.Fatalf("insert video: %v", err)
 	}
@@ -92,9 +59,12 @@ func TestDoctorStatusReportsLocalHealthAndMasksSecrets(t *testing.T) {
 		INSERT INTO assets (
 			asset_id, asset_kind, owner_kind, owner_id, media_index,
 			file_path, content_type, size_bytes, sha256, state, created_at_ms, updated_at_ms
-		) VALUES ('sample_post_asset', 'post_media', 'tweet', 'sample_post', 0,
-			'media/sample_post_0.jpg', 'image/jpeg', 10, 'sha', 'ready', ?, ?)
-	`, now, now); err != nil {
+		) VALUES
+			('sample_post_asset', 'post_media', 'tweet', 'sample_post', 0,
+			 'media/sample_post_0.jpg', 'image/jpeg', 10, 'sha', 'ready', ?, ?),
+			('sample_missing_asset', 'avatar', 'channel', 'twitter_sample_profile', 0,
+			 '', '', 0, '', 'server_missing', ?, ?)
+	`, now, now, now, now); err != nil {
 		t.Fatalf("insert asset: %v", err)
 	}
 	if err := d.ExecRaw(`
@@ -107,19 +77,6 @@ func TestDoctorStatusReportsLocalHealthAndMasksSecrets(t *testing.T) {
 			'worker-a', ?, ?, ?)
 	`, now-1, now, now); err != nil {
 		t.Fatalf("insert downloading asset: %v", err)
-	}
-	for _, path := range []string{
-		filepath.Join(tmp, "thumbnails", "avatars", "sample_profile.jpg"),
-		filepath.Join(tmp, "thumbnails", "banners", "sample_profile.jpg"),
-		filepath.Join(tmp, "thumbnails", "previews", "sample_video", "track.json"),
-		filepath.Join(tmp, "thumbnails", "previews", "sample_video", "sprite.jpg"),
-	} {
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			t.Fatalf("mkdir asset fixture dir: %v", err)
-		}
-		if err := os.WriteFile(path, []byte("fixture"), 0o644); err != nil {
-			t.Fatalf("write asset fixture %s: %v", path, err)
-		}
 	}
 	if err := d.ExecRaw(`
 		INSERT INTO download_queue (video_id, channel_id, title, status, error, added_at)
@@ -155,10 +112,8 @@ func TestDoctorStatusReportsLocalHealthAndMasksSecrets(t *testing.T) {
 		t.Fatalf("mkdir android logs: %v", err)
 	}
 	androidLog := strings.Join([]string{
-		`{"event":"android_sync_asset_failed","fields":{"asset_kind":"post_thumbnail","error":"verify_failed","generation_id":"android-sync-doctor","asset_id":"sample_asset_1"},"level":"info"}`,
-		`{"event":"android_sync_asset_failed","fields":{"asset_kind":"post_thumbnail","error":"verify_failed","generation_id":"android-sync-doctor","asset_id":"sample_asset_2"},"level":"info"}`,
-		`{"event":"android_sync_asset_stale","fields":{"asset_kind":"post_thumbnail","reason":"stale_generation_asset_verify_failed","generation_id":"android-sync-doctor","asset_id":"sample_asset_3"},"level":"info"}`,
-		`{"event":"android_sync_metadata_retry","fields":{"label":"latest_generation","error":"Sync HTTP 502 for latest_generation"},"level":"info"}`,
+		`{"event":"android_sync_metadata_retry","fields":{"label":"bootstrap","attempt":1},"level":"info"}`,
+		`{"event":"android_sync_metadata_retry","fields":{"label":"changes","attempt":2},"level":"info"}`,
 	}, "\n")
 	if err := os.WriteFile(filepath.Join(tmp, "logs", "android", "server.log"), []byte(androidLog), 0o644); err != nil {
 		t.Fatalf("write android log: %v", err)
@@ -170,6 +125,8 @@ func TestDoctorStatusReportsLocalHealthAndMasksSecrets(t *testing.T) {
 	}
 	for _, want := range []string{
 		"=== Igloo Doctor ===",
+		"Storage layout:",
+		"media_ready: true",
 		"Database files:",
 		"SQLite storage:",
 		"page_size:",
@@ -185,25 +142,27 @@ func TestDoctorStatusReportsLocalHealthAndMasksSecrets(t *testing.T) {
 		"Android sync:",
 		"Queue counts:",
 		"Profile/media readiness:",
-		"Asset inventory parity:",
+		"channel_profiles: total=1 tombstones=0",
+		"profile_jobs: pending=1 leased=0 failed=1",
+		"Asset inventory:",
 		"inventory states: downloading=1, ready=1",
 		"asset leases: active_downloading=0 expired_downloading=1",
-		"post_media:          assets=1 legacy=1 gap=0",
-		"video_stream:        assets=0 legacy=1 gap=1",
-		"post_thumbnail:      assets=1 legacy=1 gap=0",
-		"dearrow_thumbnail:   assets=0 legacy=1 gap=1",
-		"avatar:              assets=0 legacy=1 gap=1",
-		"banner:              assets=0 legacy=1 gap=1",
-		"preview_track_json:  assets=0 legacy=1 gap=1",
-		"preview_sprite:      assets=0 legacy=1 gap=1",
+		"avatar assets: server_missing=1",
+		"banner assets: empty=0",
+		"post_media:          ready=1",
+		"video_stream:        empty=0",
+		"post_thumbnail:      downloading=1",
+		"dearrow_thumbnail:   empty=0",
+		"avatar:              server_missing=1",
+		"banner:              empty=0",
+		"preview_track_json:  empty=0",
+		"preview_sprite:      empty=0",
 		"Downloader failures:",
 		"Recent high-signal log errors:",
 		"Android sync client failures:",
-		"asset_failed verify_failed/post_thumbnail=2",
-		"asset_stale stale_generation_asset_verify_failed/post_thumbnail=1",
-		"metadata_retry latest_generation/http_502=1",
-		"android-sync-doctor",
-		"prune eligible: generations=1 items=1 assets=1 health_reports=1",
+		"metadata_retry bootstrap=1, changes=1",
+		"compact_heads=",
+		"sample-cursor-doctor",
 		"network=1",
 	} {
 		if !strings.Contains(report, want) {
@@ -212,6 +171,21 @@ func TestDoctorStatusReportsLocalHealthAndMasksSecrets(t *testing.T) {
 	}
 	if strings.Contains(report, "super-secret-token") || strings.Contains(report, "session-secret") {
 		t.Fatalf("doctor report leaked sensitive log values:\n%s", report)
+	}
+}
+
+func TestDoctorStorageLayoutReportsUnavailableExternalRoot(t *testing.T) {
+	base := t.TempDir()
+	mediaRoot := filepath.Join(base, "media")
+	if err := os.MkdirAll(mediaRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("IGLOO_DATA_DIR", filepath.Join(base, "state"))
+	t.Setenv("IGLOO_MEDIA_DIR", mediaRoot)
+	var report strings.Builder
+	writeDoctorStorageLayout(&report)
+	if !strings.Contains(report.String(), "media_ready: false") || !strings.Contains(report.String(), ".igloo-media-root") {
+		t.Fatalf("storage report did not expose missing marker:\n%s", report.String())
 	}
 }
 

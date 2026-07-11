@@ -2,22 +2,9 @@ package db
 
 import (
 	"fmt"
-	"io/fs"
-	"log/slog"
 	"os"
 	"path/filepath"
-	"sync"
-	"time"
 )
-
-const dataDirUsageCacheTTL = 5 * time.Minute
-
-var dataDirUsageCache struct {
-	mu        sync.Mutex
-	path      string
-	bytes     int64
-	updatedAt time.Time
-}
 
 // GetDashboardStats returns aggregate statistics for the server status dashboard.
 func (db *DB) GetDashboardStats() (map[string]any, error) {
@@ -35,18 +22,25 @@ func (db *DB) GetDashboardStats() (map[string]any, error) {
 		return n
 	}
 
-	stats["channels_total"] = queryInt("SELECT COUNT(*) FROM channel_follows WHERE user_id = ''")
-	stats["videos_total"] = queryInt("SELECT COUNT(*) FROM videos WHERE file_path IS NOT NULL AND file_path <> ''")
-	stats["videos_watched"] = queryInt("SELECT COUNT(*) FROM videos WHERE watched=1 AND file_path IS NOT NULL AND file_path <> ''")
+	stats["channels_total"] = queryInt("SELECT COUNT(*) FROM channel_follows")
+	stats["videos_total"] = queryInt(`
+		SELECT COUNT(*) FROM videos v
+		WHERE ` + readyVideoMediaExistsSQL("v") + `
+	`)
+	stats["videos_watched"] = queryInt(`
+		SELECT COUNT(*) FROM videos v
+		WHERE ` + videoFullyWatchedSQL("v") + `
+		  AND ` + readyVideoMediaExistsSQL("v") + `
+	`)
 	stats["feed_items_count"] = queryInt("SELECT COUNT(*) FROM feed_items")
 	stats["bookmarks_count"] = queryInt("SELECT COUNT(*) FROM bookmarks")
 	stats["comments_count"] = queryInt("SELECT COUNT(*) FROM video_comments")
 
-	// Media pipeline from feed_media_jobs
+	// Canonical asset state is both pipeline state and presentation readiness.
 	stats["media_pipeline"] = map[string]int{
-		"ready":  queryInt("SELECT COUNT(*) FROM feed_media_jobs WHERE status='completed'"),
-		"queued": queryInt("SELECT COUNT(*) FROM feed_media_jobs WHERE status='queued'"),
-		"failed": queryInt("SELECT COUNT(*) FROM feed_media_jobs WHERE status='failed'"),
+		"ready":  queryInt("SELECT COUNT(*) FROM assets WHERE state='ready'"),
+		"queued": queryInt("SELECT COUNT(*) FROM assets WHERE state IN ('queued','downloading','stale')"),
+		"failed": queryInt("SELECT COUNT(*) FROM assets WHERE state IN ('failed','server_missing','permanent_missing')"),
 	}
 
 	// Download queue
@@ -67,7 +61,7 @@ func (db *DB) GetDashboardStats() (map[string]any, error) {
 	channelsByPlatform := map[string]int{}
 	platformRows, err := db.conn.Query(`
 		SELECT c.platform, COUNT(*) FROM channels c
-		INNER JOIN channel_follows cf ON cf.channel_id = c.channel_id AND cf.user_id = ''
+		INNER JOIN channel_follows cf ON cf.channel_id = c.channel_id
 		GROUP BY c.platform
 	`)
 	if err == nil {
@@ -97,12 +91,37 @@ func (db *DB) GetDashboardStats() (map[string]any, error) {
 	}
 
 	// Storage totals
-	totalVideoBytes := queryInt64("SELECT COALESCE(SUM(file_size),0) FROM videos WHERE file_path IS NOT NULL AND file_path <> ''")
-	videosTotal := queryInt("SELECT COUNT(*) FROM videos WHERE file_path IS NOT NULL AND file_path <> ''")
-	totalStorageBytes, err := cachedDirUsageBytes(db.dataDir)
-	if err != nil {
-		slog.Warn("dashboard storage scan failed; falling back to video bytes", "data_dir", db.dataDir, "err", err)
-		totalStorageBytes = totalVideoBytes
+	totalVideoBytes := queryInt64(`
+		SELECT COALESCE(SUM(size_bytes), 0)
+		FROM (
+			SELECT file_path, MAX(size_bytes) AS size_bytes
+			FROM assets
+			WHERE state = 'ready' AND file_path != ''
+			  AND (asset_kind = 'video_stream' OR content_type LIKE 'video/%')
+			GROUP BY file_path
+		)
+	`)
+	videosTotal := queryInt(`
+		SELECT COUNT(*) FROM videos v
+		WHERE ` + readyVideoMediaExistsSQL("v") + `
+	`)
+	totalStorageBytes := queryInt64(`
+		SELECT COALESCE(SUM(size_bytes), 0)
+		FROM (
+			SELECT file_path, MAX(size_bytes) AS size_bytes
+			FROM assets
+			WHERE state = 'ready' AND file_path != ''
+			GROUP BY file_path
+		)
+	`)
+	dbPath := filepath.Join(db.storage.StateRoot(), "igloo.db")
+	if fi, statErr := os.Stat(dbPath); statErr == nil {
+		totalStorageBytes += fi.Size()
+		stats["db_size_mb"] = fmt.Sprintf("%.1f", float64(fi.Size())/1048576)
+	}
+	if fi, statErr := os.Stat(dbPath + "-wal"); statErr == nil {
+		totalStorageBytes += fi.Size()
+		stats["wal_size_mb"] = fmt.Sprintf("%.1f", float64(fi.Size())/1048576)
 	}
 	stats["storage_total_gb"] = fmt.Sprintf("%.2f", float64(totalStorageBytes)/1073741824)
 	stats["video_storage_gb"] = fmt.Sprintf("%.2f", float64(totalVideoBytes)/1073741824)
@@ -112,30 +131,30 @@ func (db *DB) GetDashboardStats() (map[string]any, error) {
 		stats["avg_mb_per_video"] = "0"
 	}
 
-	// Local feed (completed media)
-	stats["local_feed_count"] = queryInt("SELECT COUNT(*) FROM feed_items WHERE media_status='completed'")
+	// Local feed items with canonical ready media, including quoted media.
+	stats["local_feed_count"] = queryInt(`
+		SELECT COUNT(*)
+		FROM feed_items fi
+		WHERE EXISTS (
+			SELECT 1 FROM assets a
+			WHERE a.owner_kind = 'tweet'
+			  AND a.owner_id IN (fi.tweet_id, COALESCE(NULLIF(fi.quote_tweet_id, ''), fi.tweet_id))
+			  AND a.asset_kind IN ('post_media', 'post_audio')
+			  AND a.state = 'ready'
+		)
+	`)
 
-	// Preview queue — count sprite.jpg files on disk (Go worker is in-memory, demand-based)
+	// Preview queue is represented by canonical ready sprite assets.
 	stats["preview_queue"] = map[string]int{
-		"ready":   countPreviewSprites(db.dataDir),
+		"ready":   queryInt("SELECT COUNT(*) FROM assets WHERE asset_kind='preview_sprite' AND state='ready'"),
 		"pending": 0,
-	}
-
-	// DB file sizes (pre-formatted for display)
-	dbPath := filepath.Join(db.dataDir, "igloo.db")
-	if fi, err := os.Stat(dbPath); err == nil {
-		stats["db_size_mb"] = fmt.Sprintf("%.1f", float64(fi.Size())/1048576)
-	}
-	walPath := dbPath + "-wal"
-	if fi, err := os.Stat(walPath); err == nil {
-		stats["wal_size_mb"] = fmt.Sprintf("%.1f", float64(fi.Size())/1048576)
 	}
 
 	// Table count
 	stats["table_count"] = queryInt("SELECT COUNT(*) FROM sqlite_master WHERE type='table'")
 
 	// Video file size total
-	stats["total_video_bytes"] = queryInt64("SELECT COALESCE(SUM(file_size),0) FROM videos WHERE file_path IS NOT NULL AND file_path <> ''")
+	stats["total_video_bytes"] = totalVideoBytes
 
 	// Analytics summary for server dashboard
 	stats["analytics_summary"] = map[string]int{
@@ -167,78 +186,10 @@ func (db *DB) CountSubscribedTwitterChannels() int {
 	var n int
 	_ = db.conn.QueryRow(`
 		SELECT COUNT(*) FROM channels c
-		INNER JOIN channel_follows cf ON cf.channel_id = c.channel_id AND cf.user_id = ''
+		INNER JOIN channel_follows cf ON cf.channel_id = c.channel_id
 		WHERE c.platform = 'twitter'
 	`).Scan(&n)
 	return n
-}
-
-// countPreviewSprites counts video IDs that have a generated sprite.jpg on disk.
-func countPreviewSprites(dataDir string) int {
-	dir := filepath.Join(dataDir, "thumbnails", "previews")
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return 0
-	}
-	count := 0
-	for _, e := range entries {
-		if e.IsDir() {
-			if _, err := os.Stat(filepath.Join(dir, e.Name(), "sprite.jpg")); err == nil {
-				count++
-			}
-		}
-	}
-	return count
-}
-
-func cachedDirUsageBytes(root string) (int64, error) {
-	dataDirUsageCache.mu.Lock()
-	if dataDirUsageCache.path == root && time.Since(dataDirUsageCache.updatedAt) < dataDirUsageCacheTTL {
-		bytes := dataDirUsageCache.bytes
-		dataDirUsageCache.mu.Unlock()
-		return bytes, nil
-	}
-	dataDirUsageCache.mu.Unlock()
-
-	bytes, err := dirUsageBytes(root)
-	if err != nil {
-		return 0, err
-	}
-
-	dataDirUsageCache.mu.Lock()
-	dataDirUsageCache.path = root
-	dataDirUsageCache.bytes = bytes
-	dataDirUsageCache.updatedAt = time.Now()
-	dataDirUsageCache.mu.Unlock()
-	return bytes, nil
-}
-
-func dirUsageBytes(root string) (int64, error) {
-	var total int64
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			if os.IsNotExist(err) {
-				return nil
-			}
-			return err
-		}
-		if !d.Type().IsRegular() {
-			return nil
-		}
-		info, infoErr := d.Info()
-		if infoErr != nil {
-			if os.IsNotExist(infoErr) {
-				return nil
-			}
-			return infoErr
-		}
-		total += info.Size()
-		return nil
-	})
-	if err != nil {
-		return 0, err
-	}
-	return total, nil
 }
 
 // IngestCoverageCounts returns aggregate counts for the feed dashboard coverage panel.

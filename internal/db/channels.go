@@ -22,21 +22,7 @@ type ChannelSettings struct {
 	IncludeReposts     bool   `json:"include_reposts"`
 }
 
-const (
-	StaleOrphanChannelMetadataTTL = 30 * 24 * time.Hour
-	ChannelMetadataPruneBatchSize = 500
-)
-
-type ChannelMetadataPruneResult struct {
-	Channels        int
-	ChannelProfiles int
-	MediaFiles      int
-}
-
-// GetSubscribedChannels returns every channel that has a `channel_follows`
-// row (any user). In single-user mode that reduces to the former
-// `is_subscribed=1` filter. The IsStarred flag is hydrated from
-// `channel_stars`; IncludeReposts from `channel_settings`.
+// GetSubscribedChannels returns every followed channel.
 func (db *DB) GetSubscribedChannels() ([]model.Channel, error) {
 	// Sort uses the rendered display name (display_name if set, else
 	// channels.name) via the same COALESCE so rows sort how they render —
@@ -44,10 +30,6 @@ func (db *DB) GetSubscribedChannels() ([]model.Channel, error) {
 	// "Example Display Name". COLLATE NOCASE keeps Latin case-insensitive; unicode
 	// names fall back to codepoint order which is good enough for the
 	// sidebar (users scan visually, not alphabetically).
-	// channel_follows / channel_stars are keyed by (user_id, channel_id);
-	// in single-user mode every row is written with user_id=''. Scoping the
-	// joins to that canonical user keeps the result set-based and matches
-	// the rest of the codebase (videos.go, GetChannelByID, FollowChannel).
 	rows, err := db.conn.Query(`
 		SELECT COALESCE(c.id, 0), cf.channel_id, COALESCE(c.source_id,''), COALESCE(c.name,''),
 		       COALESCE(c.url,''), COALESCE(c.platform,''),
@@ -59,10 +41,9 @@ func (db *DB) GetSubscribedChannels() ([]model.Channel, error) {
 		       COALESCE(cp.display_name,'') AS display_name
 		FROM channel_follows cf
 		LEFT JOIN channels c          ON c.channel_id = cf.channel_id
-		LEFT JOIN channel_stars cs2   ON cs2.channel_id = cf.channel_id AND cs2.user_id = ''
+		LEFT JOIN channel_stars cs2   ON cs2.channel_id = cf.channel_id
 		LEFT JOIN channel_settings cs ON cs.channel_id = cf.channel_id
 		LEFT JOIN channel_profiles cp ON cp.channel_id = cf.channel_id
-		WHERE cf.user_id = ''
 		ORDER BY COALESCE(NULLIF(cp.display_name,''), NULLIF(c.name,''), NULLIF(cp.handle,''), cf.channel_id) COLLATE NOCASE
 	`)
 	if err != nil {
@@ -170,6 +151,12 @@ func channelDefaultsFromID(channelID string) (sourceID, name, urlValue, platform
 		sourceID, name, platform = handle, handle, "tiktok"
 		if handle != "" {
 			urlValue = "https://www.tiktok.com/@" + strings.TrimPrefix(handle, "@")
+		}
+	case strings.HasPrefix(lower, "instagram_"):
+		handle := strings.TrimSpace(channelID[len("instagram_"):])
+		sourceID, name, platform = handle, handle, "instagram"
+		if handle != "" {
+			urlValue = "https://www.instagram.com/" + strings.TrimPrefix(handle, "@") + "/"
 		}
 	case strings.HasPrefix(lower, "youtube_"):
 		id := strings.TrimSpace(channelID[len("youtube_"):])
@@ -289,38 +276,32 @@ func parseTimestampString(s string) int64 {
 }
 
 // ToggleChannelStar flips the star state in `channel_stars` for the single
-// (server-side) user and records a sync change. Returns the new state.
+// (server-side) user. Returns the new state.
 func (db *DB) ToggleChannelStar(channelID string) (bool, error) {
 	var newStarred bool
 	err := db.WithWrite(func(tx *sql.Tx) error {
+		nowMs := time.Now().UnixMilli()
 		var exists int
 		err := tx.QueryRow(
-			"SELECT COUNT(*) FROM channel_stars WHERE user_id = '' AND channel_id = ?",
+			"SELECT COUNT(*) FROM channel_stars WHERE channel_id = ?",
 			channelID,
 		).Scan(&exists)
 		if err != nil {
 			return fmt.Errorf("read channel_stars: %w", err)
 		}
+		action := "set"
 		if exists > 0 {
-			_, err = tx.Exec(
-				"DELETE FROM channel_stars WHERE user_id = '' AND channel_id = ?",
-				channelID,
-			)
-			if err != nil {
-				return fmt.Errorf("delete channel_stars: %w", err)
-			}
-			newStarred = false
-		} else {
-			_, err = tx.Exec(
-				"INSERT INTO channel_stars (user_id, channel_id, starred_at) VALUES ('', ?, ?)",
-				channelID, time.Now().UnixMilli(),
-			)
-			if err != nil {
-				return fmt.Errorf("insert channel_stars: %w", err)
-			}
-			newStarred = true
+			action = "clear"
 		}
-		return db.recordSyncChangeTx(tx, "star", channelID, fmt.Sprintf(`{"starred":%t}`, newStarred))
+		result, err := mutateToggleTx(tx, "star", "channel_stars", "channel_id", channelID, action, nowMs)
+		if err != nil {
+			return err
+		}
+		newStarred = action == "set"
+		if !result.Applied {
+			return nil
+		}
+		return nil
 	})
 	return newStarred, err
 }
@@ -330,37 +311,37 @@ func (db *DB) IsChannelStarred(channelID string) bool {
 	err := db.conn.QueryRow(`
 		SELECT 1
 		FROM channel_stars
-		WHERE user_id = '' AND channel_id = ?
+		WHERE channel_id = ?
 		LIMIT 1
 	`, channelID).Scan(&exists)
 	return err == nil && exists == 1
 }
 
-// FollowChannel inserts a `channel_follows` row for the single user
-// (user_id = ”). Idempotent.
+// FollowChannel inserts a channel follow. Idempotent.
 func (db *DB) FollowChannel(channelID string) error {
-	return db.WithWrite(func(tx *sql.Tx) error {
-		_, err := tx.Exec(`
-			INSERT OR IGNORE INTO channel_follows (user_id, channel_id, followed_at)
-			VALUES ('', ?, ?)
-		`, channelID, time.Now().UnixMilli())
-		return err
-	})
+	_, err := db.MutateFollow(channelID, "set", 0)
+	return err
 }
 
-// UnfollowChannel removes the `channel_follows` row for the single user.
+// UnfollowChannel removes a channel follow.
 func (db *DB) UnfollowChannel(channelID string) error {
-	return db.WithWrite(func(tx *sql.Tx) error {
-		_, err := tx.Exec(`DELETE FROM channel_follows WHERE user_id = '' AND channel_id = ?`, channelID)
+	keys, err := db.PurgeUnfollowedChannelContent(channelID)
+	if err != nil {
 		return err
-	})
+	}
+	for _, key := range keys {
+		if _, err := db.RemoveAssetFileIfUnreferenced(key); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
-// IsChannelFollowed reports whether the single user follows the channel.
+// IsChannelFollowed reports whether the channel is followed.
 func (db *DB) IsChannelFollowed(channelID string) bool {
 	var n int
 	_ = db.conn.QueryRow(
-		"SELECT COUNT(*) FROM channel_follows WHERE user_id = '' AND channel_id = ?",
+		"SELECT COUNT(*) FROM channel_follows WHERE channel_id = ?",
 		channelID,
 	).Scan(&n)
 	return n > 0
@@ -467,16 +448,14 @@ func (db *DB) UpdateChannelSettings(channelID string, fields map[string]any) err
 
 	var chClauses []string
 	var chArgs []any
-	var setCols []string
-	var setArgs []any
+	settingFields := make(map[string]any)
 	for col, val := range fields {
 		switch {
 		case channelCols[col]:
 			chClauses = append(chClauses, fmt.Sprintf("%s=?", col))
 			chArgs = append(chArgs, val)
 		case settingCols[col]:
-			setCols = append(setCols, col)
-			setArgs = append(setArgs, val)
+			settingFields[col] = val
 		default:
 			return fmt.Errorf("UpdateChannelSettings: disallowed field %q", col)
 		}
@@ -493,25 +472,10 @@ func (db *DB) UpdateChannelSettings(channelID string, fields map[string]any) err
 				return err
 			}
 		}
-		if len(setCols) > 0 {
-			placeholders := make([]string, len(setCols))
-			updates := make([]string, len(setCols))
-			for i, col := range setCols {
-				placeholders[i] = "?"
-				updates[i] = fmt.Sprintf("%s=excluded.%s", col, col)
-			}
-			query := fmt.Sprintf(`
-				INSERT INTO channel_settings (channel_id, %s, updated_at)
-				VALUES (?, %s, ?)
-				ON CONFLICT(channel_id) DO UPDATE SET %s, updated_at=excluded.updated_at
-			`,
-				strings.Join(setCols, ", "),
-				strings.Join(placeholders, ", "),
-				strings.Join(updates, ", "),
-			)
-			args := append([]any{channelID}, setArgs...)
-			args = append(args, time.Now().UnixMilli())
-			if _, err := tx.Exec(query, args...); err != nil {
+		if len(settingFields) > 0 {
+			updatedAt := time.Now().UnixMilli()
+			_, err := mutateChannelSettingsTx(tx, channelID, settingFields, updatedAt, false)
+			if err != nil {
 				return err
 			}
 		}
@@ -524,13 +488,13 @@ func (db *DB) UpdateChannelSettings(channelID string, fields map[string]any) err
 // include_reposts) are written to the channel_settings side table via
 // UpdateChannelSettings once the channel exists.
 func (db *DB) AddChannel(ch model.Channel) error {
-	seq := db.NextSyncSeq()
+	nowMs := time.Now().UnixMilli()
 	return db.WithWrite(func(tx *sql.Tx) error {
 		if _, err := tx.Exec(`
 			INSERT INTO channels
 				(channel_id, source_id, name, url, platform,
-				 quality, sync_seq)
-			VALUES (?, ?, ?, ?, ?, ?, ?)
+				 quality)
+			VALUES (?, ?, ?, ?, ?, ?)
 		`,
 			ch.ChannelID,
 			nilIfEmpty(ch.SourceID),
@@ -538,25 +502,41 @@ func (db *DB) AddChannel(ch model.Channel) error {
 			nilIfEmpty(ch.URL),
 			nilIfEmpty(ch.Platform),
 			nilIfEmpty(ch.Quality),
-			seq,
 		); err != nil {
 			return err
 		}
 		if ch.IsSubscribed {
+			followedAt, err := advanceMutationClockTx(tx, "follow", ch.ChannelID, "set", nowMs)
+			if err != nil {
+				return err
+			}
 			if _, err := tx.Exec(`
-				INSERT OR IGNORE INTO channel_follows (user_id, channel_id, followed_at)
-				VALUES ('', ?, ?)
-			`, ch.ChannelID, time.Now().UnixMilli()); err != nil {
+						INSERT INTO channel_follows (channel_id, followed_at)
+						VALUES (?, ?)
+						ON CONFLICT(channel_id) DO UPDATE SET followed_at = excluded.followed_at
+				`, ch.ChannelID, followedAt); err != nil {
 				return err
 			}
 		}
 		if ch.IsStarred {
-			if _, err := tx.Exec(`
-				INSERT OR IGNORE INTO channel_stars (user_id, channel_id, starred_at)
-				VALUES ('', ?, ?)
-			`, ch.ChannelID, time.Now().UnixMilli()); err != nil {
+			starredAt, err := advanceMutationClockTx(tx, "star", ch.ChannelID, "set", nowMs)
+			if err != nil {
 				return err
 			}
+			if _, err := tx.Exec(`
+						INSERT INTO channel_stars (channel_id, starred_at)
+						VALUES (?, ?)
+						ON CONFLICT(channel_id) DO UPDATE SET starred_at = excluded.starred_at
+				`, ch.ChannelID, starredAt); err != nil {
+				return err
+			}
+		}
+		identity := ch
+		if strings.TrimSpace(identity.DisplayName) == "" {
+			identity.DisplayName = ch.Name
+		}
+		if err := observeChannelProfileTx(tx, identity, nowMs); err != nil {
+			return err
 		}
 		return nil
 	})
@@ -576,8 +556,8 @@ func (db *DB) GetChannelByID(channelID string) (model.Channel, error) {
 		       COALESCE(c.quality,''),
 		       c.last_checked, c.created_at
 		FROM channels c
-		LEFT JOIN channel_follows cf ON cf.channel_id = c.channel_id AND cf.user_id = ''
-		LEFT JOIN channel_stars   cs ON cs.channel_id = c.channel_id AND cs.user_id = ''
+		LEFT JOIN channel_follows cf ON cf.channel_id = c.channel_id
+		LEFT JOIN channel_stars   cs ON cs.channel_id = c.channel_id
 		WHERE c.channel_id = ?
 	`, channelID).Scan(
 		&ch.ID, &ch.ChannelID, &ch.SourceID, &ch.Name,
@@ -602,178 +582,46 @@ func (db *DB) GetChannelByID(channelID string) (model.Channel, error) {
 	return ch, nil
 }
 
-// DeleteChannel removes a channel and all its associated data (avatars, media files, videos).
-// Returns an error if the channel does not exist.
-func (db *DB) DeleteChannel(channelID string) error {
-	return db.WithWrite(func(tx *sql.Tx) error {
-		// Verify existence first
-		var exists int
-		if err := tx.QueryRow(
-			"SELECT COUNT(*) FROM channels WHERE channel_id = ?", channelID,
-		).Scan(&exists); err != nil {
-			return err
-		}
-		if exists == 0 {
-			return fmt.Errorf("channel not found: %s", channelID)
-		}
-
-		// Delete media_files for this channel's videos (thumbnails and feed media)
-		if _, err := tx.Exec(`
-			DELETE FROM media_files WHERE owner_type IN ('thumbnail', 'feed_media')
-			AND owner_id IN (SELECT video_id FROM videos WHERE channel_id = ?)
-		`, channelID); err != nil {
-			return err
-		}
-		if _, err := tx.Exec("DELETE FROM videos WHERE channel_id = ?", channelID); err != nil {
-			return err
-		}
-		if _, err := tx.Exec("DELETE FROM channel_settings WHERE channel_id = ?", channelID); err != nil {
-			return err
-		}
-		if _, err := tx.Exec("DELETE FROM channel_follows WHERE channel_id = ?", channelID); err != nil {
-			return err
-		}
-		if _, err := tx.Exec("DELETE FROM channel_stars WHERE channel_id = ?", channelID); err != nil {
-			return err
-		}
-		// twitter_profiles + banner media_files are kept as cache — the
-		// channel page should render the hero even for non-subscribed handles,
-		// and re-following skips a refetch within the TTL window.
-		if _, err := tx.Exec("DELETE FROM channels WHERE channel_id = ?", channelID); err != nil {
-			return err
-		}
-		return nil
-	})
-}
-
 // PurgeUnfollowedChannelContent removes content that is no longer owned by the
 // active follow set. Bookmarks protect video channels; followed Twitter repost
 // references protect tweets after an author/source unfollow.
-func (db *DB) PurgeUnfollowedChannelContent(channelID string, username string) ([]model.Video, error) {
-	var deletedVideos []model.Video
-	platform, err := db.clearUnfollowState(channelID)
-	if err != nil {
-		return nil, err
-	}
-	if platform == "" {
-		_, _, _, platform = channelDefaultsFromID(channelID)
-	}
-
-	err = db.WithWrite(func(tx *sql.Tx) error {
-		if strings.EqualFold(platform, "twitter") || strings.HasPrefix(strings.ToLower(channelID), "twitter_") {
-			var errTwitter error
-			deletedVideos, errTwitter = db.purgeTwitterAfterUnfollowTx(tx, channelID, username)
-			return errTwitter
-		}
-
-		var errVideos error
-		deletedVideos, errVideos = db.purgeVideoChannelAfterUnfollowTx(tx, channelID, username)
-		return errVideos
-	})
-	return deletedVideos, err
+func (db *DB) PurgeUnfollowedChannelContent(channelID string) ([]string, error) {
+	result, err := db.MutateFollow(channelID, "clear", 0)
+	return result.DeletedFileKeys, err
 }
 
-func (db *DB) clearUnfollowState(channelID string) (string, error) {
-	var platform string
-	err := db.WithWrite(func(tx *sql.Tx) error {
-		err := tx.QueryRow(`SELECT COALESCE(platform, '') FROM channels WHERE channel_id = ?`, channelID).Scan(&platform)
-		if err != nil && err != sql.ErrNoRows {
-			return err
-		}
-		if _, err := tx.Exec(`DELETE FROM channel_follows WHERE user_id = '' AND channel_id = ?`, channelID); err != nil {
-			return err
-		}
-		if _, err := tx.Exec(`DELETE FROM channel_stars WHERE user_id = '' AND channel_id = ?`, channelID); err != nil {
-			return err
-		}
-		if _, err := tx.Exec(`DELETE FROM channel_settings WHERE channel_id = ?`, channelID); err != nil {
-			return err
-		}
-		return nil
-	})
-	return platform, err
-}
-
-func (db *DB) purgeVideoChannelAfterUnfollowTx(tx *sql.Tx, channelID string, username string) ([]model.Video, error) {
-	rows, err := tx.Query(`
-		SELECT v.video_id, COALESCE(v.file_path, ''), COALESCE(v.thumbnail_path, '')
-		FROM videos v
-		WHERE v.channel_id = ?
+func (db *DB) purgeVideoChannelAfterUnfollowTx(tx *sql.Tx, channelID string) ([]string, error) {
+	keys, err := queryAssetFileKeysTx(tx, `
+		SELECT DISTINCT a.file_path
+		FROM assets a
+		JOIN videos v ON v.video_id = a.owner_id
+		WHERE a.owner_kind = v.owner_kind
+		  AND a.file_path != ''
+		  AND v.channel_id = ?
 		  AND NOT EXISTS (
-		    SELECT 1
-		    FROM bookmarks b
-		    WHERE b.video_id = v.video_id
-		      AND (b.user_id = '' OR b.user_id = ?)
-		  )
-	`, channelID, username)
-	if err != nil {
-		return nil, err
-	}
-	var deleted []model.Video
-	for rows.Next() {
-		var v model.Video
-		if err := rows.Scan(&v.VideoID, &v.FilePath, &v.ThumbnailPath); err != nil {
-			_ = rows.Close()
-			return nil, err
-		}
-		v.ChannelID = channelID
-		deleted = append(deleted, v)
-	}
-	if err := rows.Err(); err != nil {
-		_ = rows.Close()
-		return nil, err
-	}
-	_ = rows.Close()
-
-	mediaRows, err := tx.Query(`
-		SELECT COALESCE(mf.file_path, '')
-		FROM media_files mf
-		WHERE COALESCE(mf.file_path, '') != ''
-		  AND mf.owner_id IN (
-		    SELECT v.video_id
-		    FROM videos v
-		    WHERE v.channel_id = ?
-		      AND NOT EXISTS (
 		        SELECT 1
 		        FROM bookmarks b
 		        WHERE b.video_id = v.video_id
-		          AND (b.user_id = '' OR b.user_id = ?)
-		      )
 		  )
-	`, channelID, username)
+	`, channelID)
 	if err != nil {
 		return nil, err
 	}
-	for mediaRows.Next() {
-		var path string
-		if err := mediaRows.Scan(&path); err != nil {
-			_ = mediaRows.Close()
-			return nil, err
-		}
-		if strings.TrimSpace(path) != "" {
-			deleted = append(deleted, model.Video{ChannelID: channelID, FilePath: path})
-		}
-	}
-	if err := mediaRows.Err(); err != nil {
-		_ = mediaRows.Close()
-		return nil, err
-	}
-	_ = mediaRows.Close()
-
 	if _, err := tx.Exec(`
-		DELETE FROM media_files
-		WHERE owner_id IN (
-		    SELECT v.video_id
-		    FROM videos v
-		    WHERE v.channel_id = ?
-		      AND NOT EXISTS (
+		DELETE FROM assets
+		WHERE id IN (
+		  SELECT a.id
+		  FROM assets a
+		  JOIN videos v ON v.video_id = a.owner_id
+		  WHERE a.owner_kind = v.owner_kind
+		    AND v.channel_id = ?
+		    AND NOT EXISTS (
 		        SELECT 1
 		        FROM bookmarks b
 		        WHERE b.video_id = v.video_id
-		          AND (b.user_id = '' OR b.user_id = ?)
-		      )
+		    )
 		  )
-	`, channelID, username); err != nil {
+	`, channelID); err != nil {
 		return nil, err
 	}
 	if _, err := tx.Exec(`
@@ -783,203 +631,65 @@ func (db *DB) purgeVideoChannelAfterUnfollowTx(tx *sql.Tx, channelID string, use
 		    SELECT 1
 		    FROM bookmarks b
 		    WHERE b.video_id = videos.video_id
-		      AND (b.user_id = '' OR b.user_id = ?)
 		  )
-	`, channelID, username); err != nil {
+	`, channelID); err != nil {
 		return nil, err
 	}
 
-	var protected int
-	if err := tx.QueryRow(`SELECT COUNT(*) FROM videos WHERE channel_id = ?`, channelID).Scan(&protected); err != nil {
-		return nil, err
-	}
-	if protected == 0 {
-		profileMediaRows, err := tx.Query(`
-			SELECT COALESCE(file_path, '')
-			FROM media_files
-			WHERE owner_id = ?
-			  AND owner_type IN ('avatar', 'banner')
-			  AND COALESCE(file_path, '') != ''
-		`, channelID)
-		if err != nil {
-			return nil, err
-		}
-		for profileMediaRows.Next() {
-			var path string
-			if err := profileMediaRows.Scan(&path); err != nil {
-				_ = profileMediaRows.Close()
-				return nil, err
-			}
-			if strings.TrimSpace(path) != "" {
-				deleted = append(deleted, model.Video{ChannelID: channelID, FilePath: path})
-			}
-		}
-		if err := profileMediaRows.Err(); err != nil {
-			_ = profileMediaRows.Close()
-			return nil, err
-		}
-		_ = profileMediaRows.Close()
-
-		if _, err := tx.Exec(`DELETE FROM media_files WHERE owner_id = ? AND owner_type IN ('avatar', 'banner')`, channelID); err != nil {
-			return nil, err
-		}
-	}
-
-	return deleted, nil
+	return keys, nil
 }
 
-func (db *DB) PruneStaleOrphanChannelMetadata(cutoffMs int64, limit int) (ChannelMetadataPruneResult, error) {
-	var result ChannelMetadataPruneResult
-	if cutoffMs <= 0 {
-		return result, fmt.Errorf("PruneStaleOrphanChannelMetadata: cutoff must be positive")
-	}
-	if limit <= 0 || limit > ChannelMetadataPruneBatchSize {
-		limit = ChannelMetadataPruneBatchSize
-	}
-	err := db.WithWrite(func(tx *sql.Tx) error {
-		rows, err := tx.Query(`
-			WITH candidates AS (
-				SELECT cp.channel_id,
-				       COALESCE(cp.fetched_at, 0) AS fetched_at,
-				       LOWER(COALESCE(NULLIF(cp.platform, ''), NULLIF(c.platform, ''), '')) AS platform,
-				       LOWER(LTRIM(COALESCE(NULLIF(cp.handle, ''),
-				           CASE WHEN LOWER(cp.channel_id) LIKE 'twitter_%' THEN SUBSTR(cp.channel_id, 9) ELSE '' END
-				       ), '@')) AS twitter_handle
-				FROM channel_profiles cp
-				LEFT JOIN channels c ON c.channel_id = cp.channel_id
-			)
-			SELECT candidate.channel_id
-			FROM candidates candidate
-			WHERE candidate.fetched_at > 0
-			  AND candidate.fetched_at < ?
-			  AND NOT EXISTS (SELECT 1 FROM channel_follows cf WHERE cf.channel_id = candidate.channel_id)
-			  AND NOT EXISTS (SELECT 1 FROM channel_stars cs WHERE cs.channel_id = candidate.channel_id)
-			  AND NOT EXISTS (SELECT 1 FROM channel_settings cs WHERE cs.channel_id = candidate.channel_id)
-			  AND NOT EXISTS (SELECT 1 FROM videos v WHERE v.channel_id = candidate.channel_id)
-			  AND NOT EXISTS (SELECT 1 FROM video_repost_sources vrs WHERE vrs.reposter_channel_id = candidate.channel_id)
-			  AND (
-			    (candidate.platform != 'twitter' AND LOWER(candidate.channel_id) NOT LIKE 'twitter_%')
-			    OR (
-			      NOT EXISTS (
-			        SELECT 1
-			        FROM feed_items fi
-			        WHERE candidate.twitter_handle != ''
-			          AND (
-			            lower(COALESCE(fi.author_handle, '')) = candidate.twitter_handle
-			            OR lower(COALESCE(fi.source_handle, '')) = candidate.twitter_handle
-			            OR lower(COALESCE(fi.retweeted_by_handle, '')) = candidate.twitter_handle
-			            OR lower(COALESCE(fi.quote_author_handle, '')) = candidate.twitter_handle
-			            OR lower(COALESCE(fi.reply_to_handle, '')) = candidate.twitter_handle
-			          )
-			      )
-			      AND NOT EXISTS (
-			        SELECT 1
-			        FROM retweet_sources rs
-			        WHERE candidate.twitter_handle != ''
-			          AND lower(COALESCE(rs.retweeter_handle, '')) = candidate.twitter_handle
-			      )
-			    )
-			  )
-			ORDER BY candidate.fetched_at ASC, candidate.channel_id ASC
-			LIMIT ?
-		`, cutoffMs, limit)
-		if err != nil {
-			return err
-		}
-		var ids []string
-		for rows.Next() {
-			var id string
-			if err := rows.Scan(&id); err != nil {
-				_ = rows.Close()
-				return err
-			}
-			ids = append(ids, id)
-		}
-		if err := rows.Err(); err != nil {
-			_ = rows.Close()
-			return err
-		}
-		_ = rows.Close()
-		if len(ids) == 0 {
-			return nil
-		}
-		args := stringsToAny(ids)
-		inClause := placeholders(len(ids))
-		if res, err := tx.Exec(`DELETE FROM media_files WHERE owner_type IN ('avatar', 'banner') AND owner_id IN (`+inClause+`)`, args...); err != nil {
-			return err
-		} else if n, err := res.RowsAffected(); err == nil {
-			result.MediaFiles = int(n)
-		}
-		if res, err := tx.Exec(`DELETE FROM channel_profiles WHERE channel_id IN (`+inClause+`)`, args...); err != nil {
-			return err
-		} else if n, err := res.RowsAffected(); err == nil {
-			result.ChannelProfiles = int(n)
-		}
-		if res, err := tx.Exec(`DELETE FROM channels WHERE channel_id IN (`+inClause+`)`, args...); err != nil {
-			return err
-		} else if n, err := res.RowsAffected(); err == nil {
-			result.Channels = int(n)
-		}
-		return nil
-	})
-	return result, err
-}
-
-func (db *DB) purgeTwitterAfterUnfollowTx(tx *sql.Tx, channelID string, username string) ([]model.Video, error) {
-	handle := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(channelID)), "twitter_")
-	if handle == "" {
+func (db *DB) purgeTwitterAfterUnfollowTx(tx *sql.Tx, channelID string) ([]string, error) {
+	channelID = strings.TrimSpace(channelID)
+	if channelID == "" {
 		return nil, nil
 	}
 	candidate := `
-		(lower(COALESCE(fi.author_handle, '')) = ?
-		 OR lower(COALESCE(fi.source_handle, '')) = ?
-		 OR lower(COALESCE(fi.retweeted_by_handle, '')) = ?)
+		(COALESCE(fi.channel_id, '') = ?
+		 OR COALESCE(fi.source_channel_id, '') = ?
+		 OR COALESCE(fi.reposter_channel_id, '') = ?)
 	`
 	protected := `
-		EXISTS (SELECT 1 FROM bookmarks b WHERE b.video_id = fi.tweet_id AND (b.user_id = '' OR b.user_id = ?))
-		OR EXISTS (SELECT 1 FROM feed_likes fl WHERE fl.tweet_id = fi.tweet_id AND fl.username = ?)
+		EXISTS (SELECT 1 FROM bookmarks b WHERE b.video_id = fi.tweet_id)
+		OR EXISTS (SELECT 1 FROM feed_likes fl WHERE fl.tweet_id = fi.tweet_id)
 		OR EXISTS (
 			SELECT 1
 			FROM channel_follows cf
-			WHERE cf.user_id = ''
-			  AND cf.channel_id = 'twitter_' || lower(COALESCE(NULLIF(fi.source_handle, ''), NULLIF(fi.retweeted_by_handle, ''), ''))
-			  AND lower(COALESCE(NULLIF(fi.source_handle, ''), NULLIF(fi.retweeted_by_handle, ''), '')) != ?
+			WHERE cf.channel_id = COALESCE(NULLIF(fi.reposter_channel_id, ''), NULLIF(fi.source_channel_id, ''), fi.channel_id)
+			  AND cf.channel_id != ?
 		)
 		OR EXISTS (
 			SELECT 1
 			FROM retweet_sources rs
 			JOIN channel_follows cf
-			  ON cf.user_id = ''
-			 AND cf.channel_id = 'twitter_' || lower(rs.retweeter_handle)
+				  ON cf.channel_id = rs.retweeter_channel_id
 			WHERE rs.content_hash = COALESCE(fi.content_hash, '')
 			  AND COALESCE(fi.content_hash, '') != ''
-			  AND lower(rs.retweeter_handle) != ?
+			  AND rs.retweeter_channel_id != ?
 		)
 		OR EXISTS (
 			SELECT 1
 			FROM feed_items parent
 			JOIN channel_follows cf
-			  ON cf.user_id = ''
-			 AND cf.channel_id = 'twitter_' || lower(COALESCE(NULLIF(parent.source_handle, ''), NULLIF(parent.retweeted_by_handle, ''), parent.author_handle))
+				  ON cf.channel_id = COALESCE(NULLIF(parent.reposter_channel_id, ''), NULLIF(parent.source_channel_id, ''), parent.channel_id)
 			WHERE parent.quote_tweet_id = fi.tweet_id
 		)
 		OR EXISTS (
 			SELECT 1
 			FROM feed_items sibling
 			JOIN channel_follows cf
-			  ON cf.user_id = ''
-			 AND cf.channel_id = 'twitter_' || lower(COALESCE(NULLIF(sibling.source_handle, ''), NULLIF(sibling.retweeted_by_handle, ''), sibling.author_handle))
+				  ON cf.channel_id = COALESCE(NULLIF(sibling.reposter_channel_id, ''), NULLIF(sibling.source_channel_id, ''), sibling.channel_id)
 			WHERE sibling.tweet_id != fi.tweet_id
 			  AND sibling.content_hash = fi.content_hash
 			  AND COALESCE(fi.content_hash, '') != ''
 		)
 	`
-	args := []any{handle, handle, handle, username, username, handle, handle}
-	mediaRows, err := tx.Query(`
-		SELECT COALESCE(file_path, '')
-		FROM media_files
-		WHERE owner_type IN ('feed_media', 'quote_media')
-		  AND COALESCE(file_path, '') != ''
+	args := []any{channelID, channelID, channelID, channelID, channelID}
+	keys, err := queryAssetFileKeysTx(tx, `
+		SELECT DISTINCT file_path
+		FROM assets
+		WHERE owner_kind = 'tweet'
+		  AND file_path != ''
 		  AND owner_id IN (
 		    SELECT fi.tweet_id
 		    FROM feed_items fi
@@ -990,26 +700,9 @@ func (db *DB) purgeTwitterAfterUnfollowTx(tx *sql.Tx, channelID string, username
 	if err != nil {
 		return nil, err
 	}
-	var deleted []model.Video
-	for mediaRows.Next() {
-		var path string
-		if err := mediaRows.Scan(&path); err != nil {
-			_ = mediaRows.Close()
-			return nil, err
-		}
-		if strings.TrimSpace(path) != "" {
-			deleted = append(deleted, model.Video{ChannelID: channelID, FilePath: path})
-		}
-	}
-	if err := mediaRows.Err(); err != nil {
-		_ = mediaRows.Close()
-		return nil, err
-	}
-	_ = mediaRows.Close()
-
 	if _, err := tx.Exec(`
-		DELETE FROM media_files
-		WHERE owner_type IN ('feed_media', 'quote_media')
+		DELETE FROM assets
+		WHERE owner_kind = 'tweet'
 		  AND owner_id IN (
 		    SELECT fi.tweet_id
 		    FROM feed_items fi
@@ -1042,7 +735,7 @@ func (db *DB) purgeTwitterAfterUnfollowTx(tx *sql.Tx, channelID string, username
 	if err := tx.QueryRow(`
 		SELECT COUNT(*)
 		FROM feed_items fi
-		WHERE `+candidate, handle, handle, handle).Scan(&retained); err != nil {
+		WHERE `+candidate, channelID, channelID, channelID).Scan(&retained); err != nil {
 		return nil, err
 	}
 	if retained == 0 {
@@ -1050,35 +743,26 @@ func (db *DB) purgeTwitterAfterUnfollowTx(tx *sql.Tx, channelID string, username
 			return nil, err
 		}
 	}
-	return deleted, nil
+	return keys, nil
 }
 
-// GetVideosByChannel returns the video_id, file_path, and thumbnail_path for all videos
-// belonging to the given channel.
-func (db *DB) GetVideosByChannel(channelID string) ([]model.Video, error) {
-	rows, err := db.conn.Query(`
-		SELECT video_id, COALESCE(file_path,''), COALESCE(thumbnail_path,'')
-		FROM videos
-		WHERE channel_id = ?
-		ORDER BY downloaded_at DESC
-	`, channelID)
+func queryAssetFileKeysTx(tx *sql.Tx, query string, args ...any) ([]string, error) {
+	rows, err := tx.Query(query, args...)
 	if err != nil {
 		return nil, err
 	}
-	defer func() {
-		_ = rows.Close()
-	}()
-
-	var videos []model.Video
+	defer func() { _ = rows.Close() }()
+	var keys []string
 	for rows.Next() {
-		var v model.Video
-		if err := rows.Scan(&v.VideoID, &v.FilePath, &v.ThumbnailPath); err != nil {
+		var key string
+		if err := rows.Scan(&key); err != nil {
 			return nil, err
 		}
-		v.ChannelID = channelID
-		videos = append(videos, v)
+		if key = strings.TrimSpace(key); key != "" {
+			keys = append(keys, key)
+		}
 	}
-	return videos, rows.Err()
+	return keys, rows.Err()
 }
 
 // GetUnsubscribedChannelIDs returns channel_ids with no channel_follows row.
@@ -1112,8 +796,7 @@ func (db *DB) GetStarredChannelIDs() (map[string]bool, error) {
 	rows, err := db.conn.Query(`
 		SELECT cs.channel_id
 		FROM channel_stars cs
-		INNER JOIN channel_follows cf ON cf.channel_id = cs.channel_id AND cf.user_id = ''
-		WHERE cs.user_id = ''
+		INNER JOIN channel_follows cf ON cf.channel_id = cs.channel_id
 	`)
 	if err != nil {
 		return nil, err
@@ -1133,13 +816,21 @@ func (db *DB) GetStarredChannelIDs() (map[string]bool, error) {
 	return starred, rows.Err()
 }
 
-// ClearChannelSettings removes all per-channel overrides for a channel so
-// every setting falls back to the global default. Implemented as a single
-// row delete from channel_settings.
+// ClearChannelSettings removes all per-channel overrides while retaining the
+// row timestamp that rejects older offline settings writes.
 func (db *DB) ClearChannelSettings(channelID string) error {
 	return db.WithWrite(func(tx *sql.Tx) error {
-		_, err := tx.Exec(`DELETE FROM channel_settings WHERE channel_id=?`, channelID)
-		return err
+		changed, err := mutateChannelSettingsTx(tx, channelID, map[string]any{
+			"media_only":           nil,
+			"include_reposts":      nil,
+			"media_download_limit": nil,
+			"max_videos":           nil,
+			"download_subtitles":   nil,
+		}, time.Now().UnixMilli(), false)
+		if err != nil || !changed {
+			return err
+		}
+		return nil
 	})
 }
 

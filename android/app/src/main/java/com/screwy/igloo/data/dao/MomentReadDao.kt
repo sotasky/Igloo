@@ -47,9 +47,9 @@ interface MomentReadDao {
                c.source_id                                         AS channel_source_id,
                CASE WHEN cf.channel_id IS NOT NULL THEN 1 ELSE 0 END AS channel_is_followed,
                COALESCE(rh.reposter_channel_id, '')                AS reposter_channel_id,
-               COALESCE(rh.reposter_handle, '')                    AS reposter_handle,
-               COALESCE(rh.reposter_display_name, '')              AS reposter_display_name,
-               COALESCE(rh.repost_author_label, '')                AS repost_author_label,
+               COALESCE(rp.handle, '')                             AS reposter_handle,
+               COALESCE(rp.display_name, '')                       AS reposter_display_name,
+               COALESCE(NULLIF(rp.display_name, ''), '@' || LTRIM(rp.handle, '@'), '') AS repost_author_label,
                COALESCE(rh.repost_count, 0)                        AS repost_count,
                CASE WHEN rh.video_id IS NOT NULL THEN 1 ELSE 0 END AS repost_introduced,
                CASE WHEN rh.video_id IS NOT NULL
@@ -61,6 +61,7 @@ interface MomentReadDao {
         LEFT JOIN channels c      ON c.channel_id = v.channel_id
         LEFT JOIN channel_follows cf ON cf.channel_id = v.channel_id
         LEFT JOIN repost_heads rh ON rh.video_id = v.video_id
+        LEFT JOIN channel_profiles rp ON rp.channel_id = rh.reposter_channel_id
         WHERE (v.channel_id LIKE 'tiktok_%' OR v.channel_id LIKE 'instagram_%')
           AND COALESCE(v.source_kind, '') != 'story'
           AND (cf.channel_id IS NOT NULL OR rh.video_id IS NOT NULL)
@@ -129,9 +130,9 @@ interface MomentReadDao {
                c.source_id                                       AS channel_source_id,
                CASE WHEN cf.channel_id IS NOT NULL THEN 1 ELSE 0 END AS channel_is_followed,
                COALESCE(rh.reposter_channel_id, '')              AS reposter_channel_id,
-               COALESCE(rh.reposter_handle, '')                  AS reposter_handle,
-               COALESCE(rh.reposter_display_name, '')            AS reposter_display_name,
-               COALESCE(rh.repost_author_label, '')              AS repost_author_label,
+               COALESCE(rp.handle, '')                           AS reposter_handle,
+               COALESCE(rp.display_name, '')                     AS reposter_display_name,
+               COALESCE(NULLIF(rp.display_name, ''), '@' || LTRIM(rp.handle, '@'), '') AS repost_author_label,
                COALESCE(rh.repost_count, 0)                      AS repost_count,
                CASE WHEN rh.video_id IS NOT NULL THEN 1 ELSE 0 END AS repost_introduced,
                CASE WHEN rh.video_id IS NOT NULL
@@ -142,6 +143,7 @@ interface MomentReadDao {
         LEFT JOIN channels c ON c.channel_id = v.channel_id
         LEFT JOIN channel_follows cf ON cf.channel_id = v.channel_id
         LEFT JOIN repost_heads rh ON rh.video_id = v.video_id
+        LEFT JOIN channel_profiles rp ON rp.channel_id = rh.reposter_channel_id
         WHERE (v.channel_id LIKE 'tiktok_%' OR v.channel_id LIKE 'instagram_%')
           AND COALESCE(v.source_kind, '') != 'story'
           AND (cf.channel_id IS NOT NULL OR rh.video_id IS NOT NULL)

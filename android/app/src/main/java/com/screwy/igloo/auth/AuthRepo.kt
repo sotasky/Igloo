@@ -1,7 +1,6 @@
 package com.screwy.igloo.auth
 
 import com.screwy.igloo.R
-import com.screwy.igloo.data.DatabaseHolder
 import com.screwy.igloo.data.PreferencesRepo
 import com.screwy.igloo.net.AuthApi
 import com.screwy.igloo.net.LoginResponse
@@ -28,12 +27,10 @@ interface AccountSessionActions {
  *
  * Drives the login / logout / refresh flows:
  *
- *  - `login` — POSTs `/api/auth/login`, persists tokens + server URL + username, opens
- *    the per-user Room DB, kicks off post-login bootstrap (reachability / scheduler /
- *    first log emit) on the supplied callback.
- *  - `logout` — fire-and-forget `/api/auth/logout`, stops the scheduler, detaches the
- *    visible session, and clears auth keys except the server URL. The per-user DB and
- *    media cache stay local so re-login does not reset preferences or rebuild Sync.
+ *  - `login` — POSTs `/api/auth/login`, persists tokens + server URL + username, then
+ *    kicks off post-login bootstrap.
+ *  - `logout` — fire-and-forget `/api/auth/logout`, stops the scheduler, and clears
+ *    auth keys except the server URL. The fixed local mirror stays available.
  *    Surfaces a reason toast when non-user-initiated.
  *  - `onAuthExpired` — 401 handshake. Branches on envelope `error_code`: refresh-eligible
  *    (`access_token_expired`, null) → rotates tokens via `/api/auth/refresh`; terminal
@@ -45,7 +42,6 @@ interface AccountSessionActions {
  */
 class AuthRepo(
     private val storage: AuthStorage,
-    private val databaseHolder: DatabaseHolder,
     private val uiEffects: UiEffects,
     private val applicationScope: CoroutineScope,
     authApiProvider: () -> AuthApi,
@@ -91,19 +87,11 @@ class AuthRepo(
         return expiry > nowMsProvider()
     }
 
-    /**
-     * True when enough persisted state exists to open the local per-user database even
-     * if the short-lived access token needs a background refresh.
-     */
-    fun hasRestorableSessionSync(): Boolean {
-        if (usernameCache.value.isNullOrBlank()) return false
-        if (refreshTokenCache.value.isNullOrBlank()) return false
-        val refreshExpiry = storage.getLong(AuthKeys.REFRESH_EXPIRES_AT_MS) ?: return true
-        return refreshExpiry > nowMsProvider()
+    fun hasSessionSync(): Boolean {
+        if (isLoggedInSync()) return true
+        if (usernameCache.value.isNullOrBlank() || refreshTokenCache.value.isNullOrBlank()) return false
+        return (storage.getLong(AuthKeys.REFRESH_EXPIRES_AT_MS) ?: Long.MAX_VALUE) > nowMsProvider()
     }
-
-    fun canOpenLocalSessionSync(): Boolean =
-        isLoggedInSync() || hasRestorableSessionSync()
 
     // ─── Login ───────────────────────────────────────────────────────────────
 
@@ -116,7 +104,7 @@ class AuthRepo(
 
     /**
      * Normalizes + persists the server URL, POSTs `/api/auth/login`, persists tokens,
-     * opens the per-user Room DB, triggers post-login bootstrap, and mirrors the URL
+     * triggers post-login bootstrap, and mirrors the URL
      * into Room `preferences`. Returns a classified [LoginResult]; the login screen
      * translates to inline error text.
      */
@@ -136,10 +124,7 @@ class AuthRepo(
         }
 
         persistLoginTokens(response)
-        databaseHolder.openForUser(username)
-        // Mirror the URL into the now-open Room `preferences` table so Settings
-        // can display + edit it. Failure here is non-fatal (auth storage is the
-        // bootstrap source of truth).
+        // Mirror the URL into Room preferences. Auth storage remains authoritative.
         applicationScope.launch { runCatching { prefsUpdater(normalized) } }
         onPostLoginBootstrap()
 
@@ -150,7 +135,7 @@ class AuthRepo(
 
     /**
      * Clears the signed-in session without deleting local mirrors: fire-and-forget
-     * server revoke → stop scheduler → detach the visible DB session → clear auth keys
+     * server revoke → stop scheduler → clear auth keys
      * while retaining the server URL. Safe to call from any thread.
      */
     override suspend fun logout(reason: LogoutReason) {
@@ -162,7 +147,6 @@ class AuthRepo(
         }
 
         stopReconcilersOnLogout()
-        databaseHolder.detachForLogout()
         storage.clearAll()
         persistServerUrl(retainedServerUrl)
         accessTokenCache.value = null

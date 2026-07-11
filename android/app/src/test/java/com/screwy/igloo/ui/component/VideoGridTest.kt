@@ -6,8 +6,8 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 /**
- * Pure-function tests for [progressFraction] — the watch-progress bar width
- * calculation used by [VideoGrid] cells.
+ * Pure-function tests for [progressFraction] — the watch-progress bar width calculation used by
+ * [VideoGrid] cells.
  */
 class VideoGridTest {
 
@@ -48,67 +48,75 @@ class VideoGridTest {
 
     @Test
     fun youtube_channel_label_does_not_append_source_id_as_handle() {
-        val item = gridItem(
-            channelId = "youtube_UCAbCdEfGhIjKlMnOpQrStUv",
-            channelName = "Readable Channel",
-            channelSourceId = "UCAbCdEfGhIjKlMnOpQrStUv",
-        )
+        val item =
+            gridItem(
+                channelId = "youtube_UCAbCdEfGhIjKlMnOpQrStUv",
+                channelName = "Readable Channel",
+                channelSourceId = "UCAbCdEfGhIjKlMnOpQrStUv",
+            )
 
         assertEquals("Readable Channel", videoGridChannelLabel(item))
     }
 
     @Test
     fun non_youtube_channel_label_can_still_include_handle() {
-        val item = gridItem(
-            channelId = "tiktok_creator",
-            channelName = "Readable Creator",
-            channelSourceId = "creator",
-        )
+        val item =
+            gridItem(
+                channelId = "tiktok_creator",
+                channelName = "Readable Creator",
+                channelSourceId = "creator",
+            )
 
         assertEquals("Readable Creator (@creator)", videoGridChannelLabel(item))
     }
 
     @Test
     fun non_youtube_matching_label_still_includes_handle_marker() {
-        val item = gridItem(
-            channelId = "tiktok_creator",
-            channelName = "creator",
-            channelSourceId = "creator",
-        )
+        val item =
+            gridItem(
+                channelId = "tiktok_creator",
+                channelName = "creator",
+                channelSourceId = "creator",
+            )
 
         assertEquals("creator (@creator)", videoGridChannelLabel(item))
     }
 
     @Test
     fun tiktok_channel_label_rejects_internal_source_id() {
-        val item = gridItem(
-            channelId = "tiktok_7000000000000000001",
-            channelName = "Readable Creator",
-            channelSourceId = "7000000000000000001",
-        )
+        val item =
+            gridItem(
+                channelId = "tiktok_7000000000000000001",
+                channelName = "Readable Creator",
+                channelSourceId = "7000000000000000001",
+            )
 
         assertEquals("Readable Creator", videoGridChannelLabel(item))
     }
 
     @Test
-    fun duration_badge_uses_synced_label_only() {
+    fun duration_badge_formats_synced_duration() {
         assertEquals(
             "12:34",
-            videoDurationBadgeLabel(VideoEntity(
-                videoId = "video-1",
-                channelId = "youtube_chan",
-                duration = 754L,
-                durationLabel = "12:34",
-            )),
+            videoDurationBadgeLabel(
+                VideoEntity(
+                    videoId = "video-1",
+                    channelId = "youtube_chan",
+                    ownerKind = "youtube_video",
+                    duration = 754L,
+                )
+            ),
         )
         assertEquals(
             "",
-            videoDurationBadgeLabel(VideoEntity(
-                videoId = "video-2",
-                channelId = "youtube_chan",
-                duration = 754L,
-                durationLabel = "",
-            )),
+            videoDurationBadgeLabel(
+                VideoEntity(
+                    videoId = "video-2",
+                    channelId = "youtube_chan",
+                    ownerKind = "youtube_video",
+                    duration = null,
+                )
+            ),
         )
     }
 
@@ -154,20 +162,18 @@ class VideoGridTest {
         )
     }
 
-    private fun gridItem(
-        channelId: String,
-        channelName: String?,
-        channelSourceId: String?,
-    ) = VideoGridItem(
-        video = VideoEntity(
-            videoId = "video-1",
-            channelId = channelId,
-            title = "Video",
-        ),
-        playbackPosition = null,
-        watchDuration = null,
-        lastWatched = null,
-        channelName = channelName,
-        channelSourceId = channelSourceId,
-    )
+    private fun gridItem(channelId: String, channelName: String?, channelSourceId: String?) =
+        VideoGridItem(
+            video =
+                VideoEntity(
+                    videoId = "video-1",
+                    channelId = channelId,
+                    ownerKind = "youtube_video",
+                    title = "Video",
+                ),
+            playbackPosition = null,
+            watchDuration = null,
+            channelName = channelName,
+            channelSourceId = channelSourceId,
+        )
 }

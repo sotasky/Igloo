@@ -111,24 +111,6 @@ func TestLogoutRevokesSession(t *testing.T) {
 	}
 }
 
-func TestAdminAccountDeleteBlocked(t *testing.T) {
-	srv := newTestServer(t)
-
-	req := httptest.NewRequest("DELETE", "/api/account", nil)
-	ctx := contextWithUser(req, "root", "admin")
-	rec := httptest.NewRecorder()
-	srv.handleAccountDelete(rec, req.WithContext(ctx))
-
-	if rec.Code != 403 {
-		t.Fatalf("expected 403 on admin delete, got %d — %s", rec.Code, rec.Body.String())
-	}
-	var body map[string]any
-	_ = json.Unmarshal(rec.Body.Bytes(), &body)
-	if body["error_code"] != "admin_account_protected" {
-		t.Errorf("expected error_code=admin_account_protected, got %v", body["error_code"])
-	}
-}
-
 func TestTokenErrorCodeMapping(t *testing.T) {
 	tests := []struct {
 		name string

@@ -4,7 +4,7 @@ import "testing"
 
 func TestGetAccountAffinityScores(t *testing.T) {
 	d := openWritableTestDB(t)
-	scores, err := d.GetAccountAffinityScores("testuser", []string{"unknown_handle"})
+	scores, err := d.GetAccountAffinityScores([]string{"unknown_handle"})
 	if err != nil {
 		t.Fatalf("GetAccountAffinityScores: %v", err)
 	}
@@ -15,11 +15,11 @@ func TestGetAccountAffinityScores(t *testing.T) {
 
 func TestUpsertAndGetShareAccountAffinity(t *testing.T) {
 	d := openWritableTestDB(t)
-	err := d.UpsertShareAccountAffinity("testuser", "handle_a", 1.5, 1700000000000)
+	err := d.UpsertShareAccountAffinity("handle_a", 1.5, 1700000000000)
 	if err != nil {
 		t.Fatalf("UpsertShareAccountAffinity: %v", err)
 	}
-	scores, err := d.GetAccountAffinityScores("testuser", []string{"handle_a"})
+	scores, err := d.GetAccountAffinityScores([]string{"handle_a"})
 	if err != nil {
 		t.Fatalf("GetAccountAffinityScores: %v", err)
 	}

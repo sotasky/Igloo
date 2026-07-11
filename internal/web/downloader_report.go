@@ -200,8 +200,8 @@ func (s *Server) runDownloaderReport(ctx context.Context) downloaderReport {
 
 func (s *Server) createDownloaderReportDir() (string, error) {
 	baseDir := filepath.Join(os.TempDir(), "igloo", "downloader-reports")
-	if s != nil && s.cfg != nil && strings.TrimSpace(s.cfg.DataDir) != "" {
-		baseDir = filepath.Join(s.cfg.DataDir, "tmp", "downloader-reports")
+	if s != nil && s.cfg != nil && strings.TrimSpace(s.cfg.Storage.StateRoot()) != "" {
+		baseDir = filepath.Join(s.cfg.Storage.StateRoot(), "tmp", "downloader-reports")
 	}
 	if err := os.MkdirAll(baseDir, 0o755); err != nil {
 		return "", err
@@ -535,7 +535,7 @@ func (s *Server) reportFeedSample() reportFeedSample {
 	_ = s.db.WithRead(func(conn *sql.DB) error {
 		row := conn.QueryRow(`
 			SELECT tweet_id, COALESCE(author_handle, ''), COALESCE(source_handle, ''), COALESCE(canonical_url, '')
-			FROM feed_items
+			FROM feed_items_resolved
 			ORDER BY fetched_at DESC, published_at DESC
 			LIMIT 1`)
 		_ = row.Scan(&sample.TweetID, &sample.Author, &sample.Source, &sample.CanonicalURL)

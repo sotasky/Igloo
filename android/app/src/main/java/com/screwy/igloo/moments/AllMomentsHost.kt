@@ -5,10 +5,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavController
-import com.screwy.igloo.media.MediaUri
-import com.screwy.igloo.net.ServerBaseUrlProvider
 import com.screwy.igloo.ui.UiStateSwitch
-import com.screwy.igloo.ui.component.resolveInitialMomentThumbnailUri
 import com.screwy.igloo.ui.nav.IglooNavigationSource
 import com.screwy.igloo.ui.nav.rememberIglooNavigator
 import org.koin.androidx.compose.koinViewModel
@@ -37,8 +34,6 @@ fun AllMomentsHost(
     val uiState by vm.uiState.collectAsStateWithLifecycle()
     val activeTab by vm.activeTab.collectAsStateWithLifecycle()
     val storyChannels by vm.storyChannels.collectAsStateWithLifecycle()
-    val baseUrlProvider: ServerBaseUrlProvider = koinInject()
-    val baseUrl = baseUrlProvider.baseUrl()
     val navigator = rememberIglooNavigator(navController)
 
     UiStateSwitch(state = uiState, modifier = modifier) {
@@ -46,18 +41,7 @@ fun AllMomentsHost(
             items = items,
             initialIndex = startIndex,
             onMomentClick = { videoId ->
-                val selected = items.firstOrNull { it.videoId == videoId }
-                val posterUri = selected?.let {
-                    resolveInitialMomentThumbnailUri(
-                        videoId = it.videoId,
-                        thumbnailPath = it.thumbnailPath,
-                        mediaKind = it.mediaKind,
-                        slideCount = it.slideCount,
-                        ownerKind = it.ownerKind,
-                        baseUrl = baseUrl,
-                    )
-                } ?: MediaUri.Missing
-                navigator.openShorts(
+				navigator.openShorts(
                     playlistType = if (activeTab == "following") {
                         ShortsPlaylistType.Moments.routeValue
                     } else {
@@ -66,8 +50,7 @@ fun AllMomentsHost(
                     playlistId = ShortsPlaylistSpec.RootPlaylistId,
                     videoId = videoId,
                     source = IglooNavigationSource.AllMoments,
-                    posterUri = posterUri,
-                )
+				)
             },
             onChannelClick = { cid ->
                 navigator.openChannel(cid, IglooNavigationSource.AllMoments)

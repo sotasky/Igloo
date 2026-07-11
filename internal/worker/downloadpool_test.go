@@ -247,7 +247,7 @@ func TestCookiesForSkipsDisabledCookieFile(t *testing.T) {
 		t.Fatalf("write cookie file: %v", err)
 	}
 	d := newTestWorkerDB(t)
-	if err := d.SetSetting("", "cookies_twitter_enabled", "0"); err != nil {
+	if err := d.SetSetting("cookies_twitter_enabled", "0"); err != nil {
 		t.Fatalf("SetSetting enabled: %v", err)
 	}
 
@@ -271,10 +271,10 @@ func TestCookiesForFallsBackToBrowserWhenCookieFileDisabled(t *testing.T) {
 		t.Fatalf("write cookie file: %v", err)
 	}
 	d := newTestWorkerDB(t)
-	if err := d.SetSetting("", "cookies_instagram_enabled", "0"); err != nil {
+	if err := d.SetSetting("cookies_instagram_enabled", "0"); err != nil {
 		t.Fatalf("SetSetting enabled: %v", err)
 	}
-	if err := d.SetSetting("", "cookies_instagram_browser", "firefox"); err != nil {
+	if err := d.SetSetting("cookies_instagram_browser", "firefox"); err != nil {
 		t.Fatalf("SetSetting browser: %v", err)
 	}
 
@@ -298,7 +298,7 @@ func TestCookieFileAndBrowserForKeepsBrowserFallbackWithCookieFile(t *testing.T)
 		t.Fatalf("write cookie file: %v", err)
 	}
 	d := newTestWorkerDB(t)
-	if err := d.SetSetting("", "cookies_instagram_browser", "firefox"); err != nil {
+	if err := d.SetSetting("cookies_instagram_browser", "firefox"); err != nil {
 		t.Fatalf("SetSetting browser: %v", err)
 	}
 
@@ -608,71 +608,4 @@ func TestPlatformSemFor(t *testing.T) {
 	if cap(unknown) != cap(youtubeSem) {
 		t.Errorf("unknown platform semaphore cap = %d, want %d", cap(unknown), cap(youtubeSem))
 	}
-}
-
-func TestFindSiblingThumbnail(t *testing.T) {
-	// Create a temp directory with a mock thumbnail.
-	dir := t.TempDir()
-
-	// No thumbnail exists.
-	got := findSiblingThumbnail(dir+"/test_video.mp4", "test_video")
-	if got != "" {
-		t.Errorf("expected empty for missing thumbnail, got %q", got)
-	}
-
-	// Create a .jpg thumbnail.
-	thumbPath := dir + "/test_video.jpg"
-	if err := writeTestFile(thumbPath); err != nil {
-		t.Fatal(err)
-	}
-
-	got = findSiblingThumbnail(dir+"/test_video.mp4", "test_video")
-	if got != thumbPath {
-		t.Errorf("findSiblingThumbnail() = %q, want %q", got, thumbPath)
-	}
-}
-
-func TestLoadInfoJSON(t *testing.T) {
-	dir := t.TempDir()
-
-	// No file exists.
-	got := loadInfoJSON(dir+"/vid.mp4", "vid")
-	if got != nil {
-		t.Errorf("expected nil for missing info.json, got %v", got)
-	}
-
-	// Write valid info.json.
-	infoPath := dir + "/vid.info.json"
-	if err := writeTestFileContent(infoPath, `{"title":"Test","duration":120}`); err != nil {
-		t.Fatal(err)
-	}
-
-	got = loadInfoJSON(dir+"/vid.mp4", "vid")
-	if got == nil {
-		t.Fatal("expected non-nil result")
-	}
-	if got["title"] != "Test" {
-		t.Errorf("title = %v, want Test", got["title"])
-	}
-	if d, ok := got["duration"].(float64); !ok || d != 120 {
-		t.Errorf("duration = %v, want 120", got["duration"])
-	}
-
-	// Write invalid JSON.
-	invalidPath := dir + "/bad.info.json"
-	if err := writeTestFileContent(invalidPath, `{not json}`); err != nil {
-		t.Fatal(err)
-	}
-	got = loadInfoJSON(dir+"/bad.mp4", "bad")
-	if got != nil {
-		t.Errorf("expected nil for invalid JSON, got %v", got)
-	}
-}
-
-func writeTestFile(path string) error {
-	return writeTestFileContent(path, "test content")
-}
-
-func writeTestFileContent(path, content string) error {
-	return os.WriteFile(path, []byte(content), 0o644)
 }

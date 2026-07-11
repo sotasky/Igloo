@@ -9,9 +9,9 @@ import (
 	"github.com/screwys/igloo/internal/model"
 )
 
-func EnrichFeedItems(database *db.DB, items []model.FeedItem, username string) []model.FeedItem {
-	items = enrichFeedItems(database, items, username, true)
-	items = attachThreadChains(database, items, username)
+func EnrichFeedItems(database *db.DB, items []model.FeedItem) []model.FeedItem {
+	items = enrichFeedItems(database, items, true)
+	items = attachThreadChains(database, items)
 	return items
 }
 
@@ -19,8 +19,8 @@ func EnrichFeedItems(database *db.DB, items []model.FeedItem, username string) [
 // but keeps every input row. Android delta sync is a mutation stream, not a card
 // renderer, so presentation deduplication would make Room miss authoritative
 // sibling clears.
-func EnrichFeedItemsPreserveRows(database *db.DB, items []model.FeedItem, username string) []model.FeedItem {
-	return enrichFeedItems(database, items, username, false)
+func EnrichFeedItemsPreserveRows(database *db.DB, items []model.FeedItem) []model.FeedItem {
+	return enrichFeedItems(database, items, false)
 }
 
 // ThreadContextRow is the server-owned Android mirror row for one ancestor in a
@@ -56,7 +56,7 @@ func ThreadContextRows(database *db.DB, item model.FeedItem) []ThreadContextRow 
 }
 
 // enrichFeedItems attaches media status, channel flags, and personalization.
-func enrichFeedItems(database *db.DB, items []model.FeedItem, username string, deduplicate bool) []model.FeedItem {
+func enrichFeedItems(database *db.DB, items []model.FeedItem, deduplicate bool) []model.FeedItem {
 	if len(items) == 0 {
 		return items
 	}
@@ -71,10 +71,10 @@ func enrichFeedItems(database *db.DB, items []model.FeedItem, username string, d
 	}
 
 	// Batch fetch enrichment data
-	mediaJobs, _ := database.GetFeedMediaJobs(allIDs)
-	videos, _ := database.GetVideosByIDs(allIDs)
-	seen, _ := database.GetSeenTweetIDs(username, allIDs)
-	liked, _ := database.GetFeedLikesForTweetIDs(username, allIDs)
+	mediaAssets, _ := database.GetTweetMediaAssetAvailability(allIDs)
+	mediaURLs := readyTweetMediaURLs(database, allIDs)
+	seen, _ := database.GetSeenTweetIDs(allIDs)
+	liked, _ := database.GetFeedLikesForTweetIDs(allIDs)
 	bookmarkInfo, _ := database.GetBookmarksForVideoIDsRich(allIDs)
 	translateTarget, _ := database.GetSetting("translate_target_lang", "en")
 	translateTarget = strings.ToLower(strings.TrimSpace(translateTarget))
@@ -92,51 +92,40 @@ func enrichFeedItems(database *db.DB, items []model.FeedItem, username string, d
 		channelMap[ch.ChannelID] = ch
 	}
 
-	// When ingest misses a quote-author handle but still carries a raw avatar URL,
-	// map that URL back to a known profile row so the server can emit the normal
-	// avatar proxy path instead of leaking a raw twimg URL to Android.
-	rawQuoteAvatarURLs := make([]string, 0, len(items))
-	for _, item := range items {
-		if item.QuoteAuthorHandle == "" && model.IsRawTwitterProfileAvatar(item.QuoteAuthorAvatarURL) {
-			rawQuoteAvatarURLs = append(rawQuoteAvatarURLs, model.NormalizeTwitterAvatarURL(item.QuoteAuthorAvatarURL))
-		}
-	}
-	quoteAvatarChannelIDs, _ := database.GetChannelIDsByAvatarURLs(rawQuoteAvatarURLs)
-
-	// Prefer unified profile rows for identity repair; if those are still
-	// missing, fall back to names previously seen on feed rows.
+	// Fetched profile metadata owns visible identity. Feed-row names are only a
+	// fallback while that durable profile has not completed yet.
 	var profileLookupHandles []string
 	for _, item := range items {
-		if shouldRepairDisplayName(item.AuthorDisplayName, item.AuthorHandle) {
+		if item.AuthorHandle != "" {
 			profileLookupHandles = append(profileLookupHandles, item.AuthorHandle)
 		}
-		if shouldRepairDisplayName(item.RetweetedByDisplayName, item.RetweetedByHandle) {
+		if item.RetweetedByHandle != "" {
 			profileLookupHandles = append(profileLookupHandles, item.RetweetedByHandle)
 		}
-		if shouldRepairDisplayName(item.QuoteAuthorDisplayName, item.QuoteAuthorHandle) {
+		if item.QuoteAuthorHandle != "" {
 			profileLookupHandles = append(profileLookupHandles, item.QuoteAuthorHandle)
 		}
 	}
 	profilesByHandle, _ := database.GetTwitterChannelProfilesByHandles(profileLookupHandles)
 	var missingAuthorNameHandles []string
 	for i := range items {
-		if shouldRepairDisplayName(items[i].AuthorDisplayName, items[i].AuthorHandle) {
-			if profile, ok := profilesByHandle[model.NormalizeTwitterHandle(items[i].AuthorHandle)]; ok && profile.DisplayName != "" {
-				items[i].AuthorDisplayName = profile.DisplayName
-			}
+		if profile, ok := profilesByHandle[model.NormalizeTwitterHandle(items[i].AuthorHandle)]; ok && profile.DisplayName != "" {
+			items[i].AuthorDisplayName = profile.DisplayName
 		}
-		if shouldRepairDisplayName(items[i].RetweetedByDisplayName, items[i].RetweetedByHandle) {
-			if profile, ok := profilesByHandle[model.NormalizeTwitterHandle(items[i].RetweetedByHandle)]; ok && profile.DisplayName != "" {
-				items[i].RetweetedByDisplayName = profile.DisplayName
-			}
+		if profile, ok := profilesByHandle[model.NormalizeTwitterHandle(items[i].RetweetedByHandle)]; ok && profile.DisplayName != "" {
+			items[i].RetweetedByDisplayName = profile.DisplayName
 		}
-		if shouldRepairDisplayName(items[i].QuoteAuthorDisplayName, items[i].QuoteAuthorHandle) {
-			if profile, ok := profilesByHandle[model.NormalizeTwitterHandle(items[i].QuoteAuthorHandle)]; ok && profile.DisplayName != "" {
-				items[i].QuoteAuthorDisplayName = profile.DisplayName
-			}
+		if profile, ok := profilesByHandle[model.NormalizeTwitterHandle(items[i].QuoteAuthorHandle)]; ok && profile.DisplayName != "" {
+			items[i].QuoteAuthorDisplayName = profile.DisplayName
 		}
 		if shouldRepairDisplayName(items[i].AuthorDisplayName, items[i].AuthorHandle) {
 			missingAuthorNameHandles = append(missingAuthorNameHandles, items[i].AuthorHandle)
+		}
+		if shouldRepairDisplayName(items[i].RetweetedByDisplayName, items[i].RetweetedByHandle) {
+			missingAuthorNameHandles = append(missingAuthorNameHandles, items[i].RetweetedByHandle)
+		}
+		if shouldRepairDisplayName(items[i].QuoteAuthorDisplayName, items[i].QuoteAuthorHandle) {
+			missingAuthorNameHandles = append(missingAuthorNameHandles, items[i].QuoteAuthorHandle)
 		}
 	}
 	displayNames, _ := database.GetDisplayNamesForHandles(missingAuthorNameHandles)
@@ -149,6 +138,11 @@ func enrichFeedItems(database *db.DB, items []model.FeedItem, username string, d
 		if shouldRepairDisplayName(items[i].QuoteAuthorDisplayName, items[i].QuoteAuthorHandle) {
 			if name, ok := displayNames[items[i].QuoteAuthorHandle]; ok {
 				items[i].QuoteAuthorDisplayName = name
+			}
+		}
+		if shouldRepairDisplayName(items[i].RetweetedByDisplayName, items[i].RetweetedByHandle) {
+			if name, ok := displayNames[items[i].RetweetedByHandle]; ok {
+				items[i].RetweetedByDisplayName = name
 			}
 		}
 	}
@@ -165,8 +159,8 @@ func enrichFeedItems(database *db.DB, items []model.FeedItem, username string, d
 	// Enrich each item
 	for i := range items {
 		item := &items[i]
-		enrichMediaStatus(item, mediaJobs)
-		annotateChannelFlags(item, channelMap, quoteAvatarChannelIDs)
+		enrichMediaStatus(item, mediaAssets)
+		annotateChannelFlags(item, channelMap)
 
 		item.IsSeen = seen[item.TweetID]
 		item.IsLiked = liked[item.TweetID]
@@ -197,58 +191,20 @@ func enrichFeedItems(database *db.DB, items []model.FeedItem, username string, d
 		}
 
 		// Media stream URLs for local video playback
-		if job, ok := mediaJobs[item.TweetID]; ok && job.Status == "completed" {
-			// YouTube/TikTok downloads are in the videos table
-			if v, ok := videos[item.TweetID]; ok && v.FilePath != "" {
-				item.MediaStreamURL = "/api/media/stream/" + item.TweetID
-				item.MediaPreviewURL = "/api/media/thumbnail/" + item.TweetID
-			} else if job.MediaKind == "video" {
-				// Feed media videos (GIFs, tweet videos) are in media_files
-				item.MediaStreamURL = "/api/media/stream/" + item.TweetID
-				item.MediaPreviewURL = "/api/media/thumbnail/" + item.TweetID
+		if availability := mediaAssets[item.TweetID]; availability.ReadyVideo {
+			item.MediaStreamURL = "/api/media/stream/" + item.TweetID + "?owner_kind=tweet"
+			if availability.ReadyPreview {
+				item.MediaPreviewURL = "/api/media/thumbnail/" + item.TweetID + "?owner_kind=tweet"
 			}
 		}
 		if item.QuoteTweetID != "" {
-			if job, ok := mediaJobs[item.QuoteTweetID]; ok && job.Status == "completed" {
-				if v, ok := videos[item.QuoteTweetID]; ok && v.FilePath != "" {
-					item.QuoteMediaStreamURL = "/api/media/stream/" + item.QuoteTweetID
-				} else if job.MediaKind == "video" {
-					item.QuoteMediaStreamURL = "/api/media/stream/" + item.QuoteTweetID
-				}
-			}
-			// Fall back to the parent's job for quote-only media tweets.
-			// The download worker stores quote media under the parent tweet's job,
-			// so there may be no separate job for the quote tweet ID.
-			if item.QuoteMediaStreamURL == "" {
-				if parentJob, ok := mediaJobs[item.TweetID]; ok && parentJob.Status == "completed" {
-					for _, qm := range item.QuoteMedia {
-						if qm.Type == "video" || qm.Type == "gif" {
-							item.QuoteMediaStreamURL = "/api/media/stream/" + item.QuoteTweetID
-							break
-						}
-					}
-				}
-			}
-			// Final fallback: use slide endpoint for quote videos even without
-			// a completed job. The slide endpoint serves downloaded files or
-			// proxies from CDN, so the video is always playable.
-			if item.QuoteMediaStreamURL == "" {
-				for _, qm := range item.QuoteMedia {
-					if qm.Type == "video" || qm.Type == "gif" {
-						item.QuoteMediaStreamURL = fmt.Sprintf("/api/media/slide/%s/0", item.QuoteTweetID)
-						break
-					}
-				}
+			if availability := mediaAssets[item.QuoteTweetID]; availability.ReadyVideo {
+				item.QuoteMediaStreamURL = "/api/media/stream/" + item.QuoteTweetID + "?owner_kind=tweet"
 			}
 		}
 
-		// Slide URLs from media array
-		if len(item.Media) > 1 {
-			for idx := range item.Media {
-				item.MediaSlideURLs = append(item.MediaSlideURLs,
-					fmt.Sprintf("/api/media/slide/%s/%d", item.TweetID, idx))
-			}
-		}
+		item.MediaSlideURLs = indexedReadyMediaURLs(item.TweetID, len(item.Media), mediaURLs)
+		item.QuoteMediaSlideURLs = indexedReadyMediaURLs(item.QuoteTweetID, len(item.QuoteMedia), mediaURLs)
 
 		// Retweet grouping
 		if item.ContentHash != "" {
@@ -285,7 +241,7 @@ func enrichFeedItems(database *db.DB, items []model.FeedItem, username string, d
 		for _, sibs := range siblings {
 			sibIDs = append(sibIDs, sibs...)
 		}
-		sibLiked, _ := database.GetFeedLikesForTweetIDs(username, sibIDs)
+		sibLiked, _ := database.GetFeedLikesForTweetIDs(sibIDs)
 		sibBookmarked, _ := database.GetBookmarksForVideoIDs(sibIDs)
 		for i := range items {
 			for _, sib := range siblings[items[i].TweetID] {
@@ -300,7 +256,7 @@ func enrichFeedItems(database *db.DB, items []model.FeedItem, username string, d
 	}
 
 	// Personalization: compute affinity-based interest scores
-	PersonalizeItems(database, items, username)
+	PersonalizeItems(database, items)
 
 	if deduplicate {
 		// Collapse retweets sharing the same content into one card for web/feed
@@ -309,6 +265,45 @@ func enrichFeedItems(database *db.DB, items []model.FeedItem, username string, d
 	}
 
 	return items
+}
+
+func readyTweetMediaURLs(database *db.DB, ownerIDs []string) map[string]map[int]string {
+	owners := make([]db.AssetOwnerRef, 0, len(ownerIDs))
+	for _, ownerID := range ownerIDs {
+		owners = append(owners, db.AssetOwnerRef{OwnerKind: "tweet", OwnerID: ownerID})
+	}
+	assets, err := database.ListReadyAssetsForOwners(owners, []string{"post_media"})
+	if err != nil {
+		return nil
+	}
+	out := make(map[string]map[int]string)
+	for _, asset := range assets {
+		if asset.OwnerKind != "tweet" || asset.MediaIndex < 0 {
+			continue
+		}
+		if out[asset.OwnerID] == nil {
+			out[asset.OwnerID] = make(map[int]string)
+		}
+		out[asset.OwnerID][asset.MediaIndex] = fmt.Sprintf(
+			"/api/media/slide/%s/%d?owner_kind=tweet",
+			asset.OwnerID,
+			asset.MediaIndex,
+		)
+	}
+	return out
+}
+
+func indexedReadyMediaURLs(ownerID string, count int, urls map[string]map[int]string) []string {
+	if ownerID == "" || count <= 0 {
+		return nil
+	}
+	out := make([]string, count)
+	for index, url := range urls[ownerID] {
+		if index >= 0 && index < count {
+			out[index] = url
+		}
+	}
+	return out
 }
 
 func shouldRepairDisplayName(displayName, handle string) bool {
@@ -367,7 +362,7 @@ func normalizeTranslationText(text string) string {
 // proper feed cards. We don't recurse into chains for the chain ancestors —
 // only one level of threading is materialized per page, which is enough to
 // reconstruct the conversation in the UI.
-func attachThreadChains(database *db.DB, items []model.FeedItem, username string) []model.FeedItem {
+func attachThreadChains(database *db.DB, items []model.FeedItem) []model.FeedItem {
 	if len(items) == 0 {
 		return items
 	}
@@ -403,7 +398,7 @@ func attachThreadChains(database *db.DB, items []model.FeedItem, username string
 
 	// Phase 2: enrich the ancestors so cards render properly. Pass deduplicate=false
 	// — we don't want retweet collapsing to drop chain entries.
-	enrichedAncestors := enrichFeedItems(database, ancestorList, username, false)
+	enrichedAncestors := enrichFeedItems(database, ancestorList, false)
 	enrichedByID := make(map[string]model.FeedItem, len(enrichedAncestors))
 	for _, a := range enrichedAncestors {
 		enrichedByID[a.TweetID] = a
@@ -470,54 +465,41 @@ func visibleRetweeters(rts []model.RetweeterInfo, authorHandle string, channelMa
 	return out
 }
 
-// enrichMediaStatus sets MediaKind, MediaStatus, MediaSlideCount from job/video data.
-func enrichMediaStatus(item *model.FeedItem, jobs map[string]model.FeedMediaJob) {
-	job, hasJob := jobs[item.TweetID]
-
-	if hasJob && len(item.Media) > 0 {
-		// Parent has its own media — set status from the job.
-		item.MediaKind = job.MediaKind
-		// Prefer parsed Media count over job's SlideCount (which may be 0 for legacy jobs)
-		item.MediaSlideCount = len(item.Media)
-		switch job.Status {
-		case "completed":
-			item.MediaStatus = "ready"
-		case "queued", "processing":
-			item.MediaStatus = "pending"
-		case "failed":
-			item.MediaStatus = "failed"
-		case "pruned":
-			item.MediaStatus = "pruned"
-		default:
-			item.MediaStatus = job.Status
-		}
-	} else if hasJob && len(item.Media) == 0 {
-		// Job exists but parent has no media (quote-only media tweet).
-		// Don't set parent media fields — the job only covers quote media.
-		// Keep MediaStatus for quote-media stream URL fallback logic.
-	} else if len(item.Media) > 0 {
+// enrichMediaStatus derives presentation state from canonical assets, never
+// from operational downloader jobs.
+func enrichMediaStatus(item *model.FeedItem, assets map[string]db.MediaAssetAvailability) {
+	if len(item.Media) == 0 {
+		return
+	}
+	item.MediaSlideCount = len(item.Media)
+	if len(item.Media) > 1 {
+		item.MediaKind = "slideshow"
+	} else if item.Media[0].Type == "video" || item.Media[0].Type == "gif" {
+		item.MediaKind = "video"
+	} else {
+		item.MediaKind = "image"
+	}
+	availability := assets[item.TweetID]
+	switch {
+	case availability.ReadyMedia:
+		item.MediaStatus = "ready"
+	case availability.Pending:
+		item.MediaStatus = "pending"
+	case availability.Failed:
+		item.MediaStatus = "failed"
+	default:
 		item.MediaStatus = "cdn"
-		if len(item.Media) > 1 {
-			item.MediaKind = "slideshow"
-			item.MediaSlideCount = len(item.Media)
-		} else if item.Media[0].Type == "video" || item.Media[0].Type == "gif" {
-			item.MediaKind = "video"
-		} else {
-			item.MediaKind = "image"
-		}
 	}
 }
 
-// annotateChannelFlags sets ChannelID, ChannelIsFollowed, ChannelIsStarred,
-// and rewrites avatar URLs to local proxy.
-// Always sets ChannelID so author names link to in-site profiles (even for non-followed accounts).
-func annotateChannelFlags(item *model.FeedItem, channels map[string]model.Channel, quoteAvatarChannelIDs map[string]string) {
-	if effectiveAuthor := model.EffectiveTwitterAuthorHandle(item.AuthorHandle, item.SourceHandle, item.IsRetweet); effectiveAuthor != item.AuthorHandle {
-		item.AuthorHandle = effectiveAuthor
+// annotateChannelFlags joins user state onto persisted feed role identities and
+// rewrites avatar URLs to the local proxy.
+func annotateChannelFlags(item *model.FeedItem, channels map[string]model.Channel) {
+	authorChID := item.ChannelID
+	item.AuthorAvatarURL = ""
+	if authorChID != "" {
+		item.AuthorAvatarURL = "/api/media/avatar/" + authorChID
 	}
-	authorChID := "twitter_" + strings.ToLower(strings.TrimPrefix(item.AuthorHandle, "@"))
-	item.ChannelID = authorChID
-	item.AuthorAvatarURL = "/api/media/avatar/" + authorChID
 
 	authorFollowed := false
 	if ch, ok := channels[authorChID]; ok {
@@ -526,10 +508,11 @@ func annotateChannelFlags(item *model.FeedItem, channels map[string]model.Channe
 		item.ChannelIsStarred = ch.IsStarred
 	}
 
-	sourceChID := ""
-	if item.SourceHandle != "" && item.SourceHandle != item.AuthorHandle {
-		sourceChID = "twitter_" + strings.ToLower(strings.TrimPrefix(item.SourceHandle, "@"))
-		item.ReposterChannelID = sourceChID
+	sourceChID := item.ReposterChannelID
+	if sourceChID == "" {
+		sourceChID = item.SourceChannelID
+	}
+	if sourceChID != "" && sourceChID != authorChID {
 		// Retweets: inherit followed/starred from the source (retweeter) when
 		// the original author isn't followed. This ensures retweets from
 		// followed accounts rank alongside their own tweets.
@@ -545,23 +528,12 @@ func annotateChannelFlags(item *model.FeedItem, channels map[string]model.Channe
 	// the source/retweeter for ranking, so keep this as direct author truth.
 	item.FollowTargetFollowed = authorFollowed
 
-	if item.QuoteAuthorHandle != "" {
-		quoteChID := "twitter_" + model.NormalizeTwitterHandle(item.QuoteAuthorHandle)
-		item.QuoteChannelID = quoteChID
+	if quoteChID := item.QuoteChannelID; quoteChID != "" {
 		item.QuoteAuthorAvatarURL = "/api/media/avatar/" + quoteChID
 		if ch, ok := channels[quoteChID]; ok {
 			item.QuoteChannelFollowed = ch.IsSubscribed
 		}
-	} else if quoteChID, ok := quoteAvatarChannelIDs[model.NormalizeTwitterAvatarURL(item.QuoteAuthorAvatarURL)]; ok {
-		item.QuoteChannelID = quoteChID
-		item.QuoteAuthorAvatarURL = "/api/media/avatar/" + quoteChID
-		if item.QuoteAuthorHandle == "" && strings.HasPrefix(quoteChID, "twitter_") && !model.IsSyntheticTwitterAvatarChannelID(quoteChID) {
-			item.QuoteAuthorHandle = strings.TrimPrefix(quoteChID, "twitter_")
-		}
-		if ch, ok := channels[quoteChID]; ok {
-			item.QuoteChannelFollowed = ch.IsSubscribed
-		}
-	} else if quoteChID := model.SyntheticTwitterAvatarChannelID(item.QuoteAuthorAvatarURL); quoteChID != "" {
-		item.QuoteAuthorAvatarURL = "/api/media/avatar/" + quoteChID
+	} else {
+		item.QuoteAuthorAvatarURL = ""
 	}
 }

@@ -1,14 +1,27 @@
 package model
 
 import (
-	"crypto/sha1"
-	"encoding/hex"
 	"net/url"
 	"strings"
 )
 
 func NormalizeTwitterHandle(raw string) string {
 	return strings.ToLower(strings.TrimSpace(strings.TrimPrefix(raw, "@")))
+}
+
+// TwitterChannelIDFromHandle returns the canonical persisted identity for a
+// usable X handle. Placeholder or malformed handles are not identities.
+func TwitterChannelIDFromHandle(raw string) string {
+	handle := NormalizeTwitterHandle(raw)
+	if IsPlaceholderTwitterHandle(handle) || len(handle) > 15 {
+		return ""
+	}
+	for _, r := range handle {
+		if (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '_' {
+			return ""
+		}
+	}
+	return "twitter_" + handle
 }
 
 func IsPlaceholderTwitterHandle(raw string) bool {
@@ -65,26 +78,6 @@ func IsRawTwitterProfileAvatar(raw string) bool {
 	}
 	host := strings.TrimPrefix(strings.ToLower(u.Hostname()), "www.")
 	return host == "pbs.twimg.com" && strings.HasPrefix(u.EscapedPath(), "/profile_images/")
-}
-
-func SyntheticTwitterAvatarChannelID(raw string) string {
-	normalized := NormalizeTwitterAvatarURL(raw)
-	if !IsRawTwitterProfileAvatar(normalized) {
-		return ""
-	}
-	sum := sha1.Sum([]byte(normalized))
-	return "twitter_avatarhash_" + hex.EncodeToString(sum[:8])
-}
-
-func IsSyntheticTwitterAvatarChannelID(channelID string) bool {
-	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(channelID)), "twitter_avatarhash_")
-}
-
-func TwitterAvatarChannelID(handle, avatarURL string) string {
-	if normalized := NormalizeTwitterHandle(handle); normalized != "" {
-		return "twitter_" + normalized
-	}
-	return SyntheticTwitterAvatarChannelID(avatarURL)
 }
 
 func TwitterStatusIDFromURL(raw string) string {

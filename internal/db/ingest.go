@@ -304,7 +304,12 @@ func (db *DB) GetAllIngestStates() ([]model.IngestState, error) {
 
 // CountFeedItemsBySource returns source_handle → count for all feed items.
 func (db *DB) CountFeedItemsBySource() (map[string]int, error) {
-	rows, err := db.conn.Query("SELECT source_handle, COUNT(*) FROM feed_items GROUP BY source_handle")
+	rows, err := db.conn.Query(`
+		SELECT source_handle, COUNT(*)
+		FROM feed_items_resolved
+		WHERE COALESCE(source_channel_id, '') != ''
+		GROUP BY source_channel_id, source_handle
+	`)
 	if err != nil {
 		return nil, err
 	}

@@ -9,7 +9,7 @@ import com.screwy.igloo.data.IglooDatabase
 import com.screwy.igloo.data.PreferencesRepo
 import com.screwy.igloo.data.stripPlatformPrefix
 import com.screwy.igloo.data.entity.StoryChannelItem
-import com.screwy.igloo.media.ownerKindFromChannelId
+import com.screwy.igloo.media.ownerKindFromAssetOwnerKind
 import com.screwy.igloo.net.ServerBaseUrlProvider
 import com.screwy.igloo.outbox.OutboxKind
 import com.screwy.igloo.outbox.OutboxWriter
@@ -157,9 +157,7 @@ class ShortsRouteViewModel(
         activeVideoId.value = item.videoId
         if (!playlistSpec.recordsMomentsCursor) return
         viewModelScope.launch {
-            outboxWriter.enqueue(
-                OutboxKind.MomentsCursor(videoId = item.videoId, positionMs = 0L, scope = momentsCursorScope),
-            )
+            outboxWriter.recordMomentsCursor(item.videoId, 0L, momentsCursorScope)
         }
     }
 
@@ -167,16 +165,6 @@ class ShortsRouteViewModel(
         if (!recordsMomentViews) return
         viewModelScope.launch {
             outboxWriter.enqueue(OutboxKind.MomentView(videoId = videoId))
-        }
-    }
-
-    fun onCursorAdvance(videoId: String, positionMs: Long) {
-        if (!playlistSpec.recordsMomentsCursor) return
-        activeVideoId.value = videoId
-        viewModelScope.launch {
-            outboxWriter.enqueue(
-                OutboxKind.MomentsCursor(videoId = videoId, positionMs = 0L, scope = momentsCursorScope),
-            )
         }
     }
 
@@ -188,12 +176,10 @@ class ShortsRouteViewModel(
             } else {
                 OutboxKind.Action.Set
             }
-            val prev = outboxWriter.capturePreviousBookmark(item.videoId)
             outboxWriter.enqueue(
                 OutboxKind.Bookmark(
                     videoId = item.videoId,
                     action = action,
-                    prevRow = prev,
                 ),
             )
         }
@@ -216,7 +202,6 @@ class ShortsRouteViewModel(
         val target = _pendingBookmark.value ?: return
         _pendingBookmark.value = null
         viewModelScope.launch {
-            val prev = outboxWriter.capturePreviousBookmark(target.itemId)
             outboxWriter.enqueue(
                 OutboxKind.Bookmark(
                     videoId = target.itemId,
@@ -225,7 +210,6 @@ class ShortsRouteViewModel(
                     customTitle = payload.customTitle,
                     accountHandles = payload.accountHandles?.joinToString(","),
                     mediaIndices = payload.mediaIndices?.joinToString(","),
-                    prevRow = prev,
                 ),
             )
         }
@@ -235,12 +219,10 @@ class ShortsRouteViewModel(
         val target = _pendingBookmark.value ?: return
         _pendingBookmark.value = null
         viewModelScope.launch {
-            val prev = outboxWriter.capturePreviousBookmark(target.itemId)
             outboxWriter.enqueue(
                 OutboxKind.Bookmark(
                     videoId = target.itemId,
                     action = OutboxKind.Action.Clear,
-                    prevRow = prev,
                 ),
             )
         }
@@ -314,7 +296,7 @@ class ShortsRouteViewModel(
             .map { rows -> rows.map(::toPlayerMomentItem) }
         ShortsPlaylistType.Bookmarks -> db.bookmarkReadDao()
             .bookmarksFlow()
-            .map { rows -> bookmarkMomentPlaylistItems(rows, bookmarkFilter, baseUrl) }
+			.map { rows -> bookmarkMomentPlaylistItems(rows, bookmarkFilter) }
     }
 
     private fun bookmarkTargetForMoment(
@@ -345,10 +327,9 @@ class ShortsRouteViewModel(
             likeCount = null,
             isLiked = false,
             isBookmarked = false,
-            mediaKind = video.mediaMode?.takeIf { it.isNotBlank() } ?: video.mediaKind,
+            mediaKind = video.mediaKind,
             slideCount = video.slideCount,
-            ownerKind = ownerKindFromChannelId(video.channelId),
-            fallbackThumbnailPath = video.thumbnailPath,
+			ownerKind = ownerKindFromAssetOwnerKind(video.ownerKind),
             publishedAt = video.publishedAt,
             isAuthorFollowed = row.channelIsFollowed == 1,
             repostAuthorLabel = repost?.authorLabel,

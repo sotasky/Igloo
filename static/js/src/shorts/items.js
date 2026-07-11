@@ -816,7 +816,6 @@ function followShortAuthor(entryData, btn) {
     }).then(function (payload) {
       if (!payload) return false
       showToast((payload && payload.message) || tf('toast_unfollowed_channel', 'Unfollowed %1$s', label))
-      if (payload && payload.sync_version && window.SyncPoller) window.SyncPoller.advance(payload.sync_version)
       return true
     })
   } else {
@@ -827,7 +826,6 @@ function followShortAuthor(entryData, btn) {
       if (payload && payload.success === false) throw Object.assign(new Error('subscribe failed'), { payload: payload })
       syncShortAuthorFollow(channelId, true)
       showToast(tf('toast_followed_channel', 'Followed %1$s', label))
-      if (payload && payload.sync_version && window.SyncPoller) window.SyncPoller.advance(payload.sync_version)
       return true
     })
   }

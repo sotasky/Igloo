@@ -48,10 +48,17 @@ func (s *Server) resolveLocalYouTubeSubscribeChannel(rawURL, platform string) (m
 	}
 
 	sourceID := strings.TrimPrefix(profile.ChannelID, "youtube_")
+	name := strings.TrimSpace(profile.DisplayName)
+	if name == "" {
+		name = strings.TrimPrefix(profile.Handle, "@")
+	}
+	if name == "" {
+		name = sourceID
+	}
 	return model.Channel{
 		ChannelID:    profile.ChannelID,
 		SourceID:     sourceID,
-		Name:         firstNonEmpty(profile.DisplayName, strings.TrimPrefix(profile.Handle, "@"), sourceID),
+		Name:         name,
 		URL:          fmt.Sprintf("https://www.youtube.com/channel/%s", sourceID),
 		Platform:     "youtube",
 		IsSubscribed: true,

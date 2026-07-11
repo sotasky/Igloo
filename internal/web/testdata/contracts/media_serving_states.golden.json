@@ -7,7 +7,7 @@
   },
   "ready": {
     "body_bytes": 6,
-    "cache_control": "public, max-age=2592000, immutable",
+    "cache_control": "public, no-cache",
     "content_type": "image/jpeg",
     "status": 200
   }

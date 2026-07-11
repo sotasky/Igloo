@@ -2,7 +2,7 @@ package com.screwy.igloo.feature
 
 import com.screwy.igloo.bookmarks.BookmarksViewModel
 import com.screwy.igloo.channel.ChannelViewModel
-import com.screwy.igloo.data.DatabaseHolder
+import com.screwy.igloo.data.IglooDatabase
 import com.screwy.igloo.feed.FeedViewModel
 import com.screwy.igloo.liked.LikedViewModel
 import com.screwy.igloo.logs.LogsViewModel
@@ -25,44 +25,45 @@ import org.koin.core.module.dsl.viewModel
 import org.koin.dsl.module
 
 /**
- * Koin wiring for feature-route ViewModels. `IglooDatabase` is resolved fresh
- * per VM so login/logout swaps propagate transparently.
+ * Koin wiring for feature-route ViewModels.
  */
 val iglooFeatureModule = module {
     viewModel {
         FeedViewModel(
-            db = get<DatabaseHolder>().requireCurrent(),
+            db = get<IglooDatabase>(),
             outboxWriter = get(),
             scheduler = get(),
             uiEffects = get(),
             baseUrlProvider = get(),
+            reachability = get(),
         )
     }
     viewModel {
         VideosViewModel(
-            db = get<DatabaseHolder>().requireCurrent(),
+            db = get<IglooDatabase>(),
             scheduler = get(),
         )
     }
     viewModel {
         BookmarksViewModel(
-            db = get<DatabaseHolder>().requireCurrent(),
+            db = get<IglooDatabase>(),
             outboxWriter = get(),
             prefs = get(),
         )
     }
     viewModel {
         LikedViewModel(
-            db = get<DatabaseHolder>().requireCurrent(),
+            db = get<IglooDatabase>(),
             outboxWriter = get(),
             scheduler = get(),
             uiEffects = get(),
             baseUrlProvider = get(),
+            reachability = get(),
         )
     }
     viewModel {
         MomentsViewModel(
-            db = get<DatabaseHolder>().requireCurrent(),
+            db = get<IglooDatabase>(),
             outboxWriter = get(),
             prefs = get(),
             scheduler = get(),
@@ -74,7 +75,7 @@ val iglooFeatureModule = module {
         ShortsRouteViewModel(
             playlistSpec = playlistSpec,
             startVideoId = startVideoId,
-            db = get<DatabaseHolder>().requireCurrent(),
+            db = get<IglooDatabase>(),
             outboxWriter = get(),
             prefs = get(),
             uiEffects = get(),
@@ -84,7 +85,7 @@ val iglooFeatureModule = module {
     viewModel { (channelId: String) ->
         ChannelViewModel(
             channelId = channelId,
-            db = get<DatabaseHolder>().requireCurrent(),
+            db = get<IglooDatabase>(),
             outboxWriter = get(),
             prefs = get(),
             scheduler = get(),
@@ -96,7 +97,7 @@ val iglooFeatureModule = module {
     viewModel { (videoId: String) ->
         PlayerViewModel(
             videoId = videoId,
-            db = get<DatabaseHolder>().requireCurrent(),
+            db = get<IglooDatabase>(),
             outboxWriter = get(),
             prefs = get(),
             scheduler = get(),
@@ -109,18 +110,20 @@ val iglooFeatureModule = module {
             ownerKind = ownerKind,
             ownerId = ownerId,
             requestedIndex = index,
-            db = get<DatabaseHolder>().requireCurrent(),
+            db = get<IglooDatabase>(),
             outboxWriter = get(),
             baseUrlProvider = get(),
             uiEffects = get(),
+            reachability = get(),
         )
     }
     viewModel {
         ThreadViewModel(
-            db = get<DatabaseHolder>().requireCurrent(),
+            db = get<IglooDatabase>(),
             outboxWriter = get(),
             uiEffects = get(),
             baseUrlProvider = get(),
+            reachability = get(),
         )
     }
     viewModel {
@@ -131,7 +134,7 @@ val iglooFeatureModule = module {
     }
     viewModel {
         MutedAccountsViewModel(
-            db = get<DatabaseHolder>().requireCurrent(),
+            db = get<IglooDatabase>(),
             outboxWriter = get(),
         )
     }
@@ -151,6 +154,6 @@ val iglooFeatureModule = module {
         ThemeViewModel(prefs = get())
     }
     viewModel {
-        LogsViewModel(db = get<DatabaseHolder>().requireCurrent())
+        LogsViewModel(db = get<IglooDatabase>())
     }
 }

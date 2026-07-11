@@ -19,15 +19,15 @@ func TestHandlePageFeedKeepsHTMXCursorWhenSnapshotChanges(t *testing.T) {
 	for i := 1; i <= 45; i++ {
 		id := fmt.Sprintf("t%02d", i)
 		if err := srv.db.ExecRaw(`INSERT INTO feed_items
-			(tweet_id, author_handle, body_text, published_at, algo_interest, algo_scored_at)
+			(tweet_id, channel_id, body_text, published_at, algo_interest, algo_scored_at)
 			VALUES (?, ?, ?, ?, ?, ?)`,
-			id, "author_"+id, "body "+id, now-int64(i), 1.0, 1); err != nil {
+			id, "twitter_sample_author", "body "+id, now-int64(i), 1.0, 1); err != nil {
 			t.Fatal(err)
 		}
 		firstSnapshot = append(firstSnapshot, db.SnapshotRow{TweetID: id, RankPosition: i, FinalScore: float64(100 - i)})
 	}
 
-	if err := srv.db.ReplaceFeedRankSnapshot(user, firstSnapshot); err != nil {
+	if err := srv.db.ReplaceFeedRankSnapshot(firstSnapshot); err != nil {
 		t.Fatal(err)
 	}
 	oldSnapAt := int64(1000)
@@ -36,8 +36,8 @@ func TestHandlePageFeedKeepsHTMXCursorWhenSnapshotChanges(t *testing.T) {
 	}
 
 	for _, id := range []string{"t1", "t2"} {
-		if err := srv.db.ExecRaw(`INSERT INTO feed_seen (username, tweet_id, seen_at) VALUES (?, ?, ?)`,
-			user, id, now); err != nil {
+		if err := srv.db.ExecRaw(`INSERT INTO feed_seen (tweet_id, seen_at) VALUES (?, ?)`,
+			id, now); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -51,7 +51,7 @@ func TestHandlePageFeedKeepsHTMXCursorWhenSnapshotChanges(t *testing.T) {
 			FinalScore:   float64(100 - i),
 		})
 	}
-	if err := srv.db.ReplaceFeedRankSnapshot(user, secondSnapshot); err != nil {
+	if err := srv.db.ReplaceFeedRankSnapshot(secondSnapshot); err != nil {
 		t.Fatal(err)
 	}
 	newSnapAt := int64(2000)
@@ -87,14 +87,14 @@ func TestHandlePageFeedCarriesSnapshotAtInNextCursor(t *testing.T) {
 	for i := 1; i <= 41; i++ {
 		id := fmt.Sprintf("t%02d", i)
 		if err := srv.db.ExecRaw(`INSERT INTO feed_items
-			(tweet_id, author_handle, body_text, published_at, algo_interest, algo_scored_at)
+			(tweet_id, channel_id, body_text, published_at, algo_interest, algo_scored_at)
 			VALUES (?, ?, ?, ?, ?, ?)`,
-			id, "author_"+id, "body "+id, now-int64(i), 1.0, 1); err != nil {
+			id, "twitter_sample_author", "body "+id, now-int64(i), 1.0, 1); err != nil {
 			t.Fatal(err)
 		}
 		rows = append(rows, db.SnapshotRow{TweetID: id, RankPosition: i, FinalScore: float64(100 - i)})
 	}
-	if err := srv.db.ReplaceFeedRankSnapshot(user, rows); err != nil {
+	if err := srv.db.ReplaceFeedRankSnapshot(rows); err != nil {
 		t.Fatal(err)
 	}
 	snapAt := int64(1234)

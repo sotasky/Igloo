@@ -208,10 +208,10 @@ func TestClearPlatformCheckedClearsFollowedChannels(t *testing.T) {
 		t.Fatalf("insert channels: %v", err)
 	}
 	if err := d.ExecRaw(`
-		INSERT INTO channel_follows (user_id, channel_id, followed_at)
+		INSERT INTO channel_follows (channel_id, followed_at)
 		VALUES
-			('', 'tiktok_followed_refresh_a', 1),
-			('', 'youtube_followed_refresh_c', 1)
+			('tiktok_followed_refresh_a', 1),
+			('youtube_followed_refresh_c', 1)
 	`); err != nil {
 		t.Fatalf("insert follows: %v", err)
 	}
@@ -339,9 +339,9 @@ func TestPruneSourceWindowDownloadQueueCountsIntroducedRows(t *testing.T) {
 			('tag_old', 'instagram_owner', 'Tag Old', 'pending', 2),
 			('tag_keep', 'instagram_owner', 'Tag Keep', 'pending', 3),
 			('owner_only', 'instagram_owner', 'Owner Only', 'pending', 4)`,
-		`INSERT INTO video_repost_sources (video_id, reposter_channel_id, reposter_handle, first_seen_at_ms, updated_at_ms) VALUES
-			('tag_old', 'instagram_followed', 'followed', 1, 1),
-			('tag_keep', 'instagram_followed', 'followed', 2, 2)`,
+		`INSERT INTO video_repost_sources (video_id, reposter_channel_id, first_seen_at_ms, updated_at_ms) VALUES
+			('tag_old', 'instagram_followed', 1, 1),
+			('tag_keep', 'instagram_followed', 2, 2)`,
 	} {
 		if err := d.ExecRaw(stmt); err != nil {
 			t.Fatalf("seed: %v", err)
@@ -379,19 +379,19 @@ func TestGetExcessVideoIDsProtectsActiveIntroducedRows(t *testing.T) {
 		`INSERT INTO channels (channel_id, name, platform) VALUES
 			('instagram_owner', 'Owner', 'instagram'),
 			('instagram_introducer', 'Introducer', 'instagram')`,
-		`INSERT INTO channel_follows (user_id, channel_id, followed_at) VALUES ('', 'instagram_introducer', 1)`,
-		`INSERT INTO videos (video_id, channel_id, title, published_at) VALUES
-			('protected_old', 'instagram_owner', 'Protected Old', 100),
-			('unprotected_middle', 'instagram_owner', 'Unprotected Middle', 200),
-			('newest', 'instagram_owner', 'Newest', 300)`,
-		`INSERT INTO video_repost_sources (video_id, reposter_channel_id, reposter_handle, first_seen_at_ms, updated_at_ms)
-		 VALUES ('protected_old', 'instagram_introducer', 'introducer', 400, 400)`,
+		`INSERT INTO channel_follows (channel_id, followed_at) VALUES ('instagram_introducer', 1)`,
+		`INSERT INTO videos (video_id, channel_id, owner_kind, title, published_at) VALUES
+			('protected_old', 'instagram_owner', 'instagram_reel', 'Protected Old', 100),
+			('unprotected_middle', 'instagram_owner', 'instagram_reel', 'Unprotected Middle', 200),
+			('newest', 'instagram_owner', 'instagram_reel', 'Newest', 300)`,
+		`INSERT INTO video_repost_sources (video_id, reposter_channel_id, first_seen_at_ms, updated_at_ms)
+		 VALUES ('protected_old', 'instagram_introducer', 400, 400)`,
 	} {
 		if err := d.ExecRaw(stmt); err != nil {
 			t.Fatalf("seed: %v", err)
 		}
 	}
-	if err := d.SetSetting("", "instagram_include_tagged_default", "true"); err != nil {
+	if err := d.SetSetting("instagram_include_tagged_default", "true"); err != nil {
 		t.Fatalf("SetSetting instagram_include_tagged_default: %v", err)
 	}
 
@@ -412,27 +412,27 @@ func TestGetSourceWindowPrunableVideoIDsCountsIntroducedRows(t *testing.T) {
 			('instagram_followed', 'Followed', 'instagram'),
 			('instagram_owner', 'Owner', 'instagram'),
 			('instagram_other', 'Other', 'instagram')`,
-		`INSERT INTO channel_follows (user_id, channel_id, followed_at) VALUES
-			('', 'instagram_followed', 1),
-			('', 'instagram_other', 1)`,
-		`INSERT INTO videos (video_id, channel_id, title, published_at) VALUES
-			('own_old', 'instagram_followed', 'Own Old', 100),
-			('own_keep', 'instagram_followed', 'Own Keep', 200),
-			('own_bookmarked', 'instagram_followed', 'Own Bookmarked', 250),
-			('tag_old', 'instagram_owner', 'Tag Old', 300),
-			('tag_keep', 'instagram_owner', 'Tag Keep', 400),
-			('tag_other', 'instagram_owner', 'Tag Other', 500)`,
-		`INSERT INTO bookmarks (user_id, video_id, bookmarked_at) VALUES ('', 'own_bookmarked', 1)`,
-		`INSERT INTO video_repost_sources (video_id, reposter_channel_id, reposter_handle, first_seen_at_ms, updated_at_ms) VALUES
-			('tag_old', 'instagram_followed', 'followed', 1, 1),
-			('tag_keep', 'instagram_followed', 'followed', 2, 2),
-			('tag_other', 'instagram_other', 'other', 3, 3)`,
+		`INSERT INTO channel_follows (channel_id, followed_at) VALUES
+			('instagram_followed', 1),
+			('instagram_other', 1)`,
+		`INSERT INTO videos (video_id, channel_id, owner_kind, title, published_at) VALUES
+			('own_old', 'instagram_followed', 'instagram_reel', 'Own Old', 100),
+			('own_keep', 'instagram_followed', 'instagram_reel', 'Own Keep', 200),
+			('own_bookmarked', 'instagram_followed', 'instagram_reel', 'Own Bookmarked', 250),
+			('tag_old', 'instagram_owner', 'instagram_reel', 'Tag Old', 300),
+			('tag_keep', 'instagram_owner', 'instagram_reel', 'Tag Keep', 400),
+			('tag_other', 'instagram_owner', 'instagram_reel', 'Tag Other', 500)`,
+		`INSERT INTO bookmarks (video_id, bookmarked_at) VALUES ('own_bookmarked', 1)`,
+		`INSERT INTO video_repost_sources (video_id, reposter_channel_id, first_seen_at_ms, updated_at_ms) VALUES
+			('tag_old', 'instagram_followed', 1, 1),
+			('tag_keep', 'instagram_followed', 2, 2),
+			('tag_other', 'instagram_other', 3, 3)`,
 	} {
 		if err := d.ExecRaw(stmt); err != nil {
 			t.Fatalf("seed: %v", err)
 		}
 	}
-	if err := d.SetSetting("", "instagram_include_tagged_default", "true"); err != nil {
+	if err := d.SetSetting("instagram_include_tagged_default", "true"); err != nil {
 		t.Fatalf("SetSetting instagram_include_tagged_default: %v", err)
 	}
 

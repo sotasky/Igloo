@@ -44,7 +44,14 @@ fi
 
 # ── Defaults ───────────────────────────────────────────────────────
 HOME_DIR="$(eval echo ~)"
-DATA_DIR="${IGLOO_DATA_DIR:-$HOME_DIR/.local/share/igloo}"
+DEFAULT_DATA_DIR="$HOME_DIR/.local/share/igloo"
+DATA_DIR="$DEFAULT_DATA_DIR"
+CUSTOM_DATA_DIR=false
+if [ -n "${IGLOO_DATA_DIR:-}" ]; then
+    DATA_DIR="$IGLOO_DATA_DIR"
+    CUSTOM_DATA_DIR=true
+fi
+MEDIA_DIR="${IGLOO_MEDIA_DIR:-}"
 CONFIG_DIR="${IGLOO_CONFIG_DIR:-$HOME_DIR/.config/igloo}"
 SYSTEMD_DIR="$HOME_DIR/.config/systemd/user"
 SERVER_PORT="${IGLOO_PORT:-5001}"
@@ -204,7 +211,28 @@ create_dir() {
 }
 
 # Data directories
-create_dir "$DATA_DIR"
+STATE_ROOT_MARKER="$DATA_DIR/.igloo-state-root"
+if [ "$CUSTOM_DATA_DIR" = true ]; then
+    if [ ! -d "$DATA_DIR" ]; then
+        printf "${RED}error:${RESET} IGLOO_DATA_DIR is unavailable: %s\n" "$DATA_DIR"
+        exit 1
+    fi
+    if [ ! -f "$STATE_ROOT_MARKER" ] || [ -L "$STATE_ROOT_MARKER" ]; then
+        printf "${RED}error:${RESET} IGLOO_DATA_DIR is missing %s\n" "$STATE_ROOT_MARKER"
+        exit 1
+    fi
+    ok "$DATA_DIR (state root verified)"
+else
+    create_dir "$DATA_DIR"
+    if [ -L "$STATE_ROOT_MARKER" ] || { [ -e "$STATE_ROOT_MARKER" ] && [ ! -f "$STATE_ROOT_MARKER" ]; }; then
+        printf "${RED}error:${RESET} invalid state root marker: %s\n" "$STATE_ROOT_MARKER"
+        exit 1
+    fi
+    if [ ! -f "$STATE_ROOT_MARKER" ]; then
+        : > "$STATE_ROOT_MARKER"
+        chmod 0644 "$STATE_ROOT_MARKER"
+    fi
+fi
 create_dir "$DATA_DIR/logs"
 create_dir "$DATA_DIR/logs/server"
 create_dir "$DATA_DIR/logs/android"
@@ -212,6 +240,19 @@ create_dir "$DATA_DIR/thumbnails"
 create_dir "$DATA_DIR/thumbnails/generated"
 create_dir "$DATA_DIR/thumbnails/previews"
 create_dir "$DATA_DIR/tmp"
+if [ -n "$MEDIA_DIR" ]; then
+    if [ ! -d "$MEDIA_DIR" ]; then
+        printf "${RED}error:${RESET} IGLOO_MEDIA_DIR must already be mounted: %s\n" "$MEDIA_DIR"
+        exit 1
+    fi
+    if [ ! -f "$MEDIA_DIR/.igloo-media-root" ] || [ -L "$MEDIA_DIR/.igloo-media-root" ]; then
+        printf "${RED}error:${RESET} IGLOO_MEDIA_DIR is missing %s/.igloo-media-root\n" "$MEDIA_DIR"
+        exit 1
+    fi
+    ok "$MEDIA_DIR (external media root verified)"
+else
+    create_dir "$DATA_DIR/media"
+fi
 
 # Config directories
 create_dir "$CONFIG_DIR"
@@ -337,11 +378,18 @@ prepare_service_file() {
 
 # igloo.service
 prepare_service_file igloo.service
+STORAGE_MOUNTS="$DATA_DIR"
+MEDIA_ENV_LINE=""
+if [ -n "$MEDIA_DIR" ]; then
+    STORAGE_MOUNTS="$STORAGE_MOUNTS $MEDIA_DIR"
+    MEDIA_ENV_LINE="Environment=IGLOO_MEDIA_DIR=$MEDIA_DIR"
+fi
 cat > "$UNIT_FILE" <<EOF
 [Unit]
 Description=Igloo server
 Wants=network-online.target
 After=network-online.target
+RequiresMountsFor=$STORAGE_MOUNTS
 
 [Service]
 Type=simple
@@ -349,6 +397,7 @@ WorkingDirectory=$REPO_DIR
 
 Environment=IGLOO_CONFIG_DIR=$CONFIG_DIR
 Environment=IGLOO_DATA_DIR=$DATA_DIR
+$MEDIA_ENV_LINE
 Environment=IGLOO_REPO_DIR=$REPO_DIR
 Environment=IGLOO_PORT=$SERVER_PORT
 EnvironmentFile=-$KAGI_ENV_FILE
@@ -372,6 +421,7 @@ cat > "$UNIT_FILE" <<EOF
 Description=Igloo nginx reverse proxy
 After=igloo.service
 Wants=igloo.service
+RequiresMountsFor=$STORAGE_MOUNTS
 
 [Service]
 Type=forking

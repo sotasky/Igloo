@@ -40,20 +40,6 @@ func TestCookieUploadRejectsOversizedBody(t *testing.T) {
 	}
 }
 
-func TestAndroidLegacyLogRejectsOversizedChunkedBody(t *testing.T) {
-	srv := newTestServer(t)
-	body := `{"device_id":"d","lines":["` + strings.Repeat("x", int(androidLegacyLogMaxBodyBytes)+1) + `"]}`
-	req := httptest.NewRequest(http.MethodPost, "/api/logs/android/stats", strings.NewReader(body))
-	req.ContentLength = -1
-	rec := httptest.NewRecorder()
-
-	srv.handleAndroidStats(rec, req)
-
-	if rec.Code != http.StatusRequestEntityTooLarge {
-		t.Fatalf("status = %d, want 413, body = %s", rec.Code, rec.Body.String())
-	}
-}
-
 func TestAnalyticsEventsRejectsOversizedChunkedBody(t *testing.T) {
 	srv := newTestServer(t)
 	body := `{"events":[{"event_type":"` + strings.Repeat("x", int(analyticsEventsMaxBodyBytes)+1) + `"}]}`

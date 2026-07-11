@@ -154,7 +154,7 @@ func (s *Server) buildFeedDebugItem(username, tweetID string) (feedDebugItemResp
 		if err != nil {
 			return err
 		}
-		rank, err := queryFeedDebugRankSnapshot(conn, username, tweetID)
+		rank, err := queryFeedDebugRankSnapshot(conn, tweetID)
 		if err != nil {
 			return err
 		}
@@ -197,7 +197,7 @@ func queryFeedDebugItem(conn *sql.DB, tweetID string) (feedDebugItem, error) {
 		       COALESCE(is_reply,0), COALESCE(is_ghost,0),
 		       published_at, fetched_at,
 		       COALESCE(algo_interest,0), COALESCE(algo_scored_at,0)
-		FROM feed_items
+		FROM feed_items_resolved
 		WHERE tweet_id = ?
 	`, tweetID).Scan(
 		&item.TweetID, &item.SourceHandle, &item.AuthorHandle,
@@ -254,14 +254,14 @@ func queryFeedDebugSources(conn *sql.DB, tweetID string) ([]feedDebugSourceEntry
 	return out, rows.Err()
 }
 
-func queryFeedDebugRankSnapshot(conn *sql.DB, username, tweetID string) (feedDebugRankSnapshot, error) {
+func queryFeedDebugRankSnapshot(conn *sql.DB, tweetID string) (feedDebugRankSnapshot, error) {
 	var rank feedDebugRankSnapshot
 	err := conn.QueryRow(`
 		SELECT rank_position, base_score, decay_factor, freshness_bonus,
 		       jitter, diversity_demoted_by, final_score, computed_at
 		FROM feed_rank_snapshot
-		WHERE username = ? AND tweet_id = ?
-	`, username, tweetID).Scan(
+		WHERE tweet_id = ?
+	`, tweetID).Scan(
 		&rank.RankPosition, &rank.BaseScore, &rank.DecayFactor,
 		&rank.FreshnessBonus, &rank.Jitter, &rank.DiversityDemotedBy,
 		&rank.FinalScore, &rank.ComputedAtMs,
@@ -285,18 +285,18 @@ func queryFeedDebugViewerState(conn *sql.DB, username string, item feedDebugItem
 		SourceChannelID: sourceChannelID,
 	}
 
-	seenAt, err := queryOptionalInt64(conn, `SELECT seen_at FROM feed_seen WHERE username = ? AND tweet_id = ?`, username, item.TweetID)
+	seenAt, err := queryOptionalInt64(conn, `SELECT seen_at FROM feed_seen WHERE tweet_id = ?`, item.TweetID)
 	if err != nil {
 		return viewer, err
 	}
 	viewer.SeenAtMs = seenAt
 	if authorChannelID != "" {
-		viewer.AuthorFollowedAt, err = queryOptionalInt64(conn, `SELECT followed_at FROM channel_follows WHERE user_id = '' AND channel_id = ?`, authorChannelID)
+		viewer.AuthorFollowedAt, err = queryOptionalInt64(conn, `SELECT followed_at FROM channel_follows WHERE channel_id = ?`, authorChannelID)
 		if err != nil {
 			return viewer, err
 		}
 		viewer.AuthorIsFollowed = viewer.AuthorFollowedAt != nil
-		viewer.AuthorStarredAt, err = queryOptionalInt64(conn, `SELECT starred_at FROM channel_stars WHERE user_id = '' AND channel_id = ?`, authorChannelID)
+		viewer.AuthorStarredAt, err = queryOptionalInt64(conn, `SELECT starred_at FROM channel_stars WHERE channel_id = ?`, authorChannelID)
 		if err != nil {
 			return viewer, err
 		}
@@ -307,12 +307,12 @@ func queryFeedDebugViewerState(conn *sql.DB, username string, item feedDebugItem
 		}
 	}
 	if sourceChannelID != "" {
-		viewer.SourceFollowedAt, err = queryOptionalInt64(conn, `SELECT followed_at FROM channel_follows WHERE user_id = '' AND channel_id = ?`, sourceChannelID)
+		viewer.SourceFollowedAt, err = queryOptionalInt64(conn, `SELECT followed_at FROM channel_follows WHERE channel_id = ?`, sourceChannelID)
 		if err != nil {
 			return viewer, err
 		}
 		viewer.SourceIsFollowed = viewer.SourceFollowedAt != nil
-		viewer.SourceStarredAt, err = queryOptionalInt64(conn, `SELECT starred_at FROM channel_stars WHERE user_id = '' AND channel_id = ?`, sourceChannelID)
+		viewer.SourceStarredAt, err = queryOptionalInt64(conn, `SELECT starred_at FROM channel_stars WHERE channel_id = ?`, sourceChannelID)
 		if err != nil {
 			return viewer, err
 		}
@@ -322,7 +322,7 @@ func queryFeedDebugViewerState(conn *sql.DB, username string, item feedDebugItem
 			return viewer, err
 		}
 	}
-	viewer.RelatedSeen, err = queryFeedDebugRelatedSeen(conn, username, item)
+	viewer.RelatedSeen, err = queryFeedDebugRelatedSeen(conn, item)
 	if err != nil {
 		return viewer, err
 	}
@@ -359,7 +359,7 @@ func queryFeedDebugIngestState(conn *sql.DB, candidates []string) (*feedDebugIng
 	return nil, nil
 }
 
-func queryFeedDebugRelatedSeen(conn *sql.DB, username string, item feedDebugItem) ([]feedDebugRelatedSeen, error) {
+func queryFeedDebugRelatedSeen(conn *sql.DB, item feedDebugItem) ([]feedDebugRelatedSeen, error) {
 	if strings.TrimSpace(item.ContentHash) == "" {
 		return nil, nil
 	}
@@ -367,12 +367,11 @@ func queryFeedDebugRelatedSeen(conn *sql.DB, username string, item feedDebugItem
 		SELECT fs.tweet_id, fs.seen_at
 		FROM feed_seen fs
 		JOIN feed_items fi ON fi.tweet_id = fs.tweet_id
-		WHERE fs.username = ?
-		  AND fi.content_hash = ?
+		WHERE fi.content_hash = ?
 		  AND fs.tweet_id != ?
 		ORDER BY fs.seen_at DESC, fs.tweet_id
 		LIMIT 10
-	`, username, item.ContentHash, item.TweetID)
+	`, item.ContentHash, item.TweetID)
 	if err != nil {
 		return nil, err
 	}
@@ -409,9 +408,10 @@ func queryMutedAccountAt(conn *sql.DB, handle string) (*int64, error) {
 		return nil, nil
 	}
 	return queryOptionalInt64(conn, `
-		SELECT muted_at
-		FROM muted_accounts
-		WHERE LOWER(LTRIM(TRIM(handle), '@')) = ?
+		SELECT mc.muted_at
+		FROM muted_channels mc
+		JOIN channel_profiles cp ON cp.channel_id = mc.channel_id
+		WHERE LOWER(LTRIM(TRIM(COALESCE(cp.handle, '')), '@')) = ?
 		LIMIT 1
 	`, normalized)
 }

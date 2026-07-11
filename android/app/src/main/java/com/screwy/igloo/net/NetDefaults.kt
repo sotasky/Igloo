@@ -25,11 +25,6 @@ object NetDefaults {
     /** Health probe timeout. */
     val PROBE_REQUEST_TIMEOUT: Duration = 5.seconds
 
-    /** Bundle-delta catch-up can replay large bootstrap pages on one pass. */
-    val DELTA_REQUEST_TIMEOUT: Duration = 45.seconds
-    val DELTA_CONNECT_TIMEOUT: Duration = 20.seconds
-    val DELTA_SOCKET_TIMEOUT: Duration = 45.seconds
-
     /** Optional per-host overrides. Prefer the shared public UA unless a host forces a different one. */
     val UA_OVERRIDES: Map<String, String> = emptyMap()
 }

@@ -83,7 +83,7 @@ func (s *Server) appendClientLog(w http.ResponseWriter, r *http.Request, logRelP
 		username = user.Username
 	}
 
-	path := filepath.Join(s.cfg.DataDir, "logs", logRelPath)
+	path := filepath.Join(s.cfg.Storage.StateRoot(), "logs", logRelPath)
 	logDir := filepath.Dir(path)
 	if err := os.MkdirAll(logDir, 0o755); err != nil {
 		writeJSONError(w, 500, "log_write_failed", fmt.Sprintf("mkdir: %v", err))

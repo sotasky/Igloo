@@ -99,7 +99,7 @@ class MediaPrefetchTest {
             bannerFlowRequests += channelId
             return flowOf(MediaUri.Missing)
         }
-        override suspend fun videoStream(videoId: String): MediaUri = MediaUri.Missing
-        override fun videoStreamFlow(videoId: String): Flow<MediaUri> = flowOf(MediaUri.Missing)
+        override suspend fun videoStream(videoId: String, ownerKind: OwnerKind): MediaUri = MediaUri.Missing
+        override fun videoStreamFlow(videoId: String, ownerKind: OwnerKind): Flow<MediaUri> = flowOf(MediaUri.Missing)
     }
 }

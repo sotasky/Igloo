@@ -18,17 +18,16 @@ internal class AndroidSyncHealthReporter(
     private val logger: Logger,
     private val nowMsProvider: () -> Long,
 ) {
-    suspend fun report(generationId: String, retention: AndroidSyncRetentionRequest): Boolean {
-        val counts = dao.healthCounts(generationId)
+    suspend fun report(cursor: String, retention: AndroidSyncRetentionRequest): Boolean {
+        val counts = dao.healthCounts()
         val req = AndroidSyncHealthRequest(
-            generation_id = generationId,
+            cursor = cursor,
             reported_at_ms = nowMsProvider(),
             retention = retention,
             counts = AndroidSyncHealthCountPayload(
                 total = counts.total,
                 verified = counts.verified,
                 pending = counts.pending,
-                failed = counts.failed,
                 missing = counts.missing,
             ),
             bytes = AndroidSyncHealthBytePayload(verified = counts.verifiedBytes),
@@ -46,12 +45,11 @@ internal class AndroidSyncHealthReporter(
         logger.info(
             event = "android_sync_health_reported",
             fields = mapOf(
-                "generation_id" to generationId,
+                "cursor" to cursor,
                 "uploaded" to uploaded,
                 "upload_elapsed_ms" to uploadElapsedMs,
                 "verified" to counts.verified,
                 "pending" to counts.pending,
-                "failed" to counts.failed,
                 "missing" to counts.missing,
                 "total" to counts.total,
                 "verified_bytes" to counts.verifiedBytes,

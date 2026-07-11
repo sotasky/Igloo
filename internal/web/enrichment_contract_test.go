@@ -45,7 +45,7 @@ func seedEnrichmentFixture(t *testing.T, srv *testServer) {
 		t.Fatalf("UpsertFeedItems: %v", err)
 	}
 
-	if err := srv.db.AddBookmark("alice", "tw_enrich_main", 0, "", "", ""); err != nil {
+	if err := srv.db.AddBookmark("tw_enrich_main", 0, "", "", ""); err != nil {
 		t.Fatalf("AddBookmark: %v", err)
 	}
 }
@@ -142,17 +142,17 @@ func TestFeedXExcludesSeenContent(t *testing.T) {
 		{id: "fresh_post", hash: "fresh_content", published: now - 2},
 	} {
 		if err := srv.db.ExecRaw(`INSERT INTO feed_items
-			(tweet_id, author_handle, source_handle, body_text, content_hash,
+			(tweet_id, channel_id, source_channel_id, body_text, content_hash,
 			 canonical_tweet_id, published_at, fetched_at, algo_interest, algo_scored_at)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			row.id, "sample_author", "sample_author", "body "+row.id, row.hash,
+			row.id, "twitter_sample_author", "twitter_sample_author", "body "+row.id, row.hash,
 			row.id, row.published, now, 20.0, 1); err != nil {
 			t.Fatalf("insert %s: %v", row.id, err)
 		}
 	}
 	if err := srv.db.ExecRaw(
-		`INSERT INTO feed_seen (username, tweet_id, seen_at) VALUES (?, ?, ?)`,
-		user, "seen_post", now,
+		`INSERT INTO feed_seen (tweet_id, seen_at) VALUES (?, ?)`,
+		"seen_post", now,
 	); err != nil {
 		t.Fatalf("insert seen row: %v", err)
 	}

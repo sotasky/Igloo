@@ -17,64 +17,11 @@ object EventDictionary {
         "app_start" to EventTemplate("App started"),
 
         // ─── Sync ─────────────────────────────────────────────────────
-        "periodic_sync_triggered" to EventTemplate("Periodic sync triggered"),
-        "mutation_delta_page_applied" to EventTemplate(
-            "Applied {count} mutations from server",
-            expandFields = listOf("request_marker", "next_marker", "truncated"),
-        ),
-        "mutation_delta_skipped_offline" to EventTemplate("Skipped mutation delta — device is offline"),
-        "mutation_delta_sync_failed" to EventTemplate(
-            "Mutation delta sync failed",
-            expandFields = listOf("error", "stack"),
-        ),
-        "mutation_delta_unknown_type" to EventTemplate("Unknown mutation type — ignored"),
-        "inbound_pass_start"            to EventTemplate("Inbound sync pass starting"),
-        "inbound_pass_done"             to EventTemplate("Inbound sync pass complete"),
-        "inbound_pass_skipped_offline"  to EventTemplate("Inbound pass skipped — device is offline"),
-        "inbound_pass_aborted_offline"  to EventTemplate("Inbound pass aborted — went offline mid-run"),
-        "inbound_reconciler_unhandled"  to EventTemplate(
-            "Inbound reconciler crashed",
-            expandFields = listOf("class", "error", "stack"),
-        ),
-        "stream_page_applied"           to EventTemplate("Applied stream page ({count} items)"),
-        "stream_fetch_exception"        to EventTemplate(
-            "Stream fetch failed",
-            expandFields = listOf("class", "error"),
-        ),
-        "stream_fetch_response_error"   to EventTemplate(
-            "Stream fetch returned error ({status})",
-            expandFields = listOf("status"),
-        ),
-        "stream_fetch_retry"            to EventTemplate("Stream fetch retry scheduled"),
-        "stream_marker_stalled"         to EventTemplate("Stream marker stalled — bailed out"),
-        "stream_parse_failed"           to EventTemplate("Stream entry failed to parse"),
-        "stream_all_parses_failed"      to EventTemplate("Every stream entry failed to parse"),
-        "bundle_parse_failure"          to EventTemplate("Bundle payload parse failed"),
-        "bundle_unknown_kind"           to EventTemplate("Bundle had unknown kind — ignored"),
-        "retention_replay_reset"        to EventTemplate("Retention replay reset"),
-        "retention_prune_refresh"       to EventTemplate("Retention prune refresh"),
-        "android_sync_orphan_asset_files_pruned" to EventTemplate("Pruned orphan Android sync media files"),
-
         // ─── Outbox ───────────────────────────────────────────────────
-        "outbox_drain_skipped_offline" to EventTemplate("Skipped drain — device is offline"),
-        "outbox_drain_unhandled"       to EventTemplate(
-            "Outbox drain crashed",
-            expandFields = listOf("class", "error", "stack"),
-        ),
-        "outbox_row_auth_refresh" to EventTemplate(
-            "Refreshed auth before posting row #{id}",
-            expandFields = listOf("kind"),
-        ),
-        "outbox_row_retry" to EventTemplate(
-            "Retrying outbox row #{id}",
-            expandFields = listOf("kind", "attempt", "error"),
-        ),
         "outbox_row_dead" to EventTemplate(
             "Outbox row #{id} gave up — marked dead",
             expandFields = listOf("kind", "error"),
         ),
-        "outbox_ttl_gc_dead"           to EventTemplate("Dropped {count} dead outbox rows past TTL"),
-        "outbox_debug_backlog_dropped" to EventTemplate("Dropped {count} old debug rows from outbox"),
 
         // ─── Media ────────────────────────────────────────────────────
         "cache_cleared" to EventTemplate("Cleared {bucket|human} cache"),

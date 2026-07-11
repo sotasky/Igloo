@@ -21,3 +21,12 @@ func TestCleanFeedAvatarURLPreservesProfileImages(t *testing.T) {
 		t.Fatalf("CleanFeedAvatarURL() = %q", got)
 	}
 }
+
+func TestTwitterChannelIDFromHandleEnforcesPlatformLength(t *testing.T) {
+	if got := TwitterChannelIDFromHandle("sample_bookmark"); got != "twitter_sample_bookmark" {
+		t.Fatalf("15-character handle = %q", got)
+	}
+	if got := TwitterChannelIDFromHandle("sample_collection"); got != "" {
+		t.Fatalf("overlong handle = %q, want empty", got)
+	}
+}

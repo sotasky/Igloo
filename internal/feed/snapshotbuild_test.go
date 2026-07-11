@@ -13,9 +13,9 @@ import (
 
 func TestBuildSnapshot_AssignsSequentialPositions(t *testing.T) {
 	in := []db.PreDiversitySnapshotRow{
-		{TweetID: "a", AuthorHandle: "u1", BaseScore: 10, DecayFactor: 1, FreshnessBonus: 0},
-		{TweetID: "b", AuthorHandle: "u2", BaseScore: 9, DecayFactor: 1, FreshnessBonus: 0},
-		{TweetID: "c", AuthorHandle: "u3", BaseScore: 8, DecayFactor: 1, FreshnessBonus: 0},
+		{TweetID: "a", ChannelID: "u1", BaseScore: 10, DecayFactor: 1, FreshnessBonus: 0},
+		{TweetID: "b", ChannelID: "u2", BaseScore: 9, DecayFactor: 1, FreshnessBonus: 0},
+		{TweetID: "c", ChannelID: "u3", BaseScore: 8, DecayFactor: 1, FreshnessBonus: 0},
 	}
 	out := BuildSnapshot(in, time.Unix(0, 0))
 	if len(out) != 3 {
@@ -32,9 +32,9 @@ func TestBuildSnapshot_DiversityBreaksAuthorClumps(t *testing.T) {
 	// Two items by "u1" at the top, then "u2" slightly lower — diversity penalty
 	// should pull u2 ahead of the second u1.
 	in := []db.PreDiversitySnapshotRow{
-		{TweetID: "a1", AuthorHandle: "u1", BaseScore: 10, DecayFactor: 1},
-		{TweetID: "a2", AuthorHandle: "u1", BaseScore: 9.5, DecayFactor: 1},
-		{TweetID: "b1", AuthorHandle: "u2", BaseScore: 9.2, DecayFactor: 1},
+		{TweetID: "a1", ChannelID: "u1", BaseScore: 10, DecayFactor: 1},
+		{TweetID: "a2", ChannelID: "u1", BaseScore: 9.5, DecayFactor: 1},
+		{TweetID: "b1", ChannelID: "u2", BaseScore: 9.2, DecayFactor: 1},
 	}
 	out := BuildSnapshot(in, time.Unix(0, 0))
 	if out[0].TweetID != "a1" {
@@ -50,9 +50,9 @@ func TestBuildSnapshot_DiversityBreaksAuthorClumps(t *testing.T) {
 
 func TestBuildSnapshot_DiversityBreaksRelatedContentClumps(t *testing.T) {
 	in := []db.PreDiversitySnapshotRow{
-		{TweetID: "quote_a", AuthorHandle: "sample_author_a", SourceHandle: "sample_source_a", RelatedContentKey: "tweet:sample_original", BaseScore: 30, DecayFactor: 1},
-		{TweetID: "quote_b", AuthorHandle: "sample_author_b", SourceHandle: "sample_source_b", RelatedContentKey: "tweet:sample_original", BaseScore: 29, DecayFactor: 1},
-		{TweetID: "other", AuthorHandle: "sample_author_c", SourceHandle: "sample_source_c", RelatedContentKey: "tweet:other", BaseScore: 28.5, DecayFactor: 1},
+		{TweetID: "quote_a", ChannelID: "sample_author_a", SourceChannelID: "sample_source_a", RelatedContentKey: "tweet:sample_original", BaseScore: 30, DecayFactor: 1},
+		{TweetID: "quote_b", ChannelID: "sample_author_b", SourceChannelID: "sample_source_b", RelatedContentKey: "tweet:sample_original", BaseScore: 29, DecayFactor: 1},
+		{TweetID: "other", ChannelID: "sample_author_c", SourceChannelID: "sample_source_c", RelatedContentKey: "tweet:other", BaseScore: 28.5, DecayFactor: 1},
 	}
 	out := BuildSnapshot(in, time.Unix(0, 0))
 	if out[0].TweetID != "quote_a" {
@@ -70,8 +70,8 @@ func TestBuildSnapshot_HidesNearbyOriginalWhenPureRepostIsClose(t *testing.T) {
 	now := time.Unix(1700000000, 0)
 	publishedAt := now.Add(-time.Hour).UnixMilli()
 	in := []db.PreDiversitySnapshotRow{
-		{TweetID: "original", AuthorHandle: "sample_author", SourceHandle: "sample_author", ContentHash: "same_content", PublishedAtMs: publishedAt, BaseScore: 100, DecayFactor: 1},
-		{TweetID: "sample_repost", AuthorHandle: "sample_author", SourceHandle: "sample_reposter", ContentHash: "same_content", IsRetweet: true, PublishedAtMs: publishedAt + int64(time.Hour/time.Millisecond), BaseScore: 99, DecayFactor: 1},
+		{TweetID: "original", ChannelID: "sample_author", SourceChannelID: "sample_author", ContentHash: "same_content", PublishedAtMs: publishedAt, BaseScore: 100, DecayFactor: 1},
+		{TweetID: "sample_repost", ChannelID: "sample_author", SourceChannelID: "sample_reposter", ContentHash: "same_content", IsRetweet: true, PublishedAtMs: publishedAt + int64(time.Hour/time.Millisecond), BaseScore: 99, DecayFactor: 1},
 	}
 	out := BuildSnapshot(in, now)
 	if got, want := snapshotIDs(out), []string{"sample_repost"}; !reflect.DeepEqual(got, want) {
@@ -86,8 +86,8 @@ func TestBuildSnapshot_HidesOriginalWhenPureRepostIsFourAndHalfHoursLater(t *tes
 	now := time.Unix(1700000000, 0)
 	publishedAt := now.Add(-6 * time.Hour).UnixMilli()
 	in := []db.PreDiversitySnapshotRow{
-		{TweetID: "original", AuthorHandle: "sample_author", SourceHandle: "sample_author", ContentHash: "same_content", PublishedAtMs: publishedAt, BaseScore: 100, DecayFactor: 1},
-		{TweetID: "sample_repost", AuthorHandle: "sample_author", SourceHandle: "sample_reposter", ContentHash: "same_content", IsRetweet: true, PublishedAtMs: publishedAt + int64((4*time.Hour+30*time.Minute)/time.Millisecond), BaseScore: 99, DecayFactor: 1},
+		{TweetID: "original", ChannelID: "sample_author", SourceChannelID: "sample_author", ContentHash: "same_content", PublishedAtMs: publishedAt, BaseScore: 100, DecayFactor: 1},
+		{TweetID: "sample_repost", ChannelID: "sample_author", SourceChannelID: "sample_reposter", ContentHash: "same_content", IsRetweet: true, PublishedAtMs: publishedAt + int64((4*time.Hour+30*time.Minute)/time.Millisecond), BaseScore: 99, DecayFactor: 1},
 	}
 
 	out := BuildSnapshot(in, now)
@@ -100,8 +100,8 @@ func TestBuildSnapshot_KeepsOriginalWhenPureRepostIsOutsideTimeWindow(t *testing
 	now := time.Unix(1700000000, 0)
 	publishedAt := now.Add(-12 * time.Hour).UnixMilli()
 	in := []db.PreDiversitySnapshotRow{
-		{TweetID: "original", AuthorHandle: "sample_author", SourceHandle: "sample_author", ContentHash: "same_content", PublishedAtMs: publishedAt, BaseScore: 100, DecayFactor: 1},
-		{TweetID: "sample_repost_later", AuthorHandle: "sample_author", SourceHandle: "sample_reposter", ContentHash: "same_content", IsRetweet: true, PublishedAtMs: publishedAt + int64(nearbyRepostMergeWindow/time.Millisecond) + 1, BaseScore: 99, DecayFactor: 1},
+		{TweetID: "original", ChannelID: "sample_author", SourceChannelID: "sample_author", ContentHash: "same_content", PublishedAtMs: publishedAt, BaseScore: 100, DecayFactor: 1},
+		{TweetID: "sample_repost_later", ChannelID: "sample_author", SourceChannelID: "sample_reposter", ContentHash: "same_content", IsRetweet: true, PublishedAtMs: publishedAt + int64(nearbyRepostMergeWindow/time.Millisecond) + 1, BaseScore: 99, DecayFactor: 1},
 	}
 	out := BuildSnapshot(in, now)
 	if !snapshotHasID(out, "original") || !snapshotHasID(out, "sample_repost_later") {
@@ -113,28 +113,28 @@ func TestBuildSnapshot_KeepsOriginalWhenPureRepostIsOutsideRankWindow(t *testing
 	now := time.Unix(1700000000, 0)
 	publishedAt := now.Add(-time.Hour).UnixMilli()
 	in := []db.PreDiversitySnapshotRow{
-		{TweetID: "original", AuthorHandle: "sample_author", SourceHandle: "sample_author", ContentHash: "same_content", PublishedAtMs: publishedAt, BaseScore: 400, DecayFactor: 1},
+		{TweetID: "original", ChannelID: "sample_author", SourceChannelID: "sample_author", ContentHash: "same_content", PublishedAtMs: publishedAt, BaseScore: 400, DecayFactor: 1},
 	}
 	for i := 0; i <= nearbyRepostMergeRankDistance; i++ {
 		in = append(in, db.PreDiversitySnapshotRow{
-			TweetID:       fmt.Sprintf("filler_%03d", i),
-			AuthorHandle:  fmt.Sprintf("filler_author_%03d", i),
-			SourceHandle:  fmt.Sprintf("filler_source_%03d", i),
-			ContentHash:   fmt.Sprintf("filler_hash_%03d", i),
-			PublishedAtMs: publishedAt,
-			BaseScore:     399 - float64(i),
-			DecayFactor:   1,
+			TweetID:         fmt.Sprintf("filler_%03d", i),
+			ChannelID:       fmt.Sprintf("filler_author_%03d", i),
+			SourceChannelID: fmt.Sprintf("filler_source_%03d", i),
+			ContentHash:     fmt.Sprintf("filler_hash_%03d", i),
+			PublishedAtMs:   publishedAt,
+			BaseScore:       399 - float64(i),
+			DecayFactor:     1,
 		})
 	}
 	in = append(in, db.PreDiversitySnapshotRow{
-		TweetID:       "sample_repost_b",
-		AuthorHandle:  "sample_author",
-		SourceHandle:  "sample_reposter",
-		ContentHash:   "same_content",
-		IsRetweet:     true,
-		PublishedAtMs: publishedAt + int64(time.Hour/time.Millisecond),
-		BaseScore:     100,
-		DecayFactor:   1,
+		TweetID:         "sample_repost_b",
+		ChannelID:       "sample_author",
+		SourceChannelID: "sample_reposter",
+		ContentHash:     "same_content",
+		IsRetweet:       true,
+		PublishedAtMs:   publishedAt + int64(time.Hour/time.Millisecond),
+		BaseScore:       100,
+		DecayFactor:     1,
 	})
 
 	out := BuildSnapshot(in, now)
@@ -147,8 +147,8 @@ func TestBuildSnapshot_KeepsOriginalForQuoteRetweet(t *testing.T) {
 	now := time.Unix(1700000000, 0)
 	publishedAt := now.Add(-time.Hour).UnixMilli()
 	in := []db.PreDiversitySnapshotRow{
-		{TweetID: "original", AuthorHandle: "sample_author", SourceHandle: "sample_author", ContentHash: "same_content", PublishedAtMs: publishedAt, BaseScore: 100, DecayFactor: 1},
-		{TweetID: "sample_quote_repost", AuthorHandle: "sample_author", SourceHandle: "sample_reposter", ContentHash: "same_content", IsRetweet: true, QuoteTweetID: "quoted_status", PublishedAtMs: publishedAt + int64(time.Hour/time.Millisecond), BaseScore: 99, DecayFactor: 1},
+		{TweetID: "original", ChannelID: "sample_author", SourceChannelID: "sample_author", ContentHash: "same_content", PublishedAtMs: publishedAt, BaseScore: 100, DecayFactor: 1},
+		{TweetID: "sample_quote_repost", ChannelID: "sample_author", SourceChannelID: "sample_reposter", ContentHash: "same_content", IsRetweet: true, QuoteTweetID: "quoted_status", PublishedAtMs: publishedAt + int64(time.Hour/time.Millisecond), BaseScore: 99, DecayFactor: 1},
 	}
 	out := BuildSnapshot(in, now)
 	if !snapshotHasID(out, "original") || !snapshotHasID(out, "sample_quote_repost") {
@@ -158,10 +158,10 @@ func TestBuildSnapshot_KeepsOriginalForQuoteRetweet(t *testing.T) {
 
 func TestBuildSnapshotCompactsConversationRoots(t *testing.T) {
 	in := []db.PreDiversitySnapshotRow{
-		{TweetID: "thread_root", AuthorHandle: "sample_root_author", ThreadRootID: "thread_root", BaseScore: 100, DecayFactor: 1},
-		{TweetID: "thread_reply_a", AuthorHandle: "sample_reply_author_a", ThreadRootID: "thread_root", IsReply: true, BaseScore: 90, DecayFactor: 1},
-		{TweetID: "thread_reply_b", AuthorHandle: "sample_reply_author_b", ThreadRootID: "thread_root", IsReply: true, BaseScore: 80, DecayFactor: 1},
-		{TweetID: "other_thread", AuthorHandle: "sample_author_c", ThreadRootID: "other_thread", BaseScore: 70, DecayFactor: 1},
+		{TweetID: "thread_root", ChannelID: "sample_root_author", ThreadRootID: "thread_root", BaseScore: 100, DecayFactor: 1},
+		{TweetID: "thread_reply_a", ChannelID: "sample_reply_author_a", ThreadRootID: "thread_root", IsReply: true, BaseScore: 90, DecayFactor: 1},
+		{TweetID: "thread_reply_b", ChannelID: "sample_reply_author_b", ThreadRootID: "thread_root", IsReply: true, BaseScore: 80, DecayFactor: 1},
+		{TweetID: "other_thread", ChannelID: "sample_author_c", ThreadRootID: "other_thread", BaseScore: 70, DecayFactor: 1},
 	}
 
 	out := BuildSnapshot(in, time.Unix(0, 0))
@@ -177,10 +177,10 @@ func TestBuildSnapshotCompactsConversationRoots(t *testing.T) {
 
 func TestBuildSnapshotCompactsPureRepostIntoThreadAtBestRank(t *testing.T) {
 	in := []db.PreDiversitySnapshotRow{
-		{TweetID: "sample_repost", AuthorHandle: "sample_root_author", SourceHandle: "sample_reposter", ContentHash: "same_content", IsRetweet: true, RepostTargetThreadRootID: "thread_root", BaseScore: 100, DecayFactor: 1},
-		{TweetID: "sample_repost_b", AuthorHandle: "sample_root_author", SourceHandle: "sample_reposter_b", ContentHash: "same_content", IsRetweet: true, RepostTargetThreadRootID: "thread_root", BaseScore: 95, DecayFactor: 1},
-		{TweetID: "other_thread", AuthorHandle: "sample_author_c", ThreadRootID: "other_thread", BaseScore: 90, DecayFactor: 1},
-		{TweetID: "thread_leaf", AuthorHandle: "sample_reply_author", ThreadRootID: "thread_root", IsReply: true, BaseScore: 10, DecayFactor: 1},
+		{TweetID: "sample_repost", ChannelID: "sample_root_author", SourceChannelID: "sample_reposter", ContentHash: "same_content", IsRetweet: true, RepostTargetThreadRootID: "thread_root", BaseScore: 100, DecayFactor: 1},
+		{TweetID: "sample_repost_b", ChannelID: "sample_root_author", SourceChannelID: "sample_reposter_b", ContentHash: "same_content", IsRetweet: true, RepostTargetThreadRootID: "thread_root", BaseScore: 95, DecayFactor: 1},
+		{TweetID: "other_thread", ChannelID: "sample_author_c", ThreadRootID: "other_thread", BaseScore: 90, DecayFactor: 1},
+		{TweetID: "thread_leaf", ChannelID: "sample_reply_author", ThreadRootID: "thread_root", IsReply: true, BaseScore: 10, DecayFactor: 1},
 	}
 
 	out := BuildSnapshot(in, time.Unix(0, 0))
@@ -197,8 +197,8 @@ func TestBuildSnapshotCompactsPureRepostIntoThreadAtBestRank(t *testing.T) {
 
 func TestBuildSnapshotKeepsQuoteRepostSeparateFromThread(t *testing.T) {
 	in := []db.PreDiversitySnapshotRow{
-		{TweetID: "sample_quote_repost", AuthorHandle: "sample_root_author", SourceHandle: "sample_reposter", ContentHash: "same_content", IsRetweet: true, QuoteTweetID: "quoted_status", RepostTargetThreadRootID: "thread_root", BaseScore: 100, DecayFactor: 1},
-		{TweetID: "thread_leaf", AuthorHandle: "sample_reply_author", ThreadRootID: "thread_root", IsReply: true, BaseScore: 90, DecayFactor: 1},
+		{TweetID: "sample_quote_repost", ChannelID: "sample_root_author", SourceChannelID: "sample_reposter", ContentHash: "same_content", IsRetweet: true, QuoteTweetID: "quoted_status", RepostTargetThreadRootID: "thread_root", BaseScore: 100, DecayFactor: 1},
+		{TweetID: "thread_leaf", ChannelID: "sample_reply_author", ThreadRootID: "thread_root", IsReply: true, BaseScore: 90, DecayFactor: 1},
 	}
 
 	out := BuildSnapshot(in, time.Unix(0, 0))
@@ -257,7 +257,7 @@ func TestJitter_MatchesStandardFNV1a(t *testing.T) {
 
 func TestBuildSnapshot_RecordsBreakdown(t *testing.T) {
 	in := []db.PreDiversitySnapshotRow{
-		{TweetID: "x", AuthorHandle: "u", BaseScore: 7, DecayFactor: 0.5, FreshnessBonus: 2},
+		{TweetID: "x", ChannelID: "u", BaseScore: 7, DecayFactor: 0.5, FreshnessBonus: 2},
 	}
 	out := BuildSnapshot(in, time.Unix(0, 0))
 	if len(out) != 1 {
@@ -281,7 +281,7 @@ func TestBuildSnapshot_RecordsBreakdown(t *testing.T) {
 func TestBuildSnapshot_AppliesReplyPenalty(t *testing.T) {
 	now := time.Unix(1700000000, 0)
 	in := []db.PreDiversitySnapshotRow{
-		{TweetID: "reply", AuthorHandle: "u", BaseScore: 10, DecayFactor: 1, FreshnessBonus: 0, ReplyPenalty: 4},
+		{TweetID: "reply", ChannelID: "u", BaseScore: 10, DecayFactor: 1, FreshnessBonus: 0, ReplyPenalty: 4},
 	}
 	out := BuildSnapshot(in, now)
 	if len(out) != 1 {
@@ -296,8 +296,8 @@ func TestBuildSnapshot_AppliesReplyPenalty(t *testing.T) {
 func TestBuildSnapshot_DiversityDemotedByRecorded(t *testing.T) {
 	// Two items, same author. Second should have author penalty recorded.
 	in := []db.PreDiversitySnapshotRow{
-		{TweetID: "a", AuthorHandle: "u", BaseScore: 10, DecayFactor: 1, FreshnessBonus: 0},
-		{TweetID: "b", AuthorHandle: "u", BaseScore: 9, DecayFactor: 1, FreshnessBonus: 0},
+		{TweetID: "a", ChannelID: "u", BaseScore: 10, DecayFactor: 1, FreshnessBonus: 0},
+		{TweetID: "b", ChannelID: "u", BaseScore: 9, DecayFactor: 1, FreshnessBonus: 0},
 	}
 	out := BuildSnapshot(in, time.Unix(0, 0))
 	if out[0].DiversityDemotedBy != 0 {
@@ -373,11 +373,11 @@ func buildSnapshotExhaustiveForTest(in []db.PreDiversitySnapshotRow, now time.Ti
 			}
 			s := cands[i].base
 			demoted := 0.0
-			if cands[i].row.AuthorHandle != "" && containsLower(recentAuthors, cands[i].row.AuthorHandle) {
+			if cands[i].row.ChannelID != "" && containsLower(recentAuthors, cands[i].row.ChannelID) {
 				s -= diversityAuthorPen
 				demoted += diversityAuthorPen
 			}
-			if cands[i].row.SourceHandle != "" && containsLower(recentSources, cands[i].row.SourceHandle) {
+			if cands[i].row.SourceChannelID != "" && containsLower(recentSources, cands[i].row.SourceChannelID) {
 				s -= diversitySourcePen
 				demoted += diversitySourcePen
 			}
@@ -408,8 +408,8 @@ func buildSnapshotExhaustiveForTest(in []db.PreDiversitySnapshotRow, now time.Ti
 			FinalScore:         bestScore,
 		})
 
-		recentAuthors = pushWindow(recentAuthors, strings.ToLower(c.row.AuthorHandle), diversityWindow)
-		recentSources = pushWindow(recentSources, strings.ToLower(c.row.SourceHandle), diversityWindow)
+		recentAuthors = pushWindow(recentAuthors, strings.ToLower(c.row.ChannelID), diversityWindow)
+		recentSources = pushWindow(recentSources, strings.ToLower(c.row.SourceChannelID), diversityWindow)
 		recentRelated = pushWindow(recentRelated, strings.ToLower(c.row.RelatedContentKey), diversityWindow)
 	}
 	return out
@@ -429,8 +429,8 @@ func syntheticSnapshotRows(n int) []db.PreDiversitySnapshotRow {
 	for i := 0; i < n; i++ {
 		rows[i] = db.PreDiversitySnapshotRow{
 			TweetID:           fmt.Sprintf("tw_%04d", i),
-			AuthorHandle:      fmt.Sprintf("author_%02d", i%17),
-			SourceHandle:      fmt.Sprintf("source_%02d", (i/3)%11),
+			ChannelID:         fmt.Sprintf("author_%02d", i%17),
+			SourceChannelID:   fmt.Sprintf("source_%02d", (i/3)%11),
 			RelatedContentKey: fmt.Sprintf("related_%02d", (i/4)%29),
 			BaseScore:         200 - float64(i%80)*0.07 - float64(i/80)*0.5,
 			DecayFactor:       1 - float64(i%5)*0.03,

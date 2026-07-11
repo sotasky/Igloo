@@ -325,8 +325,7 @@ func (s *Server) archivePathForCategoryID(r *http.Request, catID int64) string {
 	if !bookmarkArchivePathsAllowed(user) {
 		return ""
 	}
-	uid := user.Username
-	cats, _ := s.db.GetBookmarkCategories(uid)
+	cats, _ := s.db.GetBookmarkCategories()
 	for _, c := range cats {
 		if c.ID == catID {
 			archivePath, err := normalizeArchivePath(c.ArchivePath)

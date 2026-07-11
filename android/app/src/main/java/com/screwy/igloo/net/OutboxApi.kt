@@ -11,24 +11,16 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 /**
- * Outbox dispatcher's HTTP surface. Covers:
- *  - `POST /api/logs/{server,debug}` (server-side-changes #12).
- *  - `POST` + `PUT` `/api/mutations/{kind}` (server-side-changes #11).
+ * Every method returns the raw `HttpResponse` so the dispatcher can classify status via
+ * `HttpResponse.classify()` before reading the body. Body extraction happens only on 2xx (via
+ * `.body<T>()`); on 4xx/5xx the classifier reads the envelope in `IglooError.classify` and the body
+ * is ignored.
  *
- * Every method returns the raw `HttpResponse` so the dispatcher can classify status
- * via `HttpResponse.classify()` before reading the body. Body extraction happens
- * only on 2xx (via `.body<T>()`); on 4xx/5xx the classifier reads the envelope in
- * `IglooError.classify` and the body is ignored.
- *
- * Types stay thin and close to the server's body shapes in
- * `internal/web/mutations_api.go`.
+ * Types stay thin and close to the server's body shapes in `internal/web/mutations_api.go`.
  */
-class OutboxApi(
-    private val client: HttpClient,
-    private val baseUrlProvider: () -> String,
-) {
+class OutboxApi(private val client: HttpClient, private val baseUrlProvider: () -> String) {
 
-    // ─── Logs (#12) ─────────────────────────────────────────────────────────
+    // ─── Logs ───────────────────────────────────────────────────────────────
 
     suspend fun postLogServer(batch: LogBatchRequest): HttpResponse =
         client.post(baseUrlProvider() + "/api/logs/server") {
@@ -42,7 +34,7 @@ class OutboxApi(
             setBody(batch)
         }
 
-    // ─── Mutations (#11) ────────────────────────────────────────────────────
+    // ─── Mutations ──────────────────────────────────────────────────────────
 
     suspend fun like(req: LikeRequest): HttpResponse =
         client.post(baseUrlProvider() + "/api/mutations/like") {
@@ -109,21 +101,12 @@ class OutboxApi(
             contentType(ContentType.Application.Json)
             setBody(req)
         }
-
-    suspend fun bookmarkAlias(req: BookmarkAliasRequest): HttpResponse =
-        client.put(baseUrlProvider() + "/api/mutations/bookmark_alias") {
-            contentType(ContentType.Application.Json)
-            setBody(req)
-        }
 }
 
 // ─── Log payloads ──────────────────────────────────────────────────────────
 
 @Serializable
-data class LogBatchRequest(
-    val entries: List<LogEntryPayload>,
-    val device_id: String? = null,
-)
+data class LogBatchRequest(val entries: List<LogEntryPayload>, val device_id: String? = null)
 
 @Serializable
 data class LogEntryPayload(
@@ -157,26 +140,21 @@ data class ToggleRequest(
 )
 
 @Serializable
-data class MuteRequest(val handle: String, val action: String, val updated_at_ms: Long)
+data class MuteRequest(val channel_id: String, val action: String, val updated_at_ms: Long)
+
+@Serializable data class SeenRequest(val tweet_ids: List<String>, val updated_at_ms: Long)
+
+@Serializable data class MomentViewRequest(val video_id: String, val updated_at_ms: Long)
 
 @Serializable
-data class SeenRequest(val tweet_ids: List<String>, val updated_at_ms: Long)
-
-@Serializable
-data class MomentViewRequest(val video_id: String, val updated_at_ms: Long)
-
-@Serializable
-data class CreateCategoryRequest(val name: String, val provisional_id: String, val updated_at_ms: Long)
-
-@Serializable
-data class CreateCategoryResponse(
-    val category_id: Long,
+data class CreateCategoryRequest(
+    val name: String,
     val provisional_id: String,
-    val ok: Boolean = true,
-    val sync_version: Long? = null,
-    val sync_stream: String? = null,
-    val server_time_ms: Long? = null,
+    val request_id: String,
+    val updated_at_ms: Long,
 )
+
+@Serializable data class CreateCategoryResponse(val category_id: Long, val provisional_id: String)
 
 @Serializable
 data class ChannelSettingRequest(
@@ -191,7 +169,6 @@ data class ProgressRequest(
     val video_id: String,
     val position: Double,
     val duration: Double,
-    val source: String,
     val updated_at_ms: Long,
 )
 
@@ -202,11 +179,4 @@ data class MomentsCursorRequest(
     val updated_at_ms: Long,
     val scope: String = "all",
     val sort_at_ms: Long? = null,
-)
-
-@Serializable
-data class BookmarkAliasRequest(
-    val original_handle: String,
-    val display_alias: String,
-    val updated_at_ms: Long,
 )

@@ -63,11 +63,12 @@ func CommentAuthorInitialText(p PageProps, c model.Comment) string {
 	return "U"
 }
 
-// CommentAuthorAvatarURL uses the thumbnail yt-dlp already returned with the
-// comment. YouTube commenters are not navigable Igloo profiles, so they should
-// not enter channel_profiles or local avatar recovery.
 func CommentAuthorAvatarURL(c model.Comment) string {
-	return strings.TrimSpace(c.AuthorThumbnail)
+	url := strings.TrimSpace(c.AuthorThumbnail)
+	if strings.HasPrefix(url, "/api/media/comment-avatar/") {
+		return url
+	}
+	return ""
 }
 
 // CommentIndentPx returns the left indent for a reply depth.

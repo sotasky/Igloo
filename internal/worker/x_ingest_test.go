@@ -35,108 +35,46 @@ func (f fakeXFeedFetcher) FetchStatus(ctx context.Context, handle, tweetID strin
 	return xfeed.ParseResult{}, errors.New("unexpected status fetch")
 }
 
-func TestDownloadNewAuthorAvatars_QueuesProfileFallbackForPlaceholderURL(t *testing.T) {
+func TestUpsertFeedItemsDeclaresDirectAndQuoteAssetsWithoutLegacyJobs(t *testing.T) {
 	d := newTestWorkerDB(t)
-	m := &Manager{
-		db:            d,
-		cfg:           testCfg(t.TempDir()),
-		avatarRequest: make(chan string, 1),
-	}
-
-	m.downloadNewAuthorAvatars(context.Background(), []model.FeedItem{{
-		AuthorHandle:    "UserAlpha",
-		AuthorAvatarURL: "https://x.com/example_account/status/undefined",
-	}})
-
-	select {
-	case got := <-m.avatarRequest:
-		if got != "twitter_useralpha" {
-			t.Fatalf("queued channelID = %q, want %q", got, "twitter_useralpha")
-		}
-	default:
-		t.Fatal("expected profile fallback request")
-	}
-}
-
-func TestPrimeFeedItemProfilesSeedsProfileRowsAndQueuesRecovery(t *testing.T) {
-	d := newTestWorkerDB(t)
-	m := &Manager{
-		db:            d,
-		cfg:           testCfg(t.TempDir()),
-		avatarRequest: make(chan string, 4),
-	}
-
-	m.primeFeedItemProfiles(context.Background(), []model.FeedItem{{
-		AuthorHandle:      "UserAlpha",
-		AuthorDisplayName: "User Alpha",
-	}})
-
-	got, err := d.GetChannelProfile("twitter_useralpha")
-	if err != nil {
-		t.Fatalf("GetChannelProfile: %v", err)
-	}
-	if got == nil || got.Handle != "useralpha" || got.DisplayName != "User Alpha" || got.FetchedAt != nil {
-		t.Fatalf("profile row not primed: %+v", got)
-	}
-	select {
-	case queued := <-m.avatarRequest:
-		if queued != "twitter_useralpha" {
-			t.Fatalf("queued channelID = %q, want twitter_useralpha", queued)
-		}
-	default:
-		t.Fatal("expected profile recovery request")
-	}
-}
-
-func TestFeedMediaJobRowsForItemsRespectsMediaDownloadLimit(t *testing.T) {
-	items := []model.FeedItem{
-		{TweetID: "text_only", SourceHandle: "twitter_alice"},
-		{TweetID: "media_1", SourceHandle: "twitter_alice", CanonicalURL: "https://x.com/alice/status/1", MediaJSON: `[{"url":"https://cdn.example/1.jpg","type":"photo"}]`},
-		{TweetID: "media_2", SourceHandle: "twitter_alice", CanonicalURL: "https://x.com/alice/status/2", MediaJSON: `[{"url":"https://cdn.example/2.mp4","type":"video"}]`},
-		{TweetID: "media_3", SourceHandle: "twitter_alice", CanonicalURL: "https://x.com/alice/status/3", MediaJSON: `[{"url":"https://cdn.example/3.jpg","type":"photo"}]`},
-	}
-
-	jobs := feedMediaJobRowsForItems(items, &db.ChannelSettings{MediaDownloadLimit: 2})
-	if len(jobs) != 2 {
-		t.Fatalf("jobs len = %d, want 2: %+v", len(jobs), jobs)
-	}
-	if jobs[0].TweetID != "media_1" || jobs[1].TweetID != "media_2" {
-		t.Fatalf("job IDs = %q, %q; want media_1, media_2", jobs[0].TweetID, jobs[1].TweetID)
-	}
-}
-
-func TestFeedMediaJobRowsForItemsUsesQuoteMedia(t *testing.T) {
 	items := []model.FeedItem{{
-		TweetID:           "quote_only",
-		SourceHandle:      "twitter_alice",
-		CanonicalURL:      "https://x.com/alice/status/quote",
-		QuoteTweetID:      "quoted_post",
-		QuoteMediaJSON:    `[{"url":"https://cdn.example/q1.jpg","type":"photo"},{"url":"https://cdn.example/q2.jpg","type":"photo"}]`,
-		QuoteAuthorHandle: "bob",
+		TweetID:        "sample_outer",
+		SourceHandle:   "sample_source",
+		AuthorHandle:   "sample_author",
+		MediaJSON:      `[{"url":"https://cdn.example/direct.jpg","type":"photo"}]`,
+		QuoteTweetID:   "sample_quote",
+		QuoteMediaJSON: `[{"url":"https://cdn.example/quote.jpg","type":"photo"},{"url":"https://cdn.example/quote.mp4","type":"video","thumbnail_url":"https://cdn.example/quote-thumb.jpg"}]`,
 	}}
+	if n, err := d.UpsertFeedItems(items); err != nil || n != 1 {
+		t.Fatalf("UpsertFeedItems = (%d, %v), want (1, nil)", n, err)
+	}
 
-	jobs := feedMediaJobRowsForItems(items, &db.ChannelSettings{MediaDownloadLimit: 20})
-	if len(jobs) != 1 {
-		t.Fatalf("jobs len = %d, want 1: %+v", len(jobs), jobs)
-	}
-	if jobs[0].TweetID != "quote_only" {
-		t.Fatalf("job tweet = %q, want quote_only", jobs[0].TweetID)
-	}
-	if jobs[0].MediaKind != "image" {
-		t.Fatalf("job media kind = %q, want image", jobs[0].MediaKind)
-	}
-	if jobs[0].SlideCount != 2 {
-		t.Fatalf("job slide count = %d, want 2", jobs[0].SlideCount)
+	for _, expected := range []struct {
+		owner string
+		kind  string
+		index int
+	}{
+		{"sample_outer", "post_media", 0},
+		{"sample_quote", "post_media", 0},
+		{"sample_quote", "post_media", 1},
+		{"sample_quote", "post_thumbnail", 0},
+	} {
+		asset, err := d.GetAsset(db.BuildAssetID("twitter", "tweet", expected.owner, expected.kind, expected.index), expected.kind)
+		if err != nil {
+			t.Fatalf("GetAsset %s/%s/%d: %v", expected.owner, expected.kind, expected.index, err)
+		}
+		if asset == nil || asset.State != db.AssetStateQueued || asset.SourceURL == "" {
+			t.Fatalf("asset %s/%s/%d = %+v", expected.owner, expected.kind, expected.index, asset)
+		}
 	}
 }
 
 func TestFetchOneChannelUsesXFeedFetcherAndQueuesMedia(t *testing.T) {
 	d := newTestWorkerDB(t)
 	m := &Manager{
-		db:            d,
-		cfg:           testCfg(t.TempDir()),
-		downloader:    testDownloader(),
-		avatarRequest: make(chan string, 1),
+		db:         d,
+		cfg:        testCfg(t.TempDir()),
+		downloader: testDownloader(),
 		xFeedFetcher: fakeXFeedFetcher{
 			timeline: func(_ context.Context, handle string, limit int) ([]model.FeedItem, error) {
 				if handle != "sample_user" {
@@ -177,9 +115,9 @@ func TestFetchOneChannelUsesXFeedFetcherAndQueuesMedia(t *testing.T) {
 	if got == nil || got.BodyText != "post with media" {
 		t.Fatalf("feed item = %+v", got)
 	}
-	queued, processing, err := d.CountPendingFeedMediaJobs()
+	queued, processing, err := d.CountPendingXContentDownloads()
 	if err != nil {
-		t.Fatalf("CountPendingFeedMediaJobs: %v", err)
+		t.Fatalf("CountPendingXContentDownloads: %v", err)
 	}
 	if queued+processing != 1 {
 		t.Fatalf("media jobs = queued %d processing %d, want 1 total", queued, processing)
@@ -189,10 +127,9 @@ func TestFetchOneChannelUsesXFeedFetcherAndQueuesMedia(t *testing.T) {
 func TestFetchOneChannelDropsDetachedForeignTimelineItems(t *testing.T) {
 	d := newTestWorkerDB(t)
 	m := &Manager{
-		db:            d,
-		cfg:           testCfg(t.TempDir()),
-		downloader:    testDownloader(),
-		avatarRequest: make(chan string, 1),
+		db:         d,
+		cfg:        testCfg(t.TempDir()),
+		downloader: testDownloader(),
 		xFeedFetcher: fakeXFeedFetcher{
 			timeline: func(_ context.Context, handle string, limit int) ([]model.FeedItem, error) {
 				return []model.FeedItem{
@@ -249,10 +186,9 @@ func TestFetchOneChannelDropsDetachedForeignTimelineItems(t *testing.T) {
 func TestFetchOneChannelRecordsFailureBackoff(t *testing.T) {
 	d := newTestWorkerDB(t)
 	m := &Manager{
-		db:            d,
-		cfg:           testCfg(t.TempDir()),
-		downloader:    testDownloader(),
-		avatarRequest: make(chan string, 1),
+		db:         d,
+		cfg:        testCfg(t.TempDir()),
+		downloader: testDownloader(),
 		xFeedFetcher: fakeXFeedFetcher{
 			timeline: func(context.Context, string, int) ([]model.FeedItem, error) {
 				return nil, errors.New("HTTP 429: Too Many Requests")
@@ -296,9 +232,9 @@ func TestRunIngestCycleSweepsRepliesWhenNoChannelsDue(t *testing.T) {
 	}
 	if _, err := d.UpsertFeedItems([]model.FeedItem{{
 		TweetID:       "sample_known_leaf",
-		AuthorHandle:  "sample_author_alpha",
+		AuthorHandle:  "sample_alpha",
 		IsReply:       true,
-		ReplyToHandle: "sample_author_beta",
+		ReplyToHandle: "sample_beta",
 		ReplyToStatus: "sample_missing_parent",
 		PublishedAt:   &now,
 		FetchedAt:     now,
@@ -306,9 +242,16 @@ func TestRunIngestCycleSweepsRepliesWhenNoChannelsDue(t *testing.T) {
 	}}); err != nil {
 		t.Fatalf("UpsertFeedItems: %v", err)
 	}
+	candidates, err := d.FindUnresolvedReplies(10)
+	if err != nil {
+		t.Fatalf("FindUnresolvedReplies: %v", err)
+	}
+	if len(candidates) != 1 || candidates[0].ReplyToHandle != "sample_beta" {
+		t.Fatalf("unresolved reply candidates = %#v", candidates)
+	}
 
 	fixtures := map[string]string{
-		"/sample_author_beta/status/sample_missing_parent": tweetFixture("sample_missing_parent", "sample_author_beta", "parent body", "", ""),
+		"/sample_beta/status/sample_missing_parent": tweetFixture("sample_missing_parent", "sample_beta", "parent body", "", ""),
 	}
 	srv := httptest.NewServer(fxtMockHandler(t, fixtures))
 	defer srv.Close()
@@ -351,9 +294,9 @@ func TestRunIngestCycleSweepsRepliesBeforeFetchingReadyChannels(t *testing.T) {
 	now := time.Now().UTC()
 	if _, err := d.UpsertFeedItems([]model.FeedItem{{
 		TweetID:       "sample_ready_leaf",
-		AuthorHandle:  "sample_author_alpha",
+		AuthorHandle:  "sample_alpha",
 		IsReply:       true,
-		ReplyToHandle: "sample_author_beta",
+		ReplyToHandle: "sample_beta",
 		ReplyToStatus: "sample_ready_parent",
 		PublishedAt:   &now,
 		FetchedAt:     now,
@@ -363,7 +306,7 @@ func TestRunIngestCycleSweepsRepliesBeforeFetchingReadyChannels(t *testing.T) {
 	}
 
 	fixtures := map[string]string{
-		"/sample_author_beta/status/sample_ready_parent": tweetFixture("sample_ready_parent", "sample_author_beta", "parent body", "", ""),
+		"/sample_beta/status/sample_ready_parent": tweetFixture("sample_ready_parent", "sample_beta", "parent body", "", ""),
 	}
 	srv := httptest.NewServer(fxtMockHandler(t, fixtures))
 	defer srv.Close()
@@ -494,10 +437,9 @@ func TestFetchOneFeedSourceRecordsAttribution(t *testing.T) {
 		t.Fatalf("UpsertFeedSource: %v", err)
 	}
 	m := &Manager{
-		db:            d,
-		cfg:           testCfg(t.TempDir()),
-		downloader:    testDownloader(),
-		avatarRequest: make(chan string, 1),
+		db:         d,
+		cfg:        testCfg(t.TempDir()),
+		downloader: testDownloader(),
 		xFeedFetcher: fakeXFeedFetcher{
 			timeline: func(context.Context, string, int) ([]model.FeedItem, error) {
 				t.Fatal("timeline fetch should not be called")

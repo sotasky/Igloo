@@ -2,59 +2,56 @@ package web
 
 import (
 	"net/http"
-	"path/filepath"
-
-	"github.com/screwys/igloo/internal/worker"
 )
 
 func (s *Server) registerPreviewAPIRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/media/preview-sprite/{videoID}", s.handlePreviewSprite)
 	mux.HandleFunc("GET /api/media/preview-track-json/{videoID}", s.handlePreviewTrackJSON)
-	mux.HandleFunc("POST /api/previews/ensure/{videoID}", s.handlePreviewEnsure)
 	mux.HandleFunc("GET /api/previews/status", s.handlePreviewStatus)
 }
 
 func (s *Server) handlePreviewSprite(w http.ResponseWriter, r *http.Request) {
 	videoID := r.PathValue("videoID")
-	path := filepath.Join(s.cfg.DataDir, "thumbnails", "previews", videoID, "sprite.jpg")
-	cacheControl := "public, max-age=86400"
-	w.Header().Set("Cache-Control", cacheControl)
-	if s.serveDataFileViaXAccel(w, r, path, "image/jpeg", cacheControl) {
+	owner, ok := s.videoAssetOwner(videoID)
+	if !ok {
+		http.NotFound(w, r)
 		return
 	}
-	http.ServeFile(w, r, path)
+	file := s.canonicalAsset(owner, "preview_sprite", 0)
+	if file == nil {
+		http.NotFound(w, r)
+		return
+	}
+	cacheControl := "public, max-age=86400"
+	contentType := file.asset.ContentType
+	w.Header().Set("Cache-Control", cacheControl)
+	w.Header().Set("Content-Type", contentType)
+	if s.serveDataFileViaXAccel(w, r, file.path, contentType, cacheControl) {
+		return
+	}
+	http.ServeFile(w, r, file.path)
 }
 
 func (s *Server) handlePreviewTrackJSON(w http.ResponseWriter, r *http.Request) {
 	videoID := r.PathValue("videoID")
-	path := filepath.Join(s.cfg.DataDir, "thumbnails", "previews", videoID, "track.json")
-	contentType := "application/json"
+	owner, ok := s.videoAssetOwner(videoID)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	file := s.canonicalAsset(owner, "preview_track_json", 0)
+	if file == nil {
+		http.NotFound(w, r)
+		return
+	}
+	contentType := file.asset.ContentType
 	cacheControl := "public, max-age=86400"
 	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Cache-Control", cacheControl)
-	if s.serveDataFileViaXAccel(w, r, path, contentType, cacheControl) {
+	if s.serveDataFileViaXAccel(w, r, file.path, contentType, cacheControl) {
 		return
 	}
-	http.ServeFile(w, r, path)
-}
-
-func (s *Server) handlePreviewEnsure(w http.ResponseWriter, r *http.Request) {
-	videoID := r.PathValue("videoID")
-	video, err := s.db.GetVideo(videoID)
-	if err != nil || video == nil {
-		writeJSON(w, 404, map[string]any{"error": "video not found"})
-		return
-	}
-	absPath := video.FilePath
-	if !filepath.IsAbs(absPath) {
-		absPath = filepath.Join(s.cfg.DataDir, absPath)
-	}
-	s.workers.EnqueuePreview(worker.PreviewRequest{
-		VideoID:  videoID,
-		FilePath: absPath,
-		Duration: float64(video.Duration),
-	})
-	writeJSON(w, 200, map[string]any{"success": true, "queued": true})
+	http.ServeFile(w, r, file.path)
 }
 
 func (s *Server) handlePreviewStatus(w http.ResponseWriter, r *http.Request) {

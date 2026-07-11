@@ -26,7 +26,7 @@ func (db *DB) GetUnscoredFeedItems(limit int) ([]ScoringItem, error) {
 	q := `SELECT tweet_id, COALESCE(source_handle,''), author_handle,
 	             COALESCE(body_text,''), COALESCE(media_json,''),
 	             COALESCE(is_retweet,0), COALESCE(published_at,'')
-	      FROM feed_items WHERE algo_scored_at = 0`
+	      FROM feed_items_resolved WHERE algo_scored_at = 0`
 	if limit > 0 {
 		q += fmt.Sprintf(" LIMIT %d", limit)
 	}
@@ -94,10 +94,14 @@ func (db *DB) InvalidateAlgoScore(tweetIDs ...string) error {
 // InvalidateAlgoScoreByHandle resets algo_scored_at to 0 for all items
 // matching the given source or author handle. Used when a channel is starred/unstarred.
 func (db *DB) InvalidateAlgoScoreByHandle(handle string) error {
+	channelID := model.TwitterChannelIDFromHandle(handle)
+	if channelID == "" {
+		return nil
+	}
 	return db.WithWrite(func(tx *sql.Tx) error {
 		_, err := tx.Exec(
-			"UPDATE feed_items SET algo_scored_at = 0 WHERE LOWER(source_handle) = ? OR LOWER(author_handle) = ?",
-			strings.ToLower(handle), strings.ToLower(handle),
+			"UPDATE feed_items SET algo_scored_at = 0 WHERE source_channel_id = ? OR channel_id = ?",
+			channelID, channelID,
 		)
 		return err
 	})
@@ -113,7 +117,7 @@ func (db *DB) CountUnscoredItems() (int, error) {
 // ListRankedFeedItems returns feed items ranked by algo_interest with piecewise
 // linear time decay applied in SQL. Seen items are excluded. Muted accounts filtered.
 // offset skips the first N ranked items for infinite-scroll pagination.
-func (db *DB) ListRankedFeedItems(username string, limit int, offset int) ([]model.FeedItem, error) {
+func (db *DB) ListRankedFeedItems(limit int, offset int) ([]model.FeedItem, error) {
 	if limit <= 0 {
 		limit = 41
 	}
@@ -126,25 +130,22 @@ func (db *DB) ListRankedFeedItems(username string, limit int, offset int) ([]mod
 	where = append(where, feedPrimaryItemPredicate("fi"))
 
 	// Exclude muted accounts
-	muted, _ := db.GetMutedAccounts()
+	muted, _ := db.GetMutedChannelIDs()
 	if len(muted) > 0 {
 		ph := strings.Repeat("?,", len(muted))
 		ph = ph[:len(ph)-1]
-		where = append(where, "fi.author_handle NOT IN ("+ph+")")
-		for _, h := range muted {
-			args = append(args, h)
+		where = append(where, "fi.channel_id NOT IN ("+ph+")")
+		for _, channelID := range muted {
+			args = append(args, channelID)
 		}
-		where = append(where, "COALESCE(fi.source_handle,'') NOT IN ("+ph+")")
-		for _, h := range muted {
-			args = append(args, h)
+		where = append(where, "COALESCE(fi.source_channel_id,'') NOT IN ("+ph+")")
+		for _, channelID := range muted {
+			args = append(args, channelID)
 		}
 	}
 
 	// Exclude seen items
-	if username != "" {
-		where = append(where, feedUnseenPredicate("fi"))
-		args = append(args, feedUnseenPredicateArgs(username)...)
-	}
+	where = append(where, feedUnseenPredicate("fi"))
 
 	// Canonical items only
 	where = append(where, "(fi.canonical_tweet_id IS NULL OR fi.canonical_tweet_id = '' OR fi.canonical_tweet_id = fi.tweet_id)")
@@ -164,36 +165,23 @@ func (db *DB) ListRankedFeedItems(username string, limit int, offset int) ([]mod
 	absenceExpr := feedAbsenceBoostSelect("fi")
 	relatedSeenExpr := feedRelatedSeenCountSelect("fi")
 	fromSQL := feedRankingFromSQL(relatedSeenExpr, absenceExpr)
-	args = append(feedRankingArgs(username, capHours, seenMaxBoost, neverSeenBoost), args...)
+	identityJoin := `JOIN feed_items_resolved resolved ON resolved.tweet_id = fi.tweet_id`
+	args = append(feedRankingArgs(capHours, seenMaxBoost, neverSeenBoost), args...)
 	decaySQL := feedDecaySQL()
 	freshnessSQL := feedFreshnessSQL()
 
 	query := fmt.Sprintf(`
-		SELECT fi.tweet_id, COALESCE(fi.source_handle,''), fi.author_handle,
-		       COALESCE(fi.author_display_name,''), COALESCE(fi.author_avatar_url,''),
-		       COALESCE(fi.body_text,''), COALESCE(fi.lang,''),
-		       COALESCE(fi.is_retweet,0), COALESCE(fi.retweeted_by_handle,''),
-		       COALESCE(fi.retweeted_by_display_name,''),
-		       COALESCE(fi.quote_tweet_id,''), COALESCE(fi.quote_author_handle,''),
-		       COALESCE(fi.quote_author_display_name,''), COALESCE(fi.quote_author_avatar_url,''),
-		       COALESCE(fi.quote_body_text,''), COALESCE(fi.quote_lang,''),
-		       COALESCE(fi.quote_media_json,''), COALESCE(fi.media_json,''),
-		       COALESCE(fi.canonical_url,''), COALESCE(fi.reply_to_handle,''),
-		       COALESCE(fi.reply_to_status,''),
-		       COALESCE(fi.is_reply,0), COALESCE(fi.is_ghost,0),
-		       fi.quote_published_at,
-		       COALESCE(fi.views,0), COALESCE(fi.likes,0), COALESCE(fi.retweets,0),
-		       fi.published_at, fi.fetched_at,
-			       COALESCE(fi.content_hash,''), COALESCE(fi.canonical_tweet_id,''),
+		SELECT %s,
 				       MAX(0, %s * %s
 				       + %s
 				       - %s)
 				       AS final_score
 			%s
 			%s
+			%s
 			ORDER BY final_score DESC, fi.tweet_id DESC
 			LIMIT ? OFFSET ?
-			`, feedRankingBaseScoreSQL("fi"), decaySQL, freshnessSQL, feedReplyPenaltySQL("fi"), fromSQL, whereClause)
+			`, feedItemSelectSQL("resolved"), feedRankingBaseScoreSQL("fi"), decaySQL, freshnessSQL, feedReplyPenaltySQL("fi"), fromSQL, identityJoin, whereClause)
 	args = append(args, limit, offset)
 
 	rows, err := db.conn.Query(query, args...)
@@ -226,6 +214,8 @@ func (db *DB) ListRankedFeedItems(username string, limit int, offset int) ([]mod
 			&f.Views, &f.Likes, &f.Retweets,
 			&pubAt, &fetchedAt,
 			&f.ContentHash, &f.CanonicalTweetID,
+			&f.SourceChannelID, &f.ChannelID, &f.QuoteChannelID,
+			&f.ReplyChannelID, &f.ReposterChannelID,
 			&finalScore,
 		)
 		if err != nil {

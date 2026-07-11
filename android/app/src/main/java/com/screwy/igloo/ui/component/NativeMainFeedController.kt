@@ -17,7 +17,6 @@ import com.screwy.igloo.feed.buildSocialPostModel
 import com.screwy.igloo.media.MediaResolvers
 import com.screwy.igloo.net.IglooHostProvider
 import com.screwy.igloo.net.auth.AuthTokenProvider
-import com.screwy.igloo.perf.PerfProbe
 import com.screwy.igloo.player.buildIglooPlayer
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -30,7 +29,6 @@ internal class NativeMainFeedController(
     private val iglooHostProvider: IglooHostProvider,
     private val mediaResolvers: MediaResolvers,
     private var colors: NativeFeedColors,
-    private var baseUrl: String,
     private var callbacks: NativeFeedCallbacks,
     seenBatcher: SeenBatcher,
     private val onScrollToTopVisibility: (Boolean) -> Unit,
@@ -41,102 +39,92 @@ internal class NativeMainFeedController(
     private val scope = CoroutineScope(scopeJob + Dispatchers.Main.immediate)
     private val layoutManager = LinearLayoutManager(context)
     private val seenTracker = PassedFeedRowsTracker(seenBatcher)
-    private val inlineVideoManager = NativeInlineVideoManager(
-        player = buildIglooPlayer(context, authTokens, iglooHostProvider),
-    )
+    private val inlineVideoManager =
+        NativeInlineVideoManager(player = buildIglooPlayer(context, authTokens, iglooHostProvider))
     private var pendingInitialScrollAnchor: NativeFeedScrollAnchor? =
         initialScrollAnchor.takeIf { it.rowId != null }
-    private val adapter = NativeFeedAdapter(
-        imageLoader = imageLoader,
-        authTokens = authTokens,
-        iglooHostProvider = iglooHostProvider,
-        mediaResolvers = mediaResolvers,
-        scope = scope,
-        getColors = { colors },
-        getBaseUrl = { baseUrl },
-        getCallbacks = { callbacks },
-        inlineVideoManager = inlineVideoManager,
-    )
-    val recyclerView: RecyclerView = RecyclerView(context).apply {
-        setBackgroundColor(colors.background)
-        this.layoutManager = this@NativeMainFeedController.layoutManager
-        adapter = this@NativeMainFeedController.adapter
-        itemAnimator = null
-        setHasFixedSize(false)
-        clipToPadding = false
-        setPadding(0, dp(2), 0, dp(2))
-        recycledViewPool.setMaxRecycledViews(NativeFeedAdapter.ViewTypePost, 12)
-        addOnScrollListener(object : RecyclerView.OnScrollListener() {
-            override fun onScrolled(recyclerView: RecyclerView, dx: Int, dy: Int) {
-                onViewportChanged()
-            }
-
-            override fun onScrollStateChanged(recyclerView: RecyclerView, newState: Int) {
-                onViewportChanged()
-            }
-        })
-    }
-    val rootView: SwipeRefreshLayout = SwipeRefreshLayout(context).apply {
-        setColorSchemeColors(colors.primary)
-        setProgressBackgroundColorSchemeColor(colors.surfaceElevated)
-        addView(
-            recyclerView,
-            ViewGroup.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.MATCH_PARENT,
-            ),
+    private val adapter =
+        NativeFeedAdapter(
+            imageLoader = imageLoader,
+            authTokens = authTokens,
+            iglooHostProvider = iglooHostProvider,
+            mediaResolvers = mediaResolvers,
+            scope = scope,
+            getColors = { colors },
+            getCallbacks = { callbacks },
+            inlineVideoManager = inlineVideoManager,
         )
-        setOnRefreshListener { callbacks.onRefresh() }
-    }
+    val recyclerView: RecyclerView =
+        RecyclerView(context).apply {
+            setBackgroundColor(colors.background)
+            this.layoutManager = this@NativeMainFeedController.layoutManager
+            adapter = this@NativeMainFeedController.adapter
+            itemAnimator = null
+            setHasFixedSize(false)
+            clipToPadding = false
+            setPadding(0, dp(2), 0, dp(2))
+            recycledViewPool.setMaxRecycledViews(NativeFeedAdapter.ViewTypePost, 12)
+            addOnScrollListener(
+                object : RecyclerView.OnScrollListener() {
+                    override fun onScrolled(recyclerView: RecyclerView, dx: Int, dy: Int) {
+                        onViewportChanged()
+                    }
+
+                    override fun onScrollStateChanged(recyclerView: RecyclerView, newState: Int) {
+                        onViewportChanged()
+                    }
+                }
+            )
+        }
+    val rootView: SwipeRefreshLayout =
+        SwipeRefreshLayout(context).apply {
+            setColorSchemeColors(colors.primary)
+            setProgressBackgroundColorSchemeColor(colors.surfaceElevated)
+            addView(
+                recyclerView,
+                ViewGroup.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                ),
+            )
+            setOnRefreshListener { callbacks.onRefresh() }
+        }
 
     fun update(
         rows: List<ThreadedFeedRow>,
         channelHeader: ChannelProfileHeaderUiModel?,
         mediaModels: Map<String, FeedMediaGridModel>,
         colors: NativeFeedColors,
-        baseUrl: String,
         callbacks: NativeFeedCallbacks,
         isRefreshing: Boolean,
     ) {
         this.colors = colors
-        this.baseUrl = baseUrl
         this.callbacks = callbacks
         rootView.setColorSchemeColors(colors.primary)
         rootView.setProgressBackgroundColorSchemeColor(colors.surfaceElevated)
         rootView.isRefreshing = isRefreshing
-        recyclerView.setBackgroundColor(if (channelHeader != null) colors.surface else colors.background)
-        rootView.setBackgroundColor(if (channelHeader != null) colors.surface else colors.background)
-        val items = PerfProbe.timed(
-            event = "native_feed_model_build",
-            fields = {
-                mapOf(
-                    "rows" to rows.size,
-                    "media_models" to mediaModels.size,
-                    "has_header" to (channelHeader != null),
-                )
-            },
-        ) {
-            buildList {
-                channelHeader?.let { add(NativeFeedAdapterItem.Header(it)) }
-                rows.forEach { threaded ->
-                    add(
-                        NativeFeedAdapterItem.Post(
-                            threaded = threaded,
-                            post = buildSocialPostModel(threaded.row, mediaModels),
-                            chainPosts = threaded.chain.map { row -> buildSocialPostModel(row, mediaModels) },
-                        )
+        recyclerView.setBackgroundColor(
+            if (channelHeader != null) colors.surface else colors.background
+        )
+        rootView.setBackgroundColor(
+            if (channelHeader != null) colors.surface else colors.background
+        )
+        val items = buildList {
+            channelHeader?.let { add(NativeFeedAdapterItem.Header(it)) }
+            rows.forEach { threaded ->
+                add(
+                    NativeFeedAdapterItem.Post(
+                        threaded = threaded,
+                        post = buildSocialPostModel(threaded.row, mediaModels),
+                        chainPosts =
+                            threaded.chain.map { row -> buildSocialPostModel(row, mediaModels) },
                     )
-                }
+                )
             }
         }
-        PerfProbe.log(
-            event = "native_feed_submit_list",
-        ) { mapOf("items" to items.size, "posts" to rows.size) }
+
         adapter.submitList(items) {
             recyclerView.post {
-                PerfProbe.log(
-                    event = "native_feed_submit_done",
-                ) { mapOf("items" to adapter.currentList.size) }
                 restoreInitialScrollAnchorIfNeeded()
                 onViewportChanged()
             }
@@ -159,27 +147,16 @@ internal class NativeMainFeedController(
     }
 
     private fun onViewportChanged() {
-        PerfProbe.timed(
-            event = "native_feed_viewport_changed",
-            fields = {
-                mapOf(
-                    "adapter_items" to adapter.currentList.size,
-                    "first_visible" to layoutManager.findFirstVisibleItemPosition(),
-                    "last_visible" to layoutManager.findLastVisibleItemPosition(),
-                )
-            },
-        ) {
-            onScrollAnchorChanged(nativeFeedScrollAnchor(adapter.currentList, layoutManager))
-            val firstVisible = layoutManager.findFirstVisibleItemPosition().coerceAtLeast(0)
-            val firstVisiblePost = firstVisiblePostIndex(firstVisible).coerceAtLeast(0)
-            seenTracker.onViewportChanged(
-                rowIds = adapter.postItems().map { it.id },
-                firstVisibleIndex = firstVisiblePost,
-            )
-            onScrollToTopVisibility(firstVisiblePost > 5)
-            warmNearVisibleRows(firstVisiblePost)
-            inlineVideoManager.selectFrom(recyclerView)
-        }
+        onScrollAnchorChanged(nativeFeedScrollAnchor(adapter.currentList, layoutManager))
+        val firstVisible = layoutManager.findFirstVisibleItemPosition().coerceAtLeast(0)
+        val firstVisiblePost = firstVisiblePostIndex(firstVisible).coerceAtLeast(0)
+        seenTracker.onViewportChanged(
+            rowIds = adapter.postItems().map { it.id },
+            firstVisibleIndex = firstVisiblePost,
+        )
+        onScrollToTopVisibility(firstVisiblePost > 5)
+        updateNearVisibleMediaRows(firstVisiblePost)
+        inlineVideoManager.selectFrom(recyclerView)
     }
 
     private fun restoreInitialScrollAnchorIfNeeded() {
@@ -191,41 +168,37 @@ internal class NativeMainFeedController(
     }
 
     private fun firstVisiblePostIndex(firstVisibleAdapterIndex: Int): Int {
-        val lastVisible = layoutManager.findLastVisibleItemPosition().coerceAtLeast(firstVisibleAdapterIndex)
+        val lastVisible =
+            layoutManager.findLastVisibleItemPosition().coerceAtLeast(firstVisibleAdapterIndex)
         for (index in firstVisibleAdapterIndex..lastVisible) {
-            adapter.postIndexForAdapterIndex(index)?.let { return it }
+            adapter.postIndexForAdapterIndex(index)?.let {
+                return it
+            }
         }
         return adapter.postIndexForAdapterIndex(firstVisibleAdapterIndex) ?: 0
     }
 
-    private fun warmNearVisibleRows(firstVisiblePost: Int) {
+    private fun updateNearVisibleMediaRows(firstVisiblePost: Int) {
         val lastVisibleAdapter = layoutManager.findLastVisibleItemPosition()
-        val lastVisiblePost = (0..lastVisibleAdapter.coerceAtLeast(0))
-            .mapNotNull { adapter.postIndexForAdapterIndex(it) }
-            .lastOrNull()
-            ?: firstVisiblePost
+        val lastVisiblePost =
+            (0..lastVisibleAdapter.coerceAtLeast(0))
+                .mapNotNull { adapter.postIndexForAdapterIndex(it) }
+                .lastOrNull() ?: firstVisiblePost
         val posts = adapter.postItems()
         val start = (firstVisiblePost - 2).coerceAtLeast(0)
         val end = (lastVisiblePost + 4).coerceAtMost(posts.lastIndex)
         if (end < start) return
-        val rows = (start..end)
-            .flatMap { index ->
-                posts.getOrNull(index)
+        val rows =
+            (start..end).flatMap { index ->
+                posts
+                    .getOrNull(index)
                     ?.threaded
                     ?.let { threaded -> threaded.chain + threaded.row }
                     .orEmpty()
             }
         if (rows.isNotEmpty()) {
-            PerfProbe.log(
-                event = "native_feed_warm_near_visible",
-            ) {
-                mapOf(
-                    "first_post" to firstVisiblePost,
-                    "last_post" to lastVisiblePost,
-                    "rows" to rows.size,
-                )
-            }
-            callbacks.onWarmMediaRows(rows)
+
+            callbacks.onMediaRowsChanged(rows)
         }
     }
 }

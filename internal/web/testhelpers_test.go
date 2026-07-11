@@ -5,14 +5,46 @@ import (
 	"encoding/json"
 	"net/http"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/gorilla/sessions"
 	"github.com/screwys/igloo/internal/config"
 	"github.com/screwys/igloo/internal/db"
 	"github.com/screwys/igloo/internal/i18n"
+	"github.com/screwys/igloo/internal/storage"
 	"github.com/screwys/igloo/internal/worker"
 )
+
+func testWebConfig(t *testing.T, stateRoot string) *config.Config {
+	t.Helper()
+	markWebTestStateRoot(t, stateRoot)
+	layout, err := storage.New(stateRoot, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &config.Config{SecretKey: "test-key", Storage: layout}
+}
+
+func setTestStateRoot(t *testing.T, cfg *config.Config, stateRoot string) {
+	t.Helper()
+	markWebTestStateRoot(t, stateRoot)
+	layout, err := storage.New(stateRoot, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Storage = layout
+}
+
+func markWebTestStateRoot(t *testing.T, stateRoot string) {
+	t.Helper()
+	if err := os.MkdirAll(stateRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stateRoot, ".igloo-state-root"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func decodeInto(raw []byte, into any) error {
 	return json.Unmarshal(raw, into)
@@ -36,7 +68,8 @@ func newTestServer(t *testing.T) *testServer {
 	path := tmp.Name()
 	_ = tmp.Close()
 
-	d, err := db.Open(path, t.TempDir())
+	stateRoot := t.TempDir()
+	d, err := db.OpenPath(path, stateRoot)
 	if err != nil {
 		_ = os.Remove(path)
 		t.Fatalf("db.Open: %v", err)
@@ -46,7 +79,7 @@ func newTestServer(t *testing.T) *testServer {
 		_ = os.Remove(path)
 	})
 
-	cfg := &config.Config{SecretKey: "test-key", DataDir: t.TempDir()}
+	cfg := testWebConfig(t, stateRoot)
 	s := &Server{
 		db:      d,
 		cfg:     cfg,
@@ -55,10 +88,8 @@ func newTestServer(t *testing.T) *testServer {
 		staticV: func(path string) string {
 			return "/static/" + path + "?v=test"
 		},
-		i18n:          i18n.NewCatalog(),
-		profileFlight: newProfileFlight(),
+		i18n: i18n.NewCatalog(),
 	}
-	s.requestAvatar = s.workers.RequestAvatar
 
 	mux := http.NewServeMux()
 	s.registerFeedAPIRoutes(mux)
@@ -68,7 +99,6 @@ func newTestServer(t *testing.T) *testServer {
 	s.registerVideoAPIRoutes(mux)
 	s.registerShortsAPIRoutes(mux)
 	s.registerProfileAPIRoutes(mux)
-	s.registerDeltaAPIRoutes(mux)
 	s.registerAndroidSyncAPIRoutes(mux)
 	s.registerMutationAPIRoutes(mux)
 	s.registerChannelAPIRoutes(mux)
@@ -77,6 +107,7 @@ func newTestServer(t *testing.T) *testServer {
 	mux.HandleFunc("GET /thread/{tweetID}", s.handlePageThread)
 	mux.HandleFunc("GET /api/media/thumbnail/{videoID}", s.handleThumbnail)
 	mux.HandleFunc("GET /api/media/avatar/{channelID}", s.handleChannelAvatar)
+	mux.HandleFunc("GET /api/media/comment-avatar/{ownerID}", s.handleCommentAuthorAvatar)
 
 	return &testServer{Server: s, mux: mux}
 }

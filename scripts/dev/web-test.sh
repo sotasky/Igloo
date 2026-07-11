@@ -37,6 +37,8 @@ PY
 )"
 base_url="http://127.0.0.1:${port}"
 server_log="$tmp/server.log"
+mkdir -p "$tmp/data"
+: > "$tmp/data/.igloo-state-root"
 
 IGLOO_DATA_DIR="$tmp/data" \
 IGLOO_CONFIG_DIR="$tmp/config" \

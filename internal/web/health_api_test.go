@@ -4,14 +4,10 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
-	"github.com/screwys/igloo/internal/auth"
 	"github.com/screwys/igloo/internal/db"
-	"github.com/screwys/igloo/internal/model"
 )
 
 func TestHealthLiveHandlerShape(t *testing.T) {
@@ -39,15 +35,12 @@ func TestHealthLiveHandlerShape(t *testing.T) {
 
 func TestHealthReportsStaleFeedSnapshot(t *testing.T) {
 	srv := newTestServer(t)
-	configureHealthTestUsers(t, map[string]auth.UserRecord{
-		"admin": {Role: "admin"},
-	})
 	now := time.Now().UnixMilli()
 	staleAt := now - int64((2 * time.Hour).Milliseconds())
 	freshAt := now - int64((45 * time.Minute).Milliseconds())
 
 	insertFeedItemAt(t, srv, "old_ranked", "old_author", staleAt, 1)
-	if err := srv.db.ReplaceFeedRankSnapshot("admin", []db.SnapshotRow{
+	if err := srv.db.ReplaceFeedRankSnapshot([]db.SnapshotRow{
 		{TweetID: "old_ranked", RankPosition: 1, FinalScore: 1},
 	}); err != nil {
 		t.Fatalf("replace snapshot: %v", err)
@@ -77,76 +70,23 @@ func TestHealthReportsStaleFeedSnapshot(t *testing.T) {
 	}
 }
 
-func TestHealthReportsStaleFeedSnapshotForConfiguredNonAdminUser(t *testing.T) {
+func TestHealthReportsStaleAndroidSyncHealth(t *testing.T) {
 	srv := newTestServer(t)
-	configureHealthTestUsers(t, map[string]auth.UserRecord{
-		"owner": {Role: "admin"},
+	now := time.Now().UnixMilli()
+	old := now - int64((7 * time.Hour).Milliseconds())
+	clock, err := srv.db.GetAndroidSyncClock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cursor, err := encodeAndroidSyncCursor(androidSyncCursor{
+		Version: androidSyncModelVersion, Mode: "changes", Epoch: clock.Epoch,
+		Revision: clock.Revision, Retention: androidSyncRetentionHash(srv.androidSyncRetentionFallback()),
 	})
-	now := time.Now().UnixMilli()
-	staleAt := now - int64((2 * time.Hour).Milliseconds())
-	freshAt := now - int64((45 * time.Minute).Milliseconds())
-
-	insertFeedItemAt(t, srv, "owner_ranked", "owner_author", staleAt, 1)
-	if err := srv.db.ReplaceFeedRankSnapshot("owner", []db.SnapshotRow{
-		{TweetID: "owner_ranked", RankPosition: 1, FinalScore: 1},
-	}); err != nil {
-		t.Fatalf("replace owner snapshot: %v", err)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if err := srv.db.ExecRaw(`UPDATE feed_rank_snapshot SET computed_at = ? WHERE username = ?`, staleAt, "owner"); err != nil {
-		t.Fatalf("age owner snapshot: %v", err)
-	}
-	insertFeedItemAt(t, srv, "owner_fresh", "owner_author", freshAt, 2)
-
-	if err := srv.db.ReplaceFeedRankSnapshot("admin", []db.SnapshotRow{
-		{TweetID: "owner_ranked", RankPosition: 1, FinalScore: 1},
-		{TweetID: "owner_fresh", RankPosition: 2, FinalScore: 1},
-	}); err != nil {
-		t.Fatalf("replace admin snapshot: %v", err)
-	}
-
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("GET", "/api/health", nil)
-	srv.handleHealth(rec, req)
-
-	if rec.Code != http.StatusServiceUnavailable {
-		t.Fatalf("health status = %d body=%s", rec.Code, rec.Body.String())
-	}
-	if strings.Contains(rec.Body.String(), "owner") {
-		t.Fatalf("health response leaked username: %s", rec.Body.String())
-	}
-	body := decodeHealthBody(t, rec)
-	feedCheck := healthCheckBody(t, body, "feed_snapshot")
-	if feedCheck["status"] != "unhealthy" {
-		t.Fatalf("feed snapshot check = %#v", feedCheck)
-	}
-	if feedCheck["users_checked"] != float64(1) {
-		t.Fatalf("users_checked = %v, want 1; check=%#v", feedCheck["users_checked"], feedCheck)
-	}
-	if feedCheck["users_with_data"] != float64(1) {
-		t.Fatalf("users_with_data = %v, want 1; check=%#v", feedCheck["users_with_data"], feedCheck)
-	}
-	if feedCheck["stale_users"] != float64(1) {
-		t.Fatalf("stale_users = %v, want 1; check=%#v", feedCheck["stale_users"], feedCheck)
-	}
-}
-
-func TestHealthReportsAndroidGenerationWithoutFreshHealth(t *testing.T) {
-	srv := newTestServer(t)
-	now := time.Now().UnixMilli()
-	old := now - int64((90 * time.Minute).Milliseconds())
-
-	if err := srv.db.StoreAndroidSyncGeneration(model.AndroidSyncGeneration{
-		GenerationID:  "android-sync-current",
-		CreatedAtMs:   old,
-		Status:        "ready",
-		SourceVersion: "current-source",
-		Retention: map[string]int{
-			"feed_days": 7, "youtube_days": 7, "moments_days": 7, "story_hours": 48,
-		},
-		ContentCounts: map[string]int{},
-		AssetCounts:   map[string]int{},
-	}, nil, nil); err != nil {
-		t.Fatalf("store generation: %v", err)
+	if err := srv.db.RecordAndroidSyncHealth(cursor, old, []byte(`{}`), 0, 0, 0, 0, 0); err != nil {
+		t.Fatal(err)
 	}
 
 	rec := httptest.NewRecorder()
@@ -161,8 +101,8 @@ func TestHealthReportsAndroidGenerationWithoutFreshHealth(t *testing.T) {
 	if syncCheck["status"] != "unhealthy" {
 		t.Fatalf("android sync check = %#v", syncCheck)
 	}
-	if syncCheck["latest_generation_id"] != "android-sync-current" {
-		t.Fatalf("latest_generation_id = %v", syncCheck["latest_generation_id"])
+	if syncCheck["reason"] != productHealthReasonStale {
+		t.Fatalf("android sync reason = %#v", syncCheck)
 	}
 }
 
@@ -204,16 +144,12 @@ func healthCheckBody(t *testing.T, body map[string]any, name string) map[string]
 	return check
 }
 
-func configureHealthTestUsers(t *testing.T, users map[string]auth.UserRecord) {
+func insertFeedItemAt(t *testing.T, srv *testServer, tweetID, channelID string, fetchedAt int64, publishedAt int64) {
 	t.Helper()
-	authPath := filepath.Join(t.TempDir(), "auth_users.json")
-	if err := auth.SaveUsers(authPath, users); err != nil {
-		t.Fatalf("SaveUsers: %v", err)
+	if err := srv.db.ExecRaw(`
+		INSERT INTO feed_items (tweet_id, channel_id, published_at, fetched_at)
+		VALUES (?, ?, ?, ?)
+	`, tweetID, channelID, publishedAt, fetchedAt); err != nil {
+		t.Fatal(err)
 	}
-	auth.InitCache(authPath)
-
-	emptyAuthPath := filepath.Join(t.TempDir(), "auth_users.json")
-	t.Cleanup(func() {
-		auth.InitCache(emptyAuthPath)
-	})
 }

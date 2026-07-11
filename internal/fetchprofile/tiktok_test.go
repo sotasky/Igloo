@@ -31,6 +31,21 @@ func TestParseTikTokAvatar(t *testing.T) {
 	}
 }
 
+func TestParseTikTokAvatarAcceptsConcatenatedGalleryOutput(t *testing.T) {
+	data, err := os.ReadFile("testdata/tiktok_avatar.json")
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+	data = append([]byte(`[[1,"https://example.test/ignored",{}]]`), data...)
+	p, err := parseTikTokAvatar("user_alpha", data)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if p.ChannelID != "tiktok_user_alpha" || p.AvatarURL == "" {
+		t.Fatalf("profile = %+v", p)
+	}
+}
+
 func TestParseTikTokEmpty(t *testing.T) {
 	if _, err := parseTikTokAvatar("ghost", []byte("[]")); err != ErrNotFound {
 		t.Fatalf("expected ErrNotFound, got %v", err)

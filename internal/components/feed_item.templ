@@ -488,29 +488,30 @@ templ feedBodyText(p PageProps, item model.FeedItem) {
 
 templ feedMedia(p PageProps, item model.FeedItem) {
 	{{ mediaCount := len(item.Media) }}
+	{{ readyMediaCount := feedReadyMediaCount(item.MediaSlideURLs) }}
 	if mediaCount == 1 && feedMediaRefIsVideo(item.Media[0]) {
 		{{ streamURL := item.MediaStreamURL }}
-		if streamURL == "" {
-			{{ streamURL = "/api/media/slide/" + item.TweetID + "/0" }}
-		}
+		{{ mediaURL := feedMediaURLAt(item.MediaSlideURLs, 0) }}
 		if streamURL != "" {
 			<div
 				class="feed-media-wrap"
 				data-feed-media
 				data-feed-media-kind="video"
 				data-feed-media-stream={ streamURL }
-				data-feed-media-url={ "/api/media/slide/" + item.TweetID + "/0" }
+				if mediaURL != "" {
+					data-feed-media-url={ mediaURL }
+				}
 				role="button"
 				tabindex="0"
 				aria-label={ L(p, "action_open_media", "Open media") }
 			>
 				if item.Media[0].ThumbnailURL != "" {
 					<video class="feed-media-video" muted playsinline loop preload="none" data-feed-inline-video poster={ item.Media[0].ThumbnailURL }>
-						<source src={ streamURL } type="video/mp4"/>
+						<source src={ streamURL }/>
 					</video>
 				} else {
 					<video class="feed-media-video" muted playsinline loop preload="none" data-feed-inline-video>
-						<source src={ streamURL } type="video/mp4"/>
+						<source src={ streamURL }/>
 					</video>
 				}
 				<button class="feed-video-expand-btn" type="button" aria-label={ L(p, "action_enter_fullscreen", "Enter fullscreen") } data-feed-video-expand>&#x2922;</button>
@@ -519,25 +520,25 @@ templ feedMedia(p PageProps, item model.FeedItem) {
 				</div>
 			</div>
 		}
-	} else if mediaCount == 1 {
+	} else if mediaCount == 1 && feedMediaURLAt(item.MediaSlideURLs, 0) != "" {
+		{{ mediaURL := feedMediaURLAt(item.MediaSlideURLs, 0) }}
 		<div
 			class="feed-media-wrap"
 			data-feed-media
 			data-feed-media-kind="image"
-			data-feed-media-url={ "/api/media/slide/" + item.TweetID + "/0" }
+			data-feed-media-url={ mediaURL }
 			role="button"
 			tabindex="0"
 			aria-label={ L(p, "action_open_media", "Open media") }
 		>
-			<img class="feed-media-image" src={ "/api/media/slide/" + item.TweetID + "/0" } loading="lazy" alt={ L(p, "feed_post_media", "Post media") }/>
+			<img class="feed-media-image" src={ mediaURL } loading="lazy" alt={ L(p, "feed_post_media", "Post media") }/>
 		</div>
-	} else {
-		{{ visible := mediaGridCount(mediaCount) }}
+	} else if readyMediaCount > 0 {
 		<div class="feed-media-wrap feed-media-wrap-grid">
-			<div class={ fmt.Sprintf("feed-media-grid count-%d", visible) }>
+			<div class={ fmt.Sprintf("feed-media-grid count-%d", readyMediaCount) }>
 				for i, m := range item.Media {
-					if i < 4 {
-						@feedMediaTile(p, item.TweetID, i, m, mediaCount, item.MediaStreamURL)
+					if i < 4 && feedMediaURLAt(item.MediaSlideURLs, i) != "" {
+						@feedMediaTile(p, i, m, mediaCount, item.MediaStreamURL, feedMediaURLAt(item.MediaSlideURLs, i))
 					}
 				}
 			</div>
@@ -545,8 +546,7 @@ templ feedMedia(p PageProps, item model.FeedItem) {
 	}
 }
 
-templ feedMediaTile(p PageProps, tweetID string, index int, m model.MediaRef, mediaCount int, streamURL string) {
-	{{ slideURL := fmt.Sprintf("/api/media/slide/%s/%d", tweetID, index) }}
+templ feedMediaTile(p PageProps, index int, m model.MediaRef, mediaCount int, streamURL string, slideURL string) {
 	{{ ariaLabel := fmt.Sprintf(L(p, "feed_open_media_index", "Open media %d"), index+1) }}
 	if feedMediaRefIsVideo(m) {
 		{{ tileStreamURL := streamURL }}
@@ -571,11 +571,11 @@ templ feedMediaTile(p PageProps, tweetID string, index int, m model.MediaRef, me
 			if tileStreamURL != "" {
 				if m.ThumbnailURL != "" && m.Type == "video" {
 					<video class="feed-media-video" muted playsinline loop preload="none" data-feed-inline-video poster={ m.ThumbnailURL }>
-						<source src={ tileStreamURL } type="video/mp4"/>
+						<source src={ tileStreamURL }/>
 					</video>
 				} else {
 					<video class="feed-media-video" muted playsinline loop preload="none" data-feed-inline-video>
-						<source src={ tileStreamURL } type="video/mp4"/>
+						<source src={ tileStreamURL }/>
 					</video>
 				}
 			} else {
@@ -705,6 +705,7 @@ templ feedQuoteCard(p PageProps, item model.FeedItem) {
 }
 
 templ feedQuoteMedia(p PageProps, item model.FeedItem, qMediaCount int) {
+	{{ readyMediaCount := feedReadyMediaCount(item.QuoteMediaSlideURLs) }}
 	if qMediaCount == 1 && feedMediaRefIsVideo(item.QuoteMedia[0]) && item.QuoteMediaStreamURL != "" {
 		<div
 			class="feed-media-wrap"
@@ -723,25 +724,25 @@ templ feedQuoteMedia(p PageProps, item model.FeedItem, qMediaCount int) {
 				<div class="feed-video-progress-fill" data-feed-progress-fill></div>
 			</div>
 		</div>
-	} else if qMediaCount == 1 {
+	} else if qMediaCount == 1 && feedMediaURLAt(item.QuoteMediaSlideURLs, 0) != "" {
+		{{ mediaURL := feedMediaURLAt(item.QuoteMediaSlideURLs, 0) }}
 		<div
 			class="feed-media-wrap"
 			data-feed-media
 			data-feed-media-kind="image"
-			data-feed-media-url={ "/api/media/slide/" + item.QuoteTweetID + "/0" }
+			data-feed-media-url={ mediaURL }
 			role="button"
 			tabindex="0"
 			aria-label={ L(p, "action_open_media", "Open media") }
 		>
-			<img class="feed-media-image" src={ "/api/media/slide/" + item.QuoteTweetID + "/0" } loading="lazy" alt={ L(p, "feed_quoted_post_media", "Quoted post media") }/>
+			<img class="feed-media-image" src={ mediaURL } loading="lazy" alt={ L(p, "feed_quoted_post_media", "Quoted post media") }/>
 		</div>
-	} else if qMediaCount > 1 {
-		{{ qVisible := mediaGridCount(qMediaCount) }}
+	} else if qMediaCount > 1 && readyMediaCount > 0 {
 		<div class="feed-media-wrap feed-media-wrap-grid">
-			<div class={ fmt.Sprintf("feed-media-grid count-%d", qVisible) }>
+			<div class={ fmt.Sprintf("feed-media-grid count-%d", readyMediaCount) }>
 				for i, qm := range item.QuoteMedia {
-					if i < 4 {
-						@feedQuoteMediaTile(p, item.QuoteTweetID, i, qm, qMediaCount, item.QuoteMediaStreamURL)
+					if i < 4 && feedMediaURLAt(item.QuoteMediaSlideURLs, i) != "" {
+						@feedQuoteMediaTile(p, i, qm, qMediaCount, item.QuoteMediaStreamURL, feedMediaURLAt(item.QuoteMediaSlideURLs, i))
 					}
 				}
 			</div>
@@ -751,8 +752,7 @@ templ feedQuoteMedia(p PageProps, item model.FeedItem, qMediaCount int) {
 	}
 }
 
-templ feedQuoteMediaTile(p PageProps, quoteTweetID string, index int, qm model.MediaRef, qMediaCount int, streamURL string) {
-	{{ slideURL := fmt.Sprintf("/api/media/slide/%s/%d", quoteTweetID, index) }}
+templ feedQuoteMediaTile(p PageProps, index int, qm model.MediaRef, qMediaCount int, streamURL string, slideURL string) {
 	{{ ariaLabel := fmt.Sprintf(L(p, "feed_open_media_index", "Open media %d"), index+1) }}
 	if feedMediaRefIsVideo(qm) {
 		{{ tileStreamURL := streamURL }}
@@ -777,11 +777,11 @@ templ feedQuoteMediaTile(p PageProps, quoteTweetID string, index int, qm model.M
 			if tileStreamURL != "" {
 				if qm.ThumbnailURL != "" && qm.Type == "video" {
 					<video class="feed-media-video" muted playsinline loop preload="none" data-feed-inline-video poster={ qm.ThumbnailURL }>
-						<source src={ tileStreamURL } type="video/mp4"/>
+						<source src={ tileStreamURL }/>
 					</video>
 				} else {
 					<video class="feed-media-video" muted playsinline loop preload="none" data-feed-inline-video>
-						<source src={ tileStreamURL } type="video/mp4"/>
+						<source src={ tileStreamURL }/>
 					</video>
 				}
 			} else {

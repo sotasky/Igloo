@@ -2,12 +2,10 @@ package com.screwy.igloo.auth
 
 /**
  * Narrow key-value surface used by [AuthRepo]. Production storage lives outside the
- * per-user Room DB and encrypts its state with Android Keystore; tests wire a plain
+ * Room database and encrypts its state with Android Keystore; tests wire a plain
  * in-memory implementation so they don't need Keystore scaffolding.
  *
- * Auth storage deliberately lives outside the per-user Room DB so the bootstrap
- * path (resolve server URL -> authenticate -> open DB)
- * works before any DB exists.
+ * Auth storage deliberately lives outside Room so login can bootstrap the application.
  */
 interface AuthStorage {
     fun getString(key: String): String?

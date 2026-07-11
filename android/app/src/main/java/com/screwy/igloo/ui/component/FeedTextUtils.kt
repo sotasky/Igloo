@@ -11,6 +11,7 @@ import com.screwy.igloo.feed.canonicalTweetUrl
 import java.util.concurrent.TimeUnit
 
 internal data class FeedMuteMenuAction(
+    val channelId: String,
     val handle: String,
     val isMuted: Boolean,
 )
@@ -21,15 +22,15 @@ internal data class FeedFollowTarget(
 )
 
 internal fun feedQuoteFollowTarget(row: FeedRow): FeedFollowTarget? {
-    val quoteHandle = normalizeHandle(row.item.quoteAuthorHandle).lowercase()
+    val quoteHandle = normalizeHandle(row.quoteAuthorHandle).lowercase()
     if (quoteHandle.isBlank()) return null
 
-    val parentHandle = normalizeHandle(row.item.authorHandle).lowercase()
+    val parentHandle = normalizeHandle(row.authorHandle).lowercase()
     val parentChannelId = row.item.channelId?.trim().orEmpty()
     val quoteChannelId = row.quoteChannelId
         ?.trim()
         ?.takeIf { it.isNotBlank() }
-        ?: "twitter_$quoteHandle"
+        ?: return null
 
     if (quoteChannelId.equals(parentChannelId, ignoreCase = true)) return null
     if (quoteHandle == parentHandle) return null
@@ -42,22 +43,26 @@ internal fun feedQuoteFollowTarget(row: FeedRow): FeedFollowTarget? {
 
 internal fun feedMuteMenuActions(
     row: FeedRow,
-    mutedHandles: Set<String>,
+    mutedChannelIds: Set<String>,
 ): List<FeedMuteMenuAction> {
     val actions = linkedMapOf<String, FeedMuteMenuAction>()
-    val authorHandle = normalizeHandle(row.item.authorHandle).lowercase()
-    val quoteHandle = normalizeHandle(row.item.quoteAuthorHandle).lowercase()
+    val authorHandle = normalizeHandle(row.authorHandle).lowercase()
+    val quoteHandle = normalizeHandle(row.quoteAuthorHandle).lowercase()
+    val authorChannelId = row.item.channelId.orEmpty()
+    val quoteChannelId = row.item.quoteChannelId.orEmpty()
 
-    if (row.item.isRetweet && authorHandle.isNotBlank()) {
-        actions[authorHandle] = FeedMuteMenuAction(
+    if (row.item.isRetweet && authorChannelId.isNotBlank() && authorHandle.isNotBlank()) {
+        actions[authorChannelId] = FeedMuteMenuAction(
+            channelId = authorChannelId,
             handle = authorHandle,
-            isMuted = authorHandle in mutedHandles,
+            isMuted = authorChannelId in mutedChannelIds,
         )
     }
-    if (quoteHandle.isNotBlank() && quoteHandle != authorHandle) {
-        actions[quoteHandle] = FeedMuteMenuAction(
+    if (quoteChannelId.isNotBlank() && quoteHandle.isNotBlank() && quoteChannelId != authorChannelId) {
+        actions[quoteChannelId] = FeedMuteMenuAction(
+            channelId = quoteChannelId,
             handle = quoteHandle,
-            isMuted = quoteHandle in mutedHandles,
+            isMuted = quoteChannelId in mutedChannelIds,
         )
     }
 
@@ -180,9 +185,9 @@ internal fun displayNameLooksLikeHandle(raw: String?): String {
 internal fun feedShareUrl(item: FeedItemEntity): String =
     canonicalTweetUrl(item)
 
-internal fun stripReplyPrefix(item: FeedItemEntity, text: String): String {
-    if (!item.isReply || text.isBlank()) return text
-    val replyHandle = normalizeHandle(item.replyToHandle)
+internal fun stripReplyPrefix(row: FeedRow, text: String): String {
+    if (!row.item.isReply || text.isBlank()) return text
+    val replyHandle = normalizeHandle(row.replyHandle)
     if (replyHandle.isBlank()) return text
 
     var rest = text

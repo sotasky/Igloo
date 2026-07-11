@@ -11,7 +11,6 @@ import kotlinx.coroutines.withTimeout
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -20,12 +19,12 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 /**
- * PreferencesRepo behavior — default-on-miss reads, typed setters, and the two sync
- * caches (debugMode, serverTimeOffsetMs) staying in sync with the Flow updater.
+ * PreferencesRepo behavior — default-on-miss reads, typed setters, and the two sync caches
+ * (debugMode, serverTimeOffsetMs) staying in sync with the Flow updater.
  *
- * Note: the sync-cache tests use a real `Dispatchers.Default` scope + poll-with-timeout
- * because Room's Flow emits on its own internal dispatcher; TestScope/testScheduler
- * can't advance it deterministically.
+ * Note: the sync-cache tests use a real `Dispatchers.Default` scope + poll-with-timeout because
+ * Room's Flow emits on its own internal dispatcher; TestScope/testScheduler can't advance it
+ * deterministically.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], manifest = Config.NONE)
@@ -34,58 +33,85 @@ class PreferencesRepoTest {
     private lateinit var db: IglooDatabase
     private lateinit var scope: CoroutineScope
 
-    @Before fun setUp() {
+    @Before
+    fun setUp() {
         db = RoomTestSupport.freshDb()
         scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     }
 
-    @After fun tearDown() {
+    @After
+    fun tearDown() {
         scope.cancel()
         db.close()
     }
 
-    private suspend fun waitFor(description: String, timeoutMs: Long = 5_000L, predicate: () -> Boolean) {
-        withTimeout(timeoutMs) {
-            while (!predicate()) delay(10)
-        }
+    private suspend fun waitFor(
+        description: String,
+        timeoutMs: Long = 5_000L,
+        predicate: () -> Boolean,
+    ) {
+        withTimeout(timeoutMs) { while (!predicate()) delay(10) }
     }
 
-    @Test fun defaults_surfaceWhenMissing() = runBlocking {
+    @Test
+    fun defaults_surfaceWhenMissing() = runBlocking {
         val repo = PreferencesRepo(db.preferenceDao(), scope, nowMsProvider = { 0L })
         assertEquals(PreferencesRepo.Defaults.SERVER_URL, repo.serverUrl().first())
-        assertTrue(repo.serverUrl().first().startsWith("http://") || repo.serverUrl().first().startsWith("https://"))
+        assertTrue(
+            repo.serverUrl().first().startsWith("http://") ||
+                repo.serverUrl().first().startsWith("https://")
+        )
         assertEquals(PreferencesRepo.Defaults.SYNC_ENABLED, repo.syncEnabled().first())
-        assertEquals(PreferencesRepo.Defaults.SYNC_INTERVAL_MINUTES, repo.syncIntervalMinutes().first())
+        assertEquals(
+            PreferencesRepo.Defaults.SYNC_INTERVAL_MINUTES,
+            repo.syncIntervalMinutes().first(),
+        )
         assertEquals(PreferencesRepo.Defaults.DEBUG_MODE, repo.debugMode().first())
         assertEquals(PreferencesRepo.Defaults.THEME_ID, repo.themeId().first())
         assertEquals(PreferencesRepo.Defaults.THEME_ACCENT_HEX, repo.themeAccentHex().first())
         assertEquals(PreferencesRepo.Defaults.THEME_CUSTOM_CSS, repo.themeCustomCss().first())
-        assertEquals(PreferencesRepo.Defaults.RETENTION_DAYS_MOMENTS, repo.retentionDaysMoments().first())
+        assertEquals(
+            PreferencesRepo.Defaults.RETENTION_DAYS_MOMENTS,
+            repo.retentionDaysMoments().first(),
+        )
         assertEquals(PreferencesRepo.Defaults.RETENTION_DAYS_FEED, repo.retentionDaysFeed().first())
-        assertEquals(PreferencesRepo.Defaults.RETENTION_DAYS_YOUTUBE, repo.retentionDaysYoutube().first())
-        assertEquals(PreferencesRepo.Defaults.SHARE_EMBED_FRIENDLY_LINKS, repo.shareEmbedFriendlyLinks().first())
+        assertEquals(
+            PreferencesRepo.Defaults.RETENTION_DAYS_YOUTUBE,
+            repo.retentionDaysYoutube().first(),
+        )
+        assertEquals(
+            PreferencesRepo.Defaults.SHARE_EMBED_FRIENDLY_LINKS,
+            repo.shareEmbedFriendlyLinks().first(),
+        )
         assertEquals(7, repo.retentionDaysMoments().first())
         assertEquals(2, repo.retentionDaysFeed().first())
         assertEquals(3, repo.retentionDaysYoutube().first())
         assertEquals(
             PreferencesRepo.Defaults.SB_SPONSOR,
-            repo.flowString(
-                PreferencesRepo.Keys.SB_SPONSOR,
-                default = PreferencesRepo.Defaults.sponsorBlockCategory(PreferencesRepo.Keys.SB_SPONSOR),
-            ).first(),
+            repo
+                .flowString(
+                    PreferencesRepo.Keys.SB_SPONSOR,
+                    default =
+                        PreferencesRepo.Defaults.sponsorBlockCategory(
+                            PreferencesRepo.Keys.SB_SPONSOR
+                        ),
+                )
+                .first(),
         )
         assertEquals(
             PreferencesRepo.Defaults.SB_INTRO,
-            repo.flowString(
-                PreferencesRepo.Keys.SB_INTRO,
-                default = PreferencesRepo.Defaults.sponsorBlockCategory(PreferencesRepo.Keys.SB_INTRO),
-            ).first(),
+            repo
+                .flowString(
+                    PreferencesRepo.Keys.SB_INTRO,
+                    default =
+                        PreferencesRepo.Defaults.sponsorBlockCategory(PreferencesRepo.Keys.SB_INTRO),
+                )
+                .first(),
         )
-        assertNull(repo.momentsResumeVideoId(scope = "all").first())
-        assertNull(repo.momentsResumeSortAtMs(scope = "all").first())
     }
 
-    @Test fun typedSetters_writeBackAsStrings() = runBlocking {
+    @Test
+    fun typedSetters_writeBackAsStrings() = runBlocking {
         val repo = PreferencesRepo(db.preferenceDao(), scope, nowMsProvider = { 42L })
 
         repo.setServerUrl("https://example.com")
@@ -96,9 +122,6 @@ class PreferencesRepoTest {
         repo.setThemeCustomCss(".feed-card { border-radius: 0; }")
         repo.setServerTimeOffsetMs(-2000L)
         repo.setShareEmbedFriendlyLinks(true)
-        repo.setMomentsResumeVideoId("v_1")
-        repo.setMomentsResumePositionMs(30_000L)
-        repo.setMomentsResumeSortAtMs(123_456L)
 
         assertEquals("https://example.com", repo.serverUrl().first())
         assertFalse(repo.syncEnabled().first())
@@ -108,12 +131,10 @@ class PreferencesRepoTest {
         assertEquals(".feed-card { border-radius: 0; }", repo.themeCustomCss().first())
         assertEquals(-2000L, repo.serverTimeOffsetMs().first())
         assertTrue(repo.shareEmbedFriendlyLinks().first())
-        assertEquals("v_1", repo.momentsResumeVideoId(scope = "all").first())
-        assertEquals(30_000L, repo.momentsResumePositionMs(scope = "all").first())
-        assertEquals(123_456L, repo.momentsResumeSortAtMs(scope = "all").first())
     }
 
-    @Test fun bookmarkSheetPrefs_roundTrip() = runBlocking {
+    @Test
+    fun bookmarkSheetPrefs_roundTrip() = runBlocking {
         val repo = PreferencesRepo(db.preferenceDao(), scope, nowMsProvider = { 42L })
 
         repo.setLastBookmarkCategoryId(17L)
@@ -123,7 +144,8 @@ class PreferencesRepoTest {
         assertEquals(listOf("alpha", "beta"), repo.getBookmarkAccountPrefs("creator_handle"))
     }
 
-    @Test fun themeCustomCss_isCappedBeforeStorage() = runBlocking {
+    @Test
+    fun themeCustomCss_isCappedBeforeStorage() = runBlocking {
         val repo = PreferencesRepo(db.preferenceDao(), scope, nowMsProvider = { 42L })
         val oversized = "a".repeat(PreferencesRepo.Defaults.THEME_CUSTOM_CSS_MAX_BYTES + 10)
 
@@ -135,7 +157,8 @@ class PreferencesRepoTest {
         )
     }
 
-    @Test fun syncCaches_trackDebugMode() = runBlocking {
+    @Test
+    fun syncCaches_trackDebugMode() = runBlocking {
         val repo = PreferencesRepo(db.preferenceDao(), scope, nowMsProvider = { 0L })
 
         // Initial value is the default
@@ -151,7 +174,8 @@ class PreferencesRepoTest {
         assertTrue(repo.debugModeSync())
     }
 
-    @Test fun syncCaches_trackServerTimeOffset() = runBlocking {
+    @Test
+    fun syncCaches_trackServerTimeOffset() = runBlocking {
         val repo = PreferencesRepo(db.preferenceDao(), scope, nowMsProvider = { 0L })
 
         waitFor("initial default") { repo.serverTimeOffsetMsSync() == 0L }
@@ -161,24 +185,28 @@ class PreferencesRepoTest {
         assertEquals(12345L, repo.serverTimeOffsetMsSync())
     }
 
-    @Test fun dearrowMode_defaultsToOff() = runBlocking {
+    @Test
+    fun dearrowMode_defaultsToOff() = runBlocking {
         val repo = PreferencesRepo(db.preferenceDao(), scope, nowMsProvider = { 0L })
         assertEquals("off", repo.dearrowMode().first())
     }
 
-    @Test fun dearrowMode_setAndRoundTripCasual() = runBlocking {
+    @Test
+    fun dearrowMode_setAndRoundTripCasual() = runBlocking {
         val repo = PreferencesRepo(db.preferenceDao(), scope, nowMsProvider = { 0L })
         repo.putString(PreferencesRepo.Keys.DEARROW_MODE, "casual")
         assertEquals("casual", repo.dearrowMode().first())
     }
 
-    @Test fun dearrowMode_invalidValueNormalizesToOff() = runBlocking {
+    @Test
+    fun dearrowMode_invalidValueNormalizesToOff() = runBlocking {
         val repo = PreferencesRepo(db.preferenceDao(), scope, nowMsProvider = { 0L })
         repo.putString(PreferencesRepo.Keys.DEARROW_MODE, "banana")
         assertEquals("off", repo.dearrowMode().first())
     }
 
-    @Test fun deleteAll_resetsReadsToDefaults() = runBlocking {
+    @Test
+    fun deleteAll_resetsReadsToDefaults() = runBlocking {
         val repo = PreferencesRepo(db.preferenceDao(), scope, nowMsProvider = { 0L })
         repo.setSyncEnabled(false)
         assertFalse(repo.syncEnabled().first())

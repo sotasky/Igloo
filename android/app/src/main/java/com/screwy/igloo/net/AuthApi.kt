@@ -3,7 +3,6 @@ package com.screwy.igloo.net
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.plugins.ClientRequestException
-import io.ktor.client.request.delete
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.HttpResponse
@@ -13,8 +12,7 @@ import io.ktor.http.contentType
 import kotlinx.serialization.Serializable
 
 /**
- * `/api/auth/{login,refresh,logout}` + `DELETE /api/account`. Shapes match
- * `internal/web/auth_api.go` as shipped in server-side-changes #16/#17.
+ * `/api/auth/{login,refresh,logout}`.
  */
 class AuthApi(
     private val client: HttpClient,
@@ -45,9 +43,6 @@ class AuthApi(
             contentType(ContentType.Application.Json)
             setBody(RefreshRequest(refreshToken))
         }
-
-    suspend fun deleteAccount(): HttpResponse =
-        client.delete(baseUrlProvider() + "/api/account")
 }
 
 @Serializable

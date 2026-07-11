@@ -200,7 +200,7 @@ func TestFeedItemActionsDoNotShowStandaloneThreadButton(t *testing.T) {
 	}
 }
 
-func TestFeedItemRendersSingleVideoFromSlideEndpointWhenStreamMissing(t *testing.T) {
+func TestFeedItemDoesNotSynthesizeVideoEndpointWhenInventoryIsMissing(t *testing.T) {
 	item := model.FeedItem{
 		TweetID:      "video_1",
 		AuthorHandle: "sample_author_a",
@@ -216,14 +216,8 @@ func TestFeedItemRendersSingleVideoFromSlideEndpointWhenStreamMissing(t *testing
 		t.Fatalf("render feed item: %v", err)
 	}
 	html := buf.String()
-	for _, want := range []string{
-		`data-feed-media-kind="video"`,
-		`data-feed-media-stream="/api/media/slide/video_1/0"`,
-		`<source src="/api/media/slide/video_1/0" type="video/mp4">`,
-	} {
-		if !strings.Contains(html, want) {
-			t.Fatalf("missing %q in html: %s", want, html)
-		}
+	if strings.Contains(html, `data-feed-media`) || strings.Contains(html, `/api/media/slide/video_1/`) {
+		t.Fatalf("rendered unavailable canonical media: %s", html)
 	}
 }
 
@@ -236,6 +230,7 @@ func TestFeedItemRendersArticleCoverAsImage(t *testing.T) {
 			Type: "article:cover",
 			URL:  "https://pbs.twimg.com/media/article-cover.jpg",
 		}},
+		MediaSlideURLs: []string{"/api/media/slide/article_1/0?owner_kind=tweet"},
 	}
 
 	var buf bytes.Buffer
@@ -245,7 +240,7 @@ func TestFeedItemRendersArticleCoverAsImage(t *testing.T) {
 	html := buf.String()
 	for _, want := range []string{
 		`data-feed-media-kind="image"`,
-		`<img class="feed-media-image" src="/api/media/slide/article_1/0"`,
+		`<img class="feed-media-image" src="/api/media/slide/article_1/0?owner_kind=tweet"`,
 	} {
 		if !strings.Contains(html, want) {
 			t.Fatalf("missing %q in html: %s", want, html)
@@ -253,7 +248,7 @@ func TestFeedItemRendersArticleCoverAsImage(t *testing.T) {
 	}
 	for _, notWant := range []string{
 		`data-feed-media-kind="video"`,
-		`data-feed-media-stream="/api/media/slide/article_1/0"`,
+		`data-feed-media-stream="/api/media/slide/article_1/0?owner_kind=tweet"`,
 		`<video class="feed-media-video"`,
 	} {
 		if strings.Contains(html, notWant) {
@@ -268,6 +263,10 @@ func TestFeedItemMultiVideoTilesUseIndexedSlideEndpoints(t *testing.T) {
 		AuthorHandle:   "sample_author_a",
 		BodyText:       "video body",
 		MediaStreamURL: "/api/media/stream/video_multi",
+		MediaSlideURLs: []string{
+			"/api/media/slide/video_multi/0?owner_kind=tweet",
+			"/api/media/slide/video_multi/1?owner_kind=tweet",
+		},
 		Media: []model.MediaRef{
 			{Type: "video", URL: "https://cdn.example/video_a.mp4"},
 			{Type: "video", URL: "https://cdn.example/video_b.mp4"},
@@ -280,10 +279,10 @@ func TestFeedItemMultiVideoTilesUseIndexedSlideEndpoints(t *testing.T) {
 	}
 	html := buf.String()
 	for _, want := range []string{
-		`data-feed-media-stream="/api/media/slide/video_multi/0"`,
-		`data-feed-media-stream="/api/media/slide/video_multi/1"`,
-		`<source src="/api/media/slide/video_multi/0" type="video/mp4">`,
-		`<source src="/api/media/slide/video_multi/1" type="video/mp4">`,
+		`data-feed-media-stream="/api/media/slide/video_multi/0?owner_kind=tweet"`,
+		`data-feed-media-stream="/api/media/slide/video_multi/1?owner_kind=tweet"`,
+		`<source src="/api/media/slide/video_multi/0?owner_kind=tweet">`,
+		`<source src="/api/media/slide/video_multi/1?owner_kind=tweet">`,
 	} {
 		if !strings.Contains(html, want) {
 			t.Fatalf("missing %q in html: %s", want, html)
@@ -307,6 +306,10 @@ func TestFeedItemQuoteVideoTileUsesItsOwnSlideEndpoint(t *testing.T) {
 			{Type: "video", URL: "https://cdn.example/video.mp4"},
 		},
 		QuoteMediaStreamURL: "/api/media/slide/quote_1/0",
+		QuoteMediaSlideURLs: []string{
+			"/api/media/slide/quote_1/0?owner_kind=tweet",
+			"/api/media/slide/quote_1/1?owner_kind=tweet",
+		},
 	}
 
 	var buf bytes.Buffer
@@ -314,10 +317,10 @@ func TestFeedItemQuoteVideoTileUsesItsOwnSlideEndpoint(t *testing.T) {
 		t.Fatalf("render feed item: %v", err)
 	}
 	html := buf.String()
-	if !strings.Contains(html, `data-feed-media-stream="/api/media/slide/quote_1/1"`) {
+	if !strings.Contains(html, `data-feed-media-stream="/api/media/slide/quote_1/1?owner_kind=tweet"`) {
 		t.Fatalf("quote video tile should use its own slide endpoint: %s", html)
 	}
-	if strings.Contains(html, `<source src="/api/media/slide/quote_1/0" type="video/mp4">`) {
+	if strings.Contains(html, `<source src="/api/media/slide/quote_1/0?owner_kind=tweet">`) {
 		t.Fatalf("quote video tile reused the first slide stream: %s", html)
 	}
 }
@@ -331,6 +334,10 @@ func TestFeedItemQuoteVideoTileDoesNotReuseSingleStreamEndpoint(t *testing.T) {
 		QuoteAuthorHandle:   "sample_quote_author",
 		QuoteBodyText:       "quote body",
 		QuoteMediaStreamURL: "/api/media/stream/quote_1",
+		QuoteMediaSlideURLs: []string{
+			"/api/media/slide/quote_1/0?owner_kind=tweet",
+			"/api/media/slide/quote_1/1?owner_kind=tweet",
+		},
 		QuoteMedia: []model.MediaRef{
 			{Type: "video", URL: "https://cdn.example/video_a.mp4"},
 			{Type: "video", URL: "https://cdn.example/video_b.mp4"},
@@ -343,8 +350,8 @@ func TestFeedItemQuoteVideoTileDoesNotReuseSingleStreamEndpoint(t *testing.T) {
 	}
 	html := buf.String()
 	for _, want := range []string{
-		`data-feed-media-stream="/api/media/slide/quote_1/0"`,
-		`data-feed-media-stream="/api/media/slide/quote_1/1"`,
+		`data-feed-media-stream="/api/media/slide/quote_1/0?owner_kind=tweet"`,
+		`data-feed-media-stream="/api/media/slide/quote_1/1?owner_kind=tweet"`,
 	} {
 		if !strings.Contains(html, want) {
 			t.Fatalf("missing %q in html: %s", want, html)

@@ -1,43 +1,14 @@
 package download
 
 import (
-	"bytes"
 	"context"
-	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
 
-type closeErrorWriter struct {
-	bytes.Buffer
-	closeErr error
-	closed   bool
-}
-
-func (w *closeErrorWriter) Close() error {
-	w.closed = true
-	return w.closeErr
-}
-
-func TestCopyStreamAndCloseReturnsDestinationCloseError(t *testing.T) {
-	closeErr := errors.New("delayed writeback failed")
-	dest := &closeErrorWriter{closeErr: closeErr}
-
-	err := copyStreamAndClose(strings.NewReader("video data"), dest)
-	if !errors.Is(err, closeErr) {
-		t.Fatalf("copyStreamAndClose error = %v, want close error %v", err, closeErr)
-	}
-	if !dest.closed {
-		t.Fatal("copyStreamAndClose did not close destination")
-	}
-	if got := dest.String(); got != "video data" {
-		t.Fatalf("destination content = %q, want %q", got, "video data")
-	}
-}
-
-func TestGalleryDLDownloadCopiesImageAudioAndInfo(t *testing.T) {
+func TestGalleryDLDownloadStagesUnderDestinationAndMovesOutputs(t *testing.T) {
 	bin := t.TempDir()
 	writeExecutable(t, filepath.Join(bin, "gallery-dl"), `#!/bin/sh
 out=""
@@ -50,6 +21,10 @@ while [ "$#" -gt 0 ]; do
   esac
   shift
 done
+case "$out" in
+  "$EXPECTED_DEST"/.gallerydl-*) ;;
+  *) exit 42 ;;
+esac
 mkdir -p "$out"
 printf 'image data' > "$out/slide.jpg"
 printf 'audio data' > "$out/sound.mp3"
@@ -58,7 +33,8 @@ printf '{"id":"source"}' > "$out/slide.json"
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	destDir := t.TempDir()
-	paths, err := (&GalleryDLWrapper{Runner: CommandRunner{}}).Download(
+	t.Setenv("EXPECTED_DEST", destDir)
+	completed, err := (&GalleryDLWrapper{Runner: CommandRunner{}}).DownloadCompleted(
 		context.Background(),
 		"https://www.tiktok.com/@sample_handle/video/sample_video",
 		destDir,
@@ -66,8 +42,9 @@ printf '{"id":"source"}' > "$out/slide.json"
 		"",
 	)
 	if err != nil {
-		t.Fatalf("Download returned error: %v", err)
+		t.Fatalf("DownloadCompleted returned error: %v", err)
 	}
+	paths := completed.MediaPaths
 
 	wantPaths := []string{
 		filepath.Join(destDir, "post_1.jpg"),
@@ -83,7 +60,50 @@ printf '{"id":"source"}' > "$out/slide.json"
 	}
 	assertFileContent(t, filepath.Join(destDir, "post_1.jpg"), "image data")
 	assertFileContent(t, filepath.Join(destDir, "post.mp3"), "audio data")
-	assertFileContent(t, filepath.Join(destDir, "post.info.json"), `{"id":"source"}`)
+	if completed.InfoJSONPath != filepath.Join(destDir, "post.info.json") {
+		t.Fatalf("info path = %q", completed.InfoJSONPath)
+	}
+	assertFileContent(t, completed.InfoJSONPath, `{"id":"source"}`)
+}
+
+func TestGalleryDLDownloadCompletedReturnsExactVideoThumbnail(t *testing.T) {
+	bin := t.TempDir()
+	writeExecutable(t, filepath.Join(bin, "gallery-dl"), `#!/bin/sh
+out=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -D)
+      shift
+      out="$1"
+      ;;
+  esac
+  shift
+done
+mkdir -p "$out"
+printf 'video data' > "$out/video.mp4"
+printf 'thumbnail data' > "$out/cover.png"
+printf '{"id":"source"}' > "$out/video.json"
+`)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	destDir := t.TempDir()
+	completed, err := (&GalleryDLWrapper{Runner: CommandRunner{}}).DownloadCompleted(
+		context.Background(),
+		"https://www.instagram.com/reel/sample/",
+		destDir,
+		"post",
+		"",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(completed.MediaPaths) != 1 || completed.MediaPaths[0] != filepath.Join(destDir, "post.mp4") {
+		t.Fatalf("media paths = %#v", completed.MediaPaths)
+	}
+	if completed.ThumbnailPath != filepath.Join(destDir, "post.png") {
+		t.Fatalf("thumbnail path = %q", completed.ThumbnailPath)
+	}
+	assertFileContent(t, completed.ThumbnailPath, "thumbnail data")
 }
 
 func TestEnforceGalleryDLOutputLimitsRejectsLargeFile(t *testing.T) {

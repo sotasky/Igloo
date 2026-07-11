@@ -52,3 +52,23 @@ func TestBuildFeedSourcesShowsNeverIngestedChannelAsPending(t *testing.T) {
 	}
 	t.Fatalf("_sample_handle source missing from diagnostics: %#v", sources)
 }
+
+func TestCountReadyAvatarsCountsCanonicalChannelIdentityOnly(t *testing.T) {
+	srv := newTestServer(t)
+	if err := srv.db.ExecRaw(`
+		INSERT INTO assets (
+			asset_id, asset_kind, owner_kind, owner_id, media_index,
+			state, created_at_ms, updated_at_ms
+		) VALUES
+			('channel_avatar', 'avatar', 'channel', 'twitter_sample', 0, 'ready', 1, 1),
+			('comment_avatar', 'avatar', 'comment_author', 'comment_sample', 0, 'ready', 1, 1),
+			('retired_tweet_avatar', 'avatar', 'tweet', 'tweet_sample', 0, 'ready', 1, 1),
+			('queued_channel_avatar', 'avatar', 'channel', 'twitter_pending', 0, 'queued', 1, 1)
+	`); err != nil {
+		t.Fatalf("seed avatar inventory: %v", err)
+	}
+
+	if got := srv.countReadyAvatars(); got != 1 {
+		t.Fatalf("countReadyAvatars = %d, want one ready channel avatar", got)
+	}
+}

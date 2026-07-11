@@ -198,8 +198,8 @@ func affinityDecayAt(score float64, lastEventMs int64, halfLifeMs int64, nowMs i
 
 // PersonalizeItems computes full algo_interest_score using affinity data.
 // Called after basic enrichment (liked/seen/bookmarked/channel flags already set).
-func PersonalizeItems(database *db.DB, items []model.FeedItem, username string) {
-	if username == "" || len(items) == 0 {
+func PersonalizeItems(database *db.DB, items []model.FeedItem) {
+	if len(items) == 0 {
 		return
 	}
 
@@ -221,9 +221,9 @@ func PersonalizeItems(database *db.DB, items []model.FeedItem, username string) 
 	tokenList := mapKeys(tokensNeeded)
 
 	// Fetch affinity scores
-	accountRows, _ := database.GetAccountAffinityScores(username, handleList)
-	tokenRows, _ := database.GetTokenAffinityScores(username, tokenList)
-	stateAccount, _ := database.BuildStateAccountScores(username)
+	accountRows, _ := database.GetAccountAffinityScores(handleList)
+	tokenRows, _ := database.GetTokenAffinityScores(tokenList)
+	stateAccount, _ := database.BuildStateAccountScores()
 
 	nowMs := time.Now().UnixMilli()
 

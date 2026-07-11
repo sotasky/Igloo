@@ -1,7 +1,6 @@
 package db
 
 import (
-	"strings"
 	"testing"
 )
 
@@ -11,12 +10,10 @@ func TestInsertVideoPreservesExistingMetadataOnPartialOverwrite(t *testing.T) {
 	if err := d.InsertVideo(
 		"vid_1",
 		"youtube_alice",
+		"youtube_video",
 		"Original title",
 		"Original description",
 		125,
-		"thumbs/original.webp",
-		"videos/original.mp4",
-		1024,
 		1_700_000_000_000,
 		`{"duration":125,"thumbnail":"keep"}`,
 		"video",
@@ -29,12 +26,10 @@ func TestInsertVideoPreservesExistingMetadataOnPartialOverwrite(t *testing.T) {
 	if err := d.InsertVideo(
 		"vid_1",
 		"youtube_alice",
+		"youtube_video",
 		"",
 		"",
 		0,
-		"",
-		"videos/redownload.mp4",
-		2048,
 		0,
 		"",
 		"",
@@ -54,16 +49,10 @@ func TestInsertVideoPreservesExistingMetadataOnPartialOverwrite(t *testing.T) {
 	if video.Duration != 125 {
 		t.Fatalf("duration = %d, want 125", video.Duration)
 	}
-	if !strings.HasSuffix(video.ThumbnailPath, "thumbs/original.webp") {
-		t.Fatalf("thumbnail_path = %q, want preserved value", video.ThumbnailPath)
-	}
 	if video.PublishedAt == nil || video.PublishedAt.UnixMilli() != 1_700_000_000_000 {
 		t.Fatalf("published_at = %v, want preserved value", video.PublishedAt)
 	}
 	if video.MetadataJSON != `{"duration":125,"thumbnail":"keep"}` {
 		t.Fatalf("metadata_json = %q, want preserved value", video.MetadataJSON)
-	}
-	if !strings.HasSuffix(video.FilePath, "videos/redownload.mp4") {
-		t.Fatalf("file_path = %q, want latest non-empty value", video.FilePath)
 	}
 }

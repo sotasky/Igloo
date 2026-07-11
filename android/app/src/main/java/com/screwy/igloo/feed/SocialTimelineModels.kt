@@ -2,7 +2,6 @@ package com.screwy.igloo.feed
 
 import com.screwy.igloo.data.platformKeyFromChannelId
 import com.screwy.igloo.data.entity.FeedRow
-import com.screwy.igloo.media.MediaUri
 import com.screwy.igloo.ui.component.displayLabel
 import com.screwy.igloo.ui.component.normalizeHandle
 import com.screwy.igloo.ui.nav.ProfileOpenSnapshot
@@ -41,12 +40,12 @@ internal fun buildSocialPostModel(
     mediaModels: Map<String, FeedMediaGridModel>,
 ): SocialPostModel {
     val item = row.item
-    val authorHandle = normalizeHandle(item.authorHandle)
+    val authorHandle = normalizeHandle(row.authorHandle)
     val author = SocialProfileModel(
         channelId = item.channelId.orEmpty(),
         handle = authorHandle,
         displayName = displayLabel(
-            primary = item.authorDisplayName,
+            primary = row.authorDisplayName,
             fallback = row.channelName,
             handle = authorHandle,
         ),
@@ -76,11 +75,9 @@ internal fun buildSocialPostModel(
 }
 
 internal fun buildProfileOpenSnapshot(
-    post: SocialPostModel,
-    baseUrl: String,
+	post: SocialPostModel,
 ): ProfileOpenSnapshot? {
     val channelId = post.author.channelId.takeIf { it.isNotBlank() } ?: return null
-    val root = baseUrl.trim().trimEnd('/')
     val platform = post.row.channelPlatform
         ?.trim()
         ?.takeIf { it.isNotBlank() }
@@ -91,34 +88,6 @@ internal fun buildProfileOpenSnapshot(
         handle = post.author.handle,
         platform = platform,
         isFollowed = post.actions.isAuthorFollowed,
-        isStarred = post.actions.isAuthorStarred,
-        avatarUri = profileAvatarUri(
-            root = root,
-            channelId = channelId,
-        ),
-        bannerUri = profileBannerUri(
-            root = root,
-            channelId = channelId,
-            platform = platform,
-        ),
-    )
+		isStarred = post.actions.isAuthorStarred,
+	)
 }
-
-private fun profileAvatarUri(
-    root: String,
-    channelId: String,
-): MediaUri {
-    if (root.isBlank()) return MediaUri.Missing
-    return MediaUri.Remote("$root/api/media/avatar/$channelId")
-}
-
-private fun profileBannerUri(
-    root: String,
-    channelId: String,
-    platform: String,
-): MediaUri {
-    if (root.isBlank() || platform.lowercase() !in BannerCapablePlatforms) return MediaUri.Missing
-    return MediaUri.Remote("$root/api/media/banner/$channelId")
-}
-
-private val BannerCapablePlatforms = setOf("twitter", "x", "tiktok", "youtube")

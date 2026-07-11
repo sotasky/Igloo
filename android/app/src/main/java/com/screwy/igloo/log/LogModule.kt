@@ -1,9 +1,7 @@
 package com.screwy.igloo.log
 
 import com.screwy.igloo.outbox.OutboxWriter
-import com.screwy.igloo.sync.SchedulerLogger
 import org.koin.core.qualifier.named
-import org.koin.dsl.bind
 import org.koin.dsl.module
 
 /**
@@ -23,5 +21,5 @@ val iglooLogModule = module {
             sink = get(),
             scope = get(named("applicationScope")),
         )
-    } bind SchedulerLogger::class
+    }
 }

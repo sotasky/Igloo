@@ -18,25 +18,25 @@ func renderPlayerComments(t *testing.T, comments []model.Comment) string {
 	return buf.String()
 }
 
-func TestPlayerCommentsUsesStoredYouTubeCommentThumbnail(t *testing.T) {
+func TestPlayerCommentsUsesProjectedCommentAvatar(t *testing.T) {
 	html := renderPlayerComments(t, []model.Comment{{
 		CommentID:       "comment_1",
 		AuthorName:      "Commenter",
 		AuthorID:        "UCcommenter123",
-		AuthorThumbnail: "https://yt3.ggpht.com/raw-avatar=s88-c-k-c0x00fff",
+		AuthorThumbnail: "/api/media/comment-avatar/youtube_UCcommenter123",
 		Text:            "hello",
 		Platform:        "youtube",
 	}})
 
-	if !strings.Contains(html, `src="https://yt3.ggpht.com/raw-avatar=s88-c-k-c0x00fff"`) {
-		t.Fatalf("expected stored comment thumbnail, got %s", html)
+	if !strings.Contains(html, `src="/api/media/comment-avatar/youtube_UCcommenter123"`) {
+		t.Fatalf("expected canonical comment avatar, got %s", html)
 	}
-	if strings.Contains(html, `/api/media/avatar/youtube_UCcommenter123`) {
-		t.Fatalf("rendered profile avatar path for commenter: %s", html)
+	if strings.Contains(html, `yt3.ggpht.com`) {
+		t.Fatalf("rendered upstream comment avatar: %s", html)
 	}
 }
 
-func TestPlayerCommentsKeepsRawAvatarWhenAuthorIDIsNotCanonical(t *testing.T) {
+func TestPlayerCommentsDoesNotRenderRawCommentAvatar(t *testing.T) {
 	html := renderPlayerComments(t, []model.Comment{{
 		CommentID:       "comment_1",
 		AuthorName:      "Commenter",
@@ -46,8 +46,8 @@ func TestPlayerCommentsKeepsRawAvatarWhenAuthorIDIsNotCanonical(t *testing.T) {
 		Platform:        "youtube",
 	}})
 
-	if !strings.Contains(html, `src="https://yt3.ggpht.com/raw-avatar=s88-c-k-c0x00fff"`) {
-		t.Fatalf("expected raw avatar fallback for non-canonical author id, got %s", html)
+	if strings.Contains(html, `yt3.ggpht.com`) || strings.Contains(html, `<img class="player-channel-avatar"`) {
+		t.Fatalf("rendered raw avatar instead of initial fallback: %s", html)
 	}
 }
 

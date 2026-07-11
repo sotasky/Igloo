@@ -62,7 +62,7 @@ func TestDownloaderReportPageDoesNotUseInnerHTMLForReportRows(t *testing.T) {
 
 func TestDownloaderReportDirUsesIglooDataTmpAndPrunesOldRuns(t *testing.T) {
 	srv := newTestServer(t)
-	base := filepath.Join(srv.cfg.DataDir, "tmp", "downloader-reports")
+	base := filepath.Join(srv.cfg.Storage.StateRoot(), "tmp", "downloader-reports")
 	if err := os.MkdirAll(base, 0o755); err != nil {
 		t.Fatalf("mkdir base: %v", err)
 	}

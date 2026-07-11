@@ -298,8 +298,8 @@ items := []model.FeedItem{
 			name: "sql tuples need sample identities too",
 			content: `
 if _, err := d.conn.Exec(` + "`" + `
-	INSERT INTO videos (video_id, channel_id, title, duration, published_at, sync_seq)
-	VALUES ('7777777777777777777', 'tiktok_specific0day', 'Old title', 0, 0, 0)
+	INSERT INTO videos (video_id, channel_id, owner_kind, title, duration, published_at, sync_seq)
+	VALUES ('7777777777777777777', 'tiktok_specific0day', 'tiktok_video', 'Old title', 0, 0, 0)
 ` + "`" + `); err != nil {
 	t.Fatal(err)
 }`,

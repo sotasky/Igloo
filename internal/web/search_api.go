@@ -59,7 +59,7 @@ func (s *Server) handleSearchSuggest(w http.ResponseWriter, r *http.Request) {
 			"channel_name":  v.ChannelName,
 			"channel_id":    v.ChannelID,
 			"platform":      v.Platform,
-			"thumbnail_url": ResolveDearrowThumbURL(dearrowMode, v.VideoID, v.DearrowThumbPath),
+			"thumbnail_url": ResolveDearrowThumbURL(dearrowMode, v.VideoID),
 			"is_temp":       v.IsTemp,
 		})
 	}

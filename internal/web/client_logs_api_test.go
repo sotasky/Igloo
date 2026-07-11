@@ -10,8 +10,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/screwys/igloo/internal/model"
 )
 
 // #12 — appendClientLog writes one JSON line per entry to the named
@@ -19,7 +17,7 @@ import (
 func TestClientLogServerAppendsBatch(t *testing.T) {
 	srv := newTestServer(t)
 	dataDir := t.TempDir()
-	srv.cfg.DataDir = dataDir
+	setTestStateRoot(t, srv.cfg, dataDir)
 
 	body := `{
 	  "device_id": "dev-123",
@@ -75,7 +73,7 @@ func TestClientLogServerAppendsBatch(t *testing.T) {
 func TestClientLogDebugWritesToDebugFile(t *testing.T) {
 	srv := newTestServer(t)
 	dataDir := t.TempDir()
-	srv.cfg.DataDir = dataDir
+	setTestStateRoot(t, srv.cfg, dataDir)
 
 	body := `{"entries": [{"event": "ingest_bundle", "timestamp_ms": 1745100000000}]}`
 	rec := httptest.NewRecorder()
@@ -91,7 +89,7 @@ func TestClientLogDebugWritesToDebugFile(t *testing.T) {
 
 func TestLogPathForTypeRejectsTraversalType(t *testing.T) {
 	srv := newTestServer(t)
-	srv.cfg.DataDir = t.TempDir()
+	setTestStateRoot(t, srv.cfg, t.TempDir())
 
 	if _, ok := srv.logPathForType("../../outside"); ok {
 		t.Fatal("traversal log type was accepted")
@@ -100,7 +98,7 @@ func TestLogPathForTypeRejectsTraversalType(t *testing.T) {
 	if !ok {
 		t.Fatal("server log type was rejected")
 	}
-	if want := filepath.Join(srv.cfg.DataDir, "logs", "server", "server.log"); path != want {
+	if want := filepath.Join(srv.cfg.Storage.StateRoot(), "logs", "server", "server.log"); path != want {
 		t.Fatalf("server log path = %q, want %q", path, want)
 	}
 }
@@ -108,7 +106,7 @@ func TestLogPathForTypeRejectsTraversalType(t *testing.T) {
 func TestClientLogMomentsWritesPersistentJSONL(t *testing.T) {
 	srv := newTestServer(t)
 	dataDir := t.TempDir()
-	srv.cfg.DataDir = dataDir
+	setTestStateRoot(t, srv.cfg, dataDir)
 
 	body := `{"device_id":"web-moments","entries":[{"event":"moments_video_debug","level":"debug","timestamp_ms":1745100000000,"fields":{"id":"short_1","bands":{"bottom":{"darkPct":100}}}}]}`
 	rec := httptest.NewRecorder()
@@ -137,7 +135,7 @@ func TestClientLogMomentsWritesPersistentJSONL(t *testing.T) {
 func TestClientLogMomentsRotatesBeforeAppend(t *testing.T) {
 	srv := newTestServer(t)
 	dataDir := t.TempDir()
-	srv.cfg.DataDir = dataDir
+	setTestStateRoot(t, srv.cfg, dataDir)
 
 	logPath := filepath.Join(dataDir, "logs", "moments", "debug.jsonl")
 	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
@@ -172,7 +170,7 @@ func TestClientLogMomentsRotatesBeforeAppend(t *testing.T) {
 func TestClientLogCapsBatchSize(t *testing.T) {
 	srv := newTestServer(t)
 	dataDir := t.TempDir()
-	srv.cfg.DataDir = dataDir
+	setTestStateRoot(t, srv.cfg, dataDir)
 
 	// 200 entries — server caps at 100.
 	var b strings.Builder
@@ -201,7 +199,7 @@ func TestClientLogCapsBatchSize(t *testing.T) {
 
 func TestClientLogRejectsInvalidJSON(t *testing.T) {
 	srv := newTestServer(t)
-	srv.cfg.DataDir = t.TempDir()
+	setTestStateRoot(t, srv.cfg, t.TempDir())
 
 	rec := httptest.NewRecorder()
 	srv.handleClientLogServer(rec, httptest.NewRequest("POST", "/api/logs/server", strings.NewReader("{not json")))
@@ -219,29 +217,23 @@ func TestClientLogRejectsInvalidJSON(t *testing.T) {
 func TestAndroidStatusRendersPersistentSyncHealth(t *testing.T) {
 	srv := newTestServer(t)
 	nowMs := time.Now().Add(-2 * time.Minute).UnixMilli()
-	gen := model.AndroidSyncGeneration{
-		GenerationID:            "android-sync-healthtest",
-		CreatedAtMs:             nowMs - 30_000,
-		Status:                  "ready",
-		SourceVersion:           "healthtest-source",
-		Retention:               map[string]int{"feed_days": 7, "youtube_days": 7, "moments_days": 7, "story_hours": 48},
-		ItemCount:               44,
-		AssetCount:              100,
-		ReadyAssetCount:         95,
-		ServerMissingAssetCount: 5,
-		ContentCounts:           map[string]int{"feed_items": 12, "videos": 32},
-		AssetCounts:             map[string]int{"post_media": 8, "post_thumbnail": 4, "video_stream": 80, "avatar": 8},
+	clock, err := srv.db.GetAndroidSyncClock()
+	if err != nil {
+		t.Fatal(err)
 	}
-	if err := srv.db.StoreAndroidSyncGeneration(gen, nil, nil); err != nil {
-		t.Fatalf("store generation: %v", err)
+	cursor, err := encodeAndroidSyncCursor(androidSyncCursor{
+		Version: androidSyncModelVersion, Mode: "changes", Epoch: clock.Epoch,
+		Revision: clock.Revision, Retention: androidSyncRetentionHash(srv.androidSyncRetentionFallback()),
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 	if err := srv.db.RecordAndroidSyncHealth(
-		gen.GenerationID,
+		cursor,
 		nowMs,
-		[]byte(`{"retention":{"feed_days":7,"youtube_days":7,"moments_days":7,"story_hours":48},"counts":{"total":100,"verified":75,"pending":20,"failed":0,"missing":5},"bytes":{"verified":1048576}}`),
+		[]byte(`{"retention":{"feed_days":7,"youtube_days":7,"moments_days":7,"story_hours":48},"counts":{"total":100,"verified":75,"pending":20,"missing":5},"bytes":{"verified":1048576}}`),
 		75,
 		20,
-		0,
 		5,
 		100,
 		1048576,
@@ -256,7 +248,7 @@ func TestAndroidStatusRendersPersistentSyncHealth(t *testing.T) {
 		t.Fatalf("status %d - %s", rec.Code, rec.Body.String())
 	}
 	body := rec.Body.String()
-	for _, want := range []string{"Generation", "Device assets", "75%", "75/100", "Asset Health", "Server missing"} {
+	for _, want := range []string{"Device assets", "75%", "75/100", "Asset Health", "Server missing"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("dashboard missing %q:\n%s", want, body)
 		}

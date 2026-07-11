@@ -257,7 +257,7 @@ func main() {
 	})
 
 	s.AddTool(mcp.NewTool("android_sync_status",
-		mcp.WithDescription("Focused Android sync convergence report: latest generation, sync assets, server_missing groups, health reports, asset inventory, and recent Android client sync failures."),
+		mcp.WithDescription("Focused Android sync convergence report: content and asset snapshots, server_missing groups, health reports, asset inventory, and recent Android client sync failures."),
 		mcp.WithNumber("minutes", mcp.Description("How far back to scan Android client logs. Default 60.")),
 	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		result, err := androidSyncStatus(int(req.GetFloat("minutes", 60)))
@@ -268,7 +268,7 @@ func main() {
 	})
 
 	s.AddTool(mcp.NewTool("identity_media_status",
-		mcp.WithDescription("Trace profile/avatar/banner readiness for a channel identity or feed tweet: profile row, cached files, avatar/banner assets, channel queue, and feed timeline."),
+		mcp.WithDescription("Trace profile/avatar/banner readiness for a channel identity or feed tweet: profile metadata, durable profile job, canonical assets, and feed timeline."),
 		mcp.WithString("channel_id", mcp.Description("Optional canonical channel id, e.g. twitter_sample_handle.")),
 		mcp.WithString("platform", mcp.Description("Optional platform for handle lookup. Default twitter.")),
 		mcp.WithString("handle", mcp.Description("Optional profile handle, with or without @.")),

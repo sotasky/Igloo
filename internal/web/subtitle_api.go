@@ -14,72 +14,21 @@ func (s *Server) registerSubtitleRoutes(mux *http.ServeMux) {
 
 func (s *Server) handleSubtitle(w http.ResponseWriter, r *http.Request) {
 	videoID := r.PathValue("videoID")
-
-	video, err := s.db.GetVideo(videoID)
-	if err != nil || video == nil || video.FilePath == "" {
+	owner, ok := s.videoAssetOwner(videoID)
+	if !ok {
 		http.NotFound(w, r)
 		return
 	}
-
-	absFilePath := resolveDataPath(s.cfg.DataDir, video.FilePath)
-	videoBase := strings.TrimSuffix(absFilePath, filepath.Ext(absFilePath))
-
-	// Try specific track if requested
-	track := r.URL.Query().Get("track")
-	if track != "" {
-		trackPath, ok := subtitleTrackPath(filepath.Dir(absFilePath), filepath.Base(videoBase), track)
-		if !ok {
-			http.NotFound(w, r)
-			return
+	assets := s.canonicalAssets(owner, "subtitle")
+	track := strings.TrimSpace(r.URL.Query().Get("track"))
+	for _, file := range assets {
+		if track != "" && track != filepath.Base(file.asset.FilePath) {
+			continue
 		}
-		if _, err := os.Stat(trackPath); err == nil {
-			serveVTT(w, trackPath)
-			return
-		}
-		http.NotFound(w, r)
+		serveVTT(w, file.path)
 		return
 	}
-
-	// Default: try .en.vtt, then .vtt
-	for _, suffix := range []string{".en.vtt", ".vtt"} {
-		path := videoBase + suffix
-		if _, err := os.Stat(path); err == nil {
-			serveVTT(w, path)
-			return
-		}
-	}
-
-	// Try any .vtt in the directory matching video stem
-	dir := filepath.Dir(absFilePath)
-	stem := filepath.Base(videoBase)
-	entries, _ := os.ReadDir(dir)
-	for _, e := range entries {
-		if strings.HasPrefix(e.Name(), stem) && strings.HasSuffix(e.Name(), ".vtt") {
-			serveVTT(w, filepath.Join(dir, e.Name()))
-			return
-		}
-	}
-
 	http.NotFound(w, r)
-}
-
-func subtitleTrackPath(dir, stem, track string) (string, bool) {
-	name := strings.TrimSpace(track)
-	if name == "" || filepath.IsAbs(name) || strings.ContainsAny(name, `/\`) {
-		return "", false
-	}
-	if name != filepath.Base(name) || name == "." || name == ".." {
-		return "", false
-	}
-	if !strings.HasPrefix(name, stem) || !strings.HasSuffix(strings.ToLower(name), ".vtt") {
-		return "", false
-	}
-	path := filepath.Join(dir, name)
-	rel, err := filepath.Rel(dir, path)
-	if err != nil || rel == "." || strings.HasPrefix(rel, "..") || filepath.IsAbs(rel) {
-		return "", false
-	}
-	return path, true
 }
 
 // Matches WebVTT cue timing lines and strips positioning directives

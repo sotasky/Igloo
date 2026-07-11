@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"sort"
-	"time"
 
 	"github.com/screwys/igloo/internal/model"
 )
@@ -15,65 +14,17 @@ import (
 // detect whether a parent already exists in DB before fetching from fxtwitter,
 // and by the thread API.
 func (db *DB) GetFeedItemByTweetID(tweetID string) (*model.FeedItem, error) {
-	const q = `
-		SELECT tweet_id, COALESCE(source_handle,''), author_handle,
-		       COALESCE(author_display_name, ''), COALESCE(author_avatar_url, ''),
-		       COALESCE(body_text, ''), COALESCE(lang, ''),
-		       COALESCE(is_retweet, 0),
-		       COALESCE(retweeted_by_handle, ''), COALESCE(retweeted_by_display_name, ''),
-		       COALESCE(quote_tweet_id, ''), COALESCE(quote_author_handle, ''),
-		       COALESCE(quote_author_display_name, ''), COALESCE(quote_author_avatar_url, ''),
-		       COALESCE(quote_body_text, ''), COALESCE(quote_lang, ''),
-		       COALESCE(quote_media_json, ''),
-		       COALESCE(media_json, ''),
-		       COALESCE(canonical_url, ''), COALESCE(reply_to_handle, ''),
-		       COALESCE(reply_to_status, ''),
-		       COALESCE(is_reply, 0), COALESCE(is_ghost, 0),
-		       COALESCE(quote_published_at, 0),
-		       COALESCE(views, 0), COALESCE(likes, 0), COALESCE(retweets, 0),
-		       COALESCE(published_at, 0), COALESCE(fetched_at, 0),
-		       COALESCE(content_hash, '')
-		FROM feed_items WHERE tweet_id = ?`
-
-	var f model.FeedItem
-	var quotePubMs, pubMs, fetchedMs int64
-	err := db.conn.QueryRow(q, tweetID).Scan(
-		&f.TweetID, &f.SourceHandle, &f.AuthorHandle,
-		&f.AuthorDisplayName, &f.AuthorAvatarURL,
-		&f.BodyText, &f.Lang,
-		&f.IsRetweet,
-		&f.RetweetedByHandle, &f.RetweetedByDisplayName,
-		&f.QuoteTweetID, &f.QuoteAuthorHandle,
-		&f.QuoteAuthorDisplayName, &f.QuoteAuthorAvatarURL,
-		&f.QuoteBodyText, &f.QuoteLang,
-		&f.QuoteMediaJSON,
-		&f.MediaJSON,
-		&f.CanonicalURL, &f.ReplyToHandle,
-		&f.ReplyToStatus,
-		&f.IsReply, &f.IsGhost,
-		&quotePubMs,
-		&f.Views, &f.Likes, &f.Retweets,
-		&pubMs, &fetchedMs,
-		&f.ContentHash,
-	)
+	f, err := scanFeedItem(db.conn.QueryRow(`
+		SELECT `+feedItemSelectSQL("feed_items")+`
+		FROM feed_items_resolved AS feed_items
+		WHERE tweet_id = ?
+	`, tweetID))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("GetFeedItemByTweetID: %w", err)
 	}
-	if quotePubMs > 0 {
-		t := time.UnixMilli(quotePubMs).UTC()
-		f.QuotePublishedAt = &t
-	}
-	if pubMs > 0 {
-		t := time.UnixMilli(pubMs).UTC()
-		f.PublishedAt = &t
-	}
-	if fetchedMs > 0 {
-		f.FetchedAt = time.UnixMilli(fetchedMs).UTC()
-	}
-	f.ParseMedia()
 	return &f, nil
 }
 
@@ -270,7 +221,7 @@ func (db *DB) FindUnresolvedReplies(limit int) ([]model.FeedItem, error) {
 	const q = `
 		SELECT f.tweet_id, COALESCE(f.author_handle, ''), COALESCE(f.reply_to_handle, ''),
 		       COALESCE(f.reply_to_status, '')
-		FROM feed_items f
+		FROM feed_items_resolved f
 		LEFT JOIN feed_items parent
 		  ON parent.tweet_id = f.reply_to_status
 		 AND COALESCE(f.reply_to_status, '') != ''

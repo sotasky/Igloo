@@ -14,6 +14,10 @@ func schemaMaintainedStateStatements() []string {
 			content_type       TEXT NOT NULL DEFAULT '',
 			size_bytes         INTEGER NOT NULL DEFAULT 0,
 			sha256             TEXT NOT NULL DEFAULT '',
+			file_mtime_ns      INTEGER NOT NULL DEFAULT 0,
+			revision           INTEGER NOT NULL DEFAULT 0,
+			is_auto            INTEGER,
+			audio_language     TEXT NOT NULL DEFAULT '',
 			state              TEXT NOT NULL DEFAULT 'queued',
 			required_reason    TEXT NOT NULL DEFAULT '',
 			last_error_kind    TEXT NOT NULL DEFAULT '',
@@ -29,5 +33,6 @@ func schemaMaintainedStateStatements() []string {
 		`CREATE INDEX IF NOT EXISTS idx_assets_owner ON assets(owner_kind, owner_id, asset_kind, media_index)`,
 		`CREATE INDEX IF NOT EXISTS idx_assets_claim ON assets(state, next_attempt_at_ms, updated_at_ms)`,
 		`CREATE INDEX IF NOT EXISTS idx_assets_kind_state ON assets(asset_kind, state)`,
+		`CREATE INDEX IF NOT EXISTS idx_assets_ready_file_path ON assets(file_path) WHERE state = 'ready'`,
 	}
 }

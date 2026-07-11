@@ -1,7 +1,6 @@
 package com.screwy.igloo.ui.nav
 
 import com.screwy.igloo.R
-import com.screwy.igloo.media.MediaUri
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertSame
@@ -88,32 +87,6 @@ class RouteRegistryTest {
         )
         assertEquals("player/video%2Fid%3Fv%3D1", RouteRegistry.playerRoute("video/id?v=1"))
         assertEquals("tweet/status%2F123%23reply", RouteRegistry.threadRoute("status/123#reply"))
-    }
-
-    @Test
-    fun mediaNavigationTargetCarriesWarmOpenSnapshot() {
-        val snapshot = MediaOpenSnapshot(
-            ownerKind = "tweet",
-            ownerId = "status-1",
-            index = 1,
-            mediaCount = 3,
-            posterUri = MediaUri.Remote("https://example.test/poster.jpg"),
-            isLiked = true,
-            isBookmarked = false,
-        )
-        val target = IglooNavigation.targetFor(
-            IglooNavigationIntent.OpenMedia(
-                ownerKind = "tweet",
-                ownerId = "status-1",
-                index = 1,
-                source = IglooNavigationSource.Feed,
-                posterUri = snapshot.posterUri,
-                snapshot = snapshot,
-            ),
-        )
-
-        assertEquals(snapshot, target?.mediaOpenSnapshot)
-        assertNotNull(target?.fullscreenTransition)
     }
 
     @Test

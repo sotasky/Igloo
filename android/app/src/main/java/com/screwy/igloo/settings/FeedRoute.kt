@@ -23,6 +23,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavController
+import com.screwy.igloo.data.entity.MutedChannelDisplay
 import com.screwy.igloo.R
 import com.screwy.igloo.settings.components.SectionHeader
 import com.screwy.igloo.settings.components.SettingsSubScreen
@@ -41,8 +42,8 @@ fun FeedRoute(
 
     val includeReposts by settingsVm.includeReposts.collectAsStateWithLifecycle()
     val mediaOnly by settingsVm.mediaOnly.collectAsStateWithLifecycle()
-    val mutedHandles by mutedVm.handles.collectAsStateWithLifecycle()
-    var pendingUnmute by remember { mutableStateOf<String?>(null) }
+    val mutedChannels by mutedVm.channels.collectAsStateWithLifecycle()
+    var pendingUnmute by remember { mutableStateOf<MutedChannelDisplay?>(null) }
     var confirmClearMuted by remember { mutableStateOf(false) }
 
     SettingsSubScreen(
@@ -62,7 +63,7 @@ fun FeedRoute(
         )
 
         SectionHeader(stringResource(R.string.settings_section_muted_accounts))
-        if (mutedHandles.isEmpty()) {
+        if (mutedChannels.isEmpty()) {
             Text(
                 text = stringResource(R.string.settings_no_muted_accounts),
                 style = MaterialTheme.typography.bodyMedium,
@@ -70,23 +71,24 @@ fun FeedRoute(
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
             )
         } else {
-            mutedHandles.forEach { handle ->
-                MutedAccountRow(handle = handle, onUnmute = { pendingUnmute = handle })
+            mutedChannels.forEach { channel ->
+                MutedAccountRow(label = channel.label(), onUnmute = { pendingUnmute = channel })
             }
             TextActionRow(label = stringResource(R.string.action_clear_muted_accounts)) { confirmClearMuted = true }
         }
     }
 
-    pendingUnmute?.let { handle ->
+    pendingUnmute?.let { channel ->
+        val label = channel.label()
         AlertDialog(
             onDismissRequest = { pendingUnmute = null },
-            title = { Text(stringResource(R.string.settings_unmute_title, handle)) },
+            title = { Text(stringResource(R.string.settings_unmute_title, label)) },
             text = { Text(stringResource(R.string.settings_unmute_help)) },
             confirmButton = {
                 TextButton(
                     onClick = {
                         pendingUnmute = null
-                        mutedVm.unmute(handle)
+                        mutedVm.unmute(channel.muted.channelId)
                     },
                 ) {
                     Text(stringResource(R.string.action_unmute_account))
@@ -125,7 +127,7 @@ fun FeedRoute(
 }
 
 @Composable
-private fun MutedAccountRow(handle: String, onUnmute: () -> Unit) {
+private fun MutedAccountRow(label: String, onUnmute: () -> Unit) {
     val colors = MaterialTheme.iglooColors
     Row(
         modifier = Modifier
@@ -135,16 +137,21 @@ private fun MutedAccountRow(handle: String, onUnmute: () -> Unit) {
         horizontalArrangement = Arrangement.SpaceBetween,
     ) {
         Text(
-            text = "@$handle",
+            text = label,
             style = MaterialTheme.typography.bodyLarge,
             color = colors.onSurface,
         )
         IconButton(onClick = onUnmute) {
             Icon(
                 imageVector = Icons.Default.Close,
-                contentDescription = stringResource(R.string.settings_unmute_title, handle),
+                contentDescription = stringResource(R.string.settings_unmute_title, label),
                 tint = colors.onSurfaceMuted,
             )
         }
     }
 }
+
+private fun MutedChannelDisplay.label(): String =
+    handle?.trim()?.removePrefix("@")?.takeIf(String::isNotBlank)?.let { "@$it" }
+        ?: displayName?.trim()?.takeIf(String::isNotBlank)
+        ?: muted.channelId

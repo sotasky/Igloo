@@ -36,9 +36,6 @@ function findPreviewCueAtTime(cues, timeSeconds) {
 export function initPreviewHover(video, videoId, playerWrapper) {
   if (!playerWrapper || !videoId) return
 
-  const csrfMeta = document.querySelector('meta[name="csrf-token"]')
-  const csrfToken = (csrfMeta && csrfMeta.content || '').trim()
-
   let previewOverlay = null
   let previewFrame = null
   let previewImg = null
@@ -138,19 +135,10 @@ export function initPreviewHover(video, videoId, playerWrapper) {
       })
   }
 
-  function ensureGeneration() {
-    fetch('/api/previews/ensure/' + encodeURIComponent(videoId), {
-      method: 'POST',
-      credentials: 'same-origin',
-      headers: csrfToken ? { 'X-CSRF-Token': csrfToken } : {},
-    }).catch(function () {})
-  }
-
   const timeRange = document.getElementById('main-player-time-range')
   if (!timeRange) return
 
   ensureOverlay()
-  ensureGeneration()
   loadCues()
 
   playerWrapper.addEventListener('mouseleave', hideOverlay)

@@ -301,10 +301,6 @@
     <string name="logs_android_device_assets_bytes_detail">%1$d/%2$d verified · %3$s</string>
     <string name="logs_android_device_assets_detail">%1$d/%2$d verified · %3$d pending</string>
     <string name="logs_android_device_assets_problem_detail">%1$d/%2$d verified · %3$d pending · %4$d failed · %5$d missing</string>
-    <string name="logs_android_generation">Generation</string>
-    <string name="logs_android_generation_assets">%1$d assets · %2$d ready</string>
-    <string name="logs_android_generation_assets_missing">%1$d assets · %2$d ready · %3$d missing</string>
-    <string name="logs_android_generation_items">content items</string>
     <string name="logs_app_starts">App starts</string>
     <string name="logs_avg_latency">Avg latency</string>
     <string name="logs_cache_health">Cache Health</string>
@@ -329,7 +325,6 @@
     <string name="logs_filter_sync">Sync</string>
     <string name="logs_filter_warnings">Warnings</string>
     <string name="logs_force_cycle">Force Cycle</string>
-    <string name="logs_force_sync">Force Sync</string>
     <string name="logs_ingest_label">Ingest</string>
     <string name="logs_last_seen_first_seen">last seen %1$s · first seen %2$s</string>
     <string name="logs_last_sync_pipeline">Last Sync Pipeline</string>
@@ -510,8 +505,7 @@
     <string name="settings_backup_dir_placeholder">/path/to/igloo-backups</string>
     <string name="settings_backup_enabled">Enable automatic backups</string>
     <string name="settings_backup_folder">Backup Folder</string>
-    <string name="settings_backup_help">Please use a dedicated folder. Daily backups include the database and non-secret config. Bookmarked media can be included separately. Keep count is limited to 1-5.</string>
-    <string name="settings_backup_include_media">Include bookmarked media in automatic backups</string>
+    <string name="settings_backup_help">Please use a dedicated folder. Daily backups include the database and non-secret config. Keep count is limited to 1-5.</string>
     <string name="settings_backup_keep_count">Backups to keep</string>
     <string name="settings_bookmark_per_category">Per-Category Settings</string>
     <string name="settings_clear_muted_help">All muted accounts will be unmuted, and their posts can appear in your feed again.</string>

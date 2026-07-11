@@ -153,13 +153,13 @@ func TestTranslateBackgroundSkipsProviderDetectedSkipLanguage(t *testing.T) {
 	}}); err != nil {
 		t.Fatalf("UpsertFeedItems: %v", err)
 	}
-	if err := d.SetSetting("", "translate_backend", settings.TranslateBackendGoogle); err != nil {
+	if err := d.SetSetting("translate_backend", settings.TranslateBackendGoogle); err != nil {
 		t.Fatalf("SetSetting translate_backend: %v", err)
 	}
-	if err := d.SetSetting("", "translate_api_site", srv.URL); err != nil {
+	if err := d.SetSetting("translate_api_site", srv.URL); err != nil {
 		t.Fatalf("SetSetting translate_api_site: %v", err)
 	}
-	if err := d.SetSetting("", "translate_api_key", "test-key"); err != nil {
+	if err := d.SetSetting("translate_api_key", "test-key"); err != nil {
 		t.Fatalf("SetSetting translate_api_key: %v", err)
 	}
 
@@ -223,13 +223,13 @@ func TestTranslateBackgroundBatchesSameLanguageThreadBodies(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("UpsertFeedItems: %v", err)
 	}
-	if err := d.SetSetting("", "translate_backend", settings.TranslateBackendGoogle); err != nil {
+	if err := d.SetSetting("translate_backend", settings.TranslateBackendGoogle); err != nil {
 		t.Fatalf("SetSetting translate_backend: %v", err)
 	}
-	if err := d.SetSetting("", "translate_api_site", srv.URL); err != nil {
+	if err := d.SetSetting("translate_api_site", srv.URL); err != nil {
 		t.Fatalf("SetSetting translate_api_site: %v", err)
 	}
-	if err := d.SetSetting("", "translate_api_key", "test-key"); err != nil {
+	if err := d.SetSetting("translate_api_key", "test-key"); err != nil {
 		t.Fatalf("SetSetting translate_api_key: %v", err)
 	}
 
@@ -304,13 +304,13 @@ func TestTranslateBackgroundRetriesOnlyRejectedBatchItem(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("UpsertFeedItems: %v", err)
 	}
-	if err := d.SetSetting("", "translate_backend", settings.TranslateBackendGoogle); err != nil {
+	if err := d.SetSetting("translate_backend", settings.TranslateBackendGoogle); err != nil {
 		t.Fatalf("SetSetting translate_backend: %v", err)
 	}
-	if err := d.SetSetting("", "translate_api_site", srv.URL); err != nil {
+	if err := d.SetSetting("translate_api_site", srv.URL); err != nil {
 		t.Fatalf("SetSetting translate_api_site: %v", err)
 	}
-	if err := d.SetSetting("", "translate_api_key", "test-key"); err != nil {
+	if err := d.SetSetting("translate_api_key", "test-key"); err != nil {
 		t.Fatalf("SetSetting translate_api_key: %v", err)
 	}
 
@@ -390,13 +390,13 @@ func TestTranslateBackgroundSplitsMixedLanguageThreadBodies(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("UpsertFeedItems: %v", err)
 	}
-	if err := d.SetSetting("", "translate_backend", settings.TranslateBackendGoogle); err != nil {
+	if err := d.SetSetting("translate_backend", settings.TranslateBackendGoogle); err != nil {
 		t.Fatalf("SetSetting translate_backend: %v", err)
 	}
-	if err := d.SetSetting("", "translate_api_site", srv.URL); err != nil {
+	if err := d.SetSetting("translate_api_site", srv.URL); err != nil {
 		t.Fatalf("SetSetting translate_api_site: %v", err)
 	}
-	if err := d.SetSetting("", "translate_api_key", "test-key"); err != nil {
+	if err := d.SetSetting("translate_api_key", "test-key"); err != nil {
 		t.Fatalf("SetSetting translate_api_key: %v", err)
 	}
 
@@ -458,13 +458,13 @@ func TestTranslateBackgroundReusesRetweetBodyTranslation(t *testing.T) {
 	if err := d.SetTranslation("sample_repost_source", "body", "Korean", "en", "Hello"); err != nil {
 		t.Fatalf("SetTranslation: %v", err)
 	}
-	if err := d.SetSetting("", "translate_backend", settings.TranslateBackendGoogle); err != nil {
+	if err := d.SetSetting("translate_backend", settings.TranslateBackendGoogle); err != nil {
 		t.Fatalf("SetSetting translate_backend: %v", err)
 	}
-	if err := d.SetSetting("", "translate_api_site", srv.URL); err != nil {
+	if err := d.SetSetting("translate_api_site", srv.URL); err != nil {
 		t.Fatalf("SetSetting translate_api_site: %v", err)
 	}
-	if err := d.SetSetting("", "translate_api_key", "test-key"); err != nil {
+	if err := d.SetSetting("translate_api_key", "test-key"); err != nil {
 		t.Fatalf("SetSetting translate_api_key: %v", err)
 	}
 
@@ -535,13 +535,13 @@ func TestTranslateBackgroundReusesMergedRetweetSiblingAfterFirstProviderCall(t *
 	}); err != nil {
 		t.Fatalf("UpsertFeedItems: %v", err)
 	}
-	if err := d.SetSetting("", "translate_backend", settings.TranslateBackendGoogle); err != nil {
+	if err := d.SetSetting("translate_backend", settings.TranslateBackendGoogle); err != nil {
 		t.Fatalf("SetSetting translate_backend: %v", err)
 	}
-	if err := d.SetSetting("", "translate_api_site", srv.URL); err != nil {
+	if err := d.SetSetting("translate_api_site", srv.URL); err != nil {
 		t.Fatalf("SetSetting translate_api_site: %v", err)
 	}
-	if err := d.SetSetting("", "translate_api_key", "test-key"); err != nil {
+	if err := d.SetSetting("translate_api_key", "test-key"); err != nil {
 		t.Fatalf("SetSetting translate_api_key: %v", err)
 	}
 
@@ -605,13 +605,13 @@ func TestTranslateBackgroundReusesQuoteWrapperTranslation(t *testing.T) {
 	if err := d.SetTranslation("quoted_translation_source", "body", "Korean", "en", "Thank you"); err != nil {
 		t.Fatalf("SetTranslation: %v", err)
 	}
-	if err := d.SetSetting("", "translate_backend", settings.TranslateBackendGoogle); err != nil {
+	if err := d.SetSetting("translate_backend", settings.TranslateBackendGoogle); err != nil {
 		t.Fatalf("SetSetting translate_backend: %v", err)
 	}
-	if err := d.SetSetting("", "translate_api_site", srv.URL); err != nil {
+	if err := d.SetSetting("translate_api_site", srv.URL); err != nil {
 		t.Fatalf("SetSetting translate_api_site: %v", err)
 	}
-	if err := d.SetSetting("", "translate_api_key", "test-key"); err != nil {
+	if err := d.SetSetting("translate_api_key", "test-key"); err != nil {
 		t.Fatalf("SetSetting translate_api_key: %v", err)
 	}
 
@@ -685,13 +685,13 @@ func TestTranslateBackgroundContinuesAfterCandidateProviderError(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("UpsertFeedItems: %v", err)
 	}
-	if err := d.SetSetting("", "translate_backend", settings.TranslateBackendGoogle); err != nil {
+	if err := d.SetSetting("translate_backend", settings.TranslateBackendGoogle); err != nil {
 		t.Fatalf("SetSetting translate_backend: %v", err)
 	}
-	if err := d.SetSetting("", "translate_api_site", srv.URL); err != nil {
+	if err := d.SetSetting("translate_api_site", srv.URL); err != nil {
 		t.Fatalf("SetSetting translate_api_site: %v", err)
 	}
-	if err := d.SetSetting("", "translate_api_key", "test-key"); err != nil {
+	if err := d.SetSetting("translate_api_key", "test-key"); err != nil {
 		t.Fatalf("SetSetting translate_api_key: %v", err)
 	}
 
@@ -782,7 +782,7 @@ func TestTranslateBackgroundStopsBatchOnKagiRateLimit(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("UpsertFeedItems: %v", err)
 	}
-	if err := d.SetSetting("", "translate_backend", settings.TranslateBackendKagiCLI); err != nil {
+	if err := d.SetSetting("translate_backend", settings.TranslateBackendKagiCLI); err != nil {
 		t.Fatalf("SetSetting translate_backend: %v", err)
 	}
 
@@ -809,10 +809,10 @@ func TestTranslateBackgroundStopsBatchOnKagiRateLimit(t *testing.T) {
 
 func TestLoadTranslateBackgroundConfigDisablesAPIBackendWithoutKey(t *testing.T) {
 	d := openTranslateTestDB(t)
-	if err := d.SetSetting("", "translate_auto_mode", settings.TranslateAutoBackground); err != nil {
+	if err := d.SetSetting("translate_auto_mode", settings.TranslateAutoBackground); err != nil {
 		t.Fatalf("SetSetting translate_auto_mode: %v", err)
 	}
-	if err := d.SetSetting("", "translate_backend", settings.TranslateBackendDeepL); err != nil {
+	if err := d.SetSetting("translate_backend", settings.TranslateBackendDeepL); err != nil {
 		t.Fatalf("SetSetting translate_backend: %v", err)
 	}
 
@@ -821,7 +821,7 @@ func TestLoadTranslateBackgroundConfigDisablesAPIBackendWithoutKey(t *testing.T)
 		t.Fatalf("backend = %q, want %q without API key", cfg.backend, settings.TranslateBackendNone)
 	}
 
-	if err := d.SetSetting("", "translate_api_key", "test-key"); err != nil {
+	if err := d.SetSetting("translate_api_key", "test-key"); err != nil {
 		t.Fatalf("SetSetting translate_api_key: %v", err)
 	}
 	cfg = loadTranslateBackgroundConfig(d)
@@ -832,10 +832,10 @@ func TestLoadTranslateBackgroundConfigDisablesAPIBackendWithoutKey(t *testing.T)
 
 func TestLoadTranslateBackgroundConfigUsesDisabledBackendWhenUnset(t *testing.T) {
 	d := openTranslateTestDB(t)
-	if err := d.SetSetting("", "translate_auto_mode", settings.TranslateAutoBackground); err != nil {
+	if err := d.SetSetting("translate_auto_mode", settings.TranslateAutoBackground); err != nil {
 		t.Fatalf("SetSetting translate_auto_mode: %v", err)
 	}
-	if err := d.SetSetting("", "translate_api_key", "test-key"); err != nil {
+	if err := d.SetSetting("translate_api_key", "test-key"); err != nil {
 		t.Fatalf("SetSetting translate_api_key: %v", err)
 	}
 
@@ -847,10 +847,10 @@ func TestLoadTranslateBackgroundConfigUsesDisabledBackendWhenUnset(t *testing.T)
 
 func TestLoadTranslateBackgroundConfigAllowsOpenAICompatWithoutKeyWhenModelSet(t *testing.T) {
 	d := openTranslateTestDB(t)
-	if err := d.SetSetting("", "translate_auto_mode", settings.TranslateAutoBackground); err != nil {
+	if err := d.SetSetting("translate_auto_mode", settings.TranslateAutoBackground); err != nil {
 		t.Fatalf("SetSetting translate_auto_mode: %v", err)
 	}
-	if err := d.SetSetting("", "translate_backend", settings.TranslateBackendOpenAICompat); err != nil {
+	if err := d.SetSetting("translate_backend", settings.TranslateBackendOpenAICompat); err != nil {
 		t.Fatalf("SetSetting translate_backend: %v", err)
 	}
 
@@ -859,7 +859,7 @@ func TestLoadTranslateBackgroundConfigAllowsOpenAICompatWithoutKeyWhenModelSet(t
 		t.Fatalf("backend = %q, want %q without model", cfg.backend, settings.TranslateBackendNone)
 	}
 
-	if err := d.SetSetting("", "translate_model", "qwen2.5:7b"); err != nil {
+	if err := d.SetSetting("translate_model", "qwen2.5:7b"); err != nil {
 		t.Fatalf("SetSetting translate_model: %v", err)
 	}
 	cfg = loadTranslateBackgroundConfig(d)
@@ -882,7 +882,7 @@ func openTranslateTestDB(t *testing.T) *db.DB {
 	if err := tmpFile.Close(); err != nil {
 		t.Fatalf("close temp db: %v", err)
 	}
-	d, err := db.Open(tmpPath, t.TempDir())
+	d, err := db.OpenPath(tmpPath, t.TempDir())
 	if err != nil {
 		_ = os.Remove(tmpPath)
 		t.Fatalf("open db: %v", err)

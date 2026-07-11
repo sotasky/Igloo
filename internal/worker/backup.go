@@ -13,8 +13,8 @@ import (
 	"time"
 
 	"github.com/screwys/igloo/internal/config"
-	"github.com/screwys/igloo/internal/exportbundle"
 	"github.com/screwys/igloo/internal/settings"
+	"github.com/screwys/igloo/internal/storage"
 )
 
 const (
@@ -106,7 +106,7 @@ func (m *Manager) createBackup(dir string) error {
 	if !filepath.IsAbs(dir) {
 		return fmt.Errorf("backup dir must be absolute: %s", dir)
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := storage.EnsureDirectory(dir, 0o755); err != nil {
 		return fmt.Errorf("create backup dir: %w", err)
 	}
 
@@ -156,22 +156,11 @@ func (m *Manager) createBackup(dir string) error {
 		}
 	}
 
-	if m.backupIncludeMedia() {
-		cfg, err := m.db.ExportFullData("")
-		if err != nil {
-			return fmt.Errorf("export bookmark data: %w", err)
-		}
-		mediaFiles := exportbundle.CollectBookmarkMedia(m.db, m.cfg.DataDir, cfg.Bookmarks)
-		mediaFiles = append(mediaFiles, exportbundle.CollectAvatarMedia(m.cfg.DataDir)...)
-		for _, file := range mediaFiles {
-			if err := addFileToZip(zw, file.SourcePath, file.ArchivePath); err != nil {
-				return fmt.Errorf("zip media %s: %w", file.ArchivePath, err)
-			}
-		}
-	}
-
 	if err := zw.Close(); err != nil {
 		return fmt.Errorf("close zip: %w", err)
+	}
+	if err := f.Sync(); err != nil {
+		return fmt.Errorf("sync backup: %w", err)
 	}
 	if err := f.Close(); err != nil {
 		return fmt.Errorf("close file: %w", err)
@@ -180,15 +169,14 @@ func (m *Manager) createBackup(dir string) error {
 	if err := os.Rename(tmpPath, finalPath); err != nil {
 		return fmt.Errorf("rename: %w", err)
 	}
+	if err := storage.SyncDirectory(dir); err != nil {
+		return fmt.Errorf("sync backup directory: %w", err)
+	}
 	return nil
 }
 
 func (m *Manager) backupKeepCount() int {
 	return settings.ClampBackupKeepCount(m.db.IntSetting("backup_keep_count"))
-}
-
-func (m *Manager) backupIncludeMedia() bool {
-	return m.db.BoolSetting("backup_include_media")
 }
 
 func (m *Manager) pruneBackups(dir string, keepCount int) {
@@ -207,17 +195,24 @@ func (m *Manager) pruneBackups(dir string, keepCount int) {
 	if len(backups) <= keepCount {
 		return
 	}
+	removed := false
 	for _, name := range backups[:len(backups)-keepCount] {
 		if err := os.Remove(filepath.Join(dir, name)); err != nil {
 			slog.Warn("backup: prune failed", "file", name, "err", err)
 		} else {
+			removed = true
 			slog.Info("backup: pruned old backup", "file", name)
+		}
+	}
+	if removed {
+		if err := storage.SyncDirectory(dir); err != nil {
+			slog.Warn("backup: sync pruned directory failed", "dir", dir, "err", err)
 		}
 	}
 }
 
 func isBackupArchiveName(name string) bool {
-	return strings.HasPrefix(name, backupPrefix) && (strings.HasSuffix(name, ".zip") || strings.HasSuffix(name, ".tar.gz"))
+	return strings.HasPrefix(name, backupPrefix) && strings.HasSuffix(name, ".zip")
 }
 
 func addFileToZip(zw *zip.Writer, srcPath, zipName string) error {

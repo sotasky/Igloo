@@ -92,11 +92,11 @@ func filterNoise(lines []string) []string {
 func (s *Server) logPathForType(logType string) (string, bool) {
 	switch logType {
 	case "server", "api", "download", "scheduler", "x_ingest", "error":
-		return filepath.Join(s.cfg.DataDir, "logs", "server", logType+".log"), true
+		return filepath.Join(s.cfg.Storage.StateRoot(), "logs", "server", logType+".log"), true
 	case "android":
-		return filepath.Join(s.cfg.DataDir, "logs", "android", "android.log"), true
+		return filepath.Join(s.cfg.Storage.StateRoot(), "logs", "android", "android.log"), true
 	case "android-stats":
-		return filepath.Join(s.cfg.DataDir, "logs", "android", "stats.jsonl"), true
+		return filepath.Join(s.cfg.Storage.StateRoot(), "logs", "android", "stats.jsonl"), true
 	default:
 		return "", false
 	}
@@ -241,11 +241,11 @@ func (s *Server) handleLogsSummary(w http.ResponseWriter, r *http.Request) {
 	for _, t := range knownLogTypes {
 		var path string
 		if t == "android" {
-			path = filepath.Join(s.cfg.DataDir, "logs", "android", "android.log")
+			path = filepath.Join(s.cfg.Storage.StateRoot(), "logs", "android", "android.log")
 		} else if t == "android-stats" {
-			path = filepath.Join(s.cfg.DataDir, "logs", "android", "stats.jsonl")
+			path = filepath.Join(s.cfg.Storage.StateRoot(), "logs", "android", "stats.jsonl")
 		} else {
-			path = filepath.Join(s.cfg.DataDir, "logs", "server", t+".log")
+			path = filepath.Join(s.cfg.Storage.StateRoot(), "logs", "server", t+".log")
 		}
 		fs := fileSummary{Name: t}
 		if fi, err := os.Stat(path); err == nil {
@@ -272,7 +272,7 @@ func (s *Server) handleLogsCleanup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cutoff := time.Now().Add(-time.Duration(body.Days) * 24 * time.Hour)
-	logsDir := filepath.Join(s.cfg.DataDir, "logs")
+	logsDir := filepath.Join(s.cfg.Storage.StateRoot(), "logs")
 
 	var deleted int
 	var freedBytes int64
@@ -302,8 +302,8 @@ func (s *Server) handleLogsCleanup(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleLogsMerged(w http.ResponseWriter, r *http.Request) {
 	const perFile = 200
 	paths := []string{
-		filepath.Join(s.cfg.DataDir, "logs", "server", "server.log"),
-		filepath.Join(s.cfg.DataDir, "logs", "server", "download.log"),
+		filepath.Join(s.cfg.Storage.StateRoot(), "logs", "server", "server.log"),
+		filepath.Join(s.cfg.Storage.StateRoot(), "logs", "server", "download.log"),
 	}
 
 	var all []string

@@ -8,7 +8,7 @@ class LogFilterTest {
     private val rows = listOf(
         row(event = "app_start", subsystem = Subsystem.App, stream = "server", level = "info"),
         row(event = "outbox_row_post_failed", subsystem = Subsystem.Outbox, stream = "server", level = "error"),
-        row(event = "mutation_delta_page_applied", subsystem = Subsystem.Sync, stream = "server", level = "info"),
+        row(event = "android_sync_metadata_retry", subsystem = Subsystem.Sync, stream = "server", level = "info"),
         row(event = "media_foreground_service_start", subsystem = Subsystem.Media, stream = "server", level = "info"),
         row(event = "outbox_drain_skipped_offline", subsystem = Subsystem.Outbox, stream = "debug", level = null),
     )

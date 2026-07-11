@@ -11,7 +11,6 @@ import com.screwy.igloo.data.entity.ChannelFollowEntity
 import com.screwy.igloo.data.entity.MomentViewEntity
 import com.screwy.igloo.data.entity.VideoEntity
 import com.screwy.igloo.net.ServerBaseUrlProvider
-import com.screwy.igloo.outbox.OutboxKind
 import com.screwy.igloo.outbox.OutboxWriter
 import com.screwy.igloo.testutil.ViewModelTestTracker
 import com.screwy.igloo.ui.UiEffects
@@ -82,8 +81,9 @@ class ShortsRouteViewModelTest {
         ))
         db.channelFollowDao().upsert(ChannelFollowEntity(channelId = "tiktok_alice"))
         db.videoDao().upsert(VideoEntity(
-            videoId = "tiktok_clip_1",
-            channelId = "tiktok_alice",
+			videoId = "tiktok_clip_1",
+			channelId = "tiktok_alice",
+			ownerKind = "tiktok_video",
             title = "Short",
             canonicalUrl = "https://www.tiktok.com/@canonical/video/clip_1",
             publishedAt = 1L,
@@ -118,9 +118,9 @@ class ShortsRouteViewModelTest {
         db.channelFollowDao().upsert(ChannelFollowEntity(channelId = "tiktok_older"))
         val now = System.currentTimeMillis()
         db.videoDao().upsert(listOf(
-            VideoEntity("v_newer_first", "tiktok_newer", title = "Newer first", publishedAt = now - 2_000L, sourceKind = "story"),
-            VideoEntity("v_newer_last", "tiktok_newer", title = "Newer last", publishedAt = now - 1_000L, sourceKind = "story"),
-            VideoEntity("v_older", "tiktok_older", title = "Older story", publishedAt = now - 3_000L, sourceKind = "story"),
+            VideoEntity("v_newer_first", "tiktok_newer", "tiktok_video", title = "Newer first", publishedAt = now - 2_000L, sourceKind = "story"),
+            VideoEntity("v_newer_last", "tiktok_newer", "tiktok_video", title = "Newer last", publishedAt = now - 1_000L, sourceKind = "story"),
+            VideoEntity("v_older", "tiktok_older", "tiktok_video", title = "Older story", publishedAt = now - 3_000L, sourceKind = "story"),
         ))
 
         val vm = viewModels.track(ShortsRouteViewModel(
@@ -155,9 +155,9 @@ class ShortsRouteViewModelTest {
         db.channelFollowDao().upsert(ChannelFollowEntity(channelId = "tiktok_sample_old"))
         val now = System.currentTimeMillis()
         db.videoDao().upsert(listOf(
-            VideoEntity("v_sample_one", "tiktok_sample_one", title = "Sample One", publishedAt = now - 1_000L, sourceKind = "story"),
-            VideoEntity("v_sample_two", "tiktok_sample_two", title = "Sample Two", publishedAt = now - 2_000L, sourceKind = "story"),
-            VideoEntity("v_sample_old", "tiktok_sample_old", title = "Sample Old", publishedAt = now - 3_000L, sourceKind = "story"),
+            VideoEntity("v_sample_one", "tiktok_sample_one", "tiktok_video", title = "Sample One", publishedAt = now - 1_000L, sourceKind = "story"),
+            VideoEntity("v_sample_two", "tiktok_sample_two", "tiktok_video", title = "Sample Two", publishedAt = now - 2_000L, sourceKind = "story"),
+            VideoEntity("v_sample_old", "tiktok_sample_old", "tiktok_video", title = "Sample Old", publishedAt = now - 3_000L, sourceKind = "story"),
         ))
 
         val vm = viewModels.track(ShortsRouteViewModel(
@@ -186,9 +186,9 @@ class ShortsRouteViewModelTest {
 
     @Test fun bookmarksPlaylistUsesRouteFilter() = runBlocking {
         db.videoDao().upsert(listOf(
-            VideoEntity("art_new", "tiktok_artist", title = "Art new", mediaKind = "video", publishedAt = 30L),
-            VideoEntity("music_new", "tiktok_artist", title = "Music new", mediaKind = "video", publishedAt = 20L),
-            VideoEntity("art_old", "tiktok_artist", title = "Art old", mediaKind = "video", publishedAt = 10L),
+            VideoEntity("art_new", "tiktok_artist", "tiktok_video", title = "Art new", mediaKind = "video", publishedAt = 30L),
+            VideoEntity("music_new", "tiktok_artist", "tiktok_video", title = "Music new", mediaKind = "video", publishedAt = 20L),
+            VideoEntity("art_old", "tiktok_artist", "tiktok_video", title = "Art old", mediaKind = "video", publishedAt = 10L),
         ))
         db.bookmarkDao().upsert(BookmarkEntity("art_new", categoryId = 34L, customTitle = "art", bookmarkedAt = 300L))
         db.bookmarkDao().upsert(BookmarkEntity("music_new", categoryId = 5L, customTitle = "music", bookmarkedAt = 200L))
@@ -215,27 +215,4 @@ class ShortsRouteViewModelTest {
         assertEquals(0, vm.startIndex.value)
     }
 
-    @Test fun onCursorAdvance_persistsZeroPositionForMomentsRoute() = runBlocking {
-        val vm = viewModels.track(ShortsRouteViewModel(
-            playlistSpec = ShortsPlaylistSpec.allMoments(),
-            startVideoId = "v_sample",
-            db = db,
-            outboxWriter = writer,
-            prefs = prefs,
-            uiEffects = uiEffects,
-            baseUrlProvider = ServerBaseUrlProvider { "https://example.test" },
-        ))
-
-        vm.onCursorAdvance("v_sample", 12_345L)
-
-        val ok = withTimeoutOrNull(1_500L) {
-            while (!db.outboxDao().hasPending(OutboxKind.CODE_MOMENTS_CURSOR, "all", null)) delay(10)
-            true
-        }
-        assertEquals(true, ok)
-
-        val row = db.outboxDao().claimKind(OutboxKind.CODE_MOMENTS_CURSOR, nowMs = Long.MAX_VALUE, limit = 1)
-            .firstOrNull()
-        assertEquals(true, row?.payloadJson?.contains("\"position_ms\":0") == true)
-    }
 }

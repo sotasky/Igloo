@@ -2,10 +2,75 @@ package download
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 )
+
+func TestCompletedYtDlpOutputsReturnsOnlyExactProducerSidecars(t *testing.T) {
+	dir := t.TempDir()
+	for name, body := range map[string]string{
+		"sample.mp4":       "video",
+		"sample.info.json": `{}`,
+		"sample.jpg":       "exact thumbnail",
+		"sample.webp":      "stale sibling",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	completed := completedYtDlpOutputs(Opts{OutputDir: dir, ID: "sample"}, []string{filepath.Join(dir, "sample.mp4")})
+	if completed.InfoJSONPath != filepath.Join(dir, "sample.info.json") {
+		t.Fatalf("info path = %q", completed.InfoJSONPath)
+	}
+	if completed.ThumbnailPath != filepath.Join(dir, "sample.jpg") {
+		t.Fatalf("thumbnail path = %q", completed.ThumbnailPath)
+	}
+	if len(completed.MediaPaths) != 1 || completed.MediaPaths[0] != filepath.Join(dir, "sample.mp4") {
+		t.Fatalf("media paths = %#v", completed.MediaPaths)
+	}
+}
+
+func TestDownloadSubtitlesUsesExplicitStateDirectory(t *testing.T) {
+	bin := t.TempDir()
+	writeExecutable(t, filepath.Join(bin, "yt-dlp"), `#!/bin/sh
+out=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -o|--output)
+      shift
+      out="$1"
+      ;;
+  esac
+  shift
+done
+target=$(printf '%s' "$out" | sed 's/%(ext)s/en.vtt/')
+mkdir -p "$(dirname "$target")"
+printf 'WEBVTT\n\nstate subtitle' > "$target"
+`)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	mediaDir := filepath.Join(t.TempDir(), "media")
+	subtitleDir := filepath.Join(t.TempDir(), "state", "subtitles", "youtube")
+	if err := os.MkdirAll(mediaDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	paths, err := (&YtDlpWrapper{}).DownloadSubtitles(context.Background(), "https://www.youtube.com/watch?v=sample", Opts{
+		OutputDir: mediaDir, SubtitleDir: subtitleDir, ID: "sample-attempt-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(subtitleDir, "sample-attempt-1.en.vtt")
+	if len(paths) != 1 || paths[0] != want {
+		t.Fatalf("subtitle paths = %#v, want %q", paths, want)
+	}
+	if entries, err := os.ReadDir(mediaDir); err != nil || len(entries) != 0 {
+		t.Fatalf("subtitle wrote into media directory: entries=%v err=%v", entries, err)
+	}
+}
 
 func TestCanonicalizeYouTubeChannelIDPrefersCanonicalURL(t *testing.T) {
 	got := CanonicalizeYouTubeChannelID(

@@ -75,12 +75,6 @@ func (s *Server) handleFeedLike(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	displayTweetID := r.PathValue("tweetID")
-	tweetID, err := s.db.ResolveFeedStateIDForWrite(displayTweetID)
-	if err != nil {
-		slog.Error("ResolveFeedStateIDForWrite", "tweet", displayTweetID, "err", err)
-		writeJSON(w, 500, map[string]any{"success": false, "error": "db error"})
-		return
-	}
 
 	var body struct {
 		Item map[string]string `json:"item"`
@@ -95,16 +89,17 @@ func (s *Server) handleFeedLike(w http.ResponseWriter, r *http.Request) {
 		fields = make(map[string]string)
 	}
 
-	err = s.db.InsertFeedLike(user.Username, tweetID, fields)
+	result, err := s.db.MutateLike(db.LikeMutation{TweetID: displayTweetID, Action: "set", Fields: fields})
 	if err != nil {
-		slog.Error("InsertFeedLike", "tweet", tweetID, "err", err)
+		slog.Error("MutateLike", "tweet", displayTweetID, "err", err)
 		writeJSON(w, 500, map[string]any{"success": false, "error": "db error"})
 		return
 	}
-	s.requestXStatusRecovery(tweetID, false)
-
-	_ = s.db.InvalidateAlgoScore(tweetID)
-	s.workers.KickFeedScoring()
+	if result.Applied {
+		s.requestXStatusRecovery(result.CanonicalID, false)
+		_ = s.db.InvalidateAlgoScore(result.CanonicalID)
+		s.workers.KickFeedScoring()
+	}
 
 	if r.Header.Get("HX-Request") != "" {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -112,11 +107,9 @@ func (s *Server) handleFeedLike(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	syncVersion, _ := s.db.GetCurrentSyncVersion()
 	writeJSON(w, 200, map[string]any{
-		"success":      true,
-		"is_liked":     true,
-		"sync_version": syncVersion,
+		"success":  true,
+		"is_liked": true,
 	})
 }
 
@@ -127,20 +120,16 @@ func (s *Server) handleFeedUnlike(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	displayTweetID := r.PathValue("tweetID")
-	tweetID, ok := s.resolveFeedStateIDForJSON(w, displayTweetID)
-	if !ok {
-		return
-	}
-
-	err := s.db.DeleteFeedLike(user.Username, tweetID)
+	result, err := s.db.MutateLike(db.LikeMutation{TweetID: displayTweetID, Action: "clear"})
 	if err != nil {
-		slog.Error("DeleteFeedLike", "tweet", tweetID, "err", err)
+		slog.Error("MutateLike", "tweet", displayTweetID, "err", err)
 		writeJSON(w, 500, map[string]any{"success": false, "error": "db error"})
 		return
 	}
-
-	_ = s.db.InvalidateAlgoScore(tweetID)
-	s.workers.KickFeedScoring()
+	if result.Applied {
+		_ = s.db.InvalidateAlgoScore(result.CanonicalID)
+		s.workers.KickFeedScoring()
+	}
 
 	if r.Header.Get("HX-Request") != "" {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -148,12 +137,10 @@ func (s *Server) handleFeedUnlike(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	syncVersion, _ := s.db.GetCurrentSyncVersion()
 	writeJSON(w, 200, map[string]any{
-		"success":      true,
-		"is_liked":     false,
-		"removed":      true,
-		"sync_version": syncVersion,
+		"success":  true,
+		"is_liked": false,
+		"removed":  true,
 	})
 }
 
@@ -191,7 +178,7 @@ func (s *Server) handleFeedSeen(w http.ResponseWriter, r *http.Request) {
 		tweetIDs = tweetIDs[:500]
 	}
 
-	count, err := s.db.MarkSeen(user.Username, tweetIDs)
+	result, err := s.db.MutateSeen(tweetIDs, 0)
 	if err != nil {
 		slog.Error("MarkSeen", "err", err)
 		writeJSON(w, 500, map[string]any{"success": false, "error": "db error"})
@@ -200,11 +187,9 @@ func (s *Server) handleFeedSeen(w http.ResponseWriter, r *http.Request) {
 
 	// Seen state is filtered at read time. Rebuilding the rank snapshot for
 	// every visible card churns snapshot cursors while the user is scrolling.
-	syncVersion, _ := s.db.GetCurrentSyncVersion()
 	writeJSON(w, 200, map[string]any{
-		"success":      true,
-		"marked":       count,
-		"sync_version": syncVersion,
+		"success": true,
+		"marked":  result.Affected,
 	})
 }
 
@@ -219,15 +204,18 @@ func (s *Server) handleFeedMute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err := s.db.MuteAccount(handle)
+	channelID := model.TwitterChannelIDFromHandle(handle)
+	result, err := s.db.MutateMute(channelID, "set", 0)
 	if err != nil {
 		slog.Error("MuteAccount", "handle", handle, "err", err)
 		writeJSON(w, 500, map[string]any{"success": false, "error": "db error"})
 		return
 	}
 
-	_ = s.db.InvalidateAlgoScoreByHandle(handle)
-	s.workers.KickFeedScoring()
+	if result.Applied {
+		_ = s.db.InvalidateAlgoScoreByHandle(handle)
+		s.workers.KickFeedScoring()
+	}
 
 	if r.Header.Get("HX-Request") != "" {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -235,12 +223,10 @@ func (s *Server) handleFeedMute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	syncVersion, _ := s.db.GetCurrentSyncVersion()
 	writeJSON(w, 200, map[string]any{
-		"success":      true,
-		"muted":        true,
-		"handle":       handle,
-		"sync_version": syncVersion,
+		"success": true,
+		"muted":   true,
+		"handle":  handle,
 	})
 }
 
@@ -251,27 +237,28 @@ func (s *Server) handleFeedUnmute(w http.ResponseWriter, r *http.Request) {
 	}
 	handle := r.PathValue("handle")
 
-	err := s.db.UnmuteAccount(handle)
+	channelID := model.TwitterChannelIDFromHandle(handle)
+	result, err := s.db.MutateMute(channelID, "clear", 0)
 	if err != nil {
 		slog.Error("UnmuteAccount", "handle", handle, "err", err)
 		writeJSON(w, 500, map[string]any{"success": false, "error": "db error"})
 		return
 	}
 
-	_ = s.db.InvalidateAlgoScoreByHandle(handle)
-	s.workers.KickFeedScoring()
+	if result.Applied {
+		_ = s.db.InvalidateAlgoScoreByHandle(handle)
+		s.workers.KickFeedScoring()
+	}
 
 	if r.Header.Get("HX-Request") != "" {
 		s.renderMutedAccountsHTML(w, r)
 		return
 	}
 
-	syncVersion, _ := s.db.GetCurrentSyncVersion()
 	writeJSON(w, 200, map[string]any{
-		"success":      true,
-		"muted":        false,
-		"handle":       handle,
-		"sync_version": syncVersion,
+		"success": true,
+		"muted":   false,
+		"handle":  handle,
 	})
 }
 
@@ -333,8 +320,8 @@ func (s *Server) handleFeedMediaRetry(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]any{"success": false, "error": "tweet_id required"})
 		return
 	}
-	if err := s.db.UpdateFeedMediaJobStatus(body.TweetID, "queued", "", 0); err != nil {
-		slog.Error("UpdateFeedMediaJobStatus", "tweet", body.TweetID, "err", err)
+	if _, err := s.db.RetryXContentForTweet(body.TweetID); err != nil {
+		slog.Error("RetryXContentForTweet", "tweet", body.TweetID, "err", err)
 		writeJSON(w, 500, map[string]any{"success": false, "error": "db error"})
 		return
 	}
@@ -357,40 +344,31 @@ func (s *Server) handleFeedInteraction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user := userFromContext(r.Context())
-	username := ""
-	if user != nil {
-		username = user.Username
-	}
-
 	switch body.Action {
 	case "share":
 		writeJSON(w, 200, map[string]any{"success": true, "action": "share"})
 	case "mute":
 		handle, _ := body.Item["source_handle"].(string)
 		if handle != "" {
-			if err := s.db.MuteAccount(handle); err != nil {
+			if _, err := s.db.MutateMute(model.TwitterChannelIDFromHandle(handle), "set", 0); err != nil {
 				slog.Error("MuteAccount", "handle", handle, "err", err)
 			}
 		}
 		writeJSON(w, 200, map[string]any{"success": true, "action": "mute"})
 	case "like":
 		if body.TweetID != "" {
-			tweetID, err := s.db.ResolveFeedStateIDForWrite(body.TweetID)
-			if err != nil {
-				slog.Error("ResolveFeedStateIDForWrite", "tweet", body.TweetID, "err", err)
-				break
-			}
 			fields := make(map[string]string)
 			for k, v := range body.Item {
 				if s, ok := v.(string); ok {
 					fields[k] = s
 				}
 			}
-			if err := s.db.InsertFeedLike(username, tweetID, fields); err != nil {
-				slog.Error("InsertFeedLike", "tweet", tweetID, "err", err)
+			result, err := s.db.MutateLike(db.LikeMutation{TweetID: body.TweetID, Action: "set", Fields: fields})
+			if err != nil {
+				slog.Error("MutateLike", "tweet", body.TweetID, "err", err)
+			} else if result.Applied {
+				s.requestXStatusRecovery(result.CanonicalID, false)
 			}
-			s.requestXStatusRecovery(tweetID, false)
 		}
 		writeJSON(w, 200, map[string]any{"success": true, "action": "like"})
 	default:
@@ -584,7 +562,7 @@ func canonicalXStatusURL(handle string, fallbackHandle string, id string, fallba
 
 // writeFeedResponse builds and writes the standard Android FeedResponse JSON.
 // cursorOverride, if non-empty, is used instead of computing from the last item's PublishedAt.
-func (s *Server) writeFeedResponse(w http.ResponseWriter, items []model.FeedItem, hasMore bool, total int, username string, cursorOverride string) {
+func (s *Server) writeFeedResponse(w http.ResponseWriter, items []model.FeedItem, hasMore bool, total int, cursorOverride string) {
 	// Collect bookmark info for all items
 	var allIDs []string
 	for _, item := range items {
@@ -634,11 +612,7 @@ func (s *Server) writeFeedResponse(w http.ResponseWriter, items []model.FeedItem
 }
 
 func (s *Server) handleFeedX(w http.ResponseWriter, r *http.Request) {
-	user := userFromContext(r.Context())
-	username := ""
-	if user != nil {
-		username = user.Username
-	}
+	excludeSeen := userFromContext(r.Context()) != nil
 
 	limit := 40
 	if l := r.URL.Query().Get("limit"); l != "" {
@@ -656,7 +630,7 @@ func (s *Server) handleFeedX(w http.ResponseWriter, r *http.Request) {
 
 	sourceHandle := r.URL.Query().Get("source_handle")
 
-	items, err := s.db.ListFeedItemsFiltered(limit+1, cursor, sourceHandle, username)
+	items, err := s.db.ListFeedItemsFiltered(limit+1, cursor, sourceHandle, excludeSeen)
 	if err != nil {
 		slog.Error("ListFeedItemsFiltered", "err", err)
 		items = nil
@@ -667,7 +641,7 @@ func (s *Server) handleFeedX(w http.ResponseWriter, r *http.Request) {
 		items = items[:limit]
 	}
 
-	items = feed.EnrichFeedItems(s.db, items, username)
+	items = feed.EnrichFeedItems(s.db, items)
 	if feed.AlgorithmicFeedEnabled(s.db) {
 		items = feed.RankFeedItems(items)
 	} else {
@@ -676,7 +650,7 @@ func (s *Server) handleFeedX(w http.ResponseWriter, r *http.Request) {
 
 	total, _ := s.db.CountFeedItems()
 
-	s.writeFeedResponse(w, items, hasMore, total, username, "")
+	s.writeFeedResponse(w, items, hasMore, total, "")
 }
 
 func (s *Server) handleFeedLikedList(w http.ResponseWriter, r *http.Request) {
@@ -700,7 +674,7 @@ func (s *Server) handleFeedLikedList(w http.ResponseWriter, r *http.Request) {
 		cursor = &c
 	}
 
-	likes, err := s.db.GetFeedLikedPage(user.Username, limit+1, cursor)
+	likes, err := s.db.GetFeedLikedPage(limit+1, cursor)
 	if err != nil {
 		slog.Error("GetFeedLikedPage", "err", err)
 		likes = nil
@@ -739,9 +713,9 @@ func (s *Server) handleFeedLikedList(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	items = feed.EnrichFeedItemsPreserveRows(s.db, items, user.Username)
+	items = feed.EnrichFeedItemsPreserveRows(s.db, items)
 
-	total, _ := s.db.CountFeedLikes(user.Username)
+	total, _ := s.db.CountFeedLikes()
 
 	// Cursor for liked feed uses liked_at (not published_at).
 	// Format: "<unix_millis>|<tweet_id>".
@@ -750,7 +724,7 @@ func (s *Server) handleFeedLikedList(w http.ResponseWriter, r *http.Request) {
 		last := likes[len(likes)-1]
 		likedCursor = fmt.Sprintf("%d|%s", last.LikedAt.UnixMilli(), last.TweetID)
 	}
-	s.writeFeedResponse(w, items, hasMore, total, user.Username, likedCursor)
+	s.writeFeedResponse(w, items, hasMore, total, likedCursor)
 }
 
 func (s *Server) handleFeedBookmarkedList(w http.ResponseWriter, r *http.Request) {
@@ -759,8 +733,6 @@ func (s *Server) handleFeedBookmarkedList(w http.ResponseWriter, r *http.Request
 		writeJSON(w, 401, map[string]any{"success": false, "error": "unauthorized"})
 		return
 	}
-	username := user.Username
-
 	limit := 40
 	if l := r.URL.Query().Get("limit"); l != "" {
 		if n, err := strconv.Atoi(l); err == nil && n > 0 && n <= 200 {
@@ -786,7 +758,7 @@ func (s *Server) handleFeedBookmarkedList(w http.ResponseWriter, r *http.Request
 		items = items[:limit]
 	}
 
-	items = feed.EnrichFeedItems(s.db, items, username)
+	items = feed.EnrichFeedItems(s.db, items)
 
 	total, _ := s.db.CountBookmarkedFeedItems()
 
@@ -801,7 +773,7 @@ func (s *Server) handleFeedBookmarkedList(w http.ResponseWriter, r *http.Request
 			}
 		}
 	}
-	s.writeFeedResponse(w, items, hasMore, total, username, bmCursor)
+	s.writeFeedResponse(w, items, hasMore, total, bmCursor)
 }
 
 func (s *Server) handleFeedShorts(w http.ResponseWriter, r *http.Request) {

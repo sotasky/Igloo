@@ -6,6 +6,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/screwys/igloo/internal/model"
+	appsettings "github.com/screwys/igloo/internal/settings"
 )
 
 // --- Settings batch operations ---
@@ -16,11 +19,9 @@ var retiredGlobalSettingKeys = map[string]bool{
 	"instagram_check_interval": true,
 }
 
-// GetAllSettings returns all global settings (user_id=”) as a key->value map.
+// GetAllSettings returns all settings as a key->value map.
 func (db *DB) GetAllSettings() (map[string]string, error) {
-	rows, err := db.conn.Query(
-		"SELECT key, value FROM settings WHERE user_id = ''",
-	)
+	rows, err := db.reader().Query("SELECT key, value FROM settings")
 	if err != nil {
 		return nil, err
 	}
@@ -42,16 +43,19 @@ func (db *DB) GetAllSettings() (map[string]string, error) {
 	return out, rows.Err()
 }
 
-// UpdateSettings upserts all entries in the provided map as global settings (user_id=”).
+// UpdateSettings upserts all entries in the provided map.
 // All upserts occur in a single transaction.
-func (db *DB) UpdateSettings(settings map[string]string) error {
-	if len(settings) == 0 {
+func (db *DB) UpdateSettings(values map[string]string) error {
+	if len(values) == 0 {
 		return nil
 	}
 	return db.WithWrite(func(tx *sql.Tx) error {
+		if _, updatesDearrowMode := values["dearrow_mode"]; updatesDearrowMode {
+			values["dearrow_mode"] = appsettings.NormalizeDearrowMode(values["dearrow_mode"])
+		}
 		stmt, err := tx.Prepare(`
-			INSERT INTO settings (user_id, key, value) VALUES ('', ?, ?)
-			ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value
+			INSERT INTO settings (key, value) VALUES (?, ?)
+			ON CONFLICT(key) DO UPDATE SET value = excluded.value
 		`)
 		if err != nil {
 			return err
@@ -59,7 +63,7 @@ func (db *DB) UpdateSettings(settings map[string]string) error {
 		defer func() {
 			_ = stmt.Close()
 		}()
-		for k, v := range settings {
+		for k, v := range values {
 			if retiredGlobalSettingKeys[k] {
 				if _, err := tx.Exec(`DELETE FROM settings WHERE key = ?`, k); err != nil {
 					return err
@@ -71,19 +75,6 @@ func (db *DB) UpdateSettings(settings map[string]string) error {
 			}
 		}
 		return nil
-	})
-}
-
-// --- Media file cleanup ---
-
-// DeleteMediaFilesByOwner deletes all media_files rows for the given owner.
-func (db *DB) DeleteMediaFilesByOwner(ownerType, ownerID string) error {
-	return db.WithWrite(func(tx *sql.Tx) error {
-		_, err := tx.Exec(
-			"DELETE FROM media_files WHERE owner_type = ? AND owner_id = ?",
-			ownerType, ownerID,
-		)
-		return err
 	})
 }
 
@@ -117,7 +108,7 @@ type exportedChannelSettings struct {
 
 // exportChannelSettingsMap loads every row of channel_settings keyed by channel_id.
 func (db *DB) exportChannelSettingsMap() (map[string]exportedChannelSettings, error) {
-	rows, err := db.conn.Query(`
+	rows, err := db.reader().Query(`
 		SELECT channel_id, max_videos, download_subtitles,
 		       media_only, media_download_limit, include_reposts
 		FROM channel_settings
@@ -198,14 +189,16 @@ type LikedPostExport struct {
 type BookmarkedVideoExport struct {
 	VideoID       string `json:"video_id"`
 	ChannelID     string `json:"channel_id"`
+	OwnerKind     string `json:"owner_kind"`
 	Title         string `json:"title"`
-	Platform      string `json:"platform,omitempty"`
 	Duration      int    `json:"duration,omitempty"`
 	PublishedAt   string `json:"published_at,omitempty"`
 	PublishedAtMs int64  `json:"published_at_ms,omitempty"`
 	CategoryName  string `json:"category_name,omitempty"`
 	BookmarkedAt  int64  `json:"bookmarked_at,omitempty"`
 }
+
+const ConfigExportVersion = 2
 
 // FeedSeenExport is a compact feed seen row for full data export.
 type FeedSeenExport struct {
@@ -217,7 +210,6 @@ type FeedSeenExport struct {
 type ConfigExport struct {
 	Version            int                     `json:"version"`
 	Scope              string                  `json:"scope,omitempty"`
-	UserID             string                  `json:"user_id,omitempty"`
 	ExportedAt         time.Time               `json:"exported_at"`
 	Subscriptions      []ChannelExport         `json:"subscriptions"`
 	BookmarkCategories []BookmarkCatExport     `json:"bookmark_categories"`
@@ -228,46 +220,9 @@ type ConfigExport struct {
 	FeedSeen           []FeedSeenExport        `json:"feed_seen,omitempty"`
 }
 
-// resolveUserID returns the first user_id that has data, checking the given
-// userID first, then ” (legacy). This handles the mismatch between old
-// exports that used user_id=” and new data that uses the login username.
-func (db *DB) resolveBookmarkUserID(preferredUserID string) string {
-	for _, uid := range []string{preferredUserID, ""} {
-		var count int
-		_ = db.conn.QueryRow("SELECT COUNT(*) FROM bookmarks WHERE user_id = ?", uid).Scan(&count)
-		if count > 0 {
-			return uid
-		}
-	}
-	return preferredUserID
-}
-
-func (db *DB) resolveCategoryUserID(preferredUserID string) string {
-	for _, uid := range []string{preferredUserID, ""} {
-		var count int
-		_ = db.conn.QueryRow("SELECT COUNT(*) FROM bookmark_categories WHERE user_id = ?", uid).Scan(&count)
-		if count > 0 {
-			return uid
-		}
-	}
-	return preferredUserID
-}
-
-func (db *DB) resolveLikeUsername(preferredUserID string) string {
-	for _, uid := range []string{preferredUserID, ""} {
-		var count int
-		_ = db.conn.QueryRow("SELECT COUNT(*) FROM feed_likes WHERE username = ?", uid).Scan(&count)
-		if count > 0 {
-			return uid
-		}
-	}
-	return preferredUserID
-}
-
-func newConfigExport(userID string) ConfigExport {
+func newConfigExport() ConfigExport {
 	return ConfigExport{
-		Version:       1,
-		UserID:        userID,
+		Version:       ConfigExportVersion,
 		ExportedAt:    time.Now().UTC(),
 		Subscriptions: make([]ChannelExport, 0),
 	}
@@ -305,8 +260,8 @@ func (db *DB) exportSubscriptions() ([]ChannelExport, error) {
 }
 
 // ExportSubscriptions gathers only the DB-backed subscription list.
-func (db *DB) ExportSubscriptions(userID string) (ConfigExport, error) {
-	cfg := newConfigExport(userID)
+func (db *DB) ExportSubscriptions() (ConfigExport, error) {
+	cfg := newConfigExport()
 	cfg.Scope = "subscriptions"
 	subs, err := db.exportSubscriptions()
 	if err != nil {
@@ -317,8 +272,8 @@ func (db *DB) ExportSubscriptions(userID string) (ConfigExport, error) {
 }
 
 // ExportConfig gathers preferences, subscriptions, bookmark categories, and bookmarks.
-func (db *DB) ExportConfig(userID string) (ConfigExport, error) {
-	cfg := newConfigExport(userID)
+func (db *DB) ExportConfig() (ConfigExport, error) {
+	cfg := newConfigExport()
 	cfg.BookmarkCategories = make([]BookmarkCatExport, 0)
 	cfg.Bookmarks = make([]BookmarkExport, 0)
 
@@ -336,10 +291,8 @@ func (db *DB) ExportConfig(userID string) (ConfigExport, error) {
 	}
 
 	// Bookmark categories
-	catUID := db.resolveCategoryUserID(userID)
-	catRows, err := db.conn.Query(
-		"SELECT name, COALESCE(archive_path,'') FROM bookmark_categories WHERE user_id=? ORDER BY id",
-		catUID,
+	catRows, err := db.reader().Query(
+		"SELECT name, COALESCE(archive_path,'') FROM bookmark_categories ORDER BY id",
 	)
 	if err != nil {
 		return cfg, fmt.Errorf("export bookmark categories: %w", err)
@@ -359,16 +312,14 @@ func (db *DB) ExportConfig(userID string) (ConfigExport, error) {
 	}
 
 	// Bookmarks: join category name
-	bmUID := db.resolveBookmarkUserID(userID)
-	bRows, err := db.conn.Query(`
+	bRows, err := db.reader().Query(`
 		SELECT b.video_id, COALESCE(bc.name,''), COALESCE(b.custom_title,''),
 		       COALESCE(b.account_handles,''), COALESCE(b.media_indices,''),
 		       COALESCE(b.bookmarked_at, 0)
 		FROM bookmarks b
-		LEFT JOIN bookmark_categories bc ON bc.id = b.category_id AND bc.user_id = ?
-		WHERE b.user_id = ?
+		LEFT JOIN bookmark_categories bc ON bc.id = b.category_id
 		ORDER BY b.bookmarked_at
-	`, catUID, bmUID)
+	`)
 	if err != nil {
 		return cfg, fmt.Errorf("export bookmarks: %w", err)
 	}
@@ -391,8 +342,8 @@ func (db *DB) ExportConfig(userID string) (ConfigExport, error) {
 }
 
 // ExportFullData exports config plus liked posts and bookmarked videos for disaster recovery.
-func (db *DB) ExportFullData(userID string) (ConfigExport, error) {
-	cfg, err := db.ExportConfig(userID)
+func (db *DB) ExportFullData() (ConfigExport, error) {
+	cfg, err := db.ExportConfig()
 	if err != nil {
 		return cfg, err
 	}
@@ -401,17 +352,17 @@ func (db *DB) ExportFullData(userID string) (ConfigExport, error) {
 	cfg.FeedSeen = make([]FeedSeenExport, 0)
 
 	// Liked posts
-	likeUID := db.resolveLikeUsername(userID)
-	likeRows, err := db.conn.Query(`
-		SELECT tweet_id, COALESCE(source_handle,''), COALESCE(author_handle,''),
-		       COALESCE(author_display_name,''), COALESCE(body_text,''),
-		       COALESCE(platform,''), COALESCE(published_at,0),
-		       COALESCE(link,''), COALESCE(canonical_x_link,''), COALESCE(media_url,''),
-		       COALESCE(avatar_url,''), COALESCE(media_json,''), COALESCE(quote_payload_json,''),
-		       COALESCE(liked_at,0), COALESCE(updated_at,0)
-		FROM feed_likes WHERE username = ?
-		ORDER BY liked_at DESC
-	`, likeUID)
+	likeRows, err := db.reader().Query(`
+		SELECT fl.tweet_id, COALESCE(fi.source_handle,''), COALESCE(fi.author_handle,''),
+		       COALESCE(fi.author_display_name,''), COALESCE(fi.body_text,''),
+		       'twitter', COALESCE(fi.published_at,0),
+		       COALESCE(fi.canonical_url,''), COALESCE(fi.canonical_url,''), '',
+		       COALESCE(fi.author_avatar_url,''), COALESCE(fi.media_json,''), '',
+		       COALESCE(fl.liked_at,0), COALESCE(fl.liked_at,0)
+		FROM feed_likes fl
+		JOIN feed_items_resolved fi ON fi.tweet_id = fl.tweet_id
+		ORDER BY fl.liked_at DESC
+	`)
 	if err != nil {
 		return cfg, fmt.Errorf("export liked posts: %w", err)
 	}
@@ -433,12 +384,11 @@ func (db *DB) ExportFullData(userID string) (ConfigExport, error) {
 		return cfg, err
 	}
 
-	seenRows, err := db.conn.Query(`
+	seenRows, err := db.reader().Query(`
 		SELECT tweet_id, COALESCE(seen_at,0)
 		FROM feed_seen
-		WHERE username = ?
 		ORDER BY seen_at DESC
-	`, userID)
+	`)
 	if err != nil {
 		return cfg, fmt.Errorf("export feed seen: %w", err)
 	}
@@ -457,20 +407,16 @@ func (db *DB) ExportFullData(userID string) (ConfigExport, error) {
 	}
 
 	// Bookmarked videos
-	bmUID := db.resolveBookmarkUserID(userID)
-	catUID := db.resolveCategoryUserID(userID)
-	vidRows, err := db.conn.Query(`
-		SELECT v.video_id, v.channel_id, COALESCE(v.title,''),
-		       COALESCE(c.platform,''), COALESCE(v.duration,0),
+	vidRows, err := db.reader().Query(`
+		SELECT v.video_id, v.channel_id, v.owner_kind, COALESCE(v.title,''),
+		       COALESCE(v.duration,0),
 		       COALESCE(v.published_at,0), COALESCE(bc.name,''),
 		       COALESCE(b.bookmarked_at,0)
 		FROM bookmarks b
 		JOIN videos v ON b.video_id = v.video_id
-		LEFT JOIN channels c ON v.channel_id = c.channel_id
-		LEFT JOIN bookmark_categories bc ON bc.id = b.category_id AND bc.user_id = ?
-		WHERE b.user_id = ?
+		LEFT JOIN bookmark_categories bc ON bc.id = b.category_id
 		ORDER BY b.bookmarked_at DESC
-	`, catUID, bmUID)
+	`)
 	if err != nil {
 		return cfg, fmt.Errorf("export bookmarked videos: %w", err)
 	}
@@ -479,8 +425,8 @@ func (db *DB) ExportFullData(userID string) (ConfigExport, error) {
 	}()
 	for vidRows.Next() {
 		var bv BookmarkedVideoExport
-		if err := vidRows.Scan(&bv.VideoID, &bv.ChannelID, &bv.Title,
-			&bv.Platform, &bv.Duration, &bv.PublishedAtMs, &bv.CategoryName,
+		if err := vidRows.Scan(&bv.VideoID, &bv.ChannelID, &bv.OwnerKind, &bv.Title,
+			&bv.Duration, &bv.PublishedAtMs, &bv.CategoryName,
 			&bv.BookmarkedAt); err != nil {
 			return cfg, err
 		}
@@ -503,48 +449,16 @@ type ImportResult struct {
 	Skipped         int
 }
 
-// ClaimBootstrapUserData moves user-owned rows imported before the first login
-// from the legacy blank owner to the first real admin username.
-func (db *DB) ClaimBootstrapUserData(userID string) error {
-	if userID == "" {
-		return nil
+func ValidateConfigExport(cfg ConfigExport) error {
+	if cfg.Version != ConfigExportVersion {
+		return fmt.Errorf("unsupported config export version %d", cfg.Version)
 	}
-	return db.WithWrite(func(tx *sql.Tx) error {
-		if _, err := tx.Exec(`
-			UPDATE bookmark_categories
-			SET user_id = ?
-			WHERE user_id = ''
-		`, userID); err != nil {
-			return err
+	for _, video := range cfg.BookmarkedVideos {
+		if _, ok := videoPlatformForOwnerKind(video.OwnerKind); !ok {
+			return fmt.Errorf("bookmarked video %s has invalid owner kind %q", video.VideoID, video.OwnerKind)
 		}
-		if _, err := tx.Exec(`
-			INSERT OR IGNORE INTO bookmarks
-				(user_id, video_id, category_id, custom_title, account_handles, media_indices, bookmarked_at)
-			SELECT ?, video_id, category_id, custom_title, account_handles, media_indices, bookmarked_at
-			FROM bookmarks
-			WHERE user_id = ''
-		`, userID); err != nil {
-			return err
-		}
-		if _, err := tx.Exec(`DELETE FROM bookmarks WHERE user_id = ''`); err != nil {
-			return err
-		}
-		if _, err := tx.Exec(`
-			INSERT OR IGNORE INTO feed_likes
-				(username, tweet_id, source_handle, author_handle, author_display_name,
-				 body_text, link, canonical_x_link, published_at, media_url, avatar_url,
-				 media_json, platform, quote_payload_json, liked_at, updated_at)
-			SELECT ?, tweet_id, source_handle, author_handle, author_display_name,
-			       body_text, link, canonical_x_link, published_at, media_url, avatar_url,
-			       media_json, platform, quote_payload_json, liked_at, updated_at
-			FROM feed_likes
-			WHERE username = ''
-		`, userID); err != nil {
-			return err
-		}
-		_, err := tx.Exec(`DELETE FROM feed_likes WHERE username = ''`)
-		return err
-	})
+	}
+	return nil
 }
 
 // ImportConfig performs a config import. When replace is true, full config
@@ -552,37 +466,71 @@ func (db *DB) ClaimBootstrapUserData(userID string) error {
 // Subscription-scoped imports only replace follow/star/settings rows. Channels are always merged
 // (INSERT OR IGNORE + UPDATE settings for existing), while follow/star/settings
 // rows are replaced when the import carries a subscriptions section.
-func (db *DB) ImportConfig(cfg ConfigExport, userID string, replace bool) (ImportResult, error) {
+func (db *DB) ImportConfig(cfg ConfigExport, replace bool) (ImportResult, error) {
 	var res ImportResult
-
+	if err := ValidateConfigExport(cfg); err != nil {
+		return res, err
+	}
+	subscriptionsOnly := strings.EqualFold(strings.TrimSpace(cfg.Scope), "subscriptions")
+	fullReplace := replace && !subscriptionsOnly
+	ownerAtMs := time.Now().UnixMilli()
 	return res, db.WithWrite(func(tx *sql.Tx) error {
 		// Replace mode: clear existing data
 		if replace {
-			subscriptionsOnly := strings.EqualFold(strings.TrimSpace(cfg.Scope), "subscriptions")
 			if !subscriptionsOnly {
-				if _, err := tx.Exec("DELETE FROM settings WHERE user_id = ''"); err != nil {
+				if _, err := tx.Exec("DELETE FROM settings"); err != nil {
 					return err
 				}
-				if _, err := tx.Exec("DELETE FROM bookmarks WHERE user_id = ?", userID); err != nil {
+				if err := advanceMutationClocksTx(tx, "bookmark", "clear", `
+					SELECT video_id AS item_key, ? AS updated_at_ms FROM bookmarks
+				`, ownerAtMs); err != nil {
 					return err
 				}
-				if _, err := tx.Exec("DELETE FROM bookmark_categories WHERE user_id = ?", userID); err != nil {
+				if _, err := tx.Exec("DELETE FROM bookmarks"); err != nil {
+					return err
+				}
+				if _, err := tx.Exec("DELETE FROM bookmark_categories"); err != nil {
 					return err
 				}
 			}
 			if cfg.Subscriptions != nil {
+				if err := advanceMutationClocksTx(tx, "follow", "clear", `
+					SELECT channel_id AS item_key, ? AS updated_at_ms FROM channel_follows
+				`, ownerAtMs); err != nil {
+					return err
+				}
+				if err := advanceMutationClocksTx(tx, "star", "clear", `
+					SELECT channel_id AS item_key, ? AS updated_at_ms FROM channel_stars
+				`, ownerAtMs); err != nil {
+					return err
+				}
 				if _, err := tx.Exec(`
-					DELETE FROM channel_settings
-					WHERE channel_id IN (
-						SELECT channel_id FROM channel_follows WHERE user_id = ''
+					INSERT INTO channel_settings (
+						channel_id, max_videos, download_subtitles,
+						media_only, media_download_limit, include_reposts, updated_at
 					)
-				`); err != nil {
+					SELECT cf.channel_id, NULL, NULL, NULL, NULL, NULL,
+					       CASE
+					         WHEN COALESCE(cs.updated_at, 0) >= ? THEN COALESCE(cs.updated_at, 0) + 1
+					         ELSE ?
+					       END
+					FROM channel_follows cf
+					LEFT JOIN channel_settings cs ON cs.channel_id = cf.channel_id
+					WHERE 1
+					ON CONFLICT(channel_id) DO UPDATE SET
+						max_videos = NULL,
+						download_subtitles = NULL,
+						media_only = NULL,
+						media_download_limit = NULL,
+						include_reposts = NULL,
+						updated_at = excluded.updated_at
+				`, ownerAtMs, ownerAtMs); err != nil {
 					return err
 				}
-				if _, err := tx.Exec("DELETE FROM channel_follows WHERE user_id = ''"); err != nil {
+				if _, err := tx.Exec("DELETE FROM channel_follows"); err != nil {
 					return err
 				}
-				if _, err := tx.Exec("DELETE FROM channel_stars WHERE user_id = ''"); err != nil {
+				if _, err := tx.Exec("DELETE FROM channel_stars"); err != nil {
 					return err
 				}
 			}
@@ -591,8 +539,8 @@ func (db *DB) ImportConfig(cfg ConfigExport, userID string, replace bool) (Impor
 		// Upsert settings
 		if len(cfg.Settings) > 0 {
 			stmt, err := tx.Prepare(`
-				INSERT INTO settings (user_id, key, value) VALUES ('', ?, ?)
-				ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value
+				INSERT INTO settings (key, value) VALUES (?, ?)
+				ON CONFLICT(key) DO UPDATE SET value = excluded.value
 			`)
 			if err != nil {
 				return err
@@ -618,9 +566,9 @@ func (db *DB) ImportConfig(cfg ConfigExport, userID string, replace bool) (Impor
 				archivePath = cat.ArchivePath
 			}
 			result, err := tx.Exec(`
-				INSERT OR IGNORE INTO bookmark_categories (user_id, name, archive_path)
-				VALUES (?, ?, ?)
-			`, userID, cat.Name, archivePath)
+				INSERT OR IGNORE INTO bookmark_categories (name, archive_path)
+				VALUES (?, ?)
+			`, cat.Name, archivePath)
 			if err != nil {
 				return err
 			}
@@ -631,7 +579,7 @@ func (db *DB) ImportConfig(cfg ConfigExport, userID string, replace bool) (Impor
 		// Re-fetch category name→id map
 		catMap := make(map[string]int64)
 		catRows, err := tx.Query(
-			"SELECT id, name FROM bookmark_categories WHERE user_id=?", userID,
+			"SELECT id, name FROM bookmark_categories",
 		)
 		if err != nil {
 			return err
@@ -668,9 +616,9 @@ func (db *DB) ImportConfig(cfg ConfigExport, userID string, replace bool) (Impor
 			}
 			result, err := tx.Exec(`
 				INSERT INTO bookmarks
-					(user_id, video_id, category_id, custom_title, account_handles, media_indices, bookmarked_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?)
-				ON CONFLICT(user_id, video_id) DO UPDATE SET
+					(video_id, category_id, custom_title, account_handles, media_indices, bookmarked_at)
+				VALUES (?, ?, ?, ?, ?, ?)
+				ON CONFLICT(video_id) DO UPDATE SET
 					category_id = CASE
 						WHEN excluded.category_id != 0 AND bookmarks.category_id = 0 THEN excluded.category_id
 						ELSE bookmarks.category_id
@@ -682,7 +630,7 @@ func (db *DB) ImportConfig(cfg ConfigExport, userID string, replace bool) (Impor
 						WHEN bookmarks.bookmarked_at <= 0 AND excluded.bookmarked_at > 0 THEN excluded.bookmarked_at
 						ELSE bookmarks.bookmarked_at
 					END
-			`, userID, bm.VideoID, catID, customTitle, nilIfEmpty(bm.AccountHandles),
+			`, bm.VideoID, catID, customTitle, nilIfEmpty(bm.AccountHandles),
 				nilIfEmpty(bm.MediaIndices), bm.BookmarkedAt)
 			if err != nil {
 				return err
@@ -696,121 +644,104 @@ func (db *DB) ImportConfig(cfg ConfigExport, userID string, replace bool) (Impor
 
 		// Channels: INSERT OR IGNORE new, UPDATE settings for existing
 		for _, ch := range cfg.Subscriptions {
-			seq := db.NextSyncSeq()
-			result, err := tx.Exec(`
+			channelURL := buildChannelURL(ch)
+			_, err := tx.Exec(`
 				INSERT OR IGNORE INTO channels
-					(channel_id, name, url, platform, quality, sync_seq)
-				VALUES (?, ?, ?, ?, ?, ?)
+					(channel_id, name, url, platform, quality)
+				VALUES (?, ?, ?, ?, ?)
 			`,
-				ch.ChannelID, ch.Name, buildChannelURL(ch), ch.Platform,
-				nilIfEmpty(ch.Quality), seq,
+				ch.ChannelID, ch.Name, channelURL, ch.Platform,
+				nilIfEmpty(ch.Quality),
 			)
 			if err != nil {
 				return err
 			}
-			n, _ := result.RowsAffected()
-			if n == 0 {
-				if _, err := tx.Exec(`
-					UPDATE channels
-					SET sync_seq = ?
-					WHERE channel_id = ?
-					  AND COALESCE(sync_seq, 0) = 0
-				`, seq, ch.ChannelID); err != nil {
-					return err
-				}
+			// Every listed subscription is authoritative for follow, star, and
+			// its complete per-channel settings row.
+			followedAt, err := advanceMutationClockTx(tx, "follow", ch.ChannelID, "set", ownerAtMs)
+			if err != nil {
+				return err
 			}
-
-			// Follow + star side tables — always ensure the follow row
-			// exists (import assumes every listed channel is subscribed).
-			nowMs := time.Now().UnixMilli()
 			if _, err := tx.Exec(`
-				INSERT OR IGNORE INTO channel_follows (user_id, channel_id, followed_at)
-				VALUES ('', ?, ?)
-			`, ch.ChannelID, nowMs); err != nil {
+				INSERT INTO channel_follows (channel_id, followed_at)
+				VALUES (?, ?)
+				ON CONFLICT(channel_id) DO UPDATE SET followed_at = excluded.followed_at
+			`, ch.ChannelID, followedAt); err != nil {
 				return err
 			}
 			if ch.IsStarred {
+				starredAt, err := advanceMutationClockTx(tx, "star", ch.ChannelID, "set", ownerAtMs)
+				if err != nil {
+					return err
+				}
 				if _, err := tx.Exec(`
-					INSERT OR IGNORE INTO channel_stars (user_id, channel_id, starred_at)
-					VALUES ('', ?, ?)
-				`, ch.ChannelID, nowMs); err != nil {
+					INSERT INTO channel_stars (channel_id, starred_at)
+					VALUES (?, ?)
+					ON CONFLICT(channel_id) DO UPDATE SET starred_at = excluded.starred_at
+				`, ch.ChannelID, starredAt); err != nil {
 					return err
 				}
 			} else {
+				if _, err := advanceMutationClockTx(tx, "star", ch.ChannelID, "clear", ownerAtMs); err != nil {
+					return err
+				}
 				if _, err := tx.Exec(`
-					DELETE FROM channel_stars WHERE user_id = '' AND channel_id = ?
+					DELETE FROM channel_stars WHERE channel_id = ?
 				`, ch.ChannelID); err != nil {
 					return err
 				}
 			}
 
-			// Per-channel settings side table. Only write rows that carry
-			// at least one non-default value.
-			if ch.MaxVideos > 0 || ch.DownloadSubtitles ||
-				ch.MediaOnly != nil || ch.MediaDownloadLimit != nil || ch.IncludeReposts != nil {
-				if _, err := tx.Exec(`
-					INSERT INTO channel_settings
-						(channel_id, max_videos, download_subtitles,
-						 media_only, media_download_limit, include_reposts, updated_at)
-					VALUES (?, ?, ?, ?, ?, ?, ?)
-					ON CONFLICT(channel_id) DO UPDATE SET
-						max_videos=excluded.max_videos,
-						download_subtitles=excluded.download_subtitles,
-						media_only=excluded.media_only,
-						media_download_limit=excluded.media_download_limit,
-						include_reposts=excluded.include_reposts,
-						updated_at=excluded.updated_at
-				`,
-					ch.ChannelID,
-					intToNullInt(ch.MaxVideos),
-					nilIfFalse(ch.DownloadSubtitles),
-					nilBoolPtr(ch.MediaOnly),
-					nilIntPtr(ch.MediaDownloadLimit),
-					nilBoolPtr(ch.IncludeReposts),
-					nowMs,
-				); err != nil {
+			hasSettings := ch.MaxVideos > 0 || ch.DownloadSubtitles ||
+				ch.MediaOnly != nil || ch.MediaDownloadLimit != nil || ch.IncludeReposts != nil
+			if hasSettings || replace {
+				if _, err := mutateChannelSettingsTx(tx, ch.ChannelID, map[string]any{
+					"max_videos":           intToNullInt(ch.MaxVideos),
+					"download_subtitles":   nilIfFalse(ch.DownloadSubtitles),
+					"media_only":           nilBoolPtr(ch.MediaOnly),
+					"media_download_limit": nilIntPtr(ch.MediaDownloadLimit),
+					"include_reposts":      nilBoolPtr(ch.IncludeReposts),
+				}, followedAt, false); err != nil {
 					return err
 				}
 			}
-
-			if n > 0 {
-				res.AddedChannels++
-			} else {
-				res.AddedChannels++
+			if err := observeChannelProfileTx(tx, model.Channel{
+				ChannelID: ch.ChannelID,
+				Name:      ch.Name,
+				URL:       channelURL,
+				Platform:  ch.Platform,
+			}, followedAt); err != nil {
+				return err
 			}
+
+			res.AddedChannels++
 		}
 
 		// Import liked posts if present
-		if len(cfg.LikedPosts) > 0 {
-			stmt, err := tx.Prepare(`
-				INSERT OR IGNORE INTO feed_likes
-					(username, tweet_id, source_handle, author_handle, author_display_name,
-					 body_text, link, canonical_x_link, published_at, media_url, avatar_url,
-					 media_json, platform, quote_payload_json, liked_at, updated_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-			`)
-			if err != nil {
+		for _, lp := range cfg.LikedPosts {
+			publishedAt := exportTimestampMillis(lp.PublishedAtMs, lp.PublishedAt)
+			if publishedAt == 0 && isTwitterExportPlatform(lp.Platform, "") {
+				publishedAt = twitterSnowflakeMillis(lp.TweetID)
+			}
+			fields := map[string]string{
+				"source_handle": lp.SourceHandle, "author_handle": lp.AuthorHandle,
+				"author_display_name": lp.AuthorDisplayName, "body_text": lp.BodyText,
+				"link": lp.Link, "canonical_x_link": lp.CanonicalXLink,
+				"avatar_url": lp.AvatarURL, "media_json": lp.MediaJSON,
+				"published_at": strconv.FormatInt(publishedAt, 10),
+			}
+			if err := db.ensureFeedItemStubFromLikeTx(tx, lp.TweetID, fields); err != nil {
 				return err
 			}
-			defer func() {
-				_ = stmt.Close()
-			}()
-			for _, lp := range cfg.LikedPosts {
-				publishedAt := exportTimestampMillis(lp.PublishedAtMs, lp.PublishedAt)
-				if publishedAt == 0 && isTwitterExportPlatform(lp.Platform, "") {
-					publishedAt = twitterSnowflakeMillis(lp.TweetID)
-				}
-				updatedAt := lp.UpdatedAt
-				if updatedAt == 0 && lp.LikedAt > 0 {
-					updatedAt = lp.LikedAt
-				}
-				if _, err := stmt.Exec(userID, lp.TweetID, nilIfEmpty(lp.SourceHandle),
-					lp.AuthorHandle, lp.AuthorDisplayName, lp.BodyText, lp.Link,
-					nilIfEmpty(lp.CanonicalXLink), publishedAt, nilIfEmpty(lp.MediaURL),
-					nilIfEmpty(lp.AvatarURL), nilIfEmpty(lp.MediaJSON), lp.Platform,
-					nilIfEmpty(lp.QuotePayloadJSON), lp.LikedAt, updatedAt); err != nil {
-					return err
-				}
+			likedAt := lp.LikedAt
+			if likedAt <= 0 {
+				likedAt = time.Now().UnixMilli()
+			}
+			if _, err := tx.Exec(`
+				INSERT INTO feed_likes (tweet_id, liked_at) VALUES (?, ?)
+				ON CONFLICT(tweet_id) DO UPDATE SET liked_at = MAX(feed_likes.liked_at, excluded.liked_at)
+			`, lp.TweetID, likedAt); err != nil {
+				return err
 			}
 		}
 
@@ -823,38 +754,34 @@ func (db *DB) ImportConfig(cfg ConfigExport, userID string, replace bool) (Impor
 				seenAt = time.Now().UnixMilli()
 			}
 			if _, err := tx.Exec(`
-				INSERT INTO feed_seen (username, tweet_id, seen_at)
-				VALUES (?, ?, ?)
-				ON CONFLICT(username, tweet_id) DO UPDATE SET
+				INSERT INTO feed_seen (tweet_id, seen_at)
+				VALUES (?, ?)
+				ON CONFLICT(tweet_id) DO UPDATE SET
 					seen_at = MAX(feed_seen.seen_at, excluded.seen_at)
-			`, userID, seen.TweetID, seenAt); err != nil {
+			`, seen.TweetID, seenAt); err != nil {
 				return err
 			}
 		}
 
 		// Import bookmarked videos if present
 		for _, bv := range cfg.BookmarkedVideos {
-			seq := db.NextSyncSeq()
+			if err := requireVideoOwnerKindTx(tx, bv.VideoID, bv.OwnerKind); err != nil {
+				return err
+			}
 			publishedAt := exportVideoPublishedAt(bv)
 			if _, err := tx.Exec(`
 				INSERT INTO videos
-					(video_id, channel_id, title, duration, published_at, file_path, sync_seq)
-				VALUES (?, ?, ?, ?, ?, '', ?)
+					(video_id, channel_id, owner_kind, title, duration, published_at)
+				VALUES (?, ?, ?, ?, ?, ?)
 				ON CONFLICT(video_id) DO UPDATE SET
+					owner_kind = excluded.owner_kind,
 					published_at = CASE
 						WHEN COALESCE(videos.published_at, 0) <= 0
 						 AND excluded.published_at > 0
 						THEN excluded.published_at
 						ELSE videos.published_at
-					END,
-					sync_seq = CASE
-						WHEN COALESCE(videos.sync_seq, 0) = 0
-						  OR (COALESCE(videos.published_at, 0) <= 0
-						      AND excluded.published_at > 0)
-						THEN excluded.sync_seq
-						ELSE videos.sync_seq
 					END
-			`, bv.VideoID, bv.ChannelID, bv.Title, bv.Duration, publishedAt, seq); err != nil {
+			`, bv.VideoID, bv.ChannelID, bv.OwnerKind, bv.Title, bv.Duration, publishedAt); err != nil {
 				return err
 			}
 
@@ -865,9 +792,9 @@ func (db *DB) ImportConfig(cfg ConfigExport, userID string, replace bool) (Impor
 				}
 			}
 			if _, err := tx.Exec(`
-				INSERT INTO bookmarks (user_id, video_id, category_id, bookmarked_at)
-				VALUES (?, ?, ?, ?)
-				ON CONFLICT(user_id, video_id) DO UPDATE SET
+				INSERT INTO bookmarks (video_id, category_id, bookmarked_at)
+				VALUES (?, ?, ?)
+				ON CONFLICT(video_id) DO UPDATE SET
 					category_id = CASE
 						WHEN excluded.category_id != 0 AND bookmarks.category_id = 0 THEN excluded.category_id
 						ELSE bookmarks.category_id
@@ -876,7 +803,54 @@ func (db *DB) ImportConfig(cfg ConfigExport, userID string, replace bool) (Impor
 						WHEN bookmarks.bookmarked_at <= 0 AND excluded.bookmarked_at > 0 THEN excluded.bookmarked_at
 						ELSE bookmarks.bookmarked_at
 					END
-			`, userID, bv.VideoID, catID, bv.BookmarkedAt); err != nil {
+			`, bv.VideoID, catID, bv.BookmarkedAt); err != nil {
+				return err
+			}
+		}
+
+		if fullReplace || len(cfg.Bookmarks) > 0 || len(cfg.BookmarkedVideos) > 0 {
+			if err := advanceMutationClocksTx(tx, "bookmark", "set", `
+				SELECT video_id AS item_key,
+				       CASE WHEN bookmarked_at > 0 THEN bookmarked_at ELSE ? END AS updated_at_ms
+				FROM bookmarks
+			`, ownerAtMs); err != nil {
+				return err
+			}
+			if _, err := tx.Exec(`
+				UPDATE bookmarks
+				SET bookmarked_at = (
+				  SELECT updated_at_ms FROM mutation_clocks
+				  WHERE kind = 'bookmark' AND item_key = bookmarks.video_id
+				)
+				WHERE EXISTS (
+				  SELECT 1 FROM mutation_clocks
+				  WHERE kind = 'bookmark' AND item_key = bookmarks.video_id
+				    AND action = 'set' AND updated_at_ms > bookmarks.bookmarked_at
+				)
+			`); err != nil {
+				return err
+			}
+		}
+		if len(cfg.LikedPosts) > 0 {
+			if err := advanceMutationClocksTx(tx, "like", "set", `
+				SELECT tweet_id AS item_key,
+				       CASE WHEN liked_at > 0 THEN liked_at ELSE ? END AS updated_at_ms
+				FROM feed_likes
+			`, ownerAtMs); err != nil {
+				return err
+			}
+			if _, err := tx.Exec(`
+				UPDATE feed_likes
+				SET liked_at = (
+				  SELECT updated_at_ms FROM mutation_clocks
+				  WHERE kind = 'like' AND item_key = feed_likes.tweet_id
+				)
+				WHERE EXISTS (
+				  SELECT 1 FROM mutation_clocks
+				  WHERE kind = 'like' AND item_key = feed_likes.tweet_id
+				    AND action = 'set' AND updated_at_ms > feed_likes.liked_at
+				)
+			`); err != nil {
 				return err
 			}
 		}
@@ -952,10 +926,10 @@ func exportVideoPublishedAt(bv BookmarkedVideoExport) int64 {
 	if publishedAt != 0 {
 		return publishedAt
 	}
-	if isTwitterExportPlatform(bv.Platform, bv.ChannelID) {
+	if bv.OwnerKind == "tweet" {
 		return twitterSnowflakeMillis(bv.VideoID)
 	}
-	if isTikTokExportPlatform(bv.Platform, bv.ChannelID) {
+	if bv.OwnerKind == "tiktok_video" {
 		return tiktokSnowflakeMillis(bv.VideoID)
 	}
 	return 0
@@ -967,12 +941,6 @@ func isTwitterExportPlatform(platform, channelID string) bool {
 	return platform == "twitter" || platform == "x" ||
 		strings.HasPrefix(channelID, "twitter_") ||
 		strings.HasPrefix(channelID, "x_")
-}
-
-func isTikTokExportPlatform(platform, channelID string) bool {
-	platform = strings.TrimSpace(strings.ToLower(platform))
-	channelID = strings.TrimSpace(strings.ToLower(channelID))
-	return platform == "tiktok" || strings.HasPrefix(channelID, "tiktok_")
 }
 
 func tiktokSnowflakeMillis(id string) int64 {

@@ -11,10 +11,10 @@ import (
 func TestGetAllSettings(t *testing.T) {
 	d := openWritableTestDB(t)
 
-	if err := d.SetSetting("", "test_key_a", "value_a"); err != nil {
+	if err := d.SetSetting("test_key_a", "value_a"); err != nil {
 		t.Fatalf("SetSetting: %v", err)
 	}
-	if err := d.SetSetting("", "test_key_b", "value_b"); err != nil {
+	if err := d.SetSetting("test_key_b", "value_b"); err != nil {
 		t.Fatalf("SetSetting: %v", err)
 	}
 
@@ -35,7 +35,7 @@ func TestUpdateSettings(t *testing.T) {
 	d := openWritableTestDB(t)
 
 	// Seed one key
-	if err := d.SetSetting("", "existing_key", "old_value"); err != nil {
+	if err := d.SetSetting("existing_key", "old_value"); err != nil {
 		t.Fatalf("SetSetting: %v", err)
 	}
 
@@ -104,6 +104,19 @@ func TestAddAndGetChannel(t *testing.T) {
 	if settings.MaxVideos != 10 {
 		t.Errorf("MaxVideos: got %d, want 10", settings.MaxVideos)
 	}
+	var followedAt int64
+	if err := d.QueryRow(`
+		SELECT updated_at_ms FROM mutation_clocks
+		WHERE kind = 'follow' AND item_key = 'test_ch_001'
+	`).Scan(&followedAt); err != nil {
+		t.Fatalf("follow clock: %v", err)
+	}
+	if _, err := d.MutateFollow("test_ch_001", "clear", followedAt-1); !IsStaleMutation(err) {
+		t.Fatalf("older unfollow error = %v, want stale mutation", err)
+	}
+	if !d.IsChannelFollowed("test_ch_001") {
+		t.Fatal("older unfollow removed AddChannel follow state")
+	}
 }
 
 // TestAddChannelDuplicate verifies a second insert with the same channel_id errors.
@@ -123,65 +136,6 @@ func TestAddChannelDuplicate(t *testing.T) {
 	}
 }
 
-// TestDeleteChannel verifies a channel can be added and then deleted.
-func TestDeleteChannel(t *testing.T) {
-	d := openWritableTestDB(t)
-
-	ch := model.Channel{
-		ChannelID: "sample_del_ch_001",
-		Name:      "Delete Me",
-		Platform:  "youtube",
-	}
-	if err := d.AddChannel(ch); err != nil {
-		t.Fatalf("AddChannel: %v", err)
-	}
-
-	if err := d.DeleteChannel("sample_del_ch_001"); err != nil {
-		t.Fatalf("DeleteChannel: %v", err)
-	}
-
-	// Verify gone
-	if _, err := d.GetChannelByID("sample_del_ch_001"); err == nil {
-		t.Fatal("GetChannelByID should error after deletion")
-	}
-
-	// Delete non-existent channel should error
-	if err := d.DeleteChannel("sample_del_ch_001"); err == nil {
-		t.Fatal("DeleteChannel of already-deleted channel should error")
-	}
-}
-
-// TestDeleteMediaFilesByOwner verifies media files are deleted by owner.
-func TestDeleteMediaFilesByOwner(t *testing.T) {
-	d := openWritableTestDB(t)
-
-	mf := model.MediaFile{
-		OwnerType:  "avatar",
-		OwnerID:    "test_owner_999",
-		MediaIndex: 0,
-		FilePath:   "avatars/test_owner_999.jpg",
-		MediaType:  "avatar",
-	}
-	if err := d.InsertMediaFile(mf); err != nil {
-		t.Fatalf("InsertMediaFile: %v", err)
-	}
-
-	// Verify it was inserted
-	if _, err := d.GetMediaFilePath("avatar", "test_owner_999", 0); err != nil {
-		t.Fatalf("GetMediaFilePath: expected file, got error: %v", err)
-	}
-
-	// Delete by owner
-	if err := d.DeleteMediaFilesByOwner("avatar", "test_owner_999"); err != nil {
-		t.Fatalf("DeleteMediaFilesByOwner: %v", err)
-	}
-
-	// Verify gone
-	if _, err := d.GetMediaFilePath("avatar", "test_owner_999", 0); err == nil {
-		t.Fatal("GetMediaFilePath should error after deletion")
-	}
-}
-
 // TestExportConfig verifies ExportConfig returns a valid structure.
 func TestExportConfig(t *testing.T) {
 	d := openWritableTestDB(t)
@@ -198,20 +152,20 @@ func TestExportConfig(t *testing.T) {
 	}
 
 	// Set a setting
-	if err := d.SetSetting("", "export_test_key", "export_test_val"); err != nil {
+	if err := d.SetSetting("export_test_key", "export_test_val"); err != nil {
 		t.Fatalf("SetSetting: %v", err)
 	}
-	if err := d.SetSetting("", "youtube_check_interval", "6"); err != nil {
+	if err := d.SetSetting("youtube_check_interval", "6"); err != nil {
 		t.Fatalf("SetSetting legacy interval: %v", err)
 	}
 
-	cfg, err := d.ExportConfig("")
+	cfg, err := d.ExportConfig()
 	if err != nil {
 		t.Fatalf("ExportConfig: %v", err)
 	}
 
-	if cfg.Version != 1 {
-		t.Errorf("Version: got %d, want 1", cfg.Version)
+	if cfg.Version != ConfigExportVersion {
+		t.Errorf("Version: got %d, want %d", cfg.Version, ConfigExportVersion)
 	}
 	if cfg.ExportedAt.IsZero() {
 		t.Error("ExportedAt should not be zero")
@@ -268,12 +222,12 @@ func TestExportSubscriptionsUsesFollowRows(t *testing.T) {
 		t.Fatalf("AddChannel unfollowed: %v", err)
 	}
 
-	cfg, err := d.ExportSubscriptions("alice")
+	cfg, err := d.ExportSubscriptions()
 	if err != nil {
 		t.Fatalf("ExportSubscriptions: %v", err)
 	}
-	if cfg.Version != 1 || cfg.Scope != "subscriptions" || cfg.UserID != "alice" || cfg.ExportedAt.IsZero() {
-		t.Fatalf("export metadata = version:%d scope:%q user:%q at:%v", cfg.Version, cfg.Scope, cfg.UserID, cfg.ExportedAt)
+	if cfg.Version != ConfigExportVersion || cfg.Scope != "subscriptions" || cfg.ExportedAt.IsZero() {
+		t.Fatalf("export metadata = version:%d scope:%q at:%v", cfg.Version, cfg.Scope, cfg.ExportedAt)
 	}
 	if len(cfg.Subscriptions) != 1 {
 		t.Fatalf("subscriptions = %#v, want one followed channel", cfg.Subscriptions)
@@ -304,18 +258,18 @@ func TestImportConfigReplaceSubscriptionsClearsStaleFollows(t *testing.T) {
 	if err := d.UpdateChannelSettings("youtube_sample_existing", map[string]any{"max_videos": 9}); err != nil {
 		t.Fatalf("UpdateChannelSettings keep: %v", err)
 	}
-	if err := d.SetSetting("", "preserved_setting", "still-here"); err != nil {
+	if err := d.SetSetting("preserved_setting", "still-here"); err != nil {
 		t.Fatalf("SetSetting: %v", err)
 	}
 
 	result, err := d.ImportConfig(ConfigExport{
-		Version: 1,
+		Version: ConfigExportVersion,
 		Scope:   "subscriptions",
 		Subscriptions: []ChannelExport{
 			{ChannelID: "youtube_sample_existing", Name: "Keep Follow", Platform: "youtube", MaxVideos: 14},
 			{ChannelID: "youtube_sample_new", Name: "New Follow", Platform: "youtube"},
 		},
-	}, "alice", true)
+	}, true)
 	if err != nil {
 		t.Fatalf("ImportConfig replace: %v", err)
 	}
@@ -336,15 +290,40 @@ func TestImportConfigReplaceSubscriptionsClearsStaleFollows(t *testing.T) {
 			t.Fatalf("%s subscribed = %v, want %v", channelID, ch.IsSubscribed, wantFollowed)
 		}
 	}
-	var oldStars, oldSettings int
-	if err := d.QueryRow(`SELECT COUNT(*) FROM channel_stars WHERE user_id = '' AND channel_id = 'youtube_sample_old'`).Scan(&oldStars); err != nil {
+	var oldStars int
+	if err := d.QueryRow(`SELECT COUNT(*) FROM channel_stars WHERE channel_id = 'youtube_sample_old'`).Scan(&oldStars); err != nil {
 		t.Fatalf("count old stars: %v", err)
 	}
-	if err := d.QueryRow(`SELECT COUNT(*) FROM channel_settings WHERE channel_id = 'youtube_sample_old'`).Scan(&oldSettings); err != nil {
-		t.Fatalf("count old settings: %v", err)
+	var oldSettingsNull int
+	var oldSettingsAt int64
+	if err := d.QueryRow(`
+		SELECT max_videos IS NULL AND download_subtitles IS NULL
+		   AND media_only IS NULL AND media_download_limit IS NULL
+		   AND include_reposts IS NULL,
+		       updated_at
+		FROM channel_settings WHERE channel_id = 'youtube_sample_old'
+	`).Scan(&oldSettingsNull, &oldSettingsAt); err != nil {
+		t.Fatalf("read old settings tombstone: %v", err)
 	}
-	if oldStars != 0 || oldSettings != 0 {
-		t.Fatalf("old follow state remained: stars=%d settings=%d", oldStars, oldSettings)
+	if oldStars != 0 || oldSettingsNull != 1 {
+		t.Fatalf("old follow state remained: stars=%d settings_null=%d", oldStars, oldSettingsNull)
+	}
+	var followAction string
+	var followClockAt int64
+	if err := d.QueryRow(`
+		SELECT action, updated_at_ms FROM mutation_clocks
+		WHERE kind = 'follow' AND item_key = 'youtube_sample_old'
+	`).Scan(&followAction, &followClockAt); err != nil {
+		t.Fatalf("old follow clock: %v", err)
+	}
+	if followAction != "clear" {
+		t.Fatalf("old follow clock action = %q, want clear", followAction)
+	}
+	if _, err := d.MutateFollow("youtube_sample_old", "set", followClockAt-1); !IsStaleMutation(err) {
+		t.Fatalf("older follow error = %v, want stale mutation", err)
+	}
+	if _, err := d.MutateChannelSetting("youtube_sample_old", "max_videos", 99, oldSettingsAt-1); !IsStaleMutation(err) {
+		t.Fatalf("older channel setting error = %v, want stale mutation", err)
 	}
 	keepSettings, err := d.GetChannelSettings("youtube_sample_existing")
 	if err != nil {
@@ -362,14 +341,14 @@ func TestImportConfigIgnoresRetiredIntervalSettings(t *testing.T) {
 	d := openWritableTestDB(t)
 
 	cfg := ConfigExport{
-		Version: 1,
+		Version: ConfigExportVersion,
 		Settings: map[string]string{
 			"youtube_fetch_delay":    "12",
 			"youtube_check_interval": "6",
 			"shorts_check_interval":  "3",
 		},
 	}
-	if _, err := d.ImportConfig(cfg, "alice", false); err != nil {
+	if _, err := d.ImportConfig(cfg, false); err != nil {
 		t.Fatalf("ImportConfig: %v", err)
 	}
 
@@ -391,12 +370,12 @@ func TestImportConfigPreservesDefaultCategoryBookmarkLabel(t *testing.T) {
 	d := openWritableTestDB(t)
 
 	cfg := ConfigExport{
-		Version: 1,
+		Version: ConfigExportVersion,
 		Bookmarks: []BookmarkExport{
 			{VideoID: "sample_default_bookmark", CustomTitle: "Saved Label"},
 		},
 	}
-	result, err := d.ImportConfig(cfg, "alice", false)
+	result, err := d.ImportConfig(cfg, false)
 	if err != nil {
 		t.Fatalf("ImportConfig: %v", err)
 	}
@@ -404,7 +383,7 @@ func TestImportConfigPreservesDefaultCategoryBookmarkLabel(t *testing.T) {
 		t.Fatalf("AddedBookmarks = %d, want 1", result.AddedBookmarks)
 	}
 
-	labels, err := d.GetBookmarkLabels("alice", "")
+	labels, err := d.GetBookmarkLabels("")
 	if err != nil {
 		t.Fatalf("GetBookmarkLabels: %v", err)
 	}
@@ -417,7 +396,7 @@ func TestImportConfigPreservesFullExportStateTimestamps(t *testing.T) {
 	d := openWritableTestDB(t)
 
 	cfg := ConfigExport{
-		Version: 1,
+		Version: ConfigExportVersion,
 		BookmarkCategories: []BookmarkCatExport{{
 			Name: "Saved",
 		}},
@@ -430,17 +409,15 @@ func TestImportConfigPreservesFullExportStateTimestamps(t *testing.T) {
 			BookmarkedAt:   1710000000000,
 		}},
 		LikedPosts: []LikedPostExport{{
-			TweetID:          "sample_stateful_like",
-			SourceHandle:     "sample_source",
-			AuthorHandle:     "sample_author",
-			BodyText:         "liked text",
-			Platform:         "twitter",
-			PublishedAtMs:    1709000000000,
-			CanonicalXLink:   "https://x.com/sample_author/status/stateful_like",
-			MediaJSON:        `[{"type":"photo"}]`,
-			QuotePayloadJSON: `{"tweet_id":"sample_quote"}`,
-			LikedAt:          1710000001000,
-			UpdatedAt:        1710000002000,
+			TweetID:        "sample_stateful_like",
+			SourceHandle:   "sample_source",
+			AuthorHandle:   "sample_author",
+			BodyText:       "liked text",
+			Platform:       "twitter",
+			PublishedAtMs:  1709000000000,
+			CanonicalXLink: "https://x.com/sample_author/status/stateful_like",
+			MediaJSON:      `[{"type":"photo"}]`,
+			LikedAt:        1710000001000,
 		}},
 		FeedSeen: []FeedSeenExport{{
 			TweetID: "sample_stateful_seen",
@@ -449,12 +426,13 @@ func TestImportConfigPreservesFullExportStateTimestamps(t *testing.T) {
 		BookmarkedVideos: []BookmarkedVideoExport{{
 			VideoID:       "sample_stateful_video",
 			ChannelID:     "youtube_sample_UCstateful",
+			OwnerKind:     "youtube_video",
 			Title:         "Stateful Video",
 			PublishedAtMs: 1708000000000,
 			BookmarkedAt:  1710000003000,
 		}},
 	}
-	if _, err := d.ImportConfig(cfg, "alice", false); err != nil {
+	if _, err := d.ImportConfig(cfg, false); err != nil {
 		t.Fatalf("ImportConfig: %v", err)
 	}
 
@@ -462,7 +440,7 @@ func TestImportConfigPreservesFullExportStateTimestamps(t *testing.T) {
 	var accountHandles, mediaIndices string
 	if err := d.QueryRow(`
 		SELECT bookmarked_at, COALESCE(account_handles,''), COALESCE(media_indices,'')
-		FROM bookmarks WHERE user_id = 'alice' AND video_id = 'sample_stateful_bookmark'
+			FROM bookmarks WHERE video_id = 'sample_stateful_bookmark'
 	`).Scan(&bookmarkedAt, &accountHandles, &mediaIndices); err != nil {
 		t.Fatalf("read bookmark: %v", err)
 	}
@@ -470,28 +448,29 @@ func TestImportConfigPreservesFullExportStateTimestamps(t *testing.T) {
 		t.Fatalf("bookmark state = %d %q %q", bookmarkedAt, accountHandles, mediaIndices)
 	}
 
-	var likedAt, updatedAt, likePublishedAt int64
-	var sourceHandle, canonicalLink, mediaJSON, quoteJSON string
+	var likedAt, likePublishedAt int64
+	var sourceHandle, canonicalLink, mediaJSON string
 	if err := d.QueryRow(`
-		SELECT liked_at, updated_at, published_at, COALESCE(source_handle,''),
-		       COALESCE(canonical_x_link,''), COALESCE(media_json,''),
-		       COALESCE(quote_payload_json,'')
-		FROM feed_likes WHERE username = 'alice' AND tweet_id = 'sample_stateful_like'
-	`).Scan(&likedAt, &updatedAt, &likePublishedAt, &sourceHandle, &canonicalLink, &mediaJSON, &quoteJSON); err != nil {
+			SELECT fl.liked_at, fi.published_at, COALESCE(fi.source_handle,''),
+			       COALESCE(fi.canonical_url,''), COALESCE(fi.media_json,'')
+			FROM feed_likes fl
+			JOIN feed_items_resolved fi ON fi.tweet_id = fl.tweet_id
+			WHERE fl.tweet_id = 'sample_stateful_like'
+		`).Scan(&likedAt, &likePublishedAt, &sourceHandle, &canonicalLink, &mediaJSON); err != nil {
 		t.Fatalf("read like: %v", err)
 	}
-	if likedAt != 1710000001000 || updatedAt != 1710000002000 || likePublishedAt != 1709000000000 {
-		t.Fatalf("like timestamps = liked:%d updated:%d published:%d", likedAt, updatedAt, likePublishedAt)
+	if likedAt != 1710000001000 || likePublishedAt != 1709000000000 {
+		t.Fatalf("like timestamps = liked:%d published:%d", likedAt, likePublishedAt)
 	}
-	if sourceHandle != "sample_source" || canonicalLink == "" || mediaJSON == "" || quoteJSON == "" {
-		t.Fatalf("like metadata = source:%q canonical:%q media:%q quote:%q", sourceHandle, canonicalLink, mediaJSON, quoteJSON)
+	if sourceHandle != "sample_source" || canonicalLink == "" || mediaJSON == "" {
+		t.Fatalf("like metadata = source:%q canonical:%q media:%q", sourceHandle, canonicalLink, mediaJSON)
 	}
 
 	var seenAt int64
 	if err := d.QueryRow(`
 		SELECT seen_at
 		FROM feed_seen
-		WHERE username = 'alice' AND tweet_id = 'sample_stateful_seen'
+			WHERE tweet_id = 'sample_stateful_seen'
 	`).Scan(&seenAt); err != nil {
 		t.Fatalf("read feed seen: %v", err)
 	}
@@ -504,7 +483,7 @@ func TestImportConfigPreservesFullExportStateTimestamps(t *testing.T) {
 		SELECT v.published_at, b.bookmarked_at
 		FROM videos v
 		JOIN bookmarks b ON b.video_id = v.video_id
-		WHERE b.user_id = 'alice' AND v.video_id = 'sample_stateful_video'
+			WHERE v.video_id = 'sample_stateful_video'
 	`).Scan(&videoPublishedAt, &videoBookmarkedAt); err != nil {
 		t.Fatalf("read bookmarked video: %v", err)
 	}
@@ -517,19 +496,19 @@ func TestImportConfigRepairsExistingZeroBookmarkTimestamps(t *testing.T) {
 	d := openWritableTestDB(t)
 
 	if err := d.ExecRaw(`
-		INSERT INTO bookmark_categories (id, user_id, name) VALUES (7, 'alice', 'Saved')
+		INSERT INTO bookmark_categories (id, name) VALUES (7, 'Saved')
 	`); err != nil {
 		t.Fatalf("seed category: %v", err)
 	}
 	if err := d.ExecRaw(`
-		INSERT INTO bookmarks (user_id, video_id, category_id, bookmarked_at)
-		VALUES ('alice', 'sample_existing_bookmark', 0, 0)
+		INSERT INTO bookmarks (video_id, category_id, bookmarked_at)
+		VALUES ('sample_existing_bookmark', 0, 0)
 	`); err != nil {
 		t.Fatalf("seed bookmark: %v", err)
 	}
 
 	cfg := ConfigExport{
-		Version: 1,
+		Version: ConfigExportVersion,
 		BookmarkCategories: []BookmarkCatExport{{
 			Name: "Saved",
 		}},
@@ -541,11 +520,14 @@ func TestImportConfigRepairsExistingZeroBookmarkTimestamps(t *testing.T) {
 		}},
 		BookmarkedVideos: []BookmarkedVideoExport{{
 			VideoID:      "sample_existing_bookmark",
+			ChannelID:    "youtube_sample_existing",
+			OwnerKind:    "youtube_video",
+			Title:        "Existing bookmark",
 			CategoryName: "Saved",
 			BookmarkedAt: 1710000001000,
 		}},
 	}
-	if _, err := d.ImportConfig(cfg, "alice", false); err != nil {
+	if _, err := d.ImportConfig(cfg, false); err != nil {
 		t.Fatalf("ImportConfig: %v", err)
 	}
 
@@ -554,7 +536,7 @@ func TestImportConfigRepairsExistingZeroBookmarkTimestamps(t *testing.T) {
 	if err := d.QueryRow(`
 		SELECT category_id, COALESCE(custom_title, ''), bookmarked_at
 		FROM bookmarks
-		WHERE user_id = 'alice' AND video_id = 'sample_existing_bookmark'
+			WHERE video_id = 'sample_existing_bookmark'
 	`).Scan(&categoryID, &customTitle, &bookmarkedAt); err != nil {
 		t.Fatalf("read bookmark: %v", err)
 	}
@@ -570,38 +552,36 @@ func TestImportConfigRepairsExistingBookmarkedTikTokPublishDate(t *testing.T) {
 	videoID := strconv.FormatInt((wantPublishedAt/1000)<<32, 10)
 
 	if _, err := d.conn.Exec(`
-		INSERT INTO videos (video_id, channel_id, title, duration, published_at, sync_seq)
-		VALUES (?, ?, 'Old title', 0, 0, 0)
+			INSERT INTO videos (video_id, channel_id, owner_kind, title, duration, published_at)
+			VALUES (?, ?, 'tiktok_video', 'Old title', 0, 0)
 	`, videoID, "tiktok_sample"); err != nil {
 		t.Fatalf("seed video: %v", err)
 	}
 
 	cfg := ConfigExport{
-		Version: 1,
+		Version: ConfigExportVersion,
 		BookmarkedVideos: []BookmarkedVideoExport{{
 			VideoID:      videoID,
 			ChannelID:    "tiktok_sample",
+			OwnerKind:    "tiktok_video",
 			Title:        "Restored title",
 			BookmarkedAt: 1710000000000,
 		}},
 	}
-	if _, err := d.ImportConfig(cfg, "alice", false); err != nil {
+	if _, err := d.ImportConfig(cfg, false); err != nil {
 		t.Fatalf("ImportConfig: %v", err)
 	}
 
-	var publishedAt, syncSeq int64
+	var publishedAt int64
 	if err := d.QueryRow(`
-		SELECT published_at, sync_seq
-		FROM videos
-		WHERE video_id = ?
-	`, videoID).Scan(&publishedAt, &syncSeq); err != nil {
+			SELECT published_at
+			FROM videos
+			WHERE video_id = ?
+		`, videoID).Scan(&publishedAt); err != nil {
 		t.Fatalf("read video: %v", err)
 	}
 	if publishedAt != wantPublishedAt {
 		t.Fatalf("published_at = %d, want %d", publishedAt, wantPublishedAt)
-	}
-	if syncSeq <= 0 {
-		t.Fatalf("sync_seq = %d, want bumped", syncSeq)
 	}
 }
 
@@ -609,7 +589,7 @@ func TestExportFullDataCarriesStateTimestampsAndMetadata(t *testing.T) {
 	d := openWritableTestDB(t)
 
 	if err := d.ExecRaw(`
-		INSERT INTO bookmark_categories (id, user_id, name) VALUES (70, 'alice', 'Saved')
+		INSERT INTO bookmark_categories (id, name) VALUES (70, 'Saved')
 	`); err != nil {
 		t.Fatalf("seed category: %v", err)
 	}
@@ -619,38 +599,43 @@ func TestExportFullDataCarriesStateTimestampsAndMetadata(t *testing.T) {
 		t.Fatalf("seed channel: %v", err)
 	}
 	if err := d.ExecRaw(`
-		INSERT INTO videos (video_id, channel_id, title, duration, published_at)
-		VALUES ('export_video', 'youtube_UCexport', 'Export Video', 12, 1707000000000)
+		INSERT INTO videos (video_id, channel_id, owner_kind, title, duration, published_at)
+		VALUES ('export_video', 'youtube_UCexport', 'youtube_video', 'Export Video', 12, 1707000000000)
 	`); err != nil {
 		t.Fatalf("seed video: %v", err)
 	}
 	if err := d.ExecRaw(`
 		INSERT INTO bookmarks
-			(user_id, video_id, category_id, custom_title, account_handles, media_indices, bookmarked_at)
-		VALUES ('alice', 'export_video', 70, 'clips', '@author', '1', 1711000000000)
+			(video_id, category_id, custom_title, account_handles, media_indices, bookmarked_at)
+		VALUES ('export_video', 70, 'clips', '@author', '1', 1711000000000)
 	`); err != nil {
 		t.Fatalf("seed bookmark: %v", err)
 	}
 	if err := d.ExecRaw(`
-		INSERT INTO feed_likes
-			(username, tweet_id, source_handle, author_handle, author_display_name,
-			 body_text, canonical_x_link, published_at, media_json, platform,
-			 quote_payload_json, liked_at, updated_at)
+		INSERT INTO channel_profiles (channel_id, platform, handle, display_name)
 		VALUES
-			('alice', 'export_like', 'source', 'author', 'Author',
-			 'liked text', 'https://x.com/sample_author/status/export_like', 1706000000000,
-			 '[{"type":"photo"}]', 'twitter', '{"tweet_id":"sample_quote"}', 1712000000000, 1712000001000)
+			('twitter_sample_source', 'twitter', 'sample_source', 'Sample Source'),
+			('twitter_sample_author', 'twitter', 'sample_author', 'Sample Author');
+		INSERT INTO feed_items
+			(tweet_id, source_channel_id, channel_id, body_text, canonical_url,
+			 published_at, media_json, fetched_at)
+		VALUES
+			('export_like', 'twitter_sample_source', 'twitter_sample_author', 'liked text',
+			 'https://x.com/sample_author/status/export_like', 1706000000000,
+			 '[{"type":"photo"}]', 1706000000000);
+		INSERT INTO feed_likes (tweet_id, liked_at)
+		VALUES ('export_like', 1712000000000)
 	`); err != nil {
 		t.Fatalf("seed like: %v", err)
 	}
 	if err := d.ExecRaw(`
-		INSERT INTO feed_seen (username, tweet_id, seen_at)
-		VALUES ('alice', 'export_seen', 1713000000000)
+		INSERT INTO feed_seen (tweet_id, seen_at)
+		VALUES ('export_seen', 1713000000000)
 	`); err != nil {
 		t.Fatalf("seed seen: %v", err)
 	}
 
-	cfg, err := d.ExportFullData("alice")
+	cfg, err := d.ExportFullData()
 	if err != nil {
 		t.Fatalf("ExportFullData: %v", err)
 	}
@@ -665,10 +650,10 @@ func TestExportFullDataCarriesStateTimestampsAndMetadata(t *testing.T) {
 		t.Fatalf("liked posts = %d, want 1", len(cfg.LikedPosts))
 	}
 	lp := cfg.LikedPosts[0]
-	if lp.LikedAt != 1712000000000 || lp.UpdatedAt != 1712000001000 || lp.PublishedAtMs != 1706000000000 {
+	if lp.LikedAt != 1712000000000 || lp.UpdatedAt != 1712000000000 || lp.PublishedAtMs != 1706000000000 {
 		t.Fatalf("exported like timestamps = %#v", lp)
 	}
-	if lp.SourceHandle != "source" || lp.CanonicalXLink == "" || lp.MediaJSON == "" || lp.QuotePayloadJSON == "" {
+	if lp.SourceHandle != "sample_source" || lp.AuthorHandle != "sample_author" || lp.CanonicalXLink == "" || lp.MediaJSON == "" {
 		t.Fatalf("exported like metadata = %#v", lp)
 	}
 	if len(cfg.FeedSeen) != 1 {
@@ -687,11 +672,11 @@ func TestExportFullDataCarriesStateTimestampsAndMetadata(t *testing.T) {
 	}
 }
 
-func TestImportConfigPublishesImportedRowsToDelta(t *testing.T) {
+func TestImportConfigPersistsImportedRows(t *testing.T) {
 	d := openWritableTestDB(t)
 
 	cfg := ConfigExport{
-		Version: 1,
+		Version: ConfigExportVersion,
 		Subscriptions: []ChannelExport{{
 			ChannelID: "youtube_UCexampleImported",
 			Name:      "Imported Channel",
@@ -700,46 +685,54 @@ func TestImportConfigPublishesImportedRowsToDelta(t *testing.T) {
 		BookmarkedVideos: []BookmarkedVideoExport{{
 			VideoID:     "sample_imported_video",
 			ChannelID:   "youtube_UCexampleImported",
+			OwnerKind:   "youtube_video",
 			Title:       "Imported Video",
-			Platform:    "youtube",
 			Duration:    42,
 			PublishedAt: "2026-05-01T12:00:00Z",
 		}},
 	}
-	if _, err := d.ImportConfig(cfg, "alice", false); err != nil {
+	if _, err := d.ImportConfig(cfg, false); err != nil {
 		t.Fatalf("ImportConfig: %v", err)
 	}
 
-	channels, _, err := d.ListChannelsForDelta(0, 500)
-	if err != nil {
-		t.Fatalf("ListChannelsForDelta: %v", err)
+	if _, err := d.GetChannelByID("youtube_UCexampleImported"); err != nil {
+		t.Fatalf("imported channel missing: %v", err)
 	}
-	if !hasChannelID(channels, "youtube_UCexampleImported") {
-		t.Fatalf("imported channel missing from delta: %#v", channels)
-	}
-	videos, _, err := d.ListVideosForDelta([]string{"youtube"}, 0, 500)
-	if err != nil {
-		t.Fatalf("ListVideosForDelta: %v", err)
-	}
-	if !hasVideoID(videos, "sample_imported_video") {
-		t.Fatalf("imported video missing from delta: %#v", videos)
+	if video, err := d.GetVideo("sample_imported_video"); err != nil || video == nil {
+		t.Fatalf("imported video missing: video=%#v err=%v", video, err)
 	}
 }
 
-func hasChannelID(channels []model.Channel, id string) bool {
-	for _, ch := range channels {
-		if ch.ChannelID == id {
-			return true
-		}
+func TestImportConfigRequiresCurrentOwnerContract(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		version   int
+		ownerKind string
+	}{
+		{name: "old version", version: ConfigExportVersion - 1, ownerKind: "youtube_video"},
+		{name: "missing owner", version: ConfigExportVersion},
+		{name: "noncanonical owner", version: ConfigExportVersion, ownerKind: " youtube_video "},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			d := openWritableTestDB(t)
+			_, err := d.ImportConfig(ConfigExport{
+				Version:  test.version,
+				Settings: map[string]string{"starting_page": "feed"},
+				BookmarkedVideos: []BookmarkedVideoExport{{
+					VideoID:   "sample_video",
+					OwnerKind: test.ownerKind,
+				}},
+			}, false)
+			if err == nil {
+				t.Fatal("ImportConfig accepted an invalid export contract")
+			}
+			var settings int
+			if err := d.QueryRow(`SELECT COUNT(*) FROM settings WHERE key = 'starting_page'`).Scan(&settings); err != nil {
+				t.Fatal(err)
+			}
+			if settings != 0 {
+				t.Fatalf("settings rows = %d, validation happened after mutation", settings)
+			}
+		})
 	}
-	return false
-}
-
-func hasVideoID(videos []model.Video, id string) bool {
-	for _, video := range videos {
-		if video.VideoID == id {
-			return true
-		}
-	}
-	return false
 }

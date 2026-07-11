@@ -27,10 +27,8 @@ import java.io.IOException
  * `buildIglooClient(engine = MockEngine { ... })` so every other plugin + interceptor
  * exercises the same code path.
  *
- * `prefsProvider` is a lambda rather than a direct reference because the per-user Room
- * DB isn't open until after login; the HTTP client must be constructible pre-login so
- * `AuthApi.login` can issue its request. Post-login, the lambda returns the live
- * `PreferencesRepo` for shared envelope side effects.
+ * `prefsProvider` stays lazy so the client can be constructed before the authenticated
+ * application graph.
  */
 
 val iglooJson: Json = Json {

@@ -3,80 +3,37 @@ package com.screwy.igloo.sync
 import androidx.room.withTransaction
 import com.screwy.igloo.data.IglooDatabase
 import com.screwy.igloo.data.PreferencesRepo
-import com.screwy.igloo.data.dao.AndroidSyncContentPruneCounts
 import com.screwy.igloo.data.dao.AndroidSyncDao
-import com.screwy.igloo.data.dao.AndroidSyncGenerationPruneCounts
-import com.screwy.igloo.data.dao.OutboxDao
 import com.screwy.igloo.data.entity.AndroidSyncAssetEntity
-import com.screwy.igloo.data.entity.AndroidSyncGenerationEntity
-import com.screwy.igloo.data.entity.AndroidSyncItemEntity
+import com.screwy.igloo.data.entity.AndroidSyncHeadEntity
+import com.screwy.igloo.data.entity.AndroidSyncStateEntity
 import com.screwy.igloo.log.Logger
 import com.screwy.igloo.media.ForegroundPromoter
 import com.screwy.igloo.net.AndroidSyncApi
 import com.screwy.igloo.net.AndroidSyncAssetDto
+import com.screwy.igloo.net.AndroidSyncChangeDto
 import com.screwy.igloo.net.AndroidSyncDecodeException
-import com.screwy.igloo.net.AndroidSyncGenerationDto
 import com.screwy.igloo.net.AndroidSyncHttpException
-import com.screwy.igloo.net.AndroidSyncItemDto
+import com.screwy.igloo.net.AndroidSyncPageResponse
 import com.screwy.igloo.net.AndroidSyncRetentionRequest
 import com.screwy.igloo.net.Reachability
 import com.screwy.igloo.net.ServerBaseUrlProvider
-import com.screwy.igloo.perf.PerfProbe
 import io.ktor.client.HttpClient
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
-import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
-import kotlinx.serialization.encodeToString
-import kotlinx.serialization.json.Json
 import java.io.File
 import java.io.IOException
-import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicLong
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
 
-private val androidSyncJson: Json = Json {
-    ignoreUnknownKeys = true
-    coerceInputValues = true
-    isLenient = true
-    encodeDefaults = true
-}
-
-const val ANDROID_SYNC_ITEM_IMPORTER_VERSION = 3
-
-private fun AndroidSyncContentPruneCounts.hasDeletes(): Boolean =
-    videos > 0 || feedItems > 0 || channels > 0 || channelProfiles > 0 || legacyAssets > 0 || sideRows > 0
-
-private fun AndroidSyncGenerationPruneCounts.hasDeletes(): Boolean =
-    items > 0 || assets > 0 || generations > 0
-
-private fun AssetFileDeleteStats.hasDeletes(): Boolean = files > 0
-
-private fun elapsedMsSince(startedAtNanos: Long): Long =
-    (System.nanoTime() - startedAtNanos) / 1_000_000L
-
-/**
- * Android sync mirror runner. This imports the server-owned immutable generation,
- * applies content bundles through the same BundleIngest path, downloads every
- * ready asset into an Android sync ledger, verifies exact size/hash, then reports
- * generation coverage.
- */
 class AndroidSyncMirror(
-    private val scope: CoroutineScope,
     private val db: IglooDatabase,
     private val dao: AndroidSyncDao,
-    private val outboxDao: OutboxDao,
     private val api: AndroidSyncApi,
     client: HttpClient,
     baseUrlProvider: ServerBaseUrlProvider,
     private val reachability: Reachability,
-    private val foregroundPromoter: ForegroundPromoter,
+    foregroundPromoter: ForegroundPromoter,
     mediaRoot: File,
     private val logger: Logger,
-    private val prefs: PreferencesRepo,
     private val retentionProvider: suspend () -> AndroidSyncRetentionRequest = {
         AndroidSyncRetentionRequest(
             feedDays = PreferencesRepo.Defaults.RETENTION_DAYS_FEED,
@@ -85,676 +42,770 @@ class AndroidSyncMirror(
             storyHours = PreferencesRepo.Defaults.STORIES_WINDOW_HOURS,
         )
     },
-    private val nowMsProvider: () -> Long = { System.currentTimeMillis() },
-    private val refreshRetryDelayMs: Long = SYNC_REFRESH_RETRY_MS,
+    private val serverNowMsProvider: () -> Long = { System.currentTimeMillis() },
     private val metadataRetryDelaysMs: List<Long> = METADATA_RETRY_DELAYS_MS,
-    private val refreshRetryEnabledProvider: () -> Boolean = { true },
-) : AndroidSyncRunner {
-
-    private val triggerChannel = Channel<Unit>(capacity = Channel.CONFLATED)
-    private val healthReporter = AndroidSyncHealthReporter(
-        dao = dao,
-        api = api,
-        reachability = reachability,
-        logger = logger,
-        nowMsProvider = nowMsProvider,
-    )
-    private val assetDrainer = AndroidSyncAssetDrainer(
-        dao = dao,
-        client = client,
-        baseUrlProvider = baseUrlProvider,
-        reachability = reachability,
-        foregroundPromoter = foregroundPromoter,
-        mediaRoot = mediaRoot,
-        logger = logger,
-        healthReporter = healthReporter,
-        nowMsProvider = nowMsProvider,
-    )
-    private val triggerSeq = AtomicLong(0L)
-    private val completedTriggerSeq = AtomicLong(0L)
-    private val syncActive = AtomicBoolean(false)
-    private val refreshRetryScheduled = AtomicBoolean(false)
-    private var lastOrphanAssetWalkGenerationId: String? = null
-
-    override fun trigger() {
-        triggerSeq.incrementAndGet()
-        triggerChannel.trySend(Unit)
-    }
-
-    fun hasPendingOrActiveWork(): Boolean =
-        syncActive.get() || completedTriggerSeq.get() < triggerSeq.get()
-
-    override suspend fun run() {
-        while (true) {
-            triggerChannel.receive()
-            val observedTriggerSeq = triggerSeq.get()
-            syncActive.set(true)
-            try {
-                syncOnce()
-                markTriggerCompleted(observedTriggerSeq)
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: AndroidSyncStaleGenerationException) {
-                val retryEnabled = refreshRetryEnabledProvider()
-                logger.info(
-                    event = "android_sync_generation_stale_retry",
-                    fields = mapOf(
-                        "generation_id" to e.generationId,
-                        "retry_scheduled" to retryEnabled.toString(),
-                    ),
-                )
-                markTriggerCompleted(observedTriggerSeq)
-                if (retryEnabled) scheduleRefreshRetry()
-            } catch (e: Exception) {
-                logger.error(
-                    event = "android_sync_unhandled",
-                    fields = mapOf("error" to (e.message ?: e::class.simpleName.orEmpty())),
-                    throwable = e,
-                )
-                markTriggerCompleted(observedTriggerSeq)
-            } finally {
-                syncActive.set(false)
-            }
-        }
-    }
-
-    private fun markTriggerCompleted(triggerSeqValue: Long) {
-        completedTriggerSeq.set(maxOf(completedTriggerSeq.get(), triggerSeqValue))
-    }
-
-    suspend fun syncOnce() {
-        val startedAt = nowMsProvider()
-        foregroundPromoter.startActiveDrain()
-        try {
-            logger.info(
-                event = "android_sync_generation_request",
-                fields = mapOf("reachability" to reachability.state.value::class.simpleName.orEmpty()),
-            )
-            val retention = retentionProvider()
-            val latest = withMetadataRetry("latest_generation") {
-                api.latestGeneration(retention)
-            }
-            applyServerPreferences(latest.dearrowMode)
-            val generation = latest.generation
-            dao.upsertGeneration(generation.toEntity())
-            logger.info(
-                event = "android_sync_generation_start",
-                fields = mapOf(
-                    "generation_id" to generation.generation_id,
-                    "items" to generation.item_count,
-                    "assets" to generation.asset_count,
-                    "ready_assets" to generation.ready_asset_count,
-                    "server_missing_assets" to generation.server_missing_asset_count,
-                ),
-            )
-
-            importAssets(generation.generation_id)
-            healthReporter.report(generation.generation_id, retention)
-            coroutineScope {
-                val itemImport = async(Dispatchers.IO) { importItems(generation.generation_id) }
-                val assetDrain = async(Dispatchers.IO) { assetDrainer.drain(generation.generation_id, retention) }
-                itemImport.await()
-                assetDrain.await()
-            }
-            healthReporter.report(generation.generation_id, retention)
-            val contentPruned = pruneContentOutsideGenerationMeasured(generation.generation_id)
-            if (contentPruned.hasDeletes()) {
-                logger.info(
-                    event = "android_sync_content_pruned",
-                    fields = mapOf(
-                        "generation_id" to generation.generation_id,
-                        "videos" to contentPruned.videos,
-                        "feed_items" to contentPruned.feedItems,
-                        "channels" to contentPruned.channels,
-                        "channel_profiles" to contentPruned.channelProfiles,
-                        "legacy_assets" to contentPruned.legacyAssets,
-                        "side_rows" to contentPruned.sideRows,
-                    ),
-                )
-            }
-            val prunedGenerations = pruneGenerationsExceptMeasured(generation.generation_id)
-            if (prunedGenerations.hasDeletes()) {
-                logger.info(
-                    event = "android_sync_generations_pruned",
-                    fields = mapOf(
-                        "generation_id" to generation.generation_id,
-                        "items" to prunedGenerations.items,
-                        "assets" to prunedGenerations.assets,
-                        "generations" to prunedGenerations.generations,
-                    ),
-                )
-            }
-            runOrSkipOrphanAssetFileCleanup(
-                generationId = generation.generation_id,
-                contentPruned = contentPruned,
-                generationPruned = prunedGenerations,
-            )
-
-            logger.info(
-                event = "android_sync_generation_done",
-                fields = mapOf(
-                    "generation_id" to generation.generation_id,
-                    "duration_ms" to (nowMsProvider() - startedAt),
-                ),
-            )
-            if (latest.refreshing) {
-                val retryEnabled = refreshRetryEnabledProvider()
-                logger.info(
-                    event = "android_sync_generation_refresh_pending",
-                    fields = mapOf(
-                        "generation_id" to generation.generation_id,
-                        "retry_scheduled" to retryEnabled.toString(),
-                    ),
-                )
-                if (retryEnabled) scheduleRefreshRetry()
-            }
-        } finally {
-            foregroundPromoter.finishActiveDrain()
-        }
-    }
-
-    private suspend fun applyServerPreferences(dearrowMode: String?) {
-        if (dearrowMode == null) return
-        prefs.putString(
-            PreferencesRepo.Keys.DEARROW_MODE,
-            PreferencesRepo.Defaults.normalizeDearrowMode(dearrowMode),
+) {
+    private val healthReporter =
+        AndroidSyncHealthReporter(
+            dao = dao,
+            api = api,
+            reachability = reachability,
+            logger = logger,
+            nowMsProvider = serverNowMsProvider,
         )
+    private val assetDrainer =
+        AndroidSyncAssetDrainer(
+            dao = dao,
+            client = client,
+            baseUrlProvider = baseUrlProvider,
+            reachability = reachability,
+            foregroundPromoter = foregroundPromoter,
+            mediaRoot = mediaRoot,
+            logger = logger,
+            nowMsProvider = serverNowMsProvider,
+        )
+
+    suspend fun syncOnce(protectionChanged: Boolean = false) {
+        val retention = retentionProvider().validated()
+        syncMetadata(retention)
+        prune(retention, protectionChanged)
+
+        var state = requireChangesState()
+        healthReporter.report(state.cursor, retention)
+        try {
+            assetDrainer.drain()
+        } catch (e: AndroidSyncAssetChangedException) {
+            syncMetadata(retention)
+            prune(retention, sweepHeadlessContent = false)
+            state = requireChangesState()
+            assetDrainer.drain()
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            healthReporter.report(state.cursor, retention)
+            throw e
+        }
+        healthReporter.report(requireChangesState().cursor, retention)
     }
 
-    private fun scheduleRefreshRetry() {
-        if (!refreshRetryScheduled.compareAndSet(false, true)) return
-        scope.launch {
-            try {
-                delay(refreshRetryDelayMs)
-                trigger()
-            } finally {
-                refreshRetryScheduled.set(false)
-            }
-        }
+    suspend fun prune() {
+        prune(retentionProvider().validated(), sweepHeadlessContent = true)
     }
 
-    private suspend fun importItems(generationId: String) {
-        if (dao.countItemsImportCompleteForImporter(generationId, ANDROID_SYNC_ITEM_IMPORTER_VERSION) > 0) {
-            logger.info(
-                event = "android_sync_items_import_skipped",
-                fields = mapOf(
-                    "generation_id" to generationId,
-                    "reason" to "already_imported",
-                    "importer_version" to ANDROID_SYNC_ITEM_IMPORTER_VERSION,
-                ),
-            )
-            return
-        }
-        val ingest = BundleIngest(db, nowMsProvider)
-        val guard = PreserveLocalGuard(outboxDao)
-        dao.markItemsImportStarted(generationId, ANDROID_SYNC_ITEM_IMPORTER_VERSION)
-        val resumeAfter = dao.importedItemSeq(generationId).takeIf { it > 0L }
-        var after: String? = resumeAfter?.toString()
-        var total = resumeAfter?.toInt() ?: 0
-        if (resumeAfter != null) {
-            logger.info(
-                event = "android_sync_items_resume",
-                fields = mapOf("generation_id" to generationId, "after" to resumeAfter),
-            )
-        }
+    suspend fun requestBootstrap() {
+        dao.syncState()?.let { dao.upsertSyncState(it.copy(bootstrapRequired = true)) }
+    }
+
+    private suspend fun syncMetadata(retention: AndroidSyncRetentionRequest) {
         while (true) {
-            val measuredPage = withMetadataRetry("items", "generation_id" to generationId, "after" to (after ?: "")) {
-                api.measuredItems(generationId, after)
+            var state = dao.syncState()
+            if (state == null) {
+                beginBootstrap(retention)
+                continue
             }
-            val page = measuredPage.value
-            var ledgerWriteMs = 0L
-            var ledgerRowsWritten = 0
-            var changedItemQueryMs = 0L
-            var changedCount = 0
-            var skippedUnchanged = 0
-            var ingestTransactions = 0
-            var ingestOk = 0
-            var ingestUnknown = 0
-            var ingestParseFailures = 0
-            var ingestTransactionMs = 0L
-            if (page.items.isNotEmpty()) {
-                val itemRows = page.items.map { it.toEntity(generationId) }
-                val ledgerWriteStartedAt = System.nanoTime()
-                ledgerRowsWritten = dao.upsertChangedItems(itemRows)
-                ledgerWriteMs = elapsedMsSince(ledgerWriteStartedAt)
-                val changedQueryStartedAt = System.nanoTime()
-                val changedSeqs = dao.changedItemSeqsFromPreviousImportedGenerations(
-                    generationId = generationId,
-                    afterSeq = after?.toLongOrNull() ?: 0L,
-                    toSeq = page.items.maxOf { it.seq },
-                    importerVersion = ANDROID_SYNC_ITEM_IMPORTER_VERSION,
-                ).toSet()
-                changedItemQueryMs = elapsedMsSince(changedQueryStartedAt)
-                changedCount = changedSeqs.size
-                skippedUnchanged = page.items.size - changedSeqs.size
-                val changedItems = page.items.filter { item -> item.seq in changedSeqs }
-                if (changedItems.isNotEmpty()) {
-                    val ingestStartedAt = System.nanoTime()
-                    val results = ingest.ingestBatch(changedItems.map { it.payload }, guard)
-                    ingestTransactionMs += elapsedMsSince(ingestStartedAt)
-                    ingestTransactions = 1
-                    for ((item, result) in changedItems.zip(results)) {
-                        if (result is IngestResult.ParseFailure) {
-                            ingestParseFailures++
-                            logger.info(
-                                event = "android_sync_item_parse_failed",
-                                fields = mapOf(
-                                    "generation_id" to generationId,
-                                    "kind" to item.item_kind,
-                                    "item_id" to item.item_id,
-                                    "error" to (result.cause.message ?: result.cause::class.simpleName.orEmpty()),
-                                ),
-                            )
-                        } else if (result is IngestResult.UnknownKind) {
-                            ingestUnknown++
-                        } else {
-                            ingestOk++
+            try {
+                when (state.mode) {
+                    MODE_BOOTSTRAP -> runPages(state, state.retention(), bootstrap = true)
+                    MODE_CHANGES -> {
+                        runPages(state, retention, bootstrap = false)
+                        state = requireNotNull(dao.syncState())
+                        if (state.bootstrapRequired) {
+                            beginBootstrap(retention)
+                            continue
                         }
+                        return
+                    }
+                    else -> error("unknown Android sync mode: ${state.mode}")
+                }
+            } catch (e: AndroidSyncHttpException) {
+                if (!e.isSyncResetRequired) throw e
+                beginBootstrap(retention)
+            }
+        }
+    }
+
+    private suspend fun beginBootstrap(retention: AndroidSyncRetentionRequest) {
+        db.withTransaction {
+            dao.markHeadsUnseen()
+            dao.upsertSyncState(
+                AndroidSyncStateEntity(
+                    mode = MODE_BOOTSTRAP,
+                    cursor = "",
+                    feedDays = retention.feedDays,
+                    youtubeDays = retention.youtubeDays,
+                    momentsDays = retention.momentsDays,
+                    storyHours = retention.storyHours,
+                )
+            )
+        }
+    }
+
+    private suspend fun runPages(
+        initial: AndroidSyncStateEntity,
+        retention: AndroidSyncRetentionRequest,
+        bootstrap: Boolean,
+    ) {
+        var state = initial
+        while (true) {
+            val page =
+                withMetadataRetry(if (bootstrap) "bootstrap" else "changes") {
+                    if (bootstrap) {
+                        api.bootstrap(retention, state.cursor.ifEmpty { null })
+                    } else {
+                        api.changes(retention, state.cursor)
                     }
                 }
-                if (skippedUnchanged > 0) {
-                    logger.info(
-                        event = "android_sync_items_unchanged_skipped",
-                        fields = mapOf(
-                            "generation_id" to generationId,
-                            "after" to (after ?: ""),
-                            "skipped" to skippedUnchanged,
-                            "changed" to changedCount,
-                        ),
-                    )
-                }
-                if (ingestParseFailures > 0) {
-                    throw IllegalStateException(
-                        "Android sync item import failed for generation $generationId; preserving item marker",
-                    )
-                }
-                dao.markItemsImportPageComplete(
-                    generationId = generationId,
-                    importedSeq = page.items.maxOf { it.seq },
-                    importerVersion = ANDROID_SYNC_ITEM_IMPORTER_VERSION,
-                )
-                total += page.items.size
-            }
-            logger.info(
-                event = "android_sync_items_page",
-                fields = mapOf(
-                    "generation_id" to generationId,
-                    "after" to (after ?: ""),
-                    "count" to page.items.size,
-                    "total" to total,
-                    "page_bytes" to measuredPage.byteCount,
-                    "decode_ms" to measuredPage.decodeDurationMs,
-                    "ledger_write_ms" to ledgerWriteMs,
-                    "ledger_rows_written" to ledgerRowsWritten,
-                    "changed_item_query_ms" to changedItemQueryMs,
-                    "changed" to changedCount,
-                    "skipped" to skippedUnchanged,
-                    "ingest_transactions" to ingestTransactions,
-                    "ingest_ok" to ingestOk,
-                    "ingest_unknown" to ingestUnknown,
-                    "ingest_parse_failed" to ingestParseFailures,
-                    "ingest_transaction_ms" to ingestTransactionMs,
-                    "next" to page.next,
-                    "end" to page.end_of_stream,
-                ),
-            )
-            if (page.end_of_stream) break
-            if (page.next.isBlank() || page.next == after) {
-                logger.info(
-                    event = "android_sync_items_marker_stalled",
-                    fields = mapOf("generation_id" to generationId, "next" to page.next),
-                )
-                throw IllegalStateException("Android sync items marker stalled for generation $generationId")
-            }
-            after = page.next
-        }
-        dao.markItemsImported(generationId, nowMsProvider(), ANDROID_SYNC_ITEM_IMPORTER_VERSION)
-        logger.info(
-            event = "android_sync_items_imported",
-            fields = mapOf(
-                "generation_id" to generationId,
-                "count" to total,
-                "importer_version" to ANDROID_SYNC_ITEM_IMPORTER_VERSION,
-            ),
-        )
-    }
-
-    private suspend fun pruneGenerationsExceptMeasured(generationId: String): AndroidSyncGenerationPruneCounts =
-        db.withTransaction {
-            val items = timedPruneStep("delete_items_for_other_generations") {
-                dao.deleteItemsForOtherGenerations(generationId)
-            }
-            val assets = timedPruneStep("delete_assets_for_other_generations") {
-                dao.deleteAssetsForOtherGenerations(generationId)
-            }
-            val generations = timedPruneStep("delete_other_generations") {
-                dao.deleteOtherGenerations(generationId)
-            }
-            AndroidSyncGenerationPruneCounts(items = items, assets = assets, generations = generations)
-        }
-
-    private suspend fun runOrSkipOrphanAssetFileCleanup(
-        generationId: String,
-        contentPruned: AndroidSyncContentPruneCounts,
-        generationPruned: AndroidSyncGenerationPruneCounts,
-    ) {
-        val firstWalkForGeneration = lastOrphanAssetWalkGenerationId != generationId
-        if (!firstWalkForGeneration && !contentPruned.hasDeletes() && !generationPruned.hasDeletes()) {
-            PerfProbe.log(event = "android_sync_orphan_asset_files_walk_skipped") {
-                mapOf("generation_id" to generationId, "reason" to "unchanged_generation")
-            }
-            return
-        }
-
-        val orphanAssetFiles = assetDrainer.deleteUnreferencedAssetFiles(
-            dao.verifiedLocalPaths(generationId),
-        )
-        lastOrphanAssetWalkGenerationId = generationId
-        PerfProbe.log(
-            event = "android_sync_orphan_asset_files_walk",
-        ) {
-            mapOf(
-                "generation_id" to generationId,
-                "files_walked" to orphanAssetFiles.walkedFiles,
-                "files_deleted" to orphanAssetFiles.files,
-                "bytes_deleted" to orphanAssetFiles.bytes,
-                "duration_ms" to orphanAssetFiles.walkDurationMs,
-                "reason" to when {
-                    firstWalkForGeneration -> "first_generation_pass"
-                    contentPruned.hasDeletes() -> "content_pruned"
-                    else -> "generation_pruned"
-                },
-            )
-        }
-        if (orphanAssetFiles.hasDeletes()) {
-            logger.info(
-                event = "android_sync_orphan_asset_files_pruned",
-                fields = mapOf(
-                    "generation_id" to generationId,
-                    "files" to orphanAssetFiles.files,
-                    "bytes" to orphanAssetFiles.bytes,
-                    "walked_files" to orphanAssetFiles.walkedFiles,
-                    "walk_duration_ms" to orphanAssetFiles.walkDurationMs,
-                ),
-            )
+            page.validate(state.cursor)
+            deleteFiles(applyPage(state, page, retention, bootstrap))
+            if (page.end_of_stream) return
+            state = requireNotNull(dao.syncState())
         }
     }
 
-    private suspend fun pruneContentOutsideGenerationMeasured(generationId: String): AndroidSyncContentPruneCounts =
+    private suspend fun applyPage(
+        state: AndroidSyncStateEntity,
+        page: AndroidSyncPageResponse,
+        retention: AndroidSyncRetentionRequest,
+        bootstrap: Boolean,
+    ): List<AndroidSyncAssetEntity> =
         db.withTransaction {
-            val videos = timedPruneStep("delete_videos_outside_generation") {
-                dao.deleteVideosOutsideGeneration(generationId)
-            }
-            val feedItems = timedPruneStep("delete_feed_items_outside_generation") {
-                dao.deleteFeedItemsOutsideGeneration(generationId)
-            }
-            val sideRows = timedPruneStep("delete_video_comments_without_video") {
-                dao.deleteVideoCommentsWithoutVideo()
-            } + timedPruneStep("delete_video_repost_sources_without_video") {
-                dao.deleteVideoRepostSourcesWithoutVideo()
-            } + timedPruneStep("delete_sponsorblock_segments_without_video") {
-                dao.deleteSponsorBlockSegmentsWithoutVideo()
-            } + timedPruneStep("delete_sponsorblock_checks_without_video") {
-                dao.deleteSponsorBlockChecksWithoutVideo()
-            } + timedPruneStep("delete_watch_history_without_video") {
-                dao.deleteWatchHistoryWithoutVideo()
-            } + timedPruneStep("delete_moment_views_without_video") {
-                dao.deleteMomentViewsWithoutVideo()
-            } + timedPruneStep("delete_feed_seen_without_feed_item") {
-                dao.deleteFeedSeenWithoutFeedItem()
-            } + timedPruneStep("delete_feed_rank_without_feed_item") {
-                dao.deleteFeedRankWithoutFeedItem()
-            } + timedPruneStep("delete_feed_thread_context_without_feed_item") {
-                dao.deleteFeedThreadContextWithoutFeedItem()
-            } + timedPruneStep("delete_retweet_sources_without_feed_item") {
-                dao.deleteRetweetSourcesWithoutFeedItem()
-            } + timedPruneStep("delete_channel_follows_outside_generation") {
-                dao.deleteChannelFollowsOutsideGeneration(generationId)
-            } + timedPruneStep("delete_channel_stars_outside_generation") {
-                dao.deleteChannelStarsOutsideGeneration(generationId)
-            } + timedPruneStep("delete_channel_settings_outside_generation") {
-                dao.deleteChannelSettingsOutsideGeneration(generationId)
-            }
-            val channels = timedPruneStep("delete_channels_outside_generation") {
-                dao.deleteChannelsOutsideGeneration(generationId)
-            }
-            val channelProfiles = timedPruneStep("delete_channel_profiles_without_channel") {
-                dao.deleteChannelProfilesWithoutChannel(generationId)
-            }
-            val legacyAssets = timedPruneStep("delete_legacy_assets_outside_generation") {
-                dao.deleteLegacyAssetsOutsideGeneration(generationId)
-            }
-            AndroidSyncContentPruneCounts(
-                videos = videos,
-                feedItems = feedItems,
-                channels = channels,
-                channelProfiles = channelProfiles,
-                legacyAssets = legacyAssets,
-                sideRows = sideRows,
-            )
-        }
+            val deletedAssets = mutableListOf<AndroidSyncAssetEntity>()
+            val overlay = PendingMutationOverlay.capture(db.outboxDao().pendingRows())
 
-    private suspend fun timedPruneStep(
-        step: String,
-        block: suspend () -> Int,
-    ): Int {
-        if (!PerfProbe.enabled()) return block()
-        val startedAt = android.os.SystemClock.elapsedRealtimeNanos()
-        var rows: Int? = null
-        val traceName = "android_sync_prune_$step"
-        val cookie = PerfProbe.beginAsync(traceName)
-        return try {
-            block().also { rows = it }
-        } finally {
-            PerfProbe.endAsync(traceName, cookie)
-            PerfProbe.log(
-                event = "android_sync_prune_step",
+            page.changes.filter(AndroidSyncChangeDto::isThinState).forEach { change ->
+                applyThinState(change, deletedAssets)
+            }
+            overlay.restore(db)
+
+            val protectedContent = dao.protectedContentIds().toHashSet()
+            page.changes.filter(AndroidSyncChangeDto::isPrimaryContent).forEach { change ->
+                applyPrimary(change, protectedContent, deletedAssets)
+            }
+
+            page.changes.filter { it.owner_kind == "retweet_sources" }.forEach { change ->
+                applySecondary(change, emptySet(), emptySet(), deletedAssets)
+            }
+
+            val protectedChannels = dao.protectedChannelIds().toHashSet()
+            page.changes
+                .filterNot {
+                    it.isThinState() || it.isPrimaryContent() ||
+                        it.owner_kind == "retweet_sources" || it.owner_kind == "asset"
+                }
+                .forEach { change ->
+                    applySecondary(change, protectedChannels, emptySet(), deletedAssets)
+                }
+
+            val retainedAssetOwners = dao.retainedAssetOwnerIds().toHashSet()
+            page.changes.filter { it.owner_kind == "asset" }.forEach { change ->
+                applySecondary(change, protectedChannels, retainedAssetOwners, deletedAssets)
+            }
+
+            if (bootstrap && page.end_of_stream) {
+                sweepBootstrap(deletedAssets)
+                sweepHeadlessThinState()
+                overlay.restore(db)
+                cleanupOrphans(deletedAssets, sweepHeadlessContent = true)
+            } else if (
+                page.changes.any { it.operation == OP_DELETE || it.replacesDependencies() }
             ) {
-                mapOf(
-                    "step" to step,
-                    "rows" to (rows ?: "failed"),
-                    "duration_ms" to PerfProbe.elapsedMsSince(startedAt),
+                cleanupOrphans(
+                    deletedAssets,
+                    sweepHeadlessContent = page.changes.any(AndroidSyncChangeDto::releasesProtection),
                 )
             }
+
+            val selectionChanged =
+                !bootstrap && page.changes.any(AndroidSyncChangeDto::changesSelection)
+            val nextState =
+                if (bootstrap && page.end_of_stream) {
+                    state.copy(
+                        mode = MODE_CHANGES,
+                        cursor = page.next_cursor,
+                        bootstrapRequired = false,
+                    )
+                } else {
+                    state.copy(
+                        cursor = page.next_cursor,
+                        feedDays = retention.feedDays,
+                        youtubeDays = retention.youtubeDays,
+                        momentsDays = retention.momentsDays,
+                        storyHours = retention.storyHours,
+                        bootstrapRequired = state.bootstrapRequired || selectionChanged,
+                    )
+                }
+            if (nextState != state) dao.upsertSyncState(nextState)
+            deletedAssets
+        }
+
+    private suspend fun sweepBootstrap(deletedAssets: MutableList<AndroidSyncAssetEntity>) {
+        val protectedContent = dao.protectedContentIds().toHashSet()
+        val protectedChannels = dao.protectedChannelIds().toHashSet()
+        val retainedAssetOwners = dao.retainedAssetOwnerIds().toHashSet()
+        dao.unseenHeads().forEach { head ->
+            deleteOwner(
+                ownerKind = head.ownerKind,
+                ownerId = head.ownerId,
+                protectedContent = protectedContent,
+                protectedChannels = protectedChannels,
+                retainedAssetOwners = retainedAssetOwners,
+                deletedAssets = deletedAssets,
+            )
         }
     }
 
-    private suspend fun importAssets(generationId: String) {
-        if (dao.countAssetsImportCompleteForCurrentContract(generationId) > 0) {
-            logger.info(
-                event = "android_sync_assets_import_skipped",
-                fields = mapOf("generation_id" to generationId, "reason" to "already_imported"),
+    private fun sweepHeadlessThinState() {
+        val sqlite = db.openHelper.writableDatabase
+        MIRRORED_THIN_STATE.forEach { owner ->
+            sqlite.execSQL(
+                """
+                DELETE FROM ${owner.table}
+                WHERE ${owner.predicate}
+                  AND NOT EXISTS (
+                      SELECT 1 FROM android_sync_heads h
+                      WHERE h.owner_kind = '${owner.kind}'
+                        AND h.owner_id = ${owner.idExpression}
+                  )
+                """.trimIndent()
+            )
+        }
+    }
+
+    private suspend fun applyThinState(
+        change: AndroidSyncChangeDto,
+        deletedAssets: MutableList<AndroidSyncAssetEntity>,
+    ) {
+        if (change.operation == OP_DELETE) {
+            deleteOwner(change.owner_kind, change.owner_id, deletedAssets = deletedAssets)
+            return
+        }
+
+        when (change.owner_kind) {
+            "feed_like" -> db.feedLikeDao().upsert(AndroidSyncChangeDecoder.feedLike(change))
+            "bookmark" -> db.bookmarkDao().upsert(AndroidSyncChangeDecoder.bookmark(change))
+            "bookmark_category" ->
+                db.bookmarkCategoryDao().upsert(AndroidSyncChangeDecoder.bookmarkCategory(change))
+            "feed_seen" -> db.feedSeenDao().upsert(AndroidSyncChangeDecoder.feedSeen(change))
+            "moment_view" -> db.momentViewDao().upsert(AndroidSyncChangeDecoder.momentView(change))
+            "watch_history" ->
+                db.watchHistoryDao().upsert(AndroidSyncChangeDecoder.watchHistory(change))
+            "muted_channel" -> {
+                db.mutedChannelDao().upsert(AndroidSyncChangeDecoder.mutedChannel(change))
+            }
+            "channel_follow" -> {
+                db.channelFollowDao().upsert(AndroidSyncChangeDecoder.channelFollow(change))
+            }
+            "channel_star" -> {
+                db.channelStarDao().upsert(AndroidSyncChangeDecoder.channelStar(change))
+            }
+            "channel_setting" -> {
+                db.channelSettingDao().upsert(AndroidSyncChangeDecoder.channelSetting(change))
+            }
+            "moments_cursor" ->
+                db.momentsCursorDao().upsert(AndroidSyncChangeDecoder.momentsCursor(change))
+            "setting" -> AndroidSyncChangeDecoder.setting(change)
+            else -> error("unknown thin Android sync owner: ${change.owner_kind}")
+        }
+        dao.upsertHead(change.toHead())
+    }
+
+    private suspend fun applyPrimary(
+        change: AndroidSyncChangeDto,
+        protectedContent: Set<String>,
+        deletedAssets: MutableList<AndroidSyncAssetEntity>,
+    ) {
+        if (change.operation == OP_DELETE) {
+            deleteOwner(
+                change.owner_kind,
+                change.owner_id,
+                protectedContent = protectedContent,
+                deletedAssets = deletedAssets,
             )
             return
         }
-        val refreshCompleteImport = dao.countAssetsImportComplete(generationId) > 0
-        val resumeAfter = if (refreshCompleteImport) null else dao.maxImportedAssetSeq(generationId).takeIf { it > 0L }
-        var after: String? = resumeAfter?.toString()
-        var total = resumeAfter?.toInt() ?: 0
-        if (refreshCompleteImport) {
-            logger.info(
-                event = "android_sync_assets_contract_refresh",
-                fields = mapOf("generation_id" to generationId),
-            )
+        when (change.owner_kind) {
+            "feed" -> applyFeed(AndroidSyncChangeDecoder.feed(change))
+            "video" -> applyVideo(AndroidSyncChangeDecoder.video(change))
         }
-        if (resumeAfter != null) {
-            logger.info(
-                event = "android_sync_assets_resume",
-                fields = mapOf("generation_id" to generationId, "after" to resumeAfter),
-            )
-        }
-        while (true) {
-            val page = withMetadataRetry("assets", "generation_id" to generationId, "after" to (after ?: "")) {
-                api.assets(generationId, after)
-            }
-            if (page.assets.isNotEmpty()) {
-                dao.importAssets(page.assets.map { it.toEntity(generationId) }, nowMsProvider())
-                total += page.assets.size
-            }
-            logger.info(
-                event = "android_sync_assets_page",
-                fields = mapOf(
-                    "generation_id" to generationId,
-                    "after" to (after ?: ""),
-                    "count" to page.assets.size,
-                    "total" to total,
-                    "next" to page.next,
-                    "end" to page.end_of_stream,
-                ),
-            )
-            if (page.end_of_stream) break
-            if (page.next.isBlank() || page.next == after) {
-                logger.info(
-                    event = "android_sync_assets_marker_stalled",
-                    fields = mapOf("generation_id" to generationId, "next" to page.next),
-                )
-                throw IllegalStateException("Android sync assets marker stalled for generation $generationId")
-            }
-            after = page.next
-        }
-        val adopted = dao.adoptVerifiedAssetsFromPreviousGenerations(generationId, nowMsProvider())
-        if (adopted > 0) {
-            logger.info(
-                event = "android_sync_assets_adopted_verified",
-                fields = mapOf("generation_id" to generationId, "count" to adopted),
-            )
-        }
-        dao.markAssetsImported(generationId, nowMsProvider())
-        logger.info(
-            event = "android_sync_assets_imported",
-            fields = mapOf("generation_id" to generationId, "count" to total),
-        )
+        dao.upsertHead(change.toHead())
     }
 
-    private suspend fun <T> withMetadataRetry(
-        label: String,
-        vararg fields: Pair<String, Any?>,
-        block: suspend () -> T,
-    ): T {
+    private suspend fun applySecondary(
+        change: AndroidSyncChangeDto,
+        protectedChannels: Set<String>,
+        retainedAssetOwners: Set<String>,
+        deletedAssets: MutableList<AndroidSyncAssetEntity>,
+    ) {
+        if (change.operation == OP_DELETE) {
+            deleteOwner(
+                change.owner_kind,
+                change.owner_id,
+                protectedChannels = protectedChannels,
+                retainedAssetOwners = retainedAssetOwners,
+                deletedAssets = deletedAssets,
+            )
+            return
+        }
+
+        val accepted =
+            when (change.owner_kind) {
+                "channel" -> {
+                    if (change.owner_id !in protectedChannels) false
+                    else {
+                        applyChannelBundle(AndroidSyncChangeDecoder.channel(change))
+                        true
+                    }
+                }
+                "retweet_sources" -> {
+                    if (!dao.hasContentHash(change.owner_id)) false
+                    else {
+                        replaceRetweetSources(change.owner_id, AndroidSyncChangeDecoder.retweetSources(change))
+                        true
+                    }
+                }
+                "feed_rank" -> {
+                    if (!dao.hasFeed(change.owner_id)) false
+                    else {
+                        db.feedRankDao().upsert(listOf(AndroidSyncChangeDecoder.feedRank(change)))
+                        true
+                    }
+                }
+                "asset" -> {
+                    val asset = AndroidSyncChangeDecoder.asset(change)
+                    if (asset.owner_id !in retainedAssetOwners) false
+                    else {
+                        upsertAsset(asset, dao.asset(asset.asset_id))
+                        true
+                    }
+                }
+                else -> error("unknown Android sync owner: ${change.owner_kind}")
+            }
+        if (accepted) dao.upsertHead(change.toHead())
+    }
+
+    private suspend fun applyFeed(row: com.screwy.igloo.data.entity.FeedItemEntity) {
+        db.feedItemDao().upsert(row)
+    }
+
+    private suspend fun applyVideo(decoded: AndroidVideoUpsert) {
+        db.videoDao().upsert(decoded.item)
+        val id = decoded.item.videoId
+        db.videoCommentDao().deleteForVideo(id)
+        db.videoRepostSourceDao().deleteForVideo(id)
+        db.sponsorBlockSegmentDao().deleteForVideo(id)
+        db.sponsorBlockCheckedDao().deleteForVideo(id)
+        if (decoded.comments.isNotEmpty()) db.videoCommentDao().upsert(decoded.comments)
+        if (decoded.repostSources.isNotEmpty()) db.videoRepostSourceDao().upsert(decoded.repostSources)
+        if (decoded.sponsorBlockSegments.isNotEmpty())
+            db.sponsorBlockSegmentDao().upsert(decoded.sponsorBlockSegments)
+        decoded.sponsorBlockChecked?.let { db.sponsorBlockCheckedDao().upsert(it) }
+    }
+
+    private suspend fun applyChannelBundle(decoded: AndroidChannelUpsert) {
+        decoded.channel?.let { db.channelDao().upsert(it) }
+        if (decoded.profile == null) {
+            decoded.channel?.let { db.channelProfileDao().delete(it.channelId) }
+        } else {
+            db.channelProfileDao().upsert(decoded.profile)
+        }
+    }
+
+    private suspend fun replaceRetweetSources(
+        contentHash: String,
+        rows: List<com.screwy.igloo.data.entity.RetweetSourceEntity>,
+    ) {
+        db.retweetSourceDao().deleteForContentHash(contentHash)
+        if (rows.isNotEmpty()) db.retweetSourceDao().upsert(rows)
+    }
+
+    private suspend fun upsertAsset(
+        asset: AndroidSyncAssetDto,
+        existing: AndroidSyncAssetEntity?,
+    ) {
+        asset.validate()
+        dao.upsertAsset(asset.toEntity(existing))
+    }
+
+    private suspend fun deleteOwner(
+        ownerKind: String,
+        ownerId: String,
+        protectedContent: Set<String> = emptySet(),
+        protectedChannels: Set<String> = emptySet(),
+        retainedAssetOwners: Set<String> = emptySet(),
+        deletedAssets: MutableList<AndroidSyncAssetEntity>,
+    ) {
+        when (ownerKind) {
+            "feed_like" -> db.feedLikeDao().delete(ownerId)
+            "bookmark" -> db.bookmarkDao().delete(ownerId)
+            "bookmark_category" ->
+                db.bookmarkCategoryDao().delete(ownerId.toLongOrNull() ?: error("invalid bookmark category id"))
+            "feed_seen" -> db.feedSeenDao().delete(ownerId)
+            "moment_view" -> db.momentViewDao().delete(ownerId)
+            "watch_history" -> db.watchHistoryDao().delete(ownerId)
+            "muted_channel" -> db.mutedChannelDao().delete(ownerId)
+            "channel_follow" -> db.channelFollowDao().delete(ownerId)
+            "channel_star" -> db.channelStarDao().delete(ownerId)
+            "channel_setting" -> db.channelSettingDao().delete(ownerId)
+            "moments_cursor" -> db.momentsCursorDao().delete(ownerId)
+            "setting" -> Unit
+            "feed" -> if (ownerId !in protectedContent) db.feedItemDao().deleteByIds(listOf(ownerId))
+            "video" -> if (ownerId !in protectedContent) db.videoDao().deleteByIds(listOf(ownerId))
+            "channel" -> if (ownerId !in protectedChannels) {
+                db.channelDao().deleteByIds(listOf(ownerId))
+                db.channelProfileDao().delete(ownerId)
+            }
+            "retweet_sources" -> db.retweetSourceDao().deleteForContentHash(ownerId)
+            "feed_rank" -> db.feedRankDao().deleteForTweets(listOf(ownerId))
+            "asset" -> {
+                val row = dao.asset(ownerId)
+                if (row == null || row.localPath == null || row.ownerId !in retainedAssetOwners) {
+                    if (row != null) deletedAssets += row
+                    dao.deleteAsset(ownerId)
+                }
+            }
+            else -> error("unknown Android sync owner: $ownerKind")
+        }
+        dao.deleteHead(ownerKind, ownerId)
+    }
+
+    private suspend fun prune(
+        retention: AndroidSyncRetentionRequest,
+        sweepHeadlessContent: Boolean,
+    ) {
+        val deleted =
+            db.withTransaction {
+                val now = serverNowMsProvider()
+                val expired =
+                    dao.expiredHeads(
+                        retention.feedDays,
+                        now - retention.feedDays.daysMs(),
+                        retention.youtubeDays,
+                        now - retention.youtubeDays.daysMs(),
+                        retention.momentsDays,
+                        now - retention.momentsDays.daysMs(),
+                        retention.storyHours,
+                        now - retention.storyHours.hoursMs(),
+                    )
+                val deletedAssets = mutableListOf<AndroidSyncAssetEntity>()
+
+                if (expired.isNotEmpty()) {
+                    val protectedContent = dao.protectedContentIds().toHashSet()
+                    val protectedChannels = dao.protectedChannelIds().toHashSet()
+                    val retainedAssetOwners = dao.retainedAssetOwnerIds().toHashSet()
+                    expired.forEach { head ->
+                        deleteOwner(
+                            ownerKind = head.ownerKind,
+                            ownerId = head.ownerId,
+                            protectedContent = protectedContent,
+                            protectedChannels = protectedChannels,
+                            retainedAssetOwners = retainedAssetOwners,
+                            deletedAssets = deletedAssets,
+                        )
+                    }
+                }
+                if (expired.isNotEmpty() || sweepHeadlessContent) {
+                    cleanupOrphans(deletedAssets, sweepHeadlessContent)
+                }
+                dao.syncState()
+                    ?.takeIf {
+                        it.mode == MODE_CHANGES &&
+                            (it.feedDays != retention.feedDays ||
+                                it.youtubeDays != retention.youtubeDays ||
+                                it.momentsDays != retention.momentsDays ||
+                                it.storyHours != retention.storyHours)
+                    }
+                    ?.let {
+                    dao.upsertSyncState(
+                        it.copy(
+                            feedDays = retention.feedDays,
+                            youtubeDays = retention.youtubeDays,
+                            momentsDays = retention.momentsDays,
+                            storyHours = retention.storyHours,
+                        )
+                    )
+                }
+                deletedAssets
+            }
+        deleteFiles(deleted)
+    }
+
+    private suspend fun cleanupOrphans(
+        deletedAssets: MutableList<AndroidSyncAssetEntity>,
+        sweepHeadlessContent: Boolean,
+    ) {
+        if (sweepHeadlessContent) {
+            val protectedContent = dao.protectedContentIds().toHashSet()
+            deleteHeadlessContent("feed", db.feedItemDao().allIds(), protectedContent) {
+                db.feedItemDao().deleteByIds(it)
+            }
+            deleteHeadlessContent("video", db.videoDao().allIds(), protectedContent) {
+                db.videoDao().deleteByIds(it)
+            }
+        }
+
+        db.videoCommentDao().deleteOrphans()
+        db.videoRepostSourceDao().deleteOrphans()
+        db.sponsorBlockSegmentDao().deleteOrphans()
+        db.sponsorBlockCheckedDao().deleteOrphans()
+        db.retweetSourceDao().deleteOrphans()
+        db.feedRankDao().deleteOrphans()
+
+        dao.unreferencedChannelIds().chunked(PRUNE_BATCH_SIZE).forEach {
+            db.channelDao().deleteByIds(it)
+        }
+        db.channelProfileDao().deleteUnreferenced()
+
+        val orphanAssets = dao.unreferencedAssets()
+        if (orphanAssets.isNotEmpty()) {
+            deletedAssets += orphanAssets
+            orphanAssets.map(AndroidSyncAssetEntity::assetId).chunked(PRUNE_BATCH_SIZE).forEach {
+                dao.deleteAssets(it)
+            }
+        }
+        dao.deleteOrphanHeads()
+    }
+
+    private suspend fun deleteHeadlessContent(
+        ownerKind: String,
+        ids: List<String>,
+        protectedContent: Set<String>,
+        delete: suspend (List<String>) -> Unit,
+    ) {
+        val heads = dao.headIds(ownerKind).toHashSet()
+        ids.filterNot { it in heads || it in protectedContent }
+            .chunked(PRUNE_BATCH_SIZE)
+            .forEach { delete(it) }
+    }
+
+    private suspend fun deleteFiles(rows: List<AndroidSyncAssetEntity>) {
+        if (rows.isEmpty()) return
+        assetDrainer.deleteFilesForAssets(rows, dao.verifiedLocalPaths())
+    }
+
+    private suspend fun requireChangesState(): AndroidSyncStateEntity =
+        requireNotNull(dao.syncState()).also {
+            check(it.mode == MODE_CHANGES && it.cursor.isNotBlank()) { "Android sync cursor is not ready" }
+        }
+
+    private suspend fun <T> withMetadataRetry(label: String, block: suspend () -> T): T {
         var failures = 0
         while (true) {
             try {
                 return block()
             } catch (e: CancellationException) {
                 throw e
-            } catch (e: AndroidSyncStaleGenerationException) {
-                throw e
             } catch (e: Exception) {
                 if (e.isTerminalMetadataFailure()) throw e
                 if (e.isLikelyTransportFailure()) reachability.downgrade()
                 failures++
-                if (failures > metadataRetryDelaysMs.size) {
-                    logger.info(
-                        event = "android_sync_metadata_retry_exhausted",
-                        fields = mapOf(
-                            "label" to label,
-                            "attempts" to failures,
-                            "error" to (e.message ?: e::class.simpleName.orEmpty()),
-                        ) + fields.toMap(),
-                    )
-                    throw e
-                }
-                val retryDelay = metadataRetryDelaysMs[failures - 1]
+                if (failures > metadataRetryDelaysMs.size) throw e
                 logger.info(
                     event = "android_sync_metadata_retry",
-                    fields = mapOf(
-                        "label" to label,
-                        "attempt" to failures,
-                        "delay_ms" to retryDelay,
-                        "error" to (e.message ?: e::class.simpleName.orEmpty()),
-                    ) + fields.toMap(),
+                    fields = mapOf("label" to label, "attempt" to failures),
                 )
-                delay(retryDelay)
+                delay(metadataRetryDelaysMs[failures - 1])
             }
         }
     }
 
     private companion object {
-        const val SYNC_REFRESH_RETRY_MS = 30_000L
-
+        const val MODE_BOOTSTRAP = "bootstrap"
+        const val MODE_CHANGES = "changes"
+        const val OP_DELETE = "delete"
+        const val PRUNE_BATCH_SIZE = 400
         val METADATA_RETRY_DELAYS_MS = listOf(1_000L, 5_000L, 15_000L)
+        val MIRRORED_THIN_STATE =
+            listOf(
+                MirroredThinState("feed_like", "feed_likes", "feed_likes.tweet_id"),
+                MirroredThinState("bookmark", "bookmarks", "bookmarks.video_id"),
+                MirroredThinState(
+                    "bookmark_category",
+                    "bookmark_categories",
+                    "CAST(bookmark_categories.category_id AS TEXT)",
+                ),
+                MirroredThinState("feed_seen", "feed_seen", "feed_seen.tweet_id"),
+                MirroredThinState("moment_view", "moment_views", "moment_views.video_id"),
+                MirroredThinState("watch_history", "watch_history", "watch_history.video_id"),
+                MirroredThinState("muted_channel", "muted_channels", "muted_channels.channel_id"),
+                MirroredThinState("channel_follow", "channel_follows", "channel_follows.channel_id"),
+                MirroredThinState("channel_star", "channel_stars", "channel_stars.channel_id"),
+                MirroredThinState("channel_setting", "channel_settings", "channel_settings.channel_id"),
+                MirroredThinState(
+                    "moments_cursor",
+                    "moments_cursors",
+                    "moments_cursors.scope",
+                    "moments_cursors.scope != 'stories'",
+                ),
+            )
     }
 }
+
+private data class MirroredThinState(
+    val kind: String,
+    val table: String,
+    val idExpression: String,
+    val predicate: String = "1",
+)
 
 internal fun Throwable.isLikelyTransportFailure(): Boolean {
     generateSequence(this) { it.cause }.forEach { cause ->
         if (cause is AndroidSyncHttpException && cause.downgradesReachability) return true
         if (cause is IOException) return true
-        val simpleName = cause::class.simpleName.orEmpty()
-        if (simpleName == "ConnectTimeoutException" ||
-            simpleName == "SocketTimeoutException" ||
-            simpleName == "HttpRequestTimeoutException"
-        ) {
+        val name = cause::class.simpleName.orEmpty()
+        if (name in setOf("ConnectTimeoutException", "SocketTimeoutException", "HttpRequestTimeoutException")) {
             return true
         }
         val message = cause.message?.lowercase().orEmpty()
-        if (message.contains("failed to connect") ||
-            message.contains("socket failed") ||
-            message.contains("operation not permitted") ||
-            message.contains("unable to resolve host") ||
-            message.contains("timeout") ||
-            message.contains("connection reset") ||
-            message.contains("socket closed") ||
-            message.contains("network"))
-        {
+        if (
+            message.contains("failed to connect") ||
+                message.contains("socket failed") ||
+                message.contains("unable to resolve host") ||
+                message.contains("timeout") ||
+                message.contains("connection reset") ||
+                message.contains("socket closed")
+        ) {
             return true
         }
     }
     return false
 }
 
-private fun Throwable.isTerminalMetadataFailure(): Boolean {
-    generateSequence(this) { it.cause }.forEach { cause ->
-        if (cause is AndroidSyncDecodeException) return true
-        if (cause is AndroidSyncHttpException && !cause.isTransient) return true
+private fun Throwable.isTerminalMetadataFailure(): Boolean =
+    generateSequence(this) { it.cause }.any { cause ->
+        cause is AndroidSyncDecodeException ||
+            (cause is AndroidSyncHttpException && !cause.isTransient)
     }
-    return false
+
+private fun AndroidSyncPageResponse.validate(previousCursor: String) {
+    require(next_cursor.isNotBlank()) { "blank Android sync cursor" }
+    if (!end_of_stream) require(next_cursor != previousCursor) { "Android sync cursor stalled" }
+    require(changes.map { it.owner_kind to it.owner_id }.toSet().size == changes.size) {
+        "duplicate Android sync owner in page"
+    }
+    changes.forEach(AndroidSyncChangeDto::validate)
 }
 
-private fun AndroidSyncGenerationDto.toEntity(): AndroidSyncGenerationEntity =
-    AndroidSyncGenerationEntity(
-        generationId = generation_id,
-        createdAtMs = created_at_ms,
-        status = status,
-        sourceVersion = source_version,
-        retentionJson = androidSyncJson.encodeToString(retention),
-        itemCount = item_count,
-        assetCount = asset_count,
-        readyAssetCount = ready_asset_count,
-        serverMissingAssetCount = server_missing_asset_count,
-        totalBytes = total_bytes,
-        contentCountsJson = androidSyncJson.encodeToString(content_counts),
-        assetCountsJson = androidSyncJson.encodeToString(asset_counts),
-    )
+private fun AndroidSyncChangeDto.validate() {
+    require(owner_kind in OWNER_KINDS && owner_id.isNotBlank()) { "invalid Android sync owner" }
+    require(operation == "upsert" || operation == "delete") { "invalid Android sync operation" }
+    require(retention_bucket in RETENTION_BUCKETS && retain_at_ms >= 0) { "invalid Android sync retention" }
+    require((operation == "upsert") == (payload != null)) { "Android sync payload does not match operation" }
+}
 
-private fun AndroidSyncItemDto.toEntity(generationId: String): AndroidSyncItemEntity =
-    AndroidSyncItemEntity(
-        generationId = generationId,
-        seq = seq,
-        itemKind = item_kind,
-        itemId = item_id,
-        payloadJson = androidSyncJson.encodeToString(payload),
-    )
+private fun AndroidSyncChangeDto.isThinState(): Boolean = owner_kind in THIN_OWNER_KINDS
 
-private fun AndroidSyncAssetDto.toEntity(generationId: String): AndroidSyncAssetEntity =
-    AndroidSyncAssetEntity(
-        generationId = generationId,
-        seq = seq,
+private fun AndroidSyncChangeDto.isPrimaryContent(): Boolean = owner_kind == "feed" || owner_kind == "video"
+
+private fun AndroidSyncChangeDto.changesSelection(): Boolean =
+    owner_kind == "channel_follow" || owner_kind == "channel_setting" || owner_kind == "setting"
+
+private fun AndroidSyncChangeDto.releasesProtection(): Boolean =
+    operation == "delete" && (owner_kind == "feed_like" || owner_kind == "bookmark")
+
+private fun AndroidSyncChangeDto.replacesDependencies(): Boolean =
+    operation == "upsert" && owner_kind in DEPENDENCY_REPLACING_OWNER_KINDS
+
+private fun AndroidSyncChangeDto.toHead() =
+    AndroidSyncHeadEntity(owner_kind, owner_id, retention_bucket, retain_at_ms)
+
+private fun AndroidSyncRetentionRequest.validated(): AndroidSyncRetentionRequest = also {
+    require(feedDays >= 0 && youtubeDays >= 0 && momentsDays >= 0 && storyHours >= 0) {
+        "negative Android retention"
+    }
+}
+
+private fun AndroidSyncStateEntity.retention() =
+    AndroidSyncRetentionRequest(feedDays, youtubeDays, momentsDays, storyHours)
+
+private fun Int.daysMs(): Long = toLong() * 86_400_000L
+
+private fun Int.hoursMs(): Long = toLong() * 3_600_000L
+
+private fun AndroidSyncAssetDto.toEntity(existing: AndroidSyncAssetEntity?): AndroidSyncAssetEntity {
+    val unchanged =
+        state == "ready" &&
+            existing?.sizeBytes == size_bytes &&
+            existing.sha256.equals(sha256, ignoreCase = true)
+    val keepVerified = unchanged || state == "server_missing"
+    return AndroidSyncAssetEntity(
         assetId = asset_id,
         assetKind = asset_kind,
         mediaIndex = media_index,
         ownerId = owner_id,
         ownerKind = owner_kind,
         bucket = bucket,
-        serverUrl = server_url,
-        contentType = content_type,
+        contentType = content_type.ifBlank { null },
         sizeBytes = size_bytes,
-        sha256 = sha256,
-        serverState = state,
-        requiredReason = required_reason,
+        sha256 = sha256.ifBlank { null },
+        revision = revision,
         subtitleIsAuto = is_auto ?: true,
-        audioLanguage = audio_language,
-        effectiveRecencyMs = effective_recency_ms,
-        state = if (state == "server_missing") "server_missing" else "desired",
-        updatedAtMs = System.currentTimeMillis(),
+        state = state,
+        localPath = existing?.localPath.takeIf { keepVerified },
+        verifiedAtMs = existing?.verifiedAtMs.takeIf { keepVerified },
+        nextAttemptAtMs = existing?.nextAttemptAtMs?.takeIf { unchanged } ?: 0,
     )
+}
+
+internal fun AndroidSyncAssetDto.validate() {
+    require(asset_id.isNotBlank() && asset_kind.isNotBlank() && revision > 0) {
+        "invalid asset identity"
+    }
+    require(owner_id.isNotBlank() && owner_kind.isNotBlank() && bucket.isNotBlank()) {
+        "asset owner is incomplete"
+    }
+    require(media_index >= 0) { "negative asset media index" }
+    require(asset_kind != "subtitle" || is_auto != null) { "subtitle source kind is missing" }
+    when (state) {
+        "ready" ->
+            require(size_bytes > 0L && content_type.isNotBlank() && SHA256.matches(sha256)) {
+                "ready asset has invalid fingerprint"
+            }
+        "server_missing" ->
+            require(size_bytes == 0L && sha256.isBlank() && content_type.isBlank()) {
+                "missing asset carries ready metadata"
+            }
+        else -> error("unknown asset state: $state")
+    }
+}
+
+private val OWNER_KINDS =
+    setOf(
+        "feed",
+        "video",
+        "channel",
+        "retweet_sources",
+        "feed_rank",
+        "asset",
+        "feed_like",
+        "bookmark",
+        "bookmark_category",
+        "feed_seen",
+        "moment_view",
+        "watch_history",
+        "muted_channel",
+        "channel_follow",
+        "channel_star",
+        "channel_setting",
+        "moments_cursor",
+        "setting",
+    )
+
+private val THIN_OWNER_KINDS =
+    setOf(
+        "feed_like",
+        "bookmark",
+        "bookmark_category",
+        "feed_seen",
+        "moment_view",
+        "watch_history",
+        "muted_channel",
+        "channel_follow",
+        "channel_star",
+        "channel_setting",
+        "moments_cursor",
+        "setting",
+    )
+
+private val DEPENDENCY_REPLACING_OWNER_KINDS = setOf("feed", "video", "retweet_sources")
+
+private val RETENTION_BUCKETS = setOf("", "feed", "youtube", "moments", "story")
+private val SHA256 = Regex("[0-9a-fA-F]{64}")

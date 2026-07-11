@@ -3,7 +3,6 @@ package web
 import (
 	"encoding/gob"
 	"net/http"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -16,6 +15,7 @@ import (
 	"github.com/screwys/igloo/internal/i18n"
 	"github.com/screwys/igloo/internal/model"
 	"github.com/screwys/igloo/internal/settings"
+	"github.com/screwys/igloo/internal/storage"
 	"github.com/screwys/igloo/internal/worker"
 )
 
@@ -33,14 +33,13 @@ func init() {
 }
 
 type Server struct {
-	db            *db.DB
-	cfg           *config.Config
-	store         sessions.Store
-	workers       *worker.Manager
-	requestAvatar func(string)
-	staticV       func(string) string
-	i18n          *i18n.Catalog
-	authLimiter   *authAttemptLimiter
+	db          *db.DB
+	cfg         *config.Config
+	store       sessions.Store
+	workers     *worker.Manager
+	staticV     func(string) string
+	i18n        *i18n.Catalog
+	authLimiter *authAttemptLimiter
 
 	// Channel preview cache — populated in background on first page load
 	channelPreviewMu   sync.Mutex
@@ -48,18 +47,13 @@ type Server struct {
 	channelPreviewFeed map[string][]model.FeedItem
 	channelPreviewAt   time.Time
 
-	// Profile card endpoint
-	profileFetch  fetchProfileFn
-	profileFlight *profileFlight
-
 	downloaderReportMu     sync.Mutex
 	downloaderReportLatest *downloaderReport
 
-	androidSyncGenerationMu         sync.Mutex
-	androidSyncGenerationRefreshMu  sync.Mutex
-	androidSyncGenerationRefreshing bool
-	androidSyncAssetServeSemOnce    sync.Once
-	androidSyncAssetServeSemaphore  chan struct{}
+	androidSyncBootstrapMu         sync.Mutex
+	androidSyncBootstraps          map[string]*androidSyncBootstrapSession
+	androidSyncAssetServeSemOnce   sync.Once
+	androidSyncAssetServeSemaphore chan struct{}
 }
 
 func NewServer(database *db.DB, cfg *config.Config, workers *worker.Manager, staticV func(string) string) http.Handler {
@@ -68,15 +62,13 @@ func NewServer(database *db.DB, cfg *config.Config, workers *worker.Manager, sta
 		catalog = i18n.NewCatalog()
 	}
 	s := &Server{
-		db:            database,
-		cfg:           cfg,
-		store:         newSessionStore(cfg.SecretKey, cfg.SessionCookieSecure),
-		workers:       workers,
-		requestAvatar: workers.RequestAvatar,
-		staticV:       staticV,
-		i18n:          catalog,
-		profileFlight: newProfileFlight(),
-		authLimiter:   newAuthAttemptLimiter(time.Now),
+		db:          database,
+		cfg:         cfg,
+		store:       newSessionStore(cfg.SecretKey, cfg.SessionCookieSecure),
+		workers:     workers,
+		staticV:     staticV,
+		i18n:        catalog,
+		authLimiter: newAuthAttemptLimiter(time.Now),
 	}
 
 	mux := http.NewServeMux()
@@ -113,6 +105,7 @@ func NewServer(database *db.DB, cfg *config.Config, workers *worker.Manager, sta
 	// Media routes (#15 G — consolidated under /api/media/)
 	mux.HandleFunc("GET /api/media/avatar/{channelID}", s.handleChannelAvatar)
 	mux.HandleFunc("GET /api/media/banner/{channelID}", s.handleChannelBanner)
+	mux.HandleFunc("GET /api/media/comment-avatar/{ownerID}", s.handleCommentAuthorAvatar)
 	mux.HandleFunc("GET /api/media/thumbnail/{videoID}", s.handleThumbnail)
 	mux.HandleFunc("GET /api/download/video/{videoID}", s.handleDownloadVideo)
 
@@ -141,7 +134,6 @@ func NewServer(database *db.DB, cfg *config.Config, workers *worker.Manager, sta
 	s.registerProfileAPIRoutes(mux)
 	s.registerHealthAPIRoutes(mux)
 	s.registerClientLogsAPIRoutes(mux)
-	s.registerDeltaAPIRoutes(mux)
 	s.registerMutationAPIRoutes(mux)
 	s.registerThreadAPIRoutes(mux)
 
@@ -301,30 +293,20 @@ func (s *Server) supportedLanguageChoices(lang string) []components.LanguageChoi
 	return out
 }
 
-// resolveDataPath makes a relative path absolute by joining it with dataDir.
-// Already-absolute paths are returned unchanged.
-func resolveDataPath(dataDir, path string) string {
-	if path == "" || filepath.IsAbs(path) {
-		return path
+func resolveDataPath(layout storage.Layout, key string) string {
+	resolved, err := layout.Path(key)
+	if err != nil {
+		return ""
 	}
-	return filepath.Join(dataDir, path)
+	return resolved
 }
 
-func resolveDataPathUnder(dataDir, path string) (string, bool) {
-	if strings.TrimSpace(dataDir) == "" || strings.TrimSpace(path) == "" {
+func resolveDataPathUnder(layout storage.Layout, key string) (string, bool) {
+	if strings.TrimSpace(key) == "" {
 		return "", false
 	}
-	abs := resolveDataPath(dataDir, path)
-	baseAbs, err := filepath.Abs(dataDir)
+	abs, err := layout.Path(key)
 	if err != nil {
-		return "", false
-	}
-	abs, err = filepath.Abs(abs)
-	if err != nil {
-		return "", false
-	}
-	rel, err := filepath.Rel(baseAbs, abs)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
 		return "", false
 	}
 	return abs, true

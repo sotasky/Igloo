@@ -18,10 +18,10 @@ func TestEnrichMediaStatus(t *testing.T) {
 	}
 	item.ParseMedia()
 
-	jobs := map[string]model.FeedMediaJob{
-		"123": {TweetID: "123", Status: "completed", MediaKind: "image", SlideCount: 1},
+	assets := map[string]db.MediaAssetAvailability{
+		"123": {Declared: true, ReadyMedia: true},
 	}
-	enrichMediaStatus(&item, jobs)
+	enrichMediaStatus(&item, assets)
 
 	if item.MediaStatus != "ready" {
 		t.Errorf("expected status ready, got %q", item.MediaStatus)
@@ -38,7 +38,7 @@ func TestEnrichMediaStatusCDN(t *testing.T) {
 	}
 	item.ParseMedia()
 
-	enrichMediaStatus(&item, map[string]model.FeedMediaJob{})
+	enrichMediaStatus(&item, map[string]db.MediaAssetAvailability{})
 
 	if item.MediaStatus != "cdn" {
 		t.Errorf("expected cdn, got %q", item.MediaStatus)
@@ -49,7 +49,7 @@ func TestEnrichMediaStatusCDN(t *testing.T) {
 }
 
 func TestEnrichMediaStatusQuoteOnly(t *testing.T) {
-	// Parent has no media but a completed job (quote-only media tweet).
+	// Parent has no media even when quote media is ready.
 	// MediaKind and MediaStatus should NOT be set on the parent.
 	item := model.FeedItem{
 		TweetID:        "789",
@@ -58,11 +58,11 @@ func TestEnrichMediaStatusQuoteOnly(t *testing.T) {
 	}
 	item.ParseMedia()
 
-	jobs := map[string]model.FeedMediaJob{
-		"789": {TweetID: "789", Status: "completed", MediaKind: "image", SlideCount: 0},
+	assets := map[string]db.MediaAssetAvailability{
+		"789": {Declared: true, ReadyMedia: true},
 	}
 
-	enrichMediaStatus(&item, jobs)
+	enrichMediaStatus(&item, assets)
 
 	if item.MediaStatus != "" {
 		t.Errorf("expected empty MediaStatus for quote-only tweet, got %q", item.MediaStatus)
@@ -72,19 +72,91 @@ func TestEnrichMediaStatusQuoteOnly(t *testing.T) {
 	}
 }
 
+func TestEnrichFeedItemsProjectsOnlyReadyCanonicalMediaURLs(t *testing.T) {
+	d, stateRoot := openWritableFeedTestDBAt(t)
+	const tweetID = "sample_sparse_media"
+	key := filepath.Join("media", "twitter", "sample", "second.jpg")
+	path := filepath.Join(stateRoot, filepath.FromSlash(key))
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("second"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.StoreReadyAsset(db.Asset{
+		AssetID:   db.BuildAssetID("twitter", "tweet", tweetID, "post_media", 1),
+		AssetKind: "post_media", OwnerKind: "tweet", OwnerID: tweetID, MediaIndex: 1,
+		FilePath: key, ContentType: "image/jpeg", RequiredReason: "retention",
+	}, 1); err != nil {
+		t.Fatal(err)
+	}
+
+	got := EnrichFeedItemsPreserveRows(d, []model.FeedItem{
+		{
+			TweetID: tweetID,
+			Media: []model.MediaRef{
+				{Type: "photo", URL: "https://cdn.example/first.jpg"},
+				{Type: "photo", URL: "https://cdn.example/second.jpg"},
+			},
+		},
+	})
+	want := []string{"", "/api/media/slide/" + tweetID + "/1?owner_kind=tweet"}
+	if !reflect.DeepEqual(got[0].MediaSlideURLs, want) {
+		t.Fatalf("MediaSlideURLs = %#v, want %#v", got[0].MediaSlideURLs, want)
+	}
+}
+
+func TestEnrichFeedItemsTypesTweetVideoMediaURLs(t *testing.T) {
+	d, stateRoot := openWritableFeedTestDBAt(t)
+	const tweetID = "sample_video_media"
+	for _, asset := range []struct {
+		kind        string
+		key         string
+		contentType string
+	}{
+		{kind: "post_media", key: filepath.Join("media", "twitter", "sample", tweetID+".mp4"), contentType: "video/mp4"},
+		{kind: "post_thumbnail", key: filepath.Join("thumbnails", "generated", tweetID+".jpg"), contentType: "image/jpeg"},
+	} {
+		path := filepath.Join(stateRoot, filepath.FromSlash(asset.key))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(asset.kind), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := d.StoreReadyAsset(db.Asset{
+			AssetID: db.BuildAssetID("twitter", "tweet", tweetID, asset.kind, 0), AssetKind: asset.kind,
+			OwnerKind: "tweet", OwnerID: tweetID, FilePath: asset.key, ContentType: asset.contentType, RequiredReason: "retention",
+		}, 1); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got := EnrichFeedItemsPreserveRows(d, []model.FeedItem{{
+		TweetID: tweetID,
+		Media:   []model.MediaRef{{Type: "video", URL: "https://cdn.example/sample.mp4"}},
+	}})[0]
+	if got.MediaStreamURL != "/api/media/stream/"+tweetID+"?owner_kind=tweet" {
+		t.Fatalf("MediaStreamURL = %q", got.MediaStreamURL)
+	}
+	if got.MediaPreviewURL != "/api/media/thumbnail/"+tweetID+"?owner_kind=tweet" {
+		t.Fatalf("MediaPreviewURL = %q", got.MediaPreviewURL)
+	}
+}
+
 func TestAnnotateChannelFlags(t *testing.T) {
 	item := model.FeedItem{
-		AuthorHandle: "user_a",
-		SourceHandle: "user_b",
+		ChannelID:       "twitter_sample_a",
+		SourceChannelID: "twitter_sample_b",
 	}
 	channels := map[string]model.Channel{
-		"twitter_user_a": {ChannelID: "twitter_user_a", IsSubscribed: true, IsStarred: true},
+		"twitter_sample_a": {ChannelID: "twitter_sample_a", IsSubscribed: true, IsStarred: true},
 	}
 
-	annotateChannelFlags(&item, channels, map[string]string{})
+	annotateChannelFlags(&item, channels)
 
-	if item.ChannelID != "twitter_user_a" {
-		t.Errorf("expected channel_id twitter_user_a, got %q", item.ChannelID)
+	if item.ChannelID != "twitter_sample_a" {
+		t.Errorf("expected channel_id twitter_sample_a, got %q", item.ChannelID)
 	}
 	if !item.ChannelIsFollowed {
 		t.Error("expected channel_is_followed=true")
@@ -96,22 +168,22 @@ func TestAnnotateChannelFlags(t *testing.T) {
 
 func TestAnnotateChannelFlagsKeepsAuthorFollowTargetSeparateFromFollowedSource(t *testing.T) {
 	item := model.FeedItem{
-		AuthorHandle: "post_author",
-		SourceHandle: "followed_source",
-		IsRetweet:    true,
-		QuoteTweetID: "quoted_status",
+		ChannelID:         "twitter_sample_author",
+		ReposterChannelID: "twitter_sample_source",
+		IsRetweet:         true,
+		QuoteTweetID:      "quoted_status",
 	}
 	channels := map[string]model.Channel{
-		"twitter_followed_source": {ChannelID: "twitter_followed_source", IsSubscribed: true},
+		"twitter_sample_source": {ChannelID: "twitter_sample_source", IsSubscribed: true},
 	}
 
-	annotateChannelFlags(&item, channels, map[string]string{})
+	annotateChannelFlags(&item, channels)
 
-	if item.ChannelID != "twitter_post_author" {
-		t.Fatalf("expected channel_id twitter_post_author, got %q", item.ChannelID)
+	if item.ChannelID != "twitter_sample_author" {
+		t.Fatalf("expected channel_id twitter_sample_author, got %q", item.ChannelID)
 	}
-	if item.ReposterChannelID != "twitter_followed_source" {
-		t.Fatalf("expected repost source twitter_followed_source, got %q", item.ReposterChannelID)
+	if item.ReposterChannelID != "twitter_sample_source" {
+		t.Fatalf("expected repost source twitter_sample_source, got %q", item.ReposterChannelID)
 	}
 	if !item.ChannelIsFollowed {
 		t.Fatal("expected channel_is_followed to inherit followed source for ranking")
@@ -121,46 +193,25 @@ func TestAnnotateChannelFlagsKeepsAuthorFollowTargetSeparateFromFollowedSource(t
 	}
 }
 
-func TestAnnotateChannelFlags_ResolvesQuoteAvatarByKnownURL(t *testing.T) {
+func TestAnnotateChannelFlagsLeavesHandlelessQuoteIdentityMissing(t *testing.T) {
 	item := model.FeedItem{
 		AuthorHandle:           "user_a",
 		QuoteAuthorAvatarURL:   "https://pbs.twimg.com/profile_images/777/photo.jpg",
 		QuoteAuthorHandle:      "",
 		QuoteAuthorDisplayName: "Quote User",
+		QuoteTweetID:           "quoted_status",
 	}
 
-	annotateChannelFlags(
-		&item,
-		map[string]model.Channel{},
-		map[string]string{"https://pbs.twimg.com/profile_images/777/photo.jpg": "twitter_quote_user"},
-	)
+	annotateChannelFlags(&item, map[string]model.Channel{})
 
-	if item.QuoteAuthorAvatarURL != "/api/media/avatar/twitter_quote_user" {
-		t.Fatalf("expected quote avatar to be proxied, got %q", item.QuoteAuthorAvatarURL)
+	if item.QuoteAuthorAvatarURL != "" {
+		t.Fatalf("handleless quote kept unowned avatar %q", item.QuoteAuthorAvatarURL)
 	}
-	if item.QuoteChannelID != "twitter_quote_user" {
-		t.Fatalf("expected quote channel id to resolve, got %q", item.QuoteChannelID)
-	}
-	if item.QuoteAuthorHandle != "quote_user" {
-		t.Fatalf("expected quote author handle backfilled from channel id, got %q", item.QuoteAuthorHandle)
-	}
-}
-
-func TestAnnotateChannelFlags_FallsBackToSyntheticQuoteAvatarID(t *testing.T) {
-	avatarURL := "https://pbs.twimg.com/profile_images/888/photo.jpg"
-	item := model.FeedItem{
-		AuthorHandle:         "user_a",
-		QuoteAuthorAvatarURL: avatarURL,
-	}
-
-	annotateChannelFlags(&item, map[string]model.Channel{}, map[string]string{})
-
-	want := "/api/media/avatar/" + model.SyntheticTwitterAvatarChannelID(avatarURL)
-	if item.QuoteAuthorAvatarURL != want {
-		t.Fatalf("expected synthetic quote avatar URL %q, got %q", want, item.QuoteAuthorAvatarURL)
+	if item.QuoteChannelID != "" {
+		t.Fatalf("handleless quote gained synthetic channel id %q", item.QuoteChannelID)
 	}
 	if item.QuoteAuthorHandle != "" {
-		t.Fatalf("expected no synthetic handle backfill, got %q", item.QuoteAuthorHandle)
+		t.Fatalf("expected handle to remain unknown, got %q", item.QuoteAuthorHandle)
 	}
 }
 
@@ -194,7 +245,7 @@ func TestEnrichFeedItemsBackfillsDisplayNamesFromChannelProfiles(t *testing.T) {
 	}}
 	items[0].ParseMedia()
 
-	got := EnrichFeedItems(d, items, "")
+	got := EnrichFeedItems(d, items)
 	if got[0].AuthorDisplayName != "Display From Profile" {
 		t.Fatalf("author display name: got %q", got[0].AuthorDisplayName)
 	}
@@ -209,20 +260,19 @@ func TestEnrichFeedItemsBackfillsDisplayNamesFromChannelProfiles(t *testing.T) {
 func TestEnrichFeedItemsUsesCanonicalStatusURLForRepostUserState(t *testing.T) {
 	d := openWritableFeedTestDB(t)
 	const (
-		userID       = "sample_user"
 		originalID   = "1000000000000000001"
 		repostID     = "1000000000000000002"
 		canonicalURL = "https://x.com/sample_author/status/" + originalID
 	)
 	if err := d.ExecRaw(
-		`INSERT INTO feed_likes (username, tweet_id, liked_at) VALUES (?, ?, ?)`,
-		userID, originalID, int64(1),
+		`INSERT INTO feed_likes (tweet_id, liked_at) VALUES (?, ?)`,
+		originalID, int64(1),
 	); err != nil {
 		t.Fatalf("insert feed like: %v", err)
 	}
 	if err := d.ExecRaw(
-		`INSERT INTO bookmarks (user_id, video_id, bookmarked_at) VALUES (?, ?, ?)`,
-		userID, originalID, int64(1),
+		`INSERT INTO bookmarks (video_id, bookmarked_at) VALUES (?, ?)`,
+		originalID, int64(1),
 	); err != nil {
 		t.Fatalf("insert bookmark: %v", err)
 	}
@@ -236,7 +286,7 @@ func TestEnrichFeedItemsUsesCanonicalStatusURLForRepostUserState(t *testing.T) {
 		CanonicalURL:     canonicalURL,
 		PublishedAt:      nil,
 		CanonicalTweetID: "1000000000000000003",
-	}}, userID)
+	}})
 	if len(got) != 1 {
 		t.Fatalf("enriched rows = %d, want 1", len(got))
 	}
@@ -282,7 +332,7 @@ func TestEnrichFeedItemsCollapsesSiblingReplyBranchesToFirstRankedLeaf(t *testin
 		stored["thread_root"],
 	}
 
-	got := EnrichFeedItems(d, input, "")
+	got := EnrichFeedItems(d, input)
 	gotIDs := make([]string, 0, len(got))
 	for _, item := range got {
 		gotIDs = append(gotIDs, item.TweetID)
@@ -329,7 +379,7 @@ func TestEnrichFeedItemsRepairsHandleLikeDisplayNamesFromProfiles(t *testing.T) 
 		QuoteAuthorHandle:      "author_alpha",
 		QuoteAuthorDisplayName: "author_alpha",
 	}}
-	got := EnrichFeedItems(d, items, "")
+	got := EnrichFeedItems(d, items)
 	if got[0].AuthorDisplayName != "Readable Author" {
 		t.Fatalf("author display name: got %q", got[0].AuthorDisplayName)
 	}
@@ -343,7 +393,7 @@ func TestEnrichFeedItemsRepairsHandleLikeDisplayNamesFromProfiles(t *testing.T) 
 
 func TestEnrichFeedItemsUsesConfiguredTranslationTarget(t *testing.T) {
 	d := openWritableFeedTestDB(t)
-	if err := d.SetSetting("", "translate_target_lang", "fr"); err != nil {
+	if err := d.SetSetting("translate_target_lang", "fr"); err != nil {
 		t.Fatalf("SetSetting translate target: %v", err)
 	}
 	if err := d.SetTranslation("tweet_translate", "body", "tr", "en", "Hello"); err != nil {
@@ -356,7 +406,7 @@ func TestEnrichFeedItemsUsesConfiguredTranslationTarget(t *testing.T) {
 	got := EnrichFeedItems(d, []model.FeedItem{{
 		TweetID:      "tweet_translate",
 		AuthorHandle: "author_alpha",
-	}}, "")
+	}})
 	if got[0].BodyTranslation != "Bonjour" {
 		t.Fatalf("BodyTranslation = %q, want configured fr translation", got[0].BodyTranslation)
 	}
@@ -364,7 +414,7 @@ func TestEnrichFeedItemsUsesConfiguredTranslationTarget(t *testing.T) {
 
 func TestEnrichFeedItemsSkipsConfiguredTranslationLanguages(t *testing.T) {
 	d := openWritableFeedTestDB(t)
-	if err := d.SetSetting("", "translate_skip_langs", "ja"); err != nil {
+	if err := d.SetSetting("translate_skip_langs", "ja"); err != nil {
 		t.Fatalf("SetSetting translate skip langs: %v", err)
 	}
 	if err := d.SetTranslation("tweet_translate", "body", "ja", "en", "Blanc"); err != nil {
@@ -374,7 +424,7 @@ func TestEnrichFeedItemsSkipsConfiguredTranslationLanguages(t *testing.T) {
 	got := EnrichFeedItems(d, []model.FeedItem{{
 		TweetID:      "tweet_translate",
 		AuthorHandle: "author_alpha",
-	}}, "")
+	}})
 	if got[0].BodyTranslation != "" {
 		t.Fatalf("BodyTranslation = %q, want empty for skipped source language", got[0].BodyTranslation)
 	}
@@ -395,7 +445,7 @@ func TestEnrichFeedItemsSkipsNoopTranslations(t *testing.T) {
 		BodyText:      "@sample_parent What if sample topic",
 		QuoteTweetID:  "sample_quote_1",
 		QuoteBodyText: "same\nquote text",
-	}}, "")
+	}})
 	if got[0].BodyTranslation != "" || got[0].BodySourceLang != "" {
 		t.Fatalf("body translation = (%q, %q), want empty no-op", got[0].BodyTranslation, got[0].BodySourceLang)
 	}
@@ -406,6 +456,12 @@ func TestEnrichFeedItemsSkipsNoopTranslations(t *testing.T) {
 
 func openWritableFeedTestDB(t *testing.T) *db.DB {
 	t.Helper()
+	d, _ := openWritableFeedTestDBAt(t)
+	return d
+}
+
+func openWritableFeedTestDBAt(t *testing.T) (*db.DB, string) {
+	t.Helper()
 	tmpFile, err := os.CreateTemp("", "igloo-feed-test-*.db")
 	if err != nil {
 		t.Fatalf("CreateTemp: %v", err)
@@ -413,7 +469,14 @@ func openWritableFeedTestDB(t *testing.T) *db.DB {
 	tmpPath := tmpFile.Name()
 	_ = tmpFile.Close()
 
-	d, err := db.Open(tmpPath, filepath.Join(t.TempDir(), "data"))
+	stateRoot := filepath.Join(t.TempDir(), "data")
+	if err := os.MkdirAll(stateRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stateRoot, ".igloo-state-root"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	d, err := db.OpenPath(tmpPath, stateRoot)
 	if err != nil {
 		_ = os.Remove(tmpPath)
 		t.Fatalf("db.Open: %v", err)
@@ -422,5 +485,5 @@ func openWritableFeedTestDB(t *testing.T) *db.DB {
 		_ = d.Close()
 		_ = os.Remove(tmpPath)
 	})
-	return d
+	return d, stateRoot
 }

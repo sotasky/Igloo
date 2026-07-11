@@ -1,8 +1,6 @@
 package db
 
 import (
-	"database/sql"
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -21,20 +19,24 @@ func testDataDir() string {
 	return home + "/.local/share/igloo"
 }
 
+func markDBTestStateRoot(t *testing.T, stateRoot string) {
+	t.Helper()
+	if err := os.MkdirAll(stateRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stateRoot, ".igloo-state-root"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func openTestDB(t *testing.T) *DB {
 	t.Helper()
-	path := testDBPath()
-	if _, err := os.Stat(path); err == nil {
-		d, err := OpenReadOnly(path, testDataDir())
-		if err != nil {
-			t.Fatalf("open: %v", err)
-		}
-		t.Cleanup(func() { _ = d.Close() })
-		return d
+	path, stateRoot := openReadOnlyFixtureDB(t)
+	d, err := OpenReadOnly(path, stateRoot)
+	if err != nil {
+		t.Fatalf("open read-only fixture: %v", err)
 	}
-
-	d := openWritableTestDB(t)
-	seedReadOnlyFixtureDB(t, d)
+	t.Cleanup(func() { _ = d.Close() })
 	return d
 }
 
@@ -47,7 +49,9 @@ func openReadOnlyFixtureDB(t *testing.T) (string, string) {
 	tmpPath := tmpFile.Name()
 	_ = tmpFile.Close()
 
-	d, err := Open(tmpPath, t.TempDir())
+	stateRoot := t.TempDir()
+	markDBTestStateRoot(t, stateRoot)
+	d, err := OpenPath(tmpPath, stateRoot)
 	if err != nil {
 		_ = os.Remove(tmpPath)
 		t.Fatalf("open writable: %v", err)
@@ -59,7 +63,7 @@ func openReadOnlyFixtureDB(t *testing.T) (string, string) {
 	t.Cleanup(func() {
 		_ = os.Remove(tmpPath)
 	})
-	return tmpPath, t.TempDir()
+	return tmpPath, stateRoot
 }
 
 // openWritableTestDB creates a fresh temp DB with schema for write tests.
@@ -73,7 +77,9 @@ func openWritableTestDB(t *testing.T) *DB {
 	tmpPath := tmpFile.Name()
 	_ = tmpFile.Close()
 
-	d, err := Open(tmpPath, t.TempDir())
+	stateRoot := t.TempDir()
+	markDBTestStateRoot(t, stateRoot)
+	d, err := OpenPath(tmpPath, stateRoot)
 	if err != nil {
 		_ = os.Remove(tmpPath)
 		t.Fatalf("open writable: %v", err)
@@ -82,6 +88,20 @@ func openWritableTestDB(t *testing.T) *DB {
 		_ = d.Close()
 		_ = os.Remove(tmpPath)
 	})
+	return d
+}
+
+// openFreshTestDB creates a brand-new database at the canonical state-root
+// location used by tests that need to inspect the database path directly.
+func openFreshTestDB(t *testing.T) *DB {
+	t.Helper()
+	tmpDir := t.TempDir()
+	markDBTestStateRoot(t, tmpDir)
+	d, err := OpenPath(filepath.Join(tmpDir, "test.db"), tmpDir)
+	if err != nil {
+		t.Fatalf("Open fresh DB: %v", err)
+	}
+	t.Cleanup(func() { _ = d.Close() })
 	return d
 }
 
@@ -99,8 +119,8 @@ func seedTestFollowedChannel(t *testing.T, d *DB, channelID string) {
 	t.Helper()
 	seedTestChannel(t, d, channelID)
 	if err := d.ExecRaw(`
-		INSERT OR IGNORE INTO channel_follows (user_id, channel_id, followed_at)
-		VALUES ('', ?, 1)
+		INSERT OR IGNORE INTO channel_follows (channel_id, followed_at)
+		VALUES (?, 1)
 	`, channelID); err != nil {
 		t.Fatalf("seed channel follow %s: %v", channelID, err)
 	}
@@ -110,9 +130,15 @@ func seedTestVideo(t *testing.T, d *DB, videoID, channelID string) {
 	t.Helper()
 	seedTestChannel(t, d, channelID)
 	if err := d.ExecRaw(`
-		INSERT OR IGNORE INTO videos (video_id, channel_id, title, duration, file_path, published_at)
-		VALUES (?, ?, 'Fixture Video', 120, 'videos/fixture.mp4', 1)
-	`, videoID, channelID); err != nil {
+		INSERT OR IGNORE INTO videos (video_id, channel_id, owner_kind, title, duration, published_at)
+		VALUES (?, ?, 'youtube_video', 'Fixture Video', 120, 1);
+		INSERT OR IGNORE INTO assets (
+			asset_id, asset_kind, owner_kind, owner_id, media_index,
+			file_path, content_type, size_bytes, state, created_at_ms, updated_at_ms
+		)
+		VALUES ('fixture-stream:' || ?, 'video_stream', 'youtube_video', ?, 0,
+		        'media/youtube/fixture.mp4', 'video/mp4', 1, 'ready', 1, 1)
+	`, videoID, channelID, videoID, videoID); err != nil {
 		t.Fatalf("seed video %s: %v", videoID, err)
 	}
 }
@@ -124,14 +150,13 @@ func seedReadOnlyFixtureDB(t *testing.T, d *DB) {
 		channelID = "youtube_fixture_channel"
 		videoID   = "youtube_fixture_video"
 		tweetID   = "twitter_fixture_tweet"
-		username  = "fixture_user"
 	)
 	seedTestFollowedChannel(t, d, channelID)
 	seedTestVideo(t, d, videoID, channelID)
 	if err := d.ExecRaw(`
 		INSERT OR IGNORE INTO video_comments (
-			video_id, comment_id, author_name, author_id, text, like_count, published_at, platform, fetched_at
-		) VALUES (?, 'fixture_comment', 'Fixture Commenter', 'fixture_author', 'Fixture comment text', 1, 1, 'youtube', 1)
+			video_id, comment_id, author_name, author_id, text, like_count, published_at
+		) VALUES (?, 'fixture_comment', 'Fixture Commenter', 'fixture_author', 'Fixture comment text', 1, 1)
 	`, videoID); err != nil {
 		t.Fatalf("seed comment: %v", err)
 	}
@@ -149,13 +174,10 @@ func seedReadOnlyFixtureDB(t *testing.T, d *DB) {
 		t.Fatalf("seed feed item: %v", err)
 	}
 	if err := d.ExecRaw(`
-		INSERT OR IGNORE INTO feed_likes (username, tweet_id, liked_at)
-		VALUES (?, ?, 1)
-	`, username, tweetID); err != nil {
+		INSERT OR IGNORE INTO feed_likes (tweet_id, liked_at)
+		VALUES (?, 1)
+	`, tweetID); err != nil {
 		t.Fatalf("seed feed like: %v", err)
-	}
-	if _, err := d.RebuildSearchIndex(t.Context()); err != nil {
-		t.Fatalf("seed search index: %v", err)
 	}
 }
 
@@ -174,91 +196,8 @@ func TestOpen(t *testing.T) {
 	}
 }
 
-func TestOpenDropsLegacyChannelCheckInterval(t *testing.T) {
-	tmpDir := t.TempDir()
-	dbPath := filepath.Join(tmpDir, "igloo.db")
-	dataDir := filepath.Join(tmpDir, "data")
-
-	seed, err := sql.Open("sqlite", "file:"+dbPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, stmt := range []string{
-		`CREATE TABLE channels (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			channel_id TEXT UNIQUE NOT NULL,
-			source_id TEXT,
-			name TEXT NOT NULL,
-			url TEXT,
-			platform TEXT,
-			quality TEXT,
-			check_interval INTEGER,
-			last_checked INTEGER NOT NULL DEFAULT 0,
-			created_at INTEGER NOT NULL DEFAULT 0
-		)`,
-		`CREATE TABLE settings (user_id TEXT NOT NULL DEFAULT '', key TEXT NOT NULL, value TEXT, PRIMARY KEY (user_id, key))`,
-		`INSERT INTO channels (channel_id, name, platform, check_interval) VALUES ('youtube_legacy', 'Legacy', 'youtube', 6)`,
-		`INSERT INTO settings (user_id, key, value) VALUES ('', 'youtube_check_interval', '6')`,
-		`INSERT INTO settings (user_id, key, value) VALUES ('feed', 'shorts_check_interval', '3')`,
-	} {
-		if _, err := seed.Exec(stmt); err != nil {
-			_ = seed.Close()
-			t.Fatalf("seed %q: %v", stmt, err)
-		}
-	}
-	if err := seed.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	d, err := Open(dbPath, dataDir)
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	defer func() {
-		_ = d.Close()
-	}()
-
-	rows, err := d.conn.Query(`PRAGMA table_info(channels)`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() {
-		_ = rows.Close()
-	}()
-	for rows.Next() {
-		var (
-			cid     int
-			name    string
-			typ     sql.NullString
-			notnull int
-			dflt    sql.NullString
-			pk      int
-		)
-		if err := rows.Scan(&cid, &name, &typ, &notnull, &dflt, &pk); err != nil {
-			t.Fatal(err)
-		}
-		if name == "check_interval" {
-			t.Fatal("channels.check_interval should be dropped")
-		}
-	}
-	var retiredSettings int
-	if err := d.conn.QueryRow(`
-		SELECT COUNT(*) FROM settings
-		WHERE key IN ('youtube_check_interval', 'shorts_check_interval', 'instagram_check_interval')
-	`).Scan(&retiredSettings); err != nil {
-		t.Fatal(err)
-	}
-	if retiredSettings != 0 {
-		t.Fatalf("retired interval settings = %d, want 0", retiredSettings)
-	}
-}
-
 func TestOpenReadOnly(t *testing.T) {
-	path := testDBPath()
-	dataDir := testDataDir()
-	if _, err := os.Stat(path); err != nil {
-		path, dataDir = openReadOnlyFixtureDB(t)
-	}
+	path, dataDir := openReadOnlyFixtureDB(t)
 
 	d, err := OpenReadOnly(path, dataDir)
 	if err != nil {
@@ -275,88 +214,5 @@ func TestOpenReadOnly(t *testing.T) {
 	}
 	if count == 0 {
 		t.Log("warning: channels table is empty")
-	}
-}
-
-func TestOpenCleansRetiredReadingFeatureState(t *testing.T) {
-	tmpDir := t.TempDir()
-	dbPath := filepath.Join(tmpDir, "igloo.db")
-	dataDir := filepath.Join(tmpDir, "data")
-	articlesDir := filepath.Join(dataDir, "articles")
-	if err := os.MkdirAll(articlesDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(articlesDir, "saved.md"), []byte("legacy"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	seed, err := sql.Open("sqlite", "file:"+dbPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, stmt := range []string{
-		`CREATE TABLE settings (user_id TEXT NOT NULL DEFAULT '', key TEXT NOT NULL, value TEXT, PRIMARY KEY (user_id, key))`,
-		`INSERT INTO settings (user_id, key, value) VALUES ('', 'reading_download_dir', '/tmp/articles')`,
-		`INSERT INTO settings (user_id, key, value) VALUES ('', 'starting_page', 'reading')`,
-		`INSERT INTO settings (user_id, key, value) VALUES ('', 'shortcuts', '{"reading.download":"b","reading.share":"s","feed.like":"l"}')`,
-		`CREATE TABLE reading_preferences (key TEXT PRIMARY KEY, value TEXT)`,
-		`CREATE TABLE saved_articles (story_id TEXT UNIQUE NOT NULL)`,
-		`CREATE TABLE reading_articles_cache (url_hash TEXT PRIMARY KEY, category_key TEXT, published_at INTEGER)`,
-		`CREATE INDEX idx_reading_cache_cat_pub ON reading_articles_cache(category_key, published_at DESC)`,
-	} {
-		if _, err := seed.Exec(stmt); err != nil {
-			_ = seed.Close()
-			t.Fatalf("seed %q: %v", stmt, err)
-		}
-	}
-	if err := seed.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	d, err := Open(dbPath, dataDir)
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	defer func() {
-		_ = d.Close()
-	}()
-
-	for _, table := range []string{"reading_preferences", "saved_articles", "reading_articles_cache"} {
-		var count int
-		if err := d.conn.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, table).Scan(&count); err != nil {
-			t.Fatalf("lookup table %s: %v", table, err)
-		}
-		if count != 0 {
-			t.Fatalf("retired table %s still exists", table)
-		}
-	}
-
-	if got, err := d.GetSetting("starting_page", ""); err != nil || got != "feed" {
-		t.Fatalf("starting_page = %q, %v; want feed", got, err)
-	}
-	if got, err := d.GetSetting("reading_download_dir", "fallback"); err != nil || got != "fallback" {
-		t.Fatalf("reading_download_dir = %q, %v; want fallback", got, err)
-	}
-
-	rawShortcuts, err := d.GetSetting("shortcuts", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	var shortcuts map[string]string
-	if err := json.Unmarshal([]byte(rawShortcuts), &shortcuts); err != nil {
-		t.Fatalf("shortcuts JSON: %v", err)
-	}
-	if _, ok := shortcuts["reading.download"]; ok {
-		t.Fatalf("reading.download shortcut survived: %s", rawShortcuts)
-	}
-	if _, ok := shortcuts["reading.share"]; ok {
-		t.Fatalf("reading.share shortcut survived: %s", rawShortcuts)
-	}
-	if got := shortcuts["feed.like"]; got != "l" {
-		t.Fatalf("feed.like = %q; want l", got)
-	}
-
-	if _, err := os.Stat(articlesDir); !os.IsNotExist(err) {
-		t.Fatalf("articles dir stat = %v; want removed", err)
 	}
 }

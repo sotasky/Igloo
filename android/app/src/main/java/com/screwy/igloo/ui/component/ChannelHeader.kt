@@ -95,13 +95,6 @@ internal data class ChannelProfileHeaderUiModel(
     val platformLabel: String,
     val openLabel: String,
     val platformUrl: String?,
-    val initialAvatarUri: MediaUri = MediaUri.Missing,
-    val initialBannerUri: MediaUri = MediaUri.Missing,
-    val fallbackBannerUrl: String? = null,
-    val hasBannerSlot: Boolean,
-    val bannerHeightDp: Int,
-    val avatarSizeDp: Int,
-    val avatarOverlapDp: Int,
     val bio: String = "",
     val website: String = "",
     val stats: List<String> = emptyList(),
@@ -130,22 +123,17 @@ internal fun ComposeChannelHeader(
 ) {
     val colors: IglooColors = MaterialTheme.iglooColors
     val mediaResolvers: MediaResolvers = koinInject()
-    val fallbackBannerUri = remember(header.fallbackBannerUrl, header.initialBannerUri) {
-        initialChannelBannerUri(
-            modelBannerUrl = header.fallbackBannerUrl,
-            snapshotBannerUri = header.initialBannerUri,
-        )
+	val resolvedBannerUri by mediaResolvers.bannerForChannelFlow(header.channelId)
+		.collectAsState(initial = MediaUri.Missing)
+	val bannerUri = resolvedBannerUri
+    val hasBanner = bannerUri !is MediaUri.Missing
+    val bannerHeight = if (hasBanner) ChannelProfileHeaderDefaults.ComposeBannerHeightDp.dp else 0.dp
+    val avatarSize = if (hasBanner) {
+        ChannelProfileHeaderDefaults.ComposeAvatarSizeDp.dp
+    } else {
+        ChannelProfileHeaderDefaults.InlineAvatarSizeDp.dp
     }
-    val resolvedBannerUri by mediaResolvers.bannerForChannelFlow(header.channelId)
-        .collectAsState(initial = MediaUri.Missing)
-    val bannerUri = selectedChannelBannerUri(
-        resolvedBannerUri = resolvedBannerUri,
-        fallbackBannerUri = fallbackBannerUri,
-    )
-    val hasBanner = header.hasBannerSlot
-    val bannerHeight = header.bannerHeightDp.dp
-    val avatarSize = header.avatarSizeDp.dp
-    val avatarOverlap = header.avatarOverlapDp.dp
+    val avatarOverlap = if (hasBanner) ChannelProfileHeaderDefaults.ComposeAvatarOverlapDp.dp else 0.dp
     var menuOpen by remember { mutableStateOf(false) }
     val storyTarget = header.storyFirstVideoId.takeIf {
         it.isNotBlank() && header.storyRingState != StoryRingState.None
@@ -189,7 +177,6 @@ internal fun ComposeChannelHeader(
                 Avatar(
                     channelId = header.channelId,
                     size = avatarSize,
-                    initialUri = header.initialAvatarUri,
                     modifier = Modifier
                         .align(Alignment.BottomStart)
                         .padding(start = 16.dp)
@@ -247,7 +234,6 @@ internal fun ComposeChannelHeader(
                     Avatar(
                         channelId = header.channelId,
                         size = avatarSize,
-                        initialUri = header.initialAvatarUri,
                         modifier = Modifier
                             .storyRingBorder(header.storyRingState, colors),
                         onClick = storyTarget?.let { firstVideoId ->
@@ -532,13 +518,10 @@ private fun profileDisplayName(
 }
 
 internal fun channelProfileHeaderUiModel(
-    baseUrl: String,
-    channel: ChannelDisplay,
-    profile: ChannelProfileEntity?,
-    displayNameOverride: String? = null,
-    initialAvatarUri: MediaUri = MediaUri.Missing,
-    initialBannerUri: MediaUri = MediaUri.Missing,
-    labels: ChannelProfileHeaderLabels,
+	channel: ChannelDisplay,
+	profile: ChannelProfileEntity?,
+	displayNameOverride: String? = null,
+	labels: ChannelProfileHeaderLabels,
 ): ChannelProfileHeaderUiModel {
     val platform = parsePlatform(profile?.platform)
         ?: parsePlatform(channel.channel.platform)
@@ -558,24 +541,13 @@ internal fun channelProfileHeaderUiModel(
         handle = handle,
         channelId = channel.channel.channelId,
     )
-    val bannerUrl = channelBannerUrl(
-        baseUrl = baseUrl,
-        channelId = channel.channel.channelId,
-        profile = profile,
-        platform = platform,
-    )
-    val platformUrl = sequenceOf(channel.channel.url, profile?.profileUrl)
-        .mapNotNull { it?.trim()?.takeIf(String::isNotBlank) }
-        .firstOrNull()
-    val hasBannerSlot = bannerUrl != null || initialBannerUri !is MediaUri.Missing
+    val platformUrl = channel.channel.url?.trim()?.takeIf(String::isNotBlank)
     val followersLabel = if (platform == Platform.YouTube) labels.subscribers else labels.followers
     val stats = buildList {
         val following = profile?.following ?: 0
         val followers = profile?.followers ?: 0
-        val followingCountLabel = syncedProfileCountLabel(profile?.followingLabel)
-        val followersCountLabel = syncedProfileCountLabel(profile?.followersLabel)
-        if (following > 0 && followingCountLabel != null) add("$followingCountLabel ${labels.following}")
-        if (followers > 0 && followersCountLabel != null) add("$followersCountLabel $followersLabel")
+        if (following > 0) add("${compactCount(following.toLong())} ${labels.following}")
+        if (followers > 0) add("${compactCount(followers.toLong())} $followersLabel")
     }
     return ChannelProfileHeaderUiModel(
         channelId = channel.channel.channelId,
@@ -585,17 +557,6 @@ internal fun channelProfileHeaderUiModel(
         platformLabel = platform.profileHeaderLabel(labels),
         openLabel = platform.profileHeaderLabel(labels),
         platformUrl = platformUrl,
-        initialAvatarUri = initialAvatarUri,
-        initialBannerUri = initialBannerUri,
-        fallbackBannerUrl = bannerUrl,
-        hasBannerSlot = hasBannerSlot,
-        bannerHeightDp = if (hasBannerSlot) ChannelProfileHeaderDefaults.ComposeBannerHeightDp else 0,
-        avatarSizeDp = if (hasBannerSlot) {
-            ChannelProfileHeaderDefaults.ComposeAvatarSizeDp
-        } else {
-            ChannelProfileHeaderDefaults.InlineAvatarSizeDp
-        },
-        avatarOverlapDp = if (hasBannerSlot) ChannelProfileHeaderDefaults.ComposeAvatarOverlapDp else 0,
         bio = profile?.bio?.trim().orEmpty(),
         website = profile?.website?.trim().orEmpty(),
         stats = stats,
@@ -608,9 +569,6 @@ internal fun channelProfileHeaderUiModel(
     )
 }
 
-private fun syncedProfileCountLabel(raw: String?): String? =
-    raw?.trim()?.takeIf { it.isNotEmpty() }
-
 private fun Platform.profileHandlePlatformKey(): String =
     when (this) {
         Platform.Twitter -> "twitter"
@@ -618,38 +576,6 @@ private fun Platform.profileHandlePlatformKey(): String =
         Platform.YouTube -> "youtube"
         Platform.Instagram -> "instagram"
     }
-
-internal fun channelBannerUrl(
-    baseUrl: String,
-    channelId: String,
-    profile: ChannelProfileEntity?,
-    platform: Platform?,
-): String? {
-    val root = baseUrl.trim().trimEnd('/')
-    if (root.isBlank() || channelId.isBlank()) return null
-    val hasProfileBanner = !profile?.bannerUrl.isNullOrBlank()
-    val canHaveServerBanner = platform == Platform.Twitter ||
-        platform == Platform.TikTok ||
-        platform == Platform.YouTube
-    if (!hasProfileBanner && !canHaveServerBanner) return null
-    return "$root/api/media/banner/$channelId"
-}
-
-internal fun initialChannelBannerUri(
-    modelBannerUrl: String?,
-    snapshotBannerUri: MediaUri,
-): MediaUri =
-    if (snapshotBannerUri !is MediaUri.Missing) {
-        snapshotBannerUri
-    } else {
-        modelBannerUrl?.let(MediaUri::Remote) ?: MediaUri.Missing
-    }
-
-internal fun selectedChannelBannerUri(
-    resolvedBannerUri: MediaUri,
-    fallbackBannerUri: MediaUri,
-): MediaUri =
-    if (resolvedBannerUri is MediaUri.Missing) fallbackBannerUri else resolvedBannerUri
 
 private fun inferPlatformFromChannelId(channelId: String): Platform? =
     parsePlatform(platformKeyFromChannelId(channelId))

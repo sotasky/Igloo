@@ -2,19 +2,12 @@
 package main
 
 import (
-	"bytes"
-	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
-	"sort"
-	"strings"
 
-	"github.com/screwys/igloo/internal/auth"
 	"github.com/screwys/igloo/internal/config"
-	"github.com/screwys/igloo/internal/db"
-	"github.com/screwys/igloo/internal/fullimport"
 	"github.com/screwys/igloo/internal/restore"
 )
 
@@ -25,23 +18,17 @@ func main() {
 func run(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("igloo-import", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	replace := fs.Bool("replace", false, "replace existing settings, bookmarks, and bookmark categories for the selected owner before importing")
-	user := fs.String("user", "", "import user-owned rows for this username; defaults to the exported owner, the only configured user, or bootstrap before first setup")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 	if fs.NArg() != 1 {
-		_, _ = fmt.Fprintln(stderr, "usage: igloo-import [--replace] [--user USERNAME] igloo-full-*.zip")
+		_, _ = fmt.Fprintln(stderr, "usage: igloo-import igloo-full-*.zip")
 		return 2
 	}
 
 	cfg := config.Load()
-	if cfg.ConfigError != nil {
-		_, _ = fmt.Fprintf(stderr, "invalid config: %v\n", cfg.ConfigError)
-		return 1
-	}
-	if err := os.MkdirAll(cfg.DataDir, 0o755); err != nil {
-		_, _ = fmt.Fprintf(stderr, "create data dir: %v\n", err)
+	if err := cfg.Storage.Ensure(); err != nil {
+		_, _ = fmt.Fprintf(stderr, "validate storage: %v\n", err)
 		return 1
 	}
 	if err := os.MkdirAll(cfg.ConfDir, 0o700); err != nil {
@@ -50,95 +37,30 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 
 	zipPath := fs.Arg(0)
-	data, err := os.ReadFile(zipPath)
+	file, err := os.Open(zipPath)
 	if err != nil {
-		_, _ = fmt.Fprintf(stderr, "read export zip: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "open export zip: %v\n", err)
 		return 1
 	}
-	if !fullimport.IsZipPayload(data) {
-		_, _ = fmt.Fprintln(stderr, "not an Igloo full export zip: missing zip signature")
+	info, statErr := file.Stat()
+	if statErr != nil {
+		_ = file.Close()
+		_, _ = fmt.Fprintf(stderr, "stat export zip: %v\n", statErr)
 		return 1
 	}
-	if err := restore.StageZip(bytes.NewReader(data), int64(len(data)), cfg.DataDir); err == nil {
-		if err := restore.ApplyPending(cfg); err != nil {
-			_, _ = fmt.Fprintf(stderr, "restore full export backup: %v\n", err)
-			return 1
+	stageErr := restore.StageZip(file, info.Size(), cfg.Storage)
+	closeErr := file.Close()
+	if stageErr != nil || closeErr != nil {
+		if stageErr == nil {
+			stageErr = closeErr
 		}
-		_, _ = fmt.Fprintln(stdout, "format=zip_backup")
-		_, _ = fmt.Fprintf(stdout, "data_dir=%s\n", cfg.DataDir)
-		_, _ = fmt.Fprintf(stdout, "config_dir=%s\n", cfg.ConfDir)
-		_, _ = fmt.Fprintf(stdout, "database=%s\n", cfg.DatabasePath)
-		return 0
-	} else if !errors.Is(err, restore.ErrMissingDatabase) {
-		_, _ = fmt.Fprintf(stderr, "restore full export backup: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "restore full export backup: %v\n", stageErr)
 		return 1
 	}
-	exportCfg, err := fullimport.ReadExportConfig(data)
-	if err != nil {
-		_, _ = fmt.Fprintf(stderr, "read full export manifest: %v\n", err)
-		return 1
-	}
-
-	owner, ownerLabel, err := resolveImportOwner(cfg.AuthUsersPath, *user, exportCfg.UserID)
-	if err != nil {
-		_, _ = fmt.Fprintf(stderr, "resolve owner: %v\n", err)
-		return 1
-	}
-
-	store, err := db.Open(cfg.DatabasePath, cfg.DataDir)
-	if err != nil {
-		_, _ = fmt.Fprintf(stderr, "open database: %v\n", err)
-		return 1
-	}
-	defer func() {
-		_ = store.Close()
-	}()
-
-	result, restoredMedia, restoredConfig, err := fullimport.ImportFullExportZip(store, cfg.DataDir, cfg.ConfDir, cfg.RepoDir, data, owner, *replace)
-	if err != nil {
-		_, _ = fmt.Fprintf(stderr, "import full export: %v\n", err)
-		return 1
-	}
-	_, _ = fmt.Fprintln(stdout, "format=full_export_zip")
-	_, _ = fmt.Fprintf(stdout, "owner=%s\n", ownerLabel)
-	_, _ = fmt.Fprintf(stdout, "data_dir=%s\n", cfg.DataDir)
+	_, _ = fmt.Fprintln(stdout, "format=zip_backup")
+	_, _ = fmt.Fprintln(stdout, "pending=true")
+	_, _ = fmt.Fprintf(stdout, "data_dir=%s\n", cfg.Storage.StateRoot())
 	_, _ = fmt.Fprintf(stdout, "config_dir=%s\n", cfg.ConfDir)
-	_, _ = fmt.Fprintf(stdout, "database=%s\n", cfg.DatabasePath)
-	_, _ = fmt.Fprintf(stdout, "replace=%t\n", *replace)
-	_, _ = fmt.Fprintf(stdout, "added_channels=%d added_bookmarks=%d added_categories=%d updated_settings=%d restored_media=%d restored_config_files=%d skipped=%d\n",
-		result.AddedChannels, result.AddedBookmarks, result.AddedCategories, result.UpdatedSettings, restoredMedia, restoredConfig, result.Skipped)
+	_, _ = fmt.Fprintf(stdout, "database=%s\n", cfg.Storage.DatabasePath())
 	return 0
-}
-
-func resolveImportOwner(authUsersPath, explicit, exported string) (userID, label string, err error) {
-	explicit = strings.TrimSpace(explicit)
-	if explicit != "" {
-		return explicit, "user:" + explicit, nil
-	}
-	exported = strings.TrimSpace(exported)
-	if exported != "" {
-		return exported, "user:" + exported, nil
-	}
-
-	users, err := auth.LoadUsers(authUsersPath)
-	if err != nil {
-		return "", "", err
-	}
-	switch len(users) {
-	case 0:
-		return "", "bootstrap", nil
-	case 1:
-		names := make([]string, 0, len(users))
-		for name := range users {
-			names = append(names, name)
-		}
-		return names[0], "user:" + names[0], nil
-	default:
-		names := make([]string, 0, len(users))
-		for name := range users {
-			names = append(names, name)
-		}
-		sort.Strings(names)
-		return "", "", fmt.Errorf("multiple users configured (%s); pass --user", strings.Join(names, ", "))
-	}
 }

@@ -9,22 +9,21 @@ const (
 	schemaLifecycleDerivedCache    schemaTableLifecycle = "derived_cache"
 	schemaLifecycleMaintainedState schemaTableLifecycle = "maintained_state"
 	schemaLifecycleDiagnostic      schemaTableLifecycle = "diagnostic"
-	schemaLifecycleLegacyMigration schemaTableLifecycle = "legacy_migration"
 	schemaLifecycleSecurityState   schemaTableLifecycle = "security_state"
 )
 
 var schemaTableLifecycles = map[string]schemaTableLifecycle{
 	"analytics_events":            schemaLifecycleDiagnostic,
 	"analytics_rollups_daily":     schemaLifecycleDiagnostic,
-	"android_sync_assets":         schemaLifecycleDerivedCache,
-	"android_sync_generations":    schemaLifecycleDerivedCache,
 	"android_sync_health_reports": schemaLifecycleDiagnostic,
-	"android_sync_items":          schemaLifecycleDerivedCache,
+	"android_sync_clock":          schemaLifecycleMaintainedState,
+	"android_sync_heads":          schemaLifecycleMaintainedState,
 	"assets":                      schemaLifecycleMaintainedState,
 	"auth_refresh_tokens":         schemaLifecycleSecurityState,
 	"auth_sessions":               schemaLifecycleSecurityState,
 	"bookmark_categories":         schemaLifecycleUserState,
 	"bookmarks":                   schemaLifecycleUserState,
+	"category_create_receipts":    schemaLifecycleUserState,
 	"channel_follows":             schemaLifecycleUserState,
 	"channel_profiles":            schemaLifecycleArchive,
 	"channel_queue":               schemaLifecycleQueue,
@@ -36,16 +35,17 @@ var schemaTableLifecycles = map[string]schemaTableLifecycle{
 	"feed_item_sources":           schemaLifecycleArchive,
 	"feed_items":                  schemaLifecycleArchive,
 	"feed_likes":                  schemaLifecycleUserState,
-	"feed_media_jobs":             schemaLifecycleQueue,
 	"feed_rank_snapshot":          schemaLifecycleDerivedCache,
 	"feed_seen":                   schemaLifecycleUserState,
 	"feed_share_account_affinity": schemaLifecycleDerivedCache,
 	"feed_share_token_affinity":   schemaLifecycleDerivedCache,
 	"feed_sources":                schemaLifecycleArchive,
 	"ingest_state":                schemaLifecycleQueue,
-	"media_files":                 schemaLifecycleArchive,
 	"moment_views":                schemaLifecycleUserState,
-	"muted_accounts":              schemaLifecycleUserState,
+	"moments_cursors":             schemaLifecycleUserState,
+	"mutation_clocks":             schemaLifecycleUserState,
+	"muted_channels":              schemaLifecycleUserState,
+	"profile_jobs":                schemaLifecycleQueue,
 	"retweet_sources":             schemaLifecycleArchive,
 	"search_channels_fts":         schemaLifecycleDerivedCache,
 	"search_channels_fts_config":  schemaLifecycleDerivedCache,
@@ -59,11 +59,9 @@ var schemaTableLifecycles = map[string]schemaTableLifecycle{
 	"search_videos_fts_data":      schemaLifecycleDerivedCache,
 	"search_videos_fts_docsize":   schemaLifecycleDerivedCache,
 	"search_videos_fts_idx":       schemaLifecycleDerivedCache,
-	"schema_migrations":           schemaLifecycleLegacyMigration,
 	"settings":                    schemaLifecycleUserState,
 	"sponsorblock_checked":        schemaLifecycleArchive,
 	"sponsorblock_segments":       schemaLifecycleArchive,
-	"sync_changes":                schemaLifecycleUserState,
 	"translation_jobs":            schemaLifecycleQueue,
 	"translations":                schemaLifecycleDerivedCache,
 	"video_comments":              schemaLifecycleArchive,

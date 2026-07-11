@@ -37,6 +37,25 @@ func TestCSRFRejectsPostWithoutToken(t *testing.T) {
 	}
 }
 
+func TestRecoverPanicPropagatesHTTPAbort(t *testing.T) {
+	handler := recoverPanic(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("partial zip"))
+		panic(http.ErrAbortHandler)
+	}))
+	req := httptest.NewRequest(http.MethodGet, "/api/config/export/full", nil)
+	rec := httptest.NewRecorder()
+	defer func() {
+		if recovered := recover(); recovered != http.ErrAbortHandler {
+			t.Fatalf("recovered panic = %v, want http.ErrAbortHandler", recovered)
+		}
+		if strings.Contains(rec.Body.String(), "internal_error") {
+			t.Fatalf("abort response was converted to JSON: %q", rec.Body.String())
+		}
+	}()
+	handler.ServeHTTP(rec, req)
+}
+
 func TestCSRFAllowsGet(t *testing.T) {
 	s := &Server{cfg: &config.Config{SecretKey: "test-key"}}
 	handler := s.csrfProtect(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

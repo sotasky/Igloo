@@ -31,6 +31,17 @@ export PATH
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
 
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+
+snapshot_generated_scope() {
+  find internal/components static/js static/css -path static/js/dist -prune -o -type f -print0 \
+    | sort -z \
+    | xargs -0 sha256sum
+}
+
+snapshot_generated_scope > "$tmp/before"
+
 echo "[drift] generating templ components..."
 go run github.com/a-h/templ/cmd/templ@v0.3.1020 generate
 
@@ -38,7 +49,8 @@ echo "[drift] bundling static assets..."
 go run ./cmd/igloo-assets
 
 echo "[drift] checking tracked generated files..."
-git diff --exit-code -- internal/components static/js static/css
+snapshot_generated_scope > "$tmp/after"
+diff -u "$tmp/before" "$tmp/after"
 
 echo "[drift] checking ignored JS bundles were produced..."
 for asset in feed.js feed.js.map shorts.js shorts.js.map player.js player.js.map; do

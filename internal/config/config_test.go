@@ -6,10 +6,27 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/screwys/igloo/internal/storage"
 )
 
 type errorReader struct {
 	err error
+}
+
+func testStorage(t *testing.T, stateRoot string) storage.Layout {
+	t.Helper()
+	if err := os.MkdirAll(stateRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stateRoot, ".igloo-state-root"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	layout, err := storage.New(stateRoot, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return layout
 }
 
 func (r errorReader) Read([]byte) (int, error) {
@@ -85,10 +102,10 @@ func TestConfigEffectivePlatforms(t *testing.T) {
 	}
 }
 
-func TestEnsureRuntimeDirsCreatesDataAndConfigDirs(t *testing.T) {
+func TestEnsureRuntimeDirsUsesProvisionedStorageAndCreatesConfigDir(t *testing.T) {
 	root := t.TempDir()
 	cfg := &Config{
-		DataDir: filepath.Join(root, "state", "data"),
+		Storage: testStorage(t, filepath.Join(root, "state", "data")),
 		ConfDir: filepath.Join(root, "state", "config"),
 	}
 
@@ -96,7 +113,7 @@ func TestEnsureRuntimeDirsCreatesDataAndConfigDirs(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for _, path := range []string{cfg.DataDir, cfg.ConfDir} {
+	for _, path := range []string{cfg.Storage.StateRoot(), cfg.ConfDir} {
 		info, err := os.Stat(path)
 		if err != nil {
 			t.Fatalf("stat %s: %v", path, err)
@@ -107,11 +124,27 @@ func TestEnsureRuntimeDirsCreatesDataAndConfigDirs(t *testing.T) {
 	}
 }
 
+func TestEnsureRuntimeDirsDoesNotProvisionMissingStateRoot(t *testing.T) {
+	root := t.TempDir()
+	stateRoot := filepath.Join(root, "missing-state")
+	layout, err := storage.New(stateRoot, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := &Config{Storage: layout, ConfDir: filepath.Join(root, "config")}
+	if err := cfg.EnsureRuntimeDirs(); err == nil {
+		t.Fatal("EnsureRuntimeDirs succeeded with a missing state root")
+	}
+	if _, err := os.Stat(stateRoot); !os.IsNotExist(err) {
+		t.Fatalf("EnsureRuntimeDirs created the missing state root: %v", err)
+	}
+}
+
 func TestEnsureRuntimeDirsRejectsEmptyPaths(t *testing.T) {
 	if err := (&Config{ConfDir: t.TempDir()}).EnsureRuntimeDirs(); err == nil {
 		t.Fatal("expected empty data dir error")
 	}
-	if err := (&Config{DataDir: t.TempDir()}).EnsureRuntimeDirs(); err == nil {
+	if err := (&Config{Storage: testStorage(t, t.TempDir())}).EnsureRuntimeDirs(); err == nil {
 		t.Fatal("expected empty config dir error")
 	}
 }
@@ -183,8 +216,8 @@ func TestLoadFreshInstallDefaultsToNoPlatforms(t *testing.T) {
 	if cfg.PlatformEnabled("youtube") {
 		t.Fatal("youtube should be opt-in on fresh installs")
 	}
-	if cfg.DatabasePath != filepath.Join(dataDir, DatabaseFilename) {
-		t.Fatalf("DatabasePath = %q, want igloo.db default", cfg.DatabasePath)
+	if cfg.Storage.DatabasePath() != filepath.Join(dataDir, DatabaseFilename) {
+		t.Fatalf("DatabasePath = %q, want igloo.db default", cfg.Storage.DatabasePath())
 	}
 }
 
@@ -239,19 +272,23 @@ func TestLoadSecretKeyPanicsWhenRandomFails(t *testing.T) {
 	_ = loadSecretKey(t.TempDir())
 }
 
-func TestLoadRespectsExplicitDBPath(t *testing.T) {
-	custom := filepath.Join(t.TempDir(), "custom.db")
-	t.Setenv("IGLOO_DATA_DIR", t.TempDir())
+func TestLoadUsesExplicitMediaRoot(t *testing.T) {
+	stateRoot := t.TempDir()
+	mediaRoot := t.TempDir()
+	t.Setenv("IGLOO_DATA_DIR", stateRoot)
+	t.Setenv("IGLOO_MEDIA_DIR", mediaRoot)
 	t.Setenv("IGLOO_CONFIG_DIR", t.TempDir())
 	t.Setenv("IGLOO_REPO_DIR", t.TempDir())
-	t.Setenv("IGLOO_DB_PATH", custom)
 
 	cfg := Load()
 	if cfg.ConfigError != nil {
 		t.Fatal(cfg.ConfigError)
 	}
-	if cfg.DatabasePath != custom {
-		t.Fatalf("DatabasePath = %q, want %q", cfg.DatabasePath, custom)
+	if cfg.Storage.DatabasePath() != filepath.Join(stateRoot, DatabaseFilename) {
+		t.Fatalf("DatabasePath = %q", cfg.Storage.DatabasePath())
+	}
+	if cfg.Storage.MediaRoot() != mediaRoot {
+		t.Fatalf("MediaRoot = %q, want %q", cfg.Storage.MediaRoot(), mediaRoot)
 	}
 }
 

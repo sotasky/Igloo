@@ -19,12 +19,26 @@ type ChannelProfile struct {
 	Protected         bool   // twitter only
 	AvatarURL         string // source URL (change detection)
 	BannerURL         string // source URL; "" when platform has no banner
+	ObservedAt        *time.Time
 	FetchedAt         *time.Time
-	FailCount         int
-	NextRetryAt       *time.Time
 	Tombstone         bool
 	StoryState        string
 	StoryCount        int
 	StoryUnseenCount  int
 	StoryFirstVideoID string
+}
+
+// ProfileJob is the durable fetch request for one channel identity. A request
+// remains pending while RequestedRevision is newer than CompletedRevision.
+type ProfileJob struct {
+	ChannelID         string
+	RequestedRevision int64
+	CompletedRevision int64
+	RequestedAt       time.Time
+	LeaseOwner        string
+	LeaseUntil        *time.Time
+	Attempts          int
+	NextAttemptAt     *time.Time
+	LastError         string
+	UpdatedAt         time.Time
 }

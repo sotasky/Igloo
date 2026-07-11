@@ -23,11 +23,11 @@ func TestHandleTweetMediaMoveRejectsHTMLDisguisedAsMP4(t *testing.T) {
 
 	stagingDir := t.TempDir()
 	archiveDir := t.TempDir()
-	categoryID, err := srv.db.CreateBookmarkCategory("alice", "Memes", archiveDir)
+	categoryID, err := srv.db.CreateBookmarkCategory("Memes", archiveDir)
 	if err != nil {
 		t.Fatalf("CreateBookmarkCategory: %v", err)
 	}
-	if err := srv.db.SetSetting("", "x_media_staging_dir", stagingDir); err != nil {
+	if err := srv.db.SetSetting("x_media_staging_dir", stagingDir); err != nil {
 		t.Fatalf("SetSetting: %v", err)
 	}
 
@@ -93,7 +93,7 @@ func TestHandleTweetMediaDlArchivesDirectMediaURL(t *testing.T) {
 	srv := newTestServer(t)
 
 	archiveDir := t.TempDir()
-	categoryID, err := srv.db.CreateBookmarkCategory("sample_user", "Clips", archiveDir)
+	categoryID, err := srv.db.CreateBookmarkCategory("Clips", archiveDir)
 	if err != nil {
 		t.Fatalf("CreateBookmarkCategory: %v", err)
 	}

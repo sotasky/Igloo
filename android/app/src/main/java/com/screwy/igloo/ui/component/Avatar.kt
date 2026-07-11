@@ -32,7 +32,6 @@ import com.screwy.igloo.R
 import com.screwy.igloo.media.MediaResolvers
 import com.screwy.igloo.media.MediaUri
 import com.screwy.igloo.net.IglooHostProvider
-import com.screwy.igloo.net.ServerBaseUrlProvider
 import com.screwy.igloo.net.auth.AuthTokenProvider
 import com.screwy.igloo.ui.theme.iglooColors
 import kotlinx.coroutines.flow.flowOf
@@ -50,26 +49,16 @@ fun Avatar(
     size: Dp = 40.dp,
     modifier: Modifier = Modifier,
     onClick: (() -> Unit)? = null,
-    fadeWhenRemoteOffline: Boolean = true,
-    showPendingBadge: Boolean = true,
-    initialUri: MediaUri? = null,
-    remoteFallbackUrl: String? = null,
+	fadeWhenRemoteOffline: Boolean = true,
+	showPendingBadge: Boolean = true,
+	assetOwnerKind: String = "channel",
 ) {
-    val resolvers: MediaResolvers = koinInject()
-    val baseUrlProvider: ServerBaseUrlProvider = koinInject()
-    val imageLoader: ImageLoader = koinInject()
-    val fallbackInitialUri = initialUri
-        ?: if (channelId.isEmpty() || baseUrlProvider.baseUrl().isBlank()) MediaUri.Missing
-        else MediaUri.Remote(baseUrlProvider.baseUrl() + "/api/media/avatar/" + channelId)
-    val uri by (if (channelId.isEmpty()) flowOf(MediaUri.Missing) else resolvers.avatarForChannelFlow(channelId))
-        .collectAsState(initial = fallbackInitialUri)
-    val explicitRemoteFallback = remoteFallbackUrl
-        ?.trim()
-        ?.takeIf { it.startsWith("https://") || it.startsWith("http://") }
-    val displayUri = when {
-        explicitRemoteFallback != null && uri.prefersExplicitAvatarFallback() -> MediaUri.Remote(explicitRemoteFallback)
-        else -> uri
-    }
+	val resolvers: MediaResolvers = koinInject()
+	val imageLoader: ImageLoader = koinInject()
+	val displayUri by (
+		if (channelId.isEmpty()) flowOf(MediaUri.Missing)
+		else resolvers.avatarForOwnerFlow(channelId, assetOwnerKind)
+	).collectAsState(initial = MediaUri.Missing)
 
     val colors = MaterialTheme.iglooColors
     val showBadge = showPendingBadge && isIglooRemoteOffline(displayUri)
@@ -107,9 +96,6 @@ fun Avatar(
         if (showBadge) DownloadPendingBadge()
     }
 }
-
-private fun MediaUri.prefersExplicitAvatarFallback(): Boolean =
-    this is MediaUri.Missing || (this is MediaUri.Remote && url.contains("/api/media/avatar/"))
 
 @Composable
 private fun AvatarPlaceholder(size: Dp) {

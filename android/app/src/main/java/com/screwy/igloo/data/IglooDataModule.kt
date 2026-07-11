@@ -4,65 +4,58 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import org.koin.core.qualifier.named
+import org.koin.android.ext.koin.androidContext
 import org.koin.dsl.module
 
 /**
  * Koin wiring for the data layer.
  *
- *  - `DatabaseHolder` is a single; holds the current per-user DB instance.
+ *  - `IglooDatabase` is the one process-wide local mirror.
  *  - `PreferencesRepo` is a single; needs an application-scoped CoroutineScope to keep
  *    its hot-path caches warm.
- *  - DAO accessors are factories that resolve the current DB from the holder at each
- *    call, so login/logout swaps propagate transparently to callers.
- *
- *  Consumers inject DAOs directly — they never hold a IglooDatabase reference. Accessing
- *  a DAO before login throws via `requireCurrent()` (bug if it happens; caller paths are
- *  all gated behind the login screen).
+ *  - DAO accessors resolve from that fixed Room instance.
  */
 val iglooDataModule = module {
 
     single(named("applicationScope")) { CoroutineScope(SupervisorJob() + Dispatchers.Default) }
 
-    single { DatabaseHolder(get()) }
+    single { IglooDatabase.build(androidContext()) }
 
     single {
         PreferencesRepo(
-            dao = get<DatabaseHolder>().requireCurrent().preferenceDao(),
+            dao = get<IglooDatabase>().preferenceDao(),
             scope = get(named("applicationScope")),
         )
     }
 
-    // Per-entity DAOs — factory shape so login/logout is transparent.
-    factory { get<DatabaseHolder>().requireCurrent().feedItemDao() }
-    factory { get<DatabaseHolder>().requireCurrent().videoDao() }
-    factory { get<DatabaseHolder>().requireCurrent().channelDao() }
-    factory { get<DatabaseHolder>().requireCurrent().channelProfileDao() }
-    factory { get<DatabaseHolder>().requireCurrent().videoCommentDao() }
-    factory { get<DatabaseHolder>().requireCurrent().retweetSourceDao() }
-    factory { get<DatabaseHolder>().requireCurrent().sponsorBlockSegmentDao() }
-    factory { get<DatabaseHolder>().requireCurrent().sponsorBlockCheckedDao() }
-    factory { get<DatabaseHolder>().requireCurrent().feedLikeDao() }
-    factory { get<DatabaseHolder>().requireCurrent().feedRankDao() }
-    factory { get<DatabaseHolder>().requireCurrent().bookmarkDao() }
-    factory { get<DatabaseHolder>().requireCurrent().bookmarkCategoryDao() }
-    factory { get<DatabaseHolder>().requireCurrent().bookmarkLabelDao() }
-    factory { get<DatabaseHolder>().requireCurrent().feedSeenDao() }
-    factory { get<DatabaseHolder>().requireCurrent().momentViewDao() }
-    factory { get<DatabaseHolder>().requireCurrent().watchHistoryDao() }
-    factory { get<DatabaseHolder>().requireCurrent().mutedAccountDao() }
-    factory { get<DatabaseHolder>().requireCurrent().channelFollowDao() }
-    factory { get<DatabaseHolder>().requireCurrent().channelStarDao() }
-    factory { get<DatabaseHolder>().requireCurrent().channelSettingDao() }
-    factory { get<DatabaseHolder>().requireCurrent().outboxDao() }
-    factory { get<DatabaseHolder>().requireCurrent().preferenceDao() }
-    factory { get<DatabaseHolder>().requireCurrent().cursorDao() }
-    factory { get<DatabaseHolder>().requireCurrent().mediaInventoryDao() }
-    factory { get<DatabaseHolder>().requireCurrent().androidSyncDao() }
+    factory { get<IglooDatabase>().feedItemDao() }
+    factory { get<IglooDatabase>().videoDao() }
+    factory { get<IglooDatabase>().channelDao() }
+    factory { get<IglooDatabase>().channelProfileDao() }
+    factory { get<IglooDatabase>().videoCommentDao() }
+    factory { get<IglooDatabase>().retweetSourceDao() }
+    factory { get<IglooDatabase>().sponsorBlockSegmentDao() }
+    factory { get<IglooDatabase>().sponsorBlockCheckedDao() }
+    factory { get<IglooDatabase>().feedLikeDao() }
+    factory { get<IglooDatabase>().feedRankDao() }
+    factory { get<IglooDatabase>().bookmarkDao() }
+    factory { get<IglooDatabase>().bookmarkCategoryDao() }
+    factory { get<IglooDatabase>().feedSeenDao() }
+    factory { get<IglooDatabase>().momentViewDao() }
+    factory { get<IglooDatabase>().momentsCursorDao() }
+    factory { get<IglooDatabase>().watchHistoryDao() }
+    factory { get<IglooDatabase>().mutedChannelDao() }
+    factory { get<IglooDatabase>().channelFollowDao() }
+    factory { get<IglooDatabase>().channelStarDao() }
+    factory { get<IglooDatabase>().channelSettingDao() }
+    factory { get<IglooDatabase>().outboxDao() }
+    factory { get<IglooDatabase>().preferenceDao() }
+    factory { get<IglooDatabase>().androidSyncDao() }
 
     // Composite read DAOs.
-    factory { get<DatabaseHolder>().requireCurrent().feedReadDao() }
-    factory { get<DatabaseHolder>().requireCurrent().momentReadDao() }
-    factory { get<DatabaseHolder>().requireCurrent().videoReadDao() }
-    factory { get<DatabaseHolder>().requireCurrent().bookmarkReadDao() }
-    factory { get<DatabaseHolder>().requireCurrent().channelReadDao() }
+    factory { get<IglooDatabase>().feedReadDao() }
+    factory { get<IglooDatabase>().momentReadDao() }
+    factory { get<IglooDatabase>().videoReadDao() }
+    factory { get<IglooDatabase>().bookmarkReadDao() }
+    factory { get<IglooDatabase>().channelReadDao() }
 }

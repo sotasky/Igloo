@@ -7,9 +7,10 @@ import com.screwy.igloo.data.IglooDatabase
 import com.screwy.igloo.data.entity.FeedRow
 import com.screwy.igloo.feed.buildFeedMediaSet
 import com.screwy.igloo.feed.feedMediaCount
-import com.screwy.igloo.feed.loadFeedMediaInventoryRows
+import com.screwy.igloo.feed.loadFeedMediaAssetRows
 import com.screwy.igloo.feed.mediaViewerInitialIndex
 import com.screwy.igloo.net.ServerBaseUrlProvider
+import com.screwy.igloo.net.Reachability
 import com.screwy.igloo.outbox.OutboxKind
 import com.screwy.igloo.outbox.OutboxWriter
 import com.screwy.igloo.ui.UiEffect
@@ -50,6 +51,7 @@ class MediaRouteViewModel(
     private val db: IglooDatabase,
     private val outboxWriter: OutboxWriter,
     private val baseUrlProvider: ServerBaseUrlProvider,
+    private val reachability: Reachability,
     private val uiEffects: UiEffects,
 ) : ViewModel() {
     private val _baseMediaState = MutableStateFlow<MediaRouteState?>(null)
@@ -143,7 +145,6 @@ class MediaRouteViewModel(
         val target = _pendingBookmark.value ?: return
         _pendingBookmark.value = null
         viewModelScope.launch {
-            val prev = outboxWriter.capturePreviousBookmark(target.itemId)
             outboxWriter.enqueue(
                 OutboxKind.Bookmark(
                     videoId = target.itemId,
@@ -152,7 +153,6 @@ class MediaRouteViewModel(
                     customTitle = payload.customTitle,
                     accountHandles = payload.accountHandles?.joinToString(","),
                     mediaIndices = payload.mediaIndices?.joinToString(","),
-                    prevRow = prev,
                 ),
             )
         }
@@ -162,12 +162,10 @@ class MediaRouteViewModel(
         val target = _pendingBookmark.value ?: return
         _pendingBookmark.value = null
         viewModelScope.launch {
-            val prev = outboxWriter.capturePreviousBookmark(target.itemId)
             outboxWriter.enqueue(
                 OutboxKind.Bookmark(
                     videoId = target.itemId,
                     action = OutboxKind.Action.Clear,
-                    prevRow = prev,
                 ),
             )
         }
@@ -187,7 +185,7 @@ class MediaRouteViewModel(
                 UiEffect.NavigateTo(
                     authorRoute(
                         channelId = row.item.channelId,
-                        handle = row.item.authorHandle,
+                        handle = row.authorHandle,
                     ),
                 ),
             )
@@ -208,8 +206,9 @@ class MediaRouteViewModel(
         }
         val mediaSet = buildFeedMediaSet(
             row = row,
-            inventoryRows = loadFeedMediaInventoryRows(db, row),
+            assetRows = loadFeedMediaAssetRows(db, row),
             baseUrl = baseUrlProvider.baseUrl(),
+            allowRemote = reachability.state.value is Reachability.State.Online,
         )
         if (mediaSet == null) {
             _uiState.value = UiState.Empty
@@ -229,12 +228,12 @@ class MediaRouteViewModel(
     ): BookmarkTarget =
         BookmarkTarget(
             itemId = row.item.tweetId,
-            authorHandle = row.item.authorHandle,
+            authorHandle = row.authorHandle.orEmpty(),
             mediaCount = feedMediaCount(row.item),
             currentBookmark = currentBookmark,
             defaultTitle = row.item.bodyText?.lineSequence()?.firstOrNull(),
-            sourceHandle = row.item.sourceHandle,
-            quoteAuthorHandle = row.item.quoteAuthorHandle,
+            sourceHandle = row.sourceHandle,
+            quoteAuthorHandle = row.quoteAuthorHandle,
             bodyText = row.item.bodyText,
             isRetweet = row.item.isRetweet,
         )

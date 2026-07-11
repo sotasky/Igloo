@@ -15,8 +15,6 @@ func (s *Server) registerAuthAPIRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/auth/login", s.handleAuthLogin)
 	mux.HandleFunc("POST /api/auth/refresh", s.handleAuthRefresh)
 	mux.HandleFunc("POST /api/auth/logout", s.handleAuthLogout)
-	mux.HandleFunc("DELETE /api/account", s.handleAccountDelete)
-	mux.HandleFunc("GET /api/auth/verify", s.handleAuthVerify)
 }
 
 // handleAuthLogin opens a new session and issues a paired access +
@@ -147,45 +145,6 @@ func (s *Server) handleAuthLogout(w http.ResponseWriter, r *http.Request) {
 		slog.Error("RevokeAuthSession", "session", claims.SessionID, "err", err)
 	}
 	writeJSON(w, 200, map[string]any{})
-}
-
-// handleAccountDelete removes the user's account and all scoped data.
-// Admin is protected — the plan (#17 + #18) requires a 403 +
-// error_code=admin_account_protected.
-func (s *Server) handleAccountDelete(w http.ResponseWriter, r *http.Request) {
-	user := userFromContext(r.Context())
-	if user == nil {
-		writeJSONError(w, 401, "unauthenticated", "authentication required")
-		return
-	}
-	if user.Role == "admin" {
-		writeJSONError(w, 403, "admin_account_protected",
-			"Admin account cannot be deleted from the client. Sign in on the web admin console.")
-		return
-	}
-
-	// Multi-user account deletion is out-of-scope for N=1 deployment per
-	// server-side-changes.md #17. We revoke all sessions — the account
-	// entry itself remains until the multi-user work lands.
-	if err := s.db.RevokeAuthSessionsForUser(user.Username, "account_deleted"); err != nil {
-		slog.Error("RevokeAuthSessionsForUser", "user", user.Username, "err", err)
-	}
-	writeJSON(w, 200, map[string]any{})
-}
-
-// handleAuthVerify is a legacy probe — Bearer verification already ran
-// in the middleware; this just echoes back who the caller is.
-func (s *Server) handleAuthVerify(w http.ResponseWriter, r *http.Request) {
-	user := userFromContext(r.Context())
-	if user == nil {
-		writeJSONError(w, 401, "unauthenticated", "authentication required")
-		return
-	}
-	writeJSON(w, 200, map[string]any{
-		"valid":    true,
-		"username": user.Username,
-		"role":     user.Role,
-	})
 }
 
 // refreshErrorCode maps refresh-path verify + consume errors onto the

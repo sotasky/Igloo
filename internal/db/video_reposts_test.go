@@ -12,9 +12,9 @@ func TestVideoRepostSourcesReplaceAndMomentsTabs(t *testing.T) {
 	for _, stmt := range []string{
 		`INSERT INTO channels (channel_id, source_id, name, platform) VALUES ('tiktok_followed', 'followed', 'Followed', 'tiktok')`,
 		`INSERT INTO channels (channel_id, source_id, name, platform) VALUES ('tiktok_author', 'author', 'Author', 'tiktok')`,
-		`INSERT INTO channel_follows (user_id, channel_id, followed_at) VALUES ('', 'tiktok_followed', 1)`,
-		`INSERT INTO videos (video_id, channel_id, title, duration, published_at) VALUES ('orig_1', 'tiktok_followed', 'Original', 0, 1000)`,
-		`INSERT INTO videos (video_id, channel_id, title, duration, published_at) VALUES ('repost_1', 'tiktok_author', 'Reposted', 0, 500)`,
+		`INSERT INTO channel_follows (channel_id, followed_at) VALUES ('tiktok_followed', 1)`,
+		`INSERT INTO videos (video_id, channel_id, owner_kind, title, duration, published_at) VALUES ('orig_1', 'tiktok_followed', 'tiktok_video', 'Original', 0, 1000)`,
+		`INSERT INTO videos (video_id, channel_id, owner_kind, title, duration, published_at) VALUES ('repost_1', 'tiktok_author', 'tiktok_video', 'Reposted', 0, 500)`,
 	} {
 		if err := d.ExecRaw(stmt); err != nil {
 			t.Fatalf("seed: %v", err)
@@ -52,7 +52,7 @@ func TestVideoRepostSourcesReplaceAndMomentsTabs(t *testing.T) {
 		t.Fatalf("all off should not add repost metadata: %+v", allOff[0])
 	}
 
-	if err := d.SetSetting("", "moments_include_reposts_default", "true"); err != nil {
+	if err := d.SetSetting("moments_include_reposts_default", "true"); err != nil {
 		t.Fatalf("SetSetting moments_include_reposts_default: %v", err)
 	}
 	allOn, err := d.GetVideos(GetVideosOpts{Platform: "shorts", MomentsMode: "all", OrderAsc: true, Limit: 10})
@@ -84,15 +84,15 @@ func TestMomentsRepostOrderingFallsBackToFirstSeenAt(t *testing.T) {
 	for _, stmt := range []string{
 		`INSERT INTO channels (channel_id, source_id, name, platform) VALUES ('tiktok_followed', 'followed', 'Followed', 'tiktok')`,
 		`INSERT INTO channels (channel_id, source_id, name, platform) VALUES ('tiktok_author', 'author', 'Author', 'tiktok')`,
-		`INSERT INTO channel_follows (user_id, channel_id, followed_at) VALUES ('', 'tiktok_followed', 1)`,
-		`INSERT INTO videos (video_id, channel_id, title, duration, published_at) VALUES ('orig_newer', 'tiktok_followed', 'Original newer', 0, 2000)`,
-		`INSERT INTO videos (video_id, channel_id, title, duration, published_at) VALUES ('repost_older', 'tiktok_author', 'Repost older', 0, 1000)`,
+		`INSERT INTO channel_follows (channel_id, followed_at) VALUES ('tiktok_followed', 1)`,
+		`INSERT INTO videos (video_id, channel_id, owner_kind, title, duration, published_at) VALUES ('orig_newer', 'tiktok_followed', 'tiktok_video', 'Original newer', 0, 2000)`,
+		`INSERT INTO videos (video_id, channel_id, owner_kind, title, duration, published_at) VALUES ('repost_older', 'tiktok_author', 'tiktok_video', 'Repost older', 0, 1000)`,
 	} {
 		if err := d.ExecRaw(stmt); err != nil {
 			t.Fatalf("seed: %v", err)
 		}
 	}
-	if err := d.SetSetting("", "moments_include_reposts_default", "true"); err != nil {
+	if err := d.SetSetting("moments_include_reposts_default", "true"); err != nil {
 		t.Fatalf("SetSetting moments_include_reposts_default: %v", err)
 	}
 	if _, err := d.UpsertVideoRepostSources([]model.VideoRepostSource{{
@@ -124,8 +124,8 @@ func TestInstagramTaggedMomentsUseInstagramSetting(t *testing.T) {
 	for _, stmt := range []string{
 		`INSERT INTO channels (channel_id, source_id, name, platform) VALUES ('instagram_followed', 'followed', 'Followed', 'instagram')`,
 		`INSERT INTO channels (channel_id, source_id, name, platform) VALUES ('instagram_author', 'author', 'Author', 'instagram')`,
-		`INSERT INTO channel_follows (user_id, channel_id, followed_at) VALUES ('', 'instagram_followed', 1)`,
-		`INSERT INTO videos (video_id, channel_id, title, duration, published_at) VALUES ('tagged_1', 'instagram_author', 'Tagged', 0, 1000)`,
+		`INSERT INTO channel_follows (channel_id, followed_at) VALUES ('instagram_followed', 1)`,
+		`INSERT INTO videos (video_id, channel_id, owner_kind, title, duration, published_at) VALUES ('tagged_1', 'instagram_author', 'instagram_reel', 'Tagged', 0, 1000)`,
 	} {
 		if err := d.ExecRaw(stmt); err != nil {
 			t.Fatalf("seed: %v", err)
@@ -141,7 +141,7 @@ func TestInstagramTaggedMomentsUseInstagramSetting(t *testing.T) {
 	}}); err != nil {
 		t.Fatalf("UpsertVideoRepostSources: %v", err)
 	}
-	if err := d.SetSetting("", "moments_include_reposts_default", "true"); err != nil {
+	if err := d.SetSetting("moments_include_reposts_default", "true"); err != nil {
 		t.Fatalf("SetSetting moments_include_reposts_default: %v", err)
 	}
 
@@ -153,7 +153,7 @@ func TestInstagramTaggedMomentsUseInstagramSetting(t *testing.T) {
 		t.Fatalf("TikTok repost setting should not include Instagram tagged rows: %v", got)
 	}
 
-	if err := d.SetSetting("", "instagram_include_tagged_default", "true"); err != nil {
+	if err := d.SetSetting("instagram_include_tagged_default", "true"); err != nil {
 		t.Fatalf("SetSetting instagram_include_tagged_default: %v", err)
 	}
 	all, err := d.GetVideos(GetVideosOpts{Platform: "shorts", MomentsMode: "all", OrderAsc: true, Limit: 10})
@@ -287,20 +287,24 @@ func TestEnsureInstagramChannelForTaggedPreservesDottedHandleWithoutMediaAvatar(
 	if ch.SourceID != "collab.one" || ch.Name != "Collab One" || ch.URL != "https://www.instagram.com/collab.one/" || ch.Platform != "instagram" {
 		t.Fatalf("unexpected channel: %+v", ch)
 	}
-	var handle, avatar string
+	var handle string
 	var fetchedAt int64
 	if err := d.QueryRow(`
-		SELECT COALESCE(handle,''), COALESCE(avatar_url,''), fetched_at
+		SELECT COALESCE(handle,''), fetched_at
 		FROM channel_profiles
 		WHERE channel_id = 'instagram_collab.one'
-	`).Scan(&handle, &avatar, &fetchedAt); err != nil {
+	`).Scan(&handle, &fetchedAt); err != nil {
 		t.Fatalf("query profile: %v", err)
 	}
-	if handle != "collab.one" || avatar != "" {
-		t.Fatalf("profile handle/avatar = %q/%q", handle, avatar)
+	if handle != "collab.one" {
+		t.Fatalf("profile handle = %q", handle)
 	}
 	if fetchedAt != 0 {
 		t.Fatalf("fetched_at = %d, want 0 so profile worker can refresh", fetchedAt)
+	}
+	avatar, err := d.GetAssetByOwnerIdentity("avatar", "channel", "instagram_collab.one", 0)
+	if err != nil || avatar != nil {
+		t.Fatalf("unexpected canonical avatar = %+v / %v", avatar, err)
 	}
 }
 

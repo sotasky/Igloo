@@ -2,55 +2,41 @@ package com.screwy.igloo.player
 
 import androidx.media3.exoplayer.ExoPlayer
 import com.screwy.igloo.media.MediaUri
-import com.screwy.igloo.perf.PerfProbe
 
-data class PlaybackSource(
-    val mediaUri: MediaUri,
-    val resumeMs: Long = 0L,
-)
+data class PlaybackSource(val mediaUri: MediaUri, val resumeMs: Long = 0L)
 
 interface PlaybackPlayer {
     fun stop()
+
     fun setMediaItem(uri: String)
+
     fun prepare()
+
     fun seekTo(positionMs: Long)
+
     fun setPlayWhenReady(playWhenReady: Boolean)
 }
 
 class PlaybackCoordinator {
-    fun bind(
-        player: PlaybackPlayer,
-        source: PlaybackSource,
-    ) {
-        val uri = when (val mediaUri = source.mediaUri) {
-            is MediaUri.Local -> mediaUri.file.toURI().toString()
-            is MediaUri.Remote -> mediaUri.url
-            is MediaUri.Missing -> return
-        }
-
-        PerfProbe.timed(
-            event = "long_form_playback_bind",
-            fields = {
-                mapOf(
-                    "uri" to PerfProbe.uriKind(source.mediaUri),
-                    "resume" to (source.resumeMs > 0L),
-                )
-            },
-        ) {
-            player.stop()
-            player.setMediaItem(uri)
-            player.prepare()
-            if (source.resumeMs > 0L) {
-                player.seekTo(source.resumeMs)
+    fun bind(player: PlaybackPlayer, source: PlaybackSource) {
+        val uri =
+            when (val mediaUri = source.mediaUri) {
+                is MediaUri.Local -> mediaUri.file.toURI().toString()
+                is MediaUri.Remote -> mediaUri.url
+                is MediaUri.Missing -> return
             }
-            player.setPlayWhenReady(true)
+
+        player.stop()
+        player.setMediaItem(uri)
+        player.prepare()
+        if (source.resumeMs > 0L) {
+            player.seekTo(source.resumeMs)
         }
+        player.setPlayWhenReady(true)
     }
 }
 
-class ExoPlayerPlaybackPlayer(
-    private val player: ExoPlayer,
-) : PlaybackPlayer {
+class ExoPlayerPlaybackPlayer(private val player: ExoPlayer) : PlaybackPlayer {
     override fun stop() {
         player.stop()
     }

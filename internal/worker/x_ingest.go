@@ -5,8 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -170,9 +168,7 @@ func (m *Manager) runIngestCycle(ctx context.Context) {
 	// Sequential paced fetch.
 	const batchSize = 500
 	var pendingItems []model.FeedItem
-	var pendingJobs []db.FeedMediaJobRow
 	var totalUpserted int
-	var totalJobs int
 	cycleFailures := make(map[string]string)
 
 	for i, ch := range fetchList {
@@ -228,7 +224,6 @@ func (m *Manager) runIngestCycle(ctx context.Context) {
 
 		items = filterTimelineItemsForSource(handle, items)
 		filtered := applyChannelFiltersFromSettings(items, settings)
-		pendingJobs = append(pendingJobs, feedMediaJobRowsForItems(filtered, settings)...)
 
 		pendingItems = append(pendingItems, filtered...)
 
@@ -241,22 +236,10 @@ func (m *Manager) runIngestCycle(ctx context.Context) {
 			} else {
 				totalUpserted += n
 				m.enforceXMediaLimitsForItems(flushedItems)
+				m.KickFeedMedia()
 			}
 
-			if len(pendingJobs) > 0 && upsertErr == nil {
-				if jErr := m.db.EnqueueFeedMediaJobs(pendingJobs); jErr != nil {
-					log.Printf("[x_ingest] EnqueueFeedMediaJobs (batch): %v", jErr)
-				} else {
-					totalJobs += len(pendingJobs)
-					m.KickFeedMedia()
-				}
-			} else if len(pendingJobs) > 0 {
-				log.Printf("[x_ingest] skipping %d media jobs after failed batch upsert", len(pendingJobs))
-			}
 			pendingItems = pendingItems[:0]
-			if len(pendingJobs) > 0 {
-				pendingJobs = pendingJobs[:0]
-			}
 		}
 	}
 
@@ -275,28 +258,15 @@ func (m *Manager) runIngestCycle(ctx context.Context) {
 	}
 
 	// Final batch upsert for remaining items.
-	finalUpsertOK := true
 	if len(pendingItems) > 0 {
 		n, upsertErr := m.upsertFeedItemsBatch(ctx, pendingItems, "final")
 		if upsertErr != nil {
 			log.Printf("[x_ingest] UpsertFeedItems (final): %v", upsertErr)
-			finalUpsertOK = false
 		} else {
 			totalUpserted += n
 			m.enforceXMediaLimitsForItems(pendingItems)
-		}
-	}
-
-	// Final batch of media jobs.
-	if len(pendingJobs) > 0 && finalUpsertOK {
-		if jErr := m.db.EnqueueFeedMediaJobs(pendingJobs); jErr != nil {
-			log.Printf("[x_ingest] EnqueueFeedMediaJobs (final): %v", jErr)
-		} else {
-			totalJobs += len(pendingJobs)
 			m.KickFeedMedia()
 		}
-	} else if len(pendingJobs) > 0 {
-		log.Printf("[x_ingest] skipping %d media jobs after failed final upsert", len(pendingJobs))
 	}
 
 	m.lastCycleMu.Lock()
@@ -306,12 +276,6 @@ func (m *Manager) runIngestCycle(ctx context.Context) {
 	m.lastCycleNotDue = notDue
 	m.lastCycleReady = len(fetchList)
 	m.lastCycleMu.Unlock()
-
-	if n, err := m.db.SeedChannelProfileRows(); err != nil {
-		log.Printf("[x_ingest] SeedChannelProfileRows: %v", err)
-	} else if n > 0 {
-		log.Printf("[x_ingest] seeded/updated %d channel profile rows", n)
-	}
 
 	// Reply chain resolution runs per-batch inside the fetch loop above so
 	// threads are joinable before items become visible to readers, instead
@@ -324,7 +288,7 @@ func (m *Manager) runIngestCycle(ctx context.Context) {
 	}
 
 	elapsed := time.Since(start)
-	detail := fmt.Sprintf("cycle done: %d items, %d jobs, %s", totalUpserted, totalJobs, elapsed.Round(time.Millisecond))
+	detail := fmt.Sprintf("cycle done: %d items, %s", totalUpserted, elapsed.Round(time.Millisecond))
 	log.Printf("[x_ingest] %s", detail)
 	m.Emit(xIngestActivitySource, fmt.Sprintf("Ingested %d items from %d sources", totalUpserted, len(fetchList)), "done")
 	m.setStatus(xIngestWorkerName, workerStatus(xIngestWorkerName, true, detail, ""))
@@ -335,10 +299,10 @@ func (m *Manager) upsertFeedItemsBatch(ctx context.Context, items []model.FeedIt
 	if err != nil {
 		return 0, err
 	}
-	m.primeFeedItemProfiles(ctx, items)
 	// Resolve reply chains for this batch so threads are joinable promptly,
 	// instead of waiting for the full ingest cycle to finish.
 	m.resolveReplyChains(ctx, items)
+	m.KickProfileJobs()
 	return n, nil
 }
 
@@ -409,15 +373,7 @@ func (m *Manager) FetchOneChannel(ctx context.Context, channelID string) (int, e
 		return 0, fmt.Errorf("upsert: %w", err)
 	}
 	m.enforceXMediaLimit(channelID)
-
-	jobs := feedMediaJobRowsForItems(filtered, settings)
-	if len(jobs) > 0 {
-		if err := m.db.EnqueueFeedMediaJobs(jobs); err != nil {
-			log.Printf("[x_ingest] EnqueueFeedMediaJobs (single): %v", err)
-		} else {
-			m.KickFeedMedia()
-		}
-	}
+	m.KickFeedMedia()
 
 	m.KickFeedScoring()
 	return n, nil
@@ -463,14 +419,7 @@ func (m *Manager) upsertFeedSourceItems(ctx context.Context, source model.FeedSo
 			return n, fmt.Errorf("record source attribution: %w", err)
 		}
 	}
-	jobs := feedMediaJobRowsForItems(items, nil)
-	if len(jobs) > 0 {
-		if err := m.db.EnqueueFeedMediaJobs(jobs); err != nil {
-			log.Printf("[x_ingest] EnqueueFeedMediaJobs (feed source): %v", err)
-		} else {
-			m.KickFeedMedia()
-		}
-	}
+	m.KickFeedMedia()
 	m.KickFeedScoring()
 	return n, nil
 }
@@ -504,14 +453,13 @@ func (m *Manager) enforceXMediaLimit(channelID string) {
 		log.Printf("[x_ingest] prune X media retention %s: %v", channelID, err)
 		return
 	}
-	if result.PrunedItems == 0 && result.MediaRowsDeleted == 0 && result.JobsMarkedPruned == 0 && result.FileRemoval.Removed == 0 {
+	if result.PrunedItems == 0 && result.AssetsPruned == 0 && result.FileRemoval.Removed == 0 {
 		return
 	}
-	log.Printf("[x_ingest] pruned X media retention for %s: items=%d media_rows=%d jobs=%d files=%d bytes=%d",
+	log.Printf("[x_ingest] pruned X media retention for %s: items=%d assets=%d files=%d bytes=%d",
 		channelID,
 		result.PrunedItems,
-		result.MediaRowsDeleted,
-		result.JobsMarkedPruned,
+		result.AssetsPruned,
 		result.FileRemoval.Removed,
 		result.FileRemoval.RemovedBytes)
 }
@@ -536,38 +484,6 @@ func applyChannelFiltersFromSettings(items []model.FeedItem, settings *db.Channe
 	return result
 }
 
-func feedMediaJobRowsForItems(items []model.FeedItem, settings *db.ChannelSettings) []db.FeedMediaJobRow {
-	limit := 0
-	if settings != nil {
-		limit = settings.MediaDownloadLimit
-	}
-
-	jobs := make([]db.FeedMediaJobRow, 0, len(items))
-	for i := range items {
-		items[i].ParseMedia()
-		kind := classifyMediaKind(items[i].MediaJSON)
-		slideCount := len(items[i].Media)
-		if kind == "unknown" && items[i].QuoteMediaJSON != "" {
-			kind = classifyMediaKind(items[i].QuoteMediaJSON)
-			slideCount = len(items[i].QuoteMedia)
-		}
-		if kind == "unknown" {
-			continue
-		}
-		if limit > 0 && len(jobs) >= limit {
-			break
-		}
-		jobs = append(jobs, db.FeedMediaJobRow{
-			TweetID:      items[i].TweetID,
-			TweetURL:     items[i].CanonicalURL,
-			SourceHandle: items[i].SourceHandle,
-			MediaKind:    kind,
-			SlideCount:   slideCount,
-		})
-	}
-	return jobs
-}
-
 // classifyMediaKind returns "video", "image", or "unknown" based on mediaJSON content.
 func classifyMediaKind(mediaJSON string) string {
 	if mediaJSON == "" {
@@ -587,79 +503,6 @@ func workerStatus(name string, running bool, detail, errMsg string) WorkerStatus
 		LastRunAt: time.Now(),
 		Detail:    detail,
 		Error:     errMsg,
-	}
-}
-
-// primeFeedItemProfiles creates profile rows for a just-upserted feed batch and
-// kicks avatar/profile recovery while those rows are still hot in the ingest path.
-func (m *Manager) primeFeedItemProfiles(ctx context.Context, items []model.FeedItem) {
-	if len(items) == 0 {
-		return
-	}
-	if n, err := m.db.SeedChannelProfileRowsForFeedItems(items); err != nil {
-		log.Printf("[x_ingest] SeedChannelProfileRowsForFeedItems: %v", err)
-	} else if n > 0 {
-		log.Printf("[x_ingest] primed %d feed profile rows", n)
-	}
-	if ctx.Err() != nil {
-		return
-	}
-	avatarCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
-	defer cancel()
-	m.downloadNewAuthorAvatars(avatarCtx, items)
-}
-
-// downloadNewAuthorAvatars downloads avatars for non-followed authors that have
-// a twimg URL stored in the feed item but no cached file yet.
-func (m *Manager) downloadNewAuthorAvatars(ctx context.Context, items []model.FeedItem) {
-	seen := make(map[string]bool)
-	avatarDir := filepath.Join(m.cfg.DataDir, "thumbnails", "avatars")
-	_ = os.MkdirAll(avatarDir, 0o755)
-
-	queueAvatarRecovery := func(handle, avatarURL string) {
-		channelID := model.TwitterAvatarChannelID(handle, avatarURL)
-		if channelID == "" || seen[channelID] {
-			return
-		}
-		seen[channelID] = true
-		if hasConventionalMediaFile(avatarDir, channelID) {
-			return
-		}
-		if strings.Contains(avatarURL, "twimg.com") {
-			if model.IsSyntheticTwitterAvatarChannelID(channelID) {
-				_ = m.db.UpsertChannelProfile(model.ChannelProfile{
-					ChannelID: channelID,
-					Platform:  "twitter",
-					AvatarURL: avatarURL,
-				})
-			}
-			m.maybeDownloadAvatar(ctx, channelID, avatarURL, avatarDir)
-			return
-		}
-		m.RequestAvatar(channelID)
-	}
-
-	for _, item := range items {
-		if ctx.Err() != nil {
-			return
-		}
-		queueAvatarRecovery(item.AuthorHandle, item.AuthorAvatarURL)
-		queueAvatarRecovery(item.QuoteAuthorHandle, item.QuoteAuthorAvatarURL)
-	}
-}
-
-// maybeDownloadAvatar downloads a twimg avatar for channelID if not already cached.
-func (m *Manager) maybeDownloadAvatar(ctx context.Context, channelID, twimgURL, avatarDir string) {
-	if hasConventionalMediaFile(avatarDir, channelID) {
-		return
-	}
-	tmpPath, err := m.downloader.HTTP.DownloadFile(ctx, upgradeTwimgURL(twimgURL), avatarDir, channelID+".download")
-	if err != nil {
-		log.Printf("[x_ingest] avatar download failed for %s: %v", channelID, err)
-		return
-	}
-	if _, err := normalizeDownloadedImage(tmpPath, avatarDir, channelID); err != nil {
-		log.Printf("[x_ingest] avatar normalize failed for %s: %v", channelID, err)
 	}
 }
 
@@ -700,10 +543,4 @@ func (m *Manager) resolveReplyChainsSweep(ctx context.Context) {
 	}
 	log.Printf("[x_ingest] reply sweep: retrying %d unresolved replies", len(candidates))
 	m.resolveReplyChains(ctx, candidates)
-}
-
-// upgradeTwimgURL replaces Twitter's _normal suffix (48x48) with _400x400 so
-// downloaded avatars are large enough to avoid the placeholder size threshold.
-func upgradeTwimgURL(u string) string {
-	return strings.Replace(u, "_normal.", "_400x400.", 1)
 }

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -163,6 +162,11 @@ func (m *Manager) downloadVideo(ctx context.Context, job db.DownloadQueueRow, pl
 		m.postponeDownloadJobForPlatformBackoff(job, platform, backoff)
 		return
 	}
+	ownerKind, ok := db.VideoOwnerKindForPlatform(platform)
+	if !ok || ownerKind == "tweet" {
+		m.failDownloadJob(job, fmt.Errorf("unsupported download platform %q", platform))
+		return
+	}
 
 	// Short-form rate-limit pacing: enforce minimum gap between downloads,
 	// measured from the END of the previous download attempt.
@@ -190,11 +194,28 @@ func (m *Manager) downloadVideo(ctx context.Context, job db.DownloadQueueRow, pl
 			safeSourceID = h
 		}
 	}
-	videoDir := filepath.Join(m.cfg.DataDir, "media", platform, safeSourceID)
+	videoDir, err := m.cfg.Storage.WritePath("media/" + platform + "/" + safeSourceID)
+	if err != nil {
+		m.failDownloadJob(job, fmt.Errorf("storage path: %w", err))
+		return
+	}
 	if err := os.MkdirAll(videoDir, 0o755); err != nil {
 		log.Printf("[downloadpool] mkdir %s: %v", videoDir, err)
 		m.failDownloadJob(job, fmt.Errorf("mkdir: %w", err))
 		return
+	}
+	attemptID, err := newDownloadAttemptID(videoDir, job.VideoID)
+	if err != nil {
+		m.failDownloadJob(job, fmt.Errorf("allocate download attempt: %w", err))
+		return
+	}
+	subtitleDir := ""
+	if subtitles {
+		subtitleDir, err = m.cfg.Storage.WritePath("subtitles/" + platform)
+		if err != nil {
+			m.failDownloadJob(job, fmt.Errorf("subtitle storage path: %w", err))
+			return
+		}
 	}
 
 	sourceURL := buildSourceURL(platform, safeSourceID, job.VideoID)
@@ -203,82 +224,60 @@ func (m *Manager) downloadVideo(ctx context.Context, job db.DownloadQueueRow, pl
 	cookiesFile, cookiesBrowser := m.cookiesFor(platform)
 	opts := download.Opts{
 		OutputDir:          videoDir,
-		ID:                 job.VideoID,
+		ID:                 attemptID,
 		Cookies:            cookiesFile,
 		CookiesFromBrowser: cookiesBrowser,
 		CookieAlternates:   m.cookieSetsFor(platform),
 		Format:             formatStr,
 		Subtitles:          subtitles,
+		SubtitleDir:        subtitleDir,
 	}
 
-	var paths []string
+	var completed download.CompletedDownload
 	var dlErr error
 
 	if platform == "tiktok" || platform == "instagram" {
-		paths, dlErr = m.downloader.Download(ctx, sourceURL, "video", opts)
+		completed, dlErr = m.downloader.DownloadCompleted(ctx, sourceURL, "video", opts)
 	} else {
-		paths, dlErr = m.downloader.YtDlp.Download(ctx, sourceURL, opts)
+		completed, dlErr = m.downloader.YtDlp.DownloadCompleted(ctx, sourceURL, opts)
 	}
 
 	if dlErr != nil {
+		(completedVideoFiles{}).removeFailedAttempt(completed)
 		log.Printf("[downloadpool] download %s: %v", job.VideoID, dlErr)
 		m.EmitDownload(fmt.Sprintf("Failed: %s — %v", job.Title, dlErr), "error", job.ChannelID, platform)
 		m.failDownloadJob(job, fmt.Errorf("download: %w", dlErr))
 		return
 	}
 
-	if len(paths) == 0 {
+	if len(completed.MediaPaths) == 0 {
+		(completedVideoFiles{}).removeFailedAttempt(completed)
 		log.Printf("[downloadpool] no files returned for %s", job.VideoID)
 		m.EmitDownload(fmt.Sprintf("Failed: %s — no files returned", job.Title), "error", job.ChannelID, platform)
 		m.failDownloadJob(job, fmt.Errorf("no files returned"))
 		return
 	}
 
-	videoPath := paths[0]
-	relVideoPath := toRelPath(m.cfg.DataDir, videoPath)
-
-	// Get file size.
-	var fileSize int64
-	if fi, err := os.Stat(videoPath); err == nil {
-		fileSize = fi.Size()
-	}
-
-	// Find sibling thumbnail.
-	thumbPath := findSiblingThumbnail(videoPath, job.VideoID)
-
-	// Load .info.json sidecar for metadata.
-	metadata := loadInfoJSON(videoPath, job.VideoID)
-	if thumbPath == "" {
-		thumbPath = m.downloadSiblingThumbnailFromMetadata(ctx, videoPath, job.VideoID, metadata)
-	}
-
-	relThumbPath := ""
-	if thumbPath != "" {
-		relThumbPath = toRelPath(m.cfg.DataDir, thumbPath)
+	metadata := loadInfoJSONFile(completed.InfoJSONPath)
+	files, err := m.prepareCompletedVideoFiles(ctx, platform, attemptID, completed)
+	if err != nil {
+		files.removeFailedAttempt(completed)
+		m.failDownloadJob(job, fmt.Errorf("prepare completed outputs: %w", err))
+		return
 	}
 
 	// Short-form slideshows: gallery-dl returns multiple image files.
 	// Build a slides array in metadata so EnrichForCard detects slideshow.
-	if (platform == "tiktok" || platform == "instagram") && len(paths) > 1 {
-		var imagePaths []string
-		for _, p := range paths {
-			ext := strings.ToLower(filepath.Ext(p))
-			switch ext {
-			case ".jpg", ".jpeg", ".png", ".webp":
-				imagePaths = append(imagePaths, p)
-			}
+	if (platform == "tiktok" || platform == "instagram") && len(files.imageKeys) > 1 {
+		slides := make([]any, len(files.imageKeys))
+		for i, key := range files.imageKeys {
+			slides[i] = map[string]any{"path": key}
 		}
-		if len(imagePaths) > 1 {
-			slides := make([]any, len(imagePaths))
-			for i, p := range imagePaths {
-				slides[i] = map[string]any{"path": toRelPath(m.cfg.DataDir, p)}
-			}
-			if metadata == nil {
-				metadata = map[string]any{}
-			}
-			metadata["slides"] = slides
-			metadata["vcodec"] = "none"
+		if metadata == nil {
+			metadata = map[string]any{}
 		}
+		metadata["slides"] = slides
+		metadata["vcodec"] = "none"
 	}
 
 	publishedAt := publishedAtForJob(metadata, job)
@@ -304,71 +303,72 @@ func (m *Manager) downloadVideo(ctx context.Context, job db.DownloadQueueRow, pl
 	if metadataJSON != "" {
 		var meta model.VideoMetadata
 		if err := json.Unmarshal([]byte(metadataJSON), &meta); err == nil {
-			mediaKind, slideCount = model.ComputeMediaKind(&meta, relVideoPath)
+			mediaKind, slideCount = model.ComputeMediaKind(&meta, files.primaryKey)
 		}
 	}
 	if mediaKind == "" {
-		mediaKind, slideCount = model.ComputeMediaKind(nil, relVideoPath)
+		mediaKind, slideCount = model.ComputeMediaKind(nil, files.primaryKey)
 	}
 
 	// Use richer post metadata when a flat channel check only carried a
 	// truncated social caption.
 	title := videoTitleFromMetadata(metadata, job.Title)
 
-	// Insert into videos table.
-	if err := m.db.InsertVideo(
-		job.VideoID, job.ChannelID, title, description,
-		duration, relThumbPath, relVideoPath, fileSize,
-		publishedAt, metadataJSON, mediaKind, slideCount, false,
-	); err != nil {
-		log.Printf("[downloadpool] InsertVideo %s: %v", job.VideoID, err)
+	if err := m.db.StoreCompletedVideo(db.CompletedVideo{
+		VideoID: job.VideoID, ChannelID: job.ChannelID, OwnerKind: ownerKind, Title: title, Description: description,
+		Duration: duration, PublishedAtMs: publishedAt, MetadataJSON: metadataJSON,
+		MediaKind: mediaKind, SlideCount: slideCount, Assets: files.assets,
+	}); err != nil {
+		files.removeFailedAttempt(completed)
+		log.Printf("[downloadpool] StoreCompletedVideo %s: %v", job.VideoID, err)
 		m.failDownloadJob(job, fmt.Errorf("db insert: %w", err))
 		return
 	}
+	if err := m.storeCompletedSubtitles(job.VideoID, files, completed); err != nil {
+		log.Printf("[downloadpool] StoreVideoSubtitleAssets %s: %v", job.VideoID, err)
+	}
+	files.removeTransientFiles()
 
 	// Remove from download queue.
 	if err := m.db.RemoveFromDownloadQueue(job.VideoID, job.LeaseOwner); err != nil {
 		log.Printf("[downloadpool] RemoveFromDownloadQueue %s: %v", job.VideoID, err)
 	}
 
-	// Enqueue preview generation.
-	if duration > 0 {
-		absVideoPath := videoPath
-		if !filepath.IsAbs(absVideoPath) {
-			absVideoPath = filepath.Join(m.cfg.DataDir, absVideoPath)
-		}
-		m.EnqueuePreview(PreviewRequest{
-			VideoID:  job.VideoID,
-			FilePath: absVideoPath,
-			Duration: float64(duration),
-		})
-	}
+	m.enqueueCompletedVideoPreview(job.VideoID, platform, files.primaryPath, float64(duration))
 
 	// Fetch comments in background — only YouTube supports yt-dlp comment extraction.
 	if platform == "youtube" {
 		capturedURL := sourceURL
 		capturedID := job.VideoID
 		capturedOpts := opts
+		m.wg.Add(1)
 		go func() {
-			bgCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			defer m.wg.Done()
+			parent := m.ctx
+			if parent == nil {
+				parent = context.Background()
+			}
+			bgCtx, cancel := context.WithTimeout(parent, 2*time.Minute)
 			defer cancel()
 			comments, err := m.downloader.YtDlp.FetchComments(bgCtx, capturedURL, download.DefaultCommentFetchLimit, capturedOpts)
 			if err != nil {
 				log.Printf("[downloadpool] comments fetch failed for %s: %v", capturedID, err)
 				return
 			}
-			inserted, _ := m.db.AddComments(capturedID, comments, "youtube")
-			// yt-dlp includes commenter thumbnails in the comment payload; commenters
-			// are not clickable Igloo profiles, so cache their public thumbnails directly.
-			cachedAvatars := m.CacheYouTubeCommentAvatars(bgCtx, comments)
-			log.Printf("[downloadpool] fetched %d comments for %s, cached %d commenter avatars", inserted, capturedID, cachedAvatars)
+			inserted, err := m.db.AddComments(capturedID, comments)
+			if err != nil {
+				log.Printf("[downloadpool] store comments for %s: %v", capturedID, err)
+				return
+			}
+			m.KickFeedMedia()
+			log.Printf("[downloadpool] fetched %d comments for %s", inserted, capturedID)
 		}()
 	}
 
 	// Fetch DeArrow branding + SponsorBlock segments in background — YouTube only.
 	if platform == "youtube" {
 		capturedID := job.VideoID
-		capturedPath := relVideoPath
+		capturedPath := files.primaryKey
 		capturedPlatform := platform
 		m.wg.Add(1)
 		go func() {
@@ -380,7 +380,7 @@ func (m *Manager) downloadVideo(ctx context.Context, job db.DownloadQueueRow, pl
 	}
 
 	elapsed := time.Since(start).Round(time.Millisecond)
-	log.Printf("[downloadpool] completed %s (%s, %d bytes, %s)", job.VideoID, title, fileSize, elapsed)
+	log.Printf("[downloadpool] completed %s (%s, %s)", job.VideoID, title, elapsed)
 	m.EmitDownload(fmt.Sprintf("Completed: %s", title), "done", job.ChannelID, platform)
 	atomic.AddInt32(&m.dlSessionCompleted, 1)
 	m.dlLastDownload.Store(&LastDownloadInfo{
@@ -785,74 +785,6 @@ func parseDateString(s string) int64 {
 	}
 
 	return 0
-}
-
-// findSiblingThumbnail looks for a thumbnail file next to the video file.
-// Checks for {videoID}.{jpg,jpeg,webp,png,image} in the same directory.
-func findSiblingThumbnail(videoPath, videoID string) string {
-	dir := filepath.Dir(videoPath)
-	for _, ext := range []string{".jpg", ".jpeg", ".webp", ".png", ".image"} {
-		p := filepath.Join(dir, videoID+ext)
-		if fi, err := os.Stat(p); err == nil && fi.Mode().IsRegular() {
-			return p
-		}
-	}
-	return ""
-}
-
-func (m *Manager) downloadSiblingThumbnailFromMetadata(ctx context.Context, videoPath, videoID string, metadata map[string]any) string {
-	if m.downloader == nil || m.downloader.HTTP == nil {
-		return ""
-	}
-	thumbURL := thumbnailURLFromMetadata(metadata)
-	if thumbURL == "" {
-		return ""
-	}
-	p, err := m.downloader.HTTP.DownloadFile(ctx, thumbURL, filepath.Dir(videoPath), videoID+".image")
-	if err != nil {
-		log.Printf("[downloadpool] thumbnail %s: %v", videoID, err)
-		return ""
-	}
-	return p
-}
-
-func thumbnailURLFromMetadata(metadata map[string]any) string {
-	if metadata == nil {
-		return ""
-	}
-	if s, ok := metadata["thumbnail"].(string); ok && strings.TrimSpace(s) != "" {
-		return strings.TrimSpace(s)
-	}
-	rawThumbs, ok := metadata["thumbnails"].([]any)
-	if !ok {
-		return ""
-	}
-	for _, raw := range rawThumbs {
-		m, ok := raw.(map[string]any)
-		if !ok {
-			continue
-		}
-		if s, ok := m["url"].(string); ok && strings.TrimSpace(s) != "" {
-			return strings.TrimSpace(s)
-		}
-	}
-	return ""
-}
-
-// loadInfoJSON loads the .info.json sidecar file for a video.
-// Returns nil if the file doesn't exist or can't be parsed.
-func loadInfoJSON(videoPath, videoID string) map[string]any {
-	dir := filepath.Dir(videoPath)
-	p := filepath.Join(dir, videoID+".info.json")
-	data, err := os.ReadFile(p)
-	if err != nil {
-		return nil
-	}
-	var m map[string]any
-	if err := json.Unmarshal(data, &m); err != nil {
-		return nil
-	}
-	return m
 }
 
 // extractDurationFromMetadata extracts duration as an integer from metadata.

@@ -3,12 +3,14 @@ package download
 import (
 	"context"
 	"errors"
-	"github.com/screwys/igloo/internal/model"
+	"fmt"
 	"log"
 	"net/url"
 	"path"
 	"strings"
 	"time"
+
+	"github.com/screwys/igloo/internal/model"
 )
 
 const (
@@ -25,6 +27,7 @@ type Opts struct {
 	CookieAlternates   []CookieSet // Ordered credential fallbacks.
 	Format             string      // yt-dlp -f format string (overrides default FormatSort when set).
 	Subtitles          bool        // Download English subtitles as VTT.
+	SubtitleDir        string      // State-root directory for subtitle outputs.
 }
 
 // Downloader is the unified entry point that routes to the correct backend.
@@ -66,6 +69,13 @@ func (d *Downloader) SetOperationSink(sink OperationSink) {
 //  2. Direct CDN (pbs.twimg.com, video.twimg.com, photo/image) → HTTP
 //  3. Default → yt-dlp
 func (d *Downloader) Download(ctx context.Context, rawURL string, mediaType string, opts Opts) ([]string, error) {
+	completed, err := d.DownloadCompleted(ctx, rawURL, mediaType, opts)
+	return completed.MediaPaths, err
+}
+
+// DownloadCompleted routes the request while preserving every exact output
+// path returned by the selected producer.
+func (d *Downloader) DownloadCompleted(ctx context.Context, rawURL string, mediaType string, opts Opts) (CompletedDownload, error) {
 	start := time.Now()
 	platform := platformFromURL(rawURL)
 	tool := "yt-dlp"
@@ -74,11 +84,11 @@ func (d *Downloader) Download(ctx context.Context, rawURL string, mediaType stri
 	} else if isDirectMedia(rawURL, mediaType) {
 		tool = "http"
 	}
-	var paths []string
+	var completed CompletedDownload
 	var err error
 	usedOpts := opts
 	defer func() {
-		files, bytes := summarizePaths(paths)
+		files, bytes := summarizePaths(completed.MediaPaths)
 		recordOperation(ctx, d.sink, model.DownloaderOperation{
 			Operation:   "media.download",
 			Platform:    platform,
@@ -98,18 +108,22 @@ func (d *Downloader) Download(ctx context.Context, rawURL string, mediaType stri
 	attempts := opts.cookieAttempts()
 	for i, auth := range attempts {
 		usedOpts = opts.withCookieSet(auth)
-		paths, err = d.downloadOnce(ctx, rawURL, mediaType, usedOpts)
+		if i > 0 && usedOpts.ID != "" {
+			usedOpts.ID = fmt.Sprintf("%s-retry-%d", opts.ID, i+1)
+		}
+		completed, err = d.downloadCompletedOnce(ctx, rawURL, mediaType, usedOpts)
 		if err == nil {
-			return paths, nil
+			return completed, nil
 		}
 		if i+1 >= len(attempts) || !shouldTryNextCookieAttempt(err) {
-			return paths, err
+			return completed, err
 		}
+		removeCompletedDownloadFiles(completed)
 	}
-	return paths, err
+	return completed, err
 }
 
-func (d *Downloader) downloadOnce(ctx context.Context, rawURL string, mediaType string, opts Opts) ([]string, error) {
+func (d *Downloader) downloadCompletedOnce(ctx context.Context, rawURL string, mediaType string, opts Opts) (CompletedDownload, error) {
 	if IsTikTokURL(rawURL) {
 		return d.downloadTikTok(ctx, rawURL, opts)
 	}
@@ -136,30 +150,30 @@ func (d *Downloader) downloadOnce(ctx context.Context, rawURL string, mediaType 
 				p, err = d.HTTP.DownloadFileWithOptions(ctx, fallbackURL, opts.OutputDir, filename, httpOpts)
 			}
 			if err != nil {
-				return nil, err
+				return CompletedDownload{}, err
 			}
 		}
-		return []string{p}, nil
+		return CompletedDownload{MediaPaths: []string{p}}, nil
 	}
-	return d.YtDlp.Download(ctx, rawURL, opts)
+	return d.YtDlp.DownloadCompleted(ctx, rawURL, opts)
 }
 
-func (d *Downloader) downloadInstagram(ctx context.Context, rawURL string, opts Opts) ([]string, error) {
+func (d *Downloader) downloadInstagram(ctx context.Context, rawURL string, opts Opts) (CompletedDownload, error) {
 	if !isInstagramReelURL(rawURL) {
 		return d.downloadGalleryDLFirst(ctx, rawURL, opts)
 	}
-	ytPaths, ytErr := d.YtDlp.Download(ctx, rawURL, opts)
-	if ytErr == nil && len(ytPaths) > 0 {
-		return ytPaths, nil
+	ytResult, ytErr := d.YtDlp.DownloadCompleted(ctx, rawURL, opts)
+	if ytErr == nil && len(ytResult.MediaPaths) > 0 {
+		return ytResult, nil
 	}
 	if ytErr == nil {
 		ytErr = errors.New("yt-dlp returned no files")
 	}
-	gdlPaths, gdlErr := d.GalleryDL.Download(ctx, rawURL, opts.OutputDir, opts.ID, opts.Cookies, opts.CookiesFromBrowser)
-	if gdlErr == nil && len(gdlPaths) > 0 {
-		return gdlPaths, nil
+	gdlResult, gdlErr := d.GalleryDL.DownloadCompleted(ctx, rawURL, opts.OutputDir, opts.ID, opts.Cookies, opts.CookiesFromBrowser)
+	if gdlErr == nil && len(gdlResult.MediaPaths) > 0 {
+		return gdlResult, nil
 	}
-	return ytPaths, fallbackDownloadError(gdlErr, ytErr)
+	return ytResult, fallbackDownloadError(gdlErr, ytErr)
 }
 
 func (opts Opts) cookieAttempts() []CookieSet {
@@ -226,12 +240,12 @@ func directMediaHTTPOptions(rawURL, mediaType string) HTTPDownloadOptions {
 // downloadTikTok handles TikTok URLs with slideshow detection.
 // gallery-dl is tried first — it handles slideshows natively (images + audio)
 // with clean 1-based numbering. For regular videos, falls back to yt-dlp.
-func (d *Downloader) downloadTikTok(ctx context.Context, rawURL string, opts Opts) ([]string, error) {
+func (d *Downloader) downloadTikTok(ctx context.Context, rawURL string, opts Opts) (CompletedDownload, error) {
 	// gallery-dl handles TikTok slideshows natively (images + audio).
 	// It fails fast on regular videos, so there's no significant overhead.
-	gdlPaths, gdlErr := d.GalleryDL.Download(ctx, rawURL, opts.OutputDir, opts.ID, opts.Cookies, opts.CookiesFromBrowser)
-	if gdlErr == nil && len(gdlPaths) > 0 {
-		return gdlPaths, nil
+	gdlResult, gdlErr := d.GalleryDL.DownloadCompleted(ctx, rawURL, opts.OutputDir, opts.ID, opts.Cookies, opts.CookiesFromBrowser)
+	if gdlErr == nil && len(gdlResult.MediaPaths) > 0 {
+		return gdlResult, nil
 	}
 
 	// If gallery-dl reached the post and got a permanent 404/403 (deleted,
@@ -239,37 +253,37 @@ func (d *Downloader) downloadTikTok(ctx context.Context, rawURL string, opts Opt
 	// misleading "IP blocked" error and keep the job looping forever.
 	var httpErr *HTTPStatusError
 	if errors.As(gdlErr, &httpErr) && (httpErr.StatusCode == 404 || httpErr.StatusCode == 403) {
-		return nil, gdlErr
+		return CompletedDownload{}, gdlErr
 	}
 
 	// gallery-dl failed or returned nothing — it's a regular video. Use yt-dlp.
-	ytPaths, ytErr := d.YtDlp.Download(ctx, rawURL, opts)
-	if ytErr == nil && len(ytPaths) > 0 {
-		return ytPaths, nil
+	ytResult, ytErr := d.YtDlp.DownloadCompleted(ctx, rawURL, opts)
+	if ytErr == nil && len(ytResult.MediaPaths) > 0 {
+		return ytResult, nil
 	}
 	if ytErr == nil {
 		ytErr = errors.New("yt-dlp returned no files")
 	}
-	return ytPaths, fallbackDownloadError(gdlErr, ytErr)
+	return ytResult, fallbackDownloadError(gdlErr, ytErr)
 }
 
-func (d *Downloader) downloadGalleryDLFirst(ctx context.Context, rawURL string, opts Opts) ([]string, error) {
-	gdlPaths, gdlErr := d.GalleryDL.Download(ctx, rawURL, opts.OutputDir, opts.ID, opts.Cookies, opts.CookiesFromBrowser)
-	if gdlErr == nil && len(gdlPaths) > 0 {
-		return gdlPaths, nil
+func (d *Downloader) downloadGalleryDLFirst(ctx context.Context, rawURL string, opts Opts) (CompletedDownload, error) {
+	gdlResult, gdlErr := d.GalleryDL.DownloadCompleted(ctx, rawURL, opts.OutputDir, opts.ID, opts.Cookies, opts.CookiesFromBrowser)
+	if gdlErr == nil && len(gdlResult.MediaPaths) > 0 {
+		return gdlResult, nil
 	}
 	var httpErr *HTTPStatusError
 	if errors.As(gdlErr, &httpErr) && (httpErr.StatusCode == 404 || httpErr.StatusCode == 403) {
-		return nil, gdlErr
+		return CompletedDownload{}, gdlErr
 	}
-	ytPaths, ytErr := d.YtDlp.Download(ctx, rawURL, opts)
-	if ytErr == nil && len(ytPaths) > 0 {
-		return ytPaths, nil
+	ytResult, ytErr := d.YtDlp.DownloadCompleted(ctx, rawURL, opts)
+	if ytErr == nil && len(ytResult.MediaPaths) > 0 {
+		return ytResult, nil
 	}
 	if ytErr == nil {
 		ytErr = errors.New("yt-dlp returned no files")
 	}
-	return ytPaths, fallbackDownloadError(gdlErr, ytErr)
+	return ytResult, fallbackDownloadError(gdlErr, ytErr)
 }
 
 func fallbackDownloadError(primaryErr, fallbackErr error) error {

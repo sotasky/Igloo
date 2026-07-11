@@ -137,14 +137,7 @@ func (m *Manager) upsertXStatusEnrichmentItems(ctx context.Context, items []mode
 		log.Printf("[x_status_enrichment] upsert: %v", err)
 		return
 	}
-	jobs := feedMediaJobRowsForItems(items, nil)
-	if len(jobs) > 0 {
-		if err := m.db.EnqueueFeedMediaJobs(jobs); err != nil {
-			log.Printf("[x_status_enrichment] EnqueueFeedMediaJobs: %v", err)
-		} else {
-			m.KickFeedMedia()
-		}
-	}
+	m.KickFeedMedia()
 	if n > 0 {
 		m.KickFeedScoring()
 	}

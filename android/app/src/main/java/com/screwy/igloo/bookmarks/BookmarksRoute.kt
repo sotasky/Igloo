@@ -56,7 +56,7 @@ import com.screwy.igloo.R
 import com.screwy.igloo.data.stripPlatformPrefix
 import com.screwy.igloo.data.entity.BookmarkItem
 import com.screwy.igloo.media.MediaResolvers
-import com.screwy.igloo.net.ServerBaseUrlProvider
+import com.screwy.igloo.media.MediaUri
 import com.screwy.igloo.ui.UiStateSwitch
 import com.screwy.igloo.ui.component.Avatar
 import com.screwy.igloo.ui.component.BookmarkSheet
@@ -66,7 +66,6 @@ import com.screwy.igloo.ui.component.ScrollToBottomFab
 import com.screwy.igloo.ui.component.ScrollToTopFab
 import com.screwy.igloo.ui.component.TimestampBadge
 import com.screwy.igloo.ui.component.displayLabel
-import com.screwy.igloo.ui.component.displayMediaCellThumbnail
 import com.screwy.igloo.ui.component.normalizeHandle
 import com.screwy.igloo.ui.component.scrollArrowVisibility
 import com.screwy.igloo.ui.nav.IglooNavigationSource
@@ -90,8 +89,6 @@ fun BookmarksRoute(
 ) {
     val vm: BookmarksViewModel = koinViewModel()
     val scope = rememberCoroutineScope()
-    val baseUrlProvider: ServerBaseUrlProvider = koinInject()
-    val baseUrl = baseUrlProvider.baseUrl()
     val items by vm.items.collectAsStateWithLifecycle()
     val categories by vm.categories.collectAsStateWithLifecycle()
     val bookmarkCategories by vm.bookmarkCategories.collectAsStateWithLifecycle()
@@ -162,7 +159,6 @@ fun BookmarksRoute(
                                     playlistId = bookmarkPlaylistId(selectedFilter),
                                     videoId = item.bookmark.videoId,
                                     source = IglooNavigationSource.Bookmarks,
-                                    posterUri = item.initialThumbnailUri(baseUrl),
                                 )
                             }
                         },
@@ -456,18 +452,13 @@ private fun BookmarkTile(
 ) {
     val colors = MaterialTheme.iglooColors
     val resolvers: MediaResolvers = koinInject()
-    val baseUrlProvider: ServerBaseUrlProvider = koinInject()
 
     val ownerKind = bookmarkOwnerKind(item)
     val mediaOwnerId = bookmarkMediaOwnerId(item)
     val channelId = item.resolvedChannelId
-    val fallbackThumbUri = remember(item, ownerKind, mediaOwnerId) {
-        item.initialThumbnailUri(baseUrlProvider.baseUrl())
-    }
-
-    val thumbUri by resolvers.thumbnailForPostFlow(mediaOwnerId, ownerKind)
-        .collectAsState(initial = fallbackThumbUri)
-    val displayThumbUri = displayMediaCellThumbnail(thumbUri, fallbackThumbUri)
+	val thumbUri by resolvers.thumbnailForPostFlow(mediaOwnerId, ownerKind)
+		.collectAsState(initial = MediaUri.Missing)
+	val displayThumbUri = thumbUri
 
     Box(
         modifier = Modifier

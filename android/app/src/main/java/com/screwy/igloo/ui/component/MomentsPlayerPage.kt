@@ -59,11 +59,8 @@ import com.screwy.igloo.data.stripPlatformPrefix
 import com.screwy.igloo.log.Logger
 import com.screwy.igloo.media.MediaResolvers
 import com.screwy.igloo.media.MediaUri
-import com.screwy.igloo.media.ownerKindFromChannelId
 import com.screwy.igloo.net.IglooHostProvider
-import com.screwy.igloo.net.ServerBaseUrlProvider
 import com.screwy.igloo.net.auth.AuthTokenProvider
-import com.screwy.igloo.perf.PerfProbe
 import com.screwy.igloo.player.buildIglooPlayer
 import com.screwy.igloo.ui.theme.iglooColors
 import kotlin.math.max
@@ -76,15 +73,12 @@ private fun prepareMomentVideo(
     item: MomentItem,
     pageIndex: Int,
     streamUri: MediaUri,
-    seedPositionMs: Long = 0L,
     logger: Logger,
 ): String? {
     val targetLoadKey = momentStreamLoadKey(item.videoId, streamUri)
     if (targetLoadKey == null) {
         if (loadedKey != null || player.mediaItemCount > 0) {
-            PerfProbe.log(
-                event = "moments_player_clear",
-            ) { mapOf("reason" to "missing_stream", "page" to pageIndex) }
+
             logger.debugMoment("moments_player_clear_missing_stream") {
                 momentVideoDebugFields(
                     item = item,
@@ -93,7 +87,6 @@ private fun prepareMomentVideo(
                     player = player,
                     loadedKey = loadedKey,
                     targetLoadKey = null,
-                    seedPositionMs = seedPositionMs,
                 )
             }
             player.playWhenReady = false
@@ -105,27 +98,16 @@ private fun prepareMomentVideo(
 
     if (
         loadedKey == targetLoadKey &&
-        player.mediaItemCount > 0 &&
-        player.currentMediaItem?.mediaId == item.videoId &&
-        player.playbackState != Player.STATE_ENDED
+            player.mediaItemCount > 0 &&
+            player.currentMediaItem?.mediaId == item.videoId &&
+            player.playbackState != Player.STATE_ENDED
     ) {
-        PerfProbe.log(
-            event = "moments_player_prepare_skip",
-        ) { mapOf("reason" to "already_loaded", "page" to pageIndex) }
+
         return loadedKey
     }
 
     val mediaItem = momentPlayerMediaItem(item.videoId, streamUri) ?: return null
-    PerfProbe.log(
-        event = "moments_player_prepare",
-    ) {
-        mapOf(
-            "page" to pageIndex,
-            "uri" to PerfProbe.uriKind(streamUri),
-            "seed_position" to (seedPositionMs > 0L),
-            "had_media" to (player.mediaItemCount > 0),
-        )
-    }
+
     logger.debugMoment("moments_player_prepare_page") {
         momentVideoDebugFields(
             item = item,
@@ -134,28 +116,22 @@ private fun prepareMomentVideo(
             player = player,
             loadedKey = loadedKey,
             targetLoadKey = targetLoadKey,
-            seedPositionMs = seedPositionMs,
         )
     }
-    PerfProbe.timed(
-        event = "moments_player_prepare_call",
-        fields = { mapOf("page" to pageIndex, "uri" to PerfProbe.uriKind(streamUri)) },
-    ) {
-        replaceMomentPlayerMediaItem(player, mediaItem, seedPositionMs)
-    }
+    replaceMomentPlayerMediaItem(player, mediaItem)
+
     return targetLoadKey
 }
 
 private fun replaceMomentPlayerMediaItem(
     player: ExoPlayer,
     mediaItem: MediaItem,
-    startPositionMs: Long,
 ) {
     if (player.mediaItemCount > 0) {
         player.stop()
         player.clearMediaItems()
     }
-    player.setMediaItem(mediaItem, startPositionMs)
+    player.setMediaItem(mediaItem)
     player.prepare()
 }
 
@@ -184,10 +160,6 @@ internal fun MomentPage(
     isActive: Boolean,
     pagerScrolling: Boolean,
     shouldPrepare: Boolean,
-    startPositionMs: Long,
-    onInitialSeekConsumed: () -> Unit,
-    cursorTracking: Boolean,
-    onCursorAdvance: (videoId: String, positionMs: Long) -> Unit,
     onAutoAdvance: () -> Unit,
     onChannelClick: (channelId: String) -> Unit,
     onStoryClick: (channelId: String, firstVideoId: String) -> Unit,
@@ -208,7 +180,6 @@ internal fun MomentPage(
     val swipeThresholdPx = with(density) { 80.dp.toPx() }
     val resolvers: MediaResolvers = koinInject()
     val bookmarkDao: BookmarkDao = koinInject()
-    val baseUrlProvider: ServerBaseUrlProvider = koinInject()
 
     var dragAccumulator by remember(item.videoId) { mutableStateOf(0f) }
     // Description expand state resets on page change — simpler than persisting
@@ -216,53 +187,28 @@ internal fun MomentPage(
     // the caption, matching the screenshot's default state.
     var expanded by remember(item.videoId) { mutableStateOf(false) }
 
-    val mediaMode = remember(item.mediaKind, item.slideCount) {
-        momentMediaMode(item.mediaKind, item.slideCount)
-    }
+    val mediaMode =
+        remember(item.mediaKind, item.slideCount) {
+            momentMediaMode(item.mediaKind, item.slideCount)
+        }
     var manualSlideAdvanceTick by remember(item.videoId) { mutableIntStateOf(0) }
-    val ownerKind = remember(item.ownerKind, item.channelId) { item.ownerKind ?: ownerKindFromChannelId(item.channelId) }
-    val baseUrl = baseUrlProvider.baseUrl()
-    val initialThumbnailUri = remember(
-        item.videoId,
-        item.mediaOwnerId,
-        item.fallbackThumbnailPath,
-        item.fallbackThumbnailUri,
-        item.mediaKind,
-        item.slideCount,
-        ownerKind,
-        baseUrl,
-    ) {
-        resolveInitialMomentThumbnailUri(
-            videoId = item.mediaOwnerId,
-            thumbnailPath = item.fallbackThumbnailPath,
-            mediaKind = item.mediaKind,
-            slideCount = item.slideCount,
-            ownerKind = ownerKind,
-            baseUrl = baseUrl,
-            fallbackThumbnailUri = item.fallbackThumbnailUri,
-        )
-    }
-    val thumbnailFlow = remember(resolvers, item.mediaOwnerId, ownerKind) {
-        resolvers.thumbnailForPostFlow(item.mediaOwnerId, ownerKind)
-    }
-    val resolvedThumbnailUri by thumbnailFlow.collectAsState(initial = initialThumbnailUri)
-    val thumbnailUri = if (resolvedThumbnailUri is MediaUri.Missing) initialThumbnailUri else resolvedThumbnailUri
-    val bookmarkFlow = remember(bookmarkDao, item.videoId) {
-        bookmarkDao.getByIdFlow(item.videoId)
-    }
+    val ownerKind = item.ownerKind
+    val thumbnailFlow =
+        remember(resolvers, item.mediaOwnerId, ownerKind) {
+            resolvers.thumbnailForPostFlow(item.mediaOwnerId, ownerKind)
+        }
+    val thumbnailUri by thumbnailFlow.collectAsState(initial = MediaUri.Missing)
+    val bookmarkFlow = remember(bookmarkDao, item.videoId) { bookmarkDao.getByIdFlow(item.videoId) }
     val bookmarkRow by bookmarkFlow.collectAsState(initial = null)
     val isBookmarked = bookmarkRow != null
-    val bookmarkItem = if (isBookmarked == item.isBookmarked) item else item.copy(isBookmarked = isBookmarked)
+    val bookmarkItem =
+        if (isBookmarked == item.isBookmarked) item else item.copy(isBookmarked = isBookmarked)
 
-    val pageModifier = if (storyMode) {
-        Modifier
-            .fillMaxSize()
-            .background(Color.Black)
-    } else {
-        Modifier
-            .fillMaxSize()
-            .background(Color.Black)
-            .pointerInput(item.videoId) {
+    val pageModifier =
+        if (storyMode) {
+            Modifier.fillMaxSize().background(Color.Black)
+        } else {
+            Modifier.fillMaxSize().background(Color.Black).pointerInput(item.videoId) {
                 detectHorizontalDragGestures(
                     onDragEnd = {
                         if (isLeftSwipe(dragAccumulator, swipeThresholdPx)) {
@@ -274,32 +220,33 @@ internal fun MomentPage(
                     onHorizontalDrag = { _, delta -> dragAccumulator += delta },
                 )
             }
-    }
+        }
 
-    Box(
-        modifier = pageModifier,
-    ) {
+    Box(modifier = pageModifier) {
         when (mediaMode) {
-            MomentMediaMode.Image -> MomentImageSurface(
-                videoId = item.mediaOwnerId,
-                thumbnailUri = thumbnailUri,
-                isActive = isActive,
-                autoSwipe = autoSwipe,
-                onAutoAdvance = onAutoAdvance,
-                modifier = Modifier.fillMaxSize(),
-            )
-            MomentMediaMode.Slideshow -> MomentSlideshowSurface(
-                videoId = item.mediaOwnerId,
-                slideCount = momentSlideCount(item.mediaKind, item.slideCount),
-                thumbnailUri = thumbnailUri,
-                isActive = isActive,
-                autoSwipe = autoSwipe,
-                onAutoAdvance = onAutoAdvance,
-                manualAdvanceTick = manualSlideAdvanceTick,
-                onManualAdvanceAtEnd = onAutoAdvance,
-                muted = muted,
-                modifier = Modifier.fillMaxSize(),
-            )
+            MomentMediaMode.Image ->
+                MomentImageSurface(
+                    videoId = item.mediaOwnerId,
+                    ownerKind = ownerKind,
+                    thumbnailUri = thumbnailUri,
+                    isActive = isActive,
+                    autoSwipe = autoSwipe,
+                    onAutoAdvance = onAutoAdvance,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            MomentMediaMode.Slideshow ->
+                MomentSlideshowSurface(
+                    videoId = item.mediaOwnerId,
+                    ownerKind = ownerKind,
+                    thumbnailUri = thumbnailUri,
+                    isActive = isActive,
+                    autoSwipe = autoSwipe,
+                    onAutoAdvance = onAutoAdvance,
+                    manualAdvanceTick = manualSlideAdvanceTick,
+                    onManualAdvanceAtEnd = onAutoAdvance,
+                    muted = muted,
+                    modifier = Modifier.fillMaxSize(),
+                )
             MomentMediaMode.Video -> {
                 MomentVideoLayer(
                     pageIndex = pageIndex,
@@ -311,10 +258,6 @@ internal fun MomentPage(
                     shouldPrepare = shouldPrepare,
                     autoSwipe = autoSwipe,
                     onAutoAdvance = onAutoAdvance,
-                    startPositionMs = startPositionMs,
-                    onInitialSeekConsumed = onInitialSeekConsumed,
-                    cursorTracking = cursorTracking,
-                    onCursorAdvance = onCursorAdvance,
                     logger = logger,
                     storyMode = storyMode,
                     sharedVideoPlayer = sharedVideoPlayer,
@@ -339,14 +282,14 @@ internal fun MomentPage(
 
         // Top dim gradient keeps the TikTok-style tab row legible against any thumbnail.
         Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(96.dp)
-                .background(
-                    Brush.verticalGradient(
-                        colors = listOf(Color.Black.copy(alpha = 0.45f), Color.Transparent),
-                    ),
-                ),
+            modifier =
+                Modifier.fillMaxWidth()
+                    .height(96.dp)
+                    .background(
+                        Brush.verticalGradient(
+                            colors = listOf(Color.Black.copy(alpha = 0.45f), Color.Transparent)
+                        )
+                    )
         )
 
         if (mediaMode != MomentMediaMode.Video) {
@@ -361,18 +304,17 @@ internal fun MomentPage(
         // auto-swipe button controls whether the player advances to the next
         // short or loops the current one when it ends.
         Column(
-            modifier = Modifier
-                .align(Alignment.BottomEnd)
-                .padding(end = 12.dp, bottom = 164.dp),
+            modifier = Modifier.align(Alignment.BottomEnd).padding(end = 12.dp, bottom = 164.dp),
             verticalArrangement = Arrangement.spacedBy(18.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             val muteLabel = stringResource(R.string.action_mute)
             val unmuteLabel = stringResource(R.string.action_unmute)
-            val autoSwipeStateLabel = stringResource(
-                R.string.moments_auto_swipe_state,
-                stringResource(if (autoSwipe) R.string.state_on else R.string.state_off),
-            )
+            val autoSwipeStateLabel =
+                stringResource(
+                    R.string.moments_auto_swipe_state,
+                    stringResource(if (autoSwipe) R.string.state_on else R.string.state_off),
+                )
             val manageBookmarkLabel = stringResource(R.string.action_manage_bookmark)
             val addBookmarkLabel = stringResource(R.string.action_bookmark)
             val shareLabel = stringResource(R.string.action_share)
@@ -385,7 +327,8 @@ internal fun MomentPage(
                 colors = colors,
             )
             ShadowIcon(
-                if (muted) Icons.AutoMirrored.Filled.VolumeOff else Icons.AutoMirrored.Filled.VolumeUp,
+                if (muted) Icons.AutoMirrored.Filled.VolumeOff
+                else Icons.AutoMirrored.Filled.VolumeUp,
                 if (muted) unmuteLabel else muteLabel,
                 onMuteToggle,
                 muted,
@@ -419,20 +362,19 @@ internal fun MomentPage(
         // Bottom overlay — timestamp + description. Tapping overflowing text
         // only changes the description line limit; the caption stays anchored.
         val captionBaseBottomPadding = momentCaptionBaseBottomPaddingDp(mediaMode).dp
-        val captionBottomPadding = if (storyMode) {
-            storyCaptionBottomPadding(captionBaseBottomPadding)
-        } else {
-            captionBaseBottomPadding
-        }
+        val captionBottomPadding =
+            if (storyMode) {
+                storyCaptionBottomPadding(captionBaseBottomPadding)
+            } else {
+                captionBaseBottomPadding
+            }
         CollapsedDescription(
             item = item,
             expanded = expanded,
             onMentionClick = onMentionClick,
             onChannelClick = onChannelClick,
             onExpandedChange = { expanded = it },
-            modifier = Modifier
-                .align(Alignment.BottomStart)
-                .padding(bottom = captionBottomPadding),
+            modifier = Modifier.align(Alignment.BottomStart).padding(bottom = captionBottomPadding),
         )
 
         if (!storyMode) {
@@ -442,20 +384,14 @@ internal fun MomentPage(
 }
 
 @Composable
-private fun storyCaptionBottomPadding(base: Dp): Dp = with(LocalDensity.current) {
-    max(base.value, WindowInsets.navigationBars.getBottom(this).toDp().value + 12f).dp
-}
+private fun storyCaptionBottomPadding(base: Dp): Dp =
+    with(LocalDensity.current) {
+        max(base.value, WindowInsets.navigationBars.getBottom(this).toDp().value + 12f).dp
+    }
 
 @Composable
-private fun StoryTapAdvanceLayer(
-    onTap: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Box(
-        modifier = modifier.pointerInput(onTap) {
-            detectTapGestures(onTap = { onTap() })
-        },
-    )
+private fun StoryTapAdvanceLayer(onTap: () -> Unit, modifier: Modifier = Modifier) {
+    Box(modifier = modifier.pointerInput(onTap) { detectTapGestures(onTap = { onTap() }) })
 }
 
 @Composable
@@ -469,10 +405,6 @@ private fun BoxScope.MomentVideoLayer(
     shouldPrepare: Boolean,
     autoSwipe: Boolean,
     onAutoAdvance: () -> Unit,
-    startPositionMs: Long,
-    onInitialSeekConsumed: () -> Unit,
-    cursorTracking: Boolean,
-    onCursorAdvance: (videoId: String, positionMs: Long) -> Unit,
     logger: Logger,
     storyMode: Boolean,
     sharedVideoPlayer: ExoPlayer? = null,
@@ -483,22 +415,12 @@ private fun BoxScope.MomentVideoLayer(
     val authTokens: AuthTokenProvider = koinInject()
     val iglooHostProvider: IglooHostProvider = koinInject()
     val resolvers: MediaResolvers = koinInject()
-    val baseUrlProvider: ServerBaseUrlProvider = koinInject()
-    val baseUrl = baseUrlProvider.baseUrl()
-    val initialStreamUri = remember(baseUrl, item.mediaOwnerId) {
-        momentStreamUrl(baseUrl, item.mediaOwnerId)
-            ?.let(MediaUri::Remote)
-            ?: MediaUri.Missing
-    }
-    val streamFlow = remember(resolvers, item.mediaOwnerId) {
-        resolvers.videoStreamFlow(item.mediaOwnerId)
-    }
-    val resolvedStreamUri by streamFlow.collectAsState(initial = initialStreamUri)
-    val candidateStreamUri = if (resolvedStreamUri is MediaUri.Missing) {
-        initialStreamUri
-    } else {
-        resolvedStreamUri
-    }
+    val ownerKind = item.ownerKind
+    val streamFlow =
+        remember(resolvers, item.mediaOwnerId, ownerKind) {
+            resolvers.videoStreamFlow(item.mediaOwnerId, ownerKind)
+        }
+    val candidateStreamUri by streamFlow.collectAsState(initial = MediaUri.Missing)
     var playbackStreamUri by remember(item.videoId) { mutableStateOf(candidateStreamUri) }
     LaunchedEffect(candidateStreamUri, isActive, pagerScrolling, item.videoId) {
         if (
@@ -513,25 +435,15 @@ private fun BoxScope.MomentVideoLayer(
     }
 
     val playerIsShared = sharedVideoPlayer != null
-    val player = sharedVideoPlayer ?: remember(item.videoId, authTokens.bearerTokenSync()) {
-        buildIglooPlayer(context, authTokens, iglooHostProvider).apply {
-            repeatMode = Player.REPEAT_MODE_OFF
-            PerfProbe.incrementCounter("igloo_moments_player_build_count")
-            PerfProbe.log(
-                event = "moments_player_build",
-            ) { mapOf("page" to pageIndex, "story_mode" to storyMode, "shared" to false) }
-        }
-    }
-    if (!playerIsShared) {
-        DisposableEffect(player) {
-            onDispose {
-                PerfProbe.incrementCounter("igloo_moments_player_release_count")
-                PerfProbe.log(
-                    event = "moments_player_release",
-                ) { mapOf("page" to pageIndex, "story_mode" to storyMode, "shared" to false) }
-                player.release()
+    val player =
+        sharedVideoPlayer
+            ?: remember(item.videoId, authTokens.bearerTokenSync()) {
+                buildIglooPlayer(context, authTokens, iglooHostProvider).apply {
+                    repeatMode = Player.REPEAT_MODE_OFF
+                }
             }
-        }
+    if (!playerIsShared) {
+        DisposableEffect(player) { onDispose { player.release() } }
     }
     var loadedKey by remember(item.videoId) { mutableStateOf<String?>(null) }
     var surfaceState by remember(item.videoId) { mutableStateOf(MomentVideoSurfaceState()) }
@@ -549,17 +461,16 @@ private fun BoxScope.MomentVideoLayer(
         )
     }
 
-    val shouldPreparePlayer = shouldPrepareMomentVideoPlayer(
-        isActive = isActive,
-        shouldPrepare = shouldPrepare,
-        sharedPlayer = playerIsShared,
-    )
+    val shouldPreparePlayer =
+        shouldPrepareMomentVideoPlayer(
+            isActive = isActive,
+            shouldPrepare = shouldPrepare,
+            sharedPlayer = playerIsShared,
+        )
     LaunchedEffect(player, playbackStreamUri, item.videoId, shouldPreparePlayer, playerIsShared) {
         if (!shouldPreparePlayer) {
             if (!playerIsShared && !shouldPrepare) {
-                PerfProbe.log(
-                    event = "moments_player_clear",
-                ) { mapOf("reason" to "outside_prepare_window", "page" to pageIndex) }
+
                 player.playWhenReady = false
                 player.pause()
                 player.clearMediaItems()
@@ -568,36 +479,24 @@ private fun BoxScope.MomentVideoLayer(
             surfaceState = MomentVideoSurfaceState()
             return@LaunchedEffect
         }
-        val seedPosition = if (startPositionMs > 0L && loadedKey == null) startPositionMs else 0L
-        val nextLoadedKey = prepareMomentVideo(
-            player = player,
-            loadedKey = loadedKey,
-            item = item,
-            pageIndex = pageIndex,
-            streamUri = playbackStreamUri,
-            seedPositionMs = seedPosition,
-            logger = logger,
-        )
+        val nextLoadedKey =
+            prepareMomentVideo(
+                player = player,
+                loadedKey = loadedKey,
+                item = item,
+                pageIndex = pageIndex,
+                streamUri = playbackStreamUri,
+                logger = logger,
+            )
         loadedKey = nextLoadedKey
-        if (seedPosition > 0L && nextLoadedKey != null) onInitialSeekConsumed()
     }
 
-    LaunchedEffect(player, muted) {
-        player.volume = if (muted) 0f else 1f
-    }
+    LaunchedEffect(player, muted) { player.volume = if (muted) 0f else 1f }
     if (!playerIsShared || isActive) {
         LaunchedEffect(player, isActive, shouldPreparePlayer, loadedKey, pagerScrolling) {
             if (isActive && shouldPreparePlayer && loadedKey != null) {
                 hasBeenActive = true
-                PerfProbe.log(
-                    event = "moments_player_play",
-                ) {
-                    mapOf(
-                        "page" to pageIndex,
-                        "position_ms" to player.currentPosition,
-                        "scrolling" to pagerScrolling,
-                    )
-                }
+
                 player.playWhenReady = true
             } else {
                 if (pagerScrolling && shouldPreparePlayer) {
@@ -607,23 +506,15 @@ private fun BoxScope.MomentVideoLayer(
                 player.pause()
                 if (
                     hasBeenActive &&
-                    shouldRewindInactiveMomentPlayback(
-                        currentMediaId = player.currentMediaItem?.mediaId,
-                        expectedVideoId = item.videoId,
-                        loadedVideoId = momentStreamLoadKeyVideoId(loadedKey),
-                        mediaItemCount = player.mediaItemCount,
-                        currentPositionMs = player.currentPosition,
-                    )
-                ) {
-                    PerfProbe.log(
-                        event = "moments_player_rewind",
-                    ) {
-                        mapOf(
-                            "page" to pageIndex,
-                            "position_ms" to player.currentPosition,
-                            "reason" to "inactive",
+                        shouldRewindInactiveMomentPlayback(
+                            currentMediaId = player.currentMediaItem?.mediaId,
+                            expectedVideoId = item.videoId,
+                            loadedVideoId = momentStreamLoadKeyVideoId(loadedKey),
+                            mediaItemCount = player.mediaItemCount,
+                            currentPositionMs = player.currentPosition,
                         )
-                    }
+                ) {
+
                     player.seekTo(0L)
                 }
                 if (!shouldPreparePlayer && player.mediaItemCount > 0) player.seekTo(0L)
@@ -633,109 +524,59 @@ private fun BoxScope.MomentVideoLayer(
 
     if (!playerIsShared || isActive) {
         DisposableEffect(player, item.videoId, autoSwipe, isActive) {
-            val listener = object : Player.Listener {
-                override fun onPlaybackStateChanged(state: Int) {
-                    if (state != Player.STATE_ENDED) return
-                    if (player.currentMediaItem?.mediaId != item.videoId) return
-                    if (!isActive) return
-                    if (autoSwipe) {
-                        onAutoAdvance()
-                        return
+            val listener =
+                object : Player.Listener {
+                    override fun onPlaybackStateChanged(state: Int) {
+                        if (state != Player.STATE_ENDED) return
+                        if (player.currentMediaItem?.mediaId != item.videoId) return
+                        if (!isActive) return
+                        if (autoSwipe) {
+                            onAutoAdvance()
+                            return
+                        }
+                        logger.debugMoment("moments_player_loop_restart") {
+                            momentVideoDebugFields(
+                                item = item,
+                                pageIndex = pageIndex,
+                                streamUri = playbackStreamUri,
+                                player = player,
+                                loadedKey = loadedKey,
+                                targetLoadKey = loadedKey,
+                            )
+                        }
+                        player.seekTo(0L)
+                        player.playWhenReady = isActive
                     }
-                    logger.debugMoment("moments_player_loop_restart") {
-                        momentVideoDebugFields(
-                            item = item,
-                            pageIndex = pageIndex,
-                            streamUri = playbackStreamUri,
-                            player = player,
-                            loadedKey = loadedKey,
-                            targetLoadKey = loadedKey,
-                        )
-                    }
-                    player.seekTo(0L)
-                    player.playWhenReady = isActive
                 }
-            }
             player.addListener(listener)
             onDispose { player.removeListener(listener) }
         }
     }
 
-    LaunchedEffect(cursorTracking, isActive, player, item.videoId, playerIsShared) {
-        if (!cursorTracking || (playerIsShared && !isActive)) return@LaunchedEffect
-        while (true) {
-            delay(2_000L)
-            if (isActive && player.currentMediaItem?.mediaId == item.videoId) {
-                onCursorAdvance(item.videoId, player.currentPosition)
-            }
-        }
-    }
-
     val remoteOffline = isIglooRemoteOffline(playbackStreamUri)
-    val showFallback = shouldShowMomentThumbnailFallback(
-        remoteOffline = remoteOffline,
-        surfaceState = surfaceState,
-    )
+    val showFallback =
+        shouldShowMomentThumbnailFallback(
+            remoteOffline = remoteOffline,
+            surfaceState = surfaceState,
+        )
     val hasLoadedMedia = momentStreamLoadKeyVideoId(loadedKey) == item.videoId
-    val showFallbackLayer = shouldShowMomentVideoFallbackLayer(
-        fallback = showFallback,
-        sharedPlayer = playerIsShared,
-        isActive = isActive,
-        pagerScrolling = pagerScrolling,
-        hasLoadedMedia = hasLoadedMedia,
-    )
-    val shouldMountVideoSurface = shouldMountMomentVideoSurface(
-        isActive = isActive,
-        shouldPrepare = shouldPrepare,
-        sharedPlayer = playerIsShared,
-        streamUri = playbackStreamUri,
-        remoteOffline = remoteOffline,
-    )
-    if (PerfProbe.enabled()) {
-        LaunchedEffect(
-            item.videoId,
-            pageIndex,
-            isActive,
-            pagerScrolling,
-            shouldPrepare,
-            shouldPreparePlayer,
-            shouldMountVideoSurface,
-            showFallbackLayer,
-            loadedKey,
-            surfaceState.hasExpectedMedia,
-            surfaceState.renderedFirstFrame,
-            surfaceState.videoWidth,
-            surfaceState.videoHeight,
-        ) {
-            PerfProbe.log(
-                event = "moments_layer_state",
-            ) {
-                mapOf(
-                    "page" to pageIndex,
-                    "video" to momentDebugHash(item.videoId),
-                    "active" to isActive,
-                    "scrolling" to pagerScrolling,
-                    "prepare_window" to shouldPrepare,
-                    "prepare_player" to shouldPreparePlayer,
-                    "mount_surface" to shouldMountVideoSurface,
-                    "fallback" to showFallbackLayer,
-                    "loaded" to (momentStreamLoadKeyVideoId(loadedKey) == item.videoId),
-                    "surface_expected" to surfaceState.hasExpectedMedia,
-                    "first_frame" to surfaceState.renderedFirstFrame,
-                    "size" to "${surfaceState.videoWidth}x${surfaceState.videoHeight}",
-                    "shared" to playerIsShared,
-                    "player" to Integer.toHexString(System.identityHashCode(player)),
-                    "position_ms" to player.currentPosition,
-                )
-            }
-        }
-    }
-
-    Box(
-        modifier = modifier
-            .fillMaxSize()
-            .background(Color.Black),
-    ) {
+    val showFallbackLayer =
+        shouldShowMomentVideoFallbackLayer(
+            fallback = showFallback,
+            sharedPlayer = playerIsShared,
+            isActive = isActive,
+            pagerScrolling = pagerScrolling,
+            hasLoadedMedia = hasLoadedMedia,
+        )
+    val shouldMountVideoSurface =
+        shouldMountMomentVideoSurface(
+            isActive = isActive,
+            shouldPrepare = shouldPrepare,
+            sharedPlayer = playerIsShared,
+            streamUri = playbackStreamUri,
+            remoteOffline = remoteOffline,
+        )
+    Box(modifier = modifier.fillMaxSize().background(Color.Black)) {
         if (shouldMountVideoSurface) {
             VideoSurface(
                 player = player,
@@ -743,9 +584,7 @@ private fun BoxScope.MomentVideoLayer(
                 pageIndex = pageIndex,
                 onStateChange = { surfaceState = it },
                 sharedPlayerView = sharedPlayerView,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .zIndex(momentVideoSurfaceZIndex()),
+                modifier = Modifier.fillMaxSize().zIndex(momentVideoSurfaceZIndex()),
             )
         }
         if (showFallbackLayer) {
@@ -772,9 +611,7 @@ private fun BoxScope.MomentVideoLayer(
         ) {
             MomentsVideoProgressBar(
                 player = player,
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(bottom = 8.dp),
+                modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 8.dp),
             )
         }
         if (remoteOffline) DownloadPendingBadge()
@@ -784,44 +621,44 @@ private fun BoxScope.MomentVideoLayer(
 @Composable
 private fun MomentBottomScrim(modifier: Modifier = Modifier) {
     Box(
-        modifier = modifier
-            .fillMaxWidth()
-            .height(220.dp)
-            .background(
-                Brush.verticalGradient(
-                    colors = listOf(
-                        Color.Transparent,
-                        Color.Black.copy(alpha = 0.28f),
-                        Color.Black.copy(alpha = 0.74f),
-                    ),
-                ),
-            ),
+        modifier =
+            modifier
+                .fillMaxWidth()
+                .height(220.dp)
+                .background(
+                    Brush.verticalGradient(
+                        colors =
+                            listOf(
+                                Color.Transparent,
+                                Color.Black.copy(alpha = 0.28f),
+                                Color.Black.copy(alpha = 0.74f),
+                            )
+                    )
+                )
     )
 }
 
 @Composable
-private fun BoxScope.MomentVideoGestureLayer(
-    player: ExoPlayer,
-    modifier: Modifier = Modifier,
-) {
+private fun BoxScope.MomentVideoGestureLayer(player: ExoPlayer, modifier: Modifier = Modifier) {
     var seekIndicator by remember(player) { mutableStateOf<SeekIndicator?>(null) }
     Box(
-        modifier = modifier.pointerInput(player) {
-            detectTapGestures(
-                onTap = {
-                    seekIndicator = null
-                    player.playWhenReady = !player.playWhenReady
-                },
-                onDoubleTap = { offset ->
-                    val isLeft = offset.x < size.width / 2
-                    val deltaMs = if (isLeft) -5_000L else 5_000L
-                    val duration = player.duration.coerceAtLeast(0L)
-                    val target = (player.currentPosition + deltaMs).coerceIn(0L, duration)
-                    player.seekTo(target)
-                    seekIndicator = if (isLeft) SeekIndicator.Back else SeekIndicator.Forward
-                },
-            )
-        },
+        modifier =
+            modifier.pointerInput(player) {
+                detectTapGestures(
+                    onTap = {
+                        seekIndicator = null
+                        player.playWhenReady = !player.playWhenReady
+                    },
+                    onDoubleTap = { offset ->
+                        val isLeft = offset.x < size.width / 2
+                        val deltaMs = if (isLeft) -5_000L else 5_000L
+                        val duration = player.duration.coerceAtLeast(0L)
+                        val target = (player.currentPosition + deltaMs).coerceIn(0L, duration)
+                        player.seekTo(target)
+                        seekIndicator = if (isLeft) SeekIndicator.Back else SeekIndicator.Forward
+                    },
+                )
+            }
     )
     if (seekIndicator != null) {
         val indicator = seekIndicator
@@ -831,11 +668,14 @@ private fun BoxScope.MomentVideoGestureLayer(
         }
         val isBack = indicator == SeekIndicator.Back
         Box(
-            modifier = Modifier
-                .align(if (isBack) Alignment.CenterStart else Alignment.CenterEnd)
-                .padding(horizontal = 32.dp)
-                .background(Color.Black.copy(alpha = 0.55f), androidx.compose.foundation.shape.CircleShape)
-                .padding(horizontal = 16.dp, vertical = 10.dp),
+            modifier =
+                Modifier.align(if (isBack) Alignment.CenterStart else Alignment.CenterEnd)
+                    .padding(horizontal = 32.dp)
+                    .background(
+                        Color.Black.copy(alpha = 0.55f),
+                        androidx.compose.foundation.shape.CircleShape,
+                    )
+                    .padding(horizontal = 16.dp, vertical = 10.dp)
         ) {
             Text(
                 text = if (isBack) "-5s" else "+5s",
@@ -847,47 +687,48 @@ private fun BoxScope.MomentVideoGestureLayer(
 }
 
 @Composable
-private fun BoxScope.MomentDrawerGestureHandle(
-    onOpenDrawer: () -> Unit,
-) {
+private fun BoxScope.MomentDrawerGestureHandle(onOpenDrawer: () -> Unit) {
     val thresholdPx = with(LocalDensity.current) { 56.dp.toPx() }
     Box(
-        modifier = Modifier
-            .align(Alignment.CenterStart)
-            .fillMaxHeight()
-            .width(96.dp)
-            .systemGestureExclusion()
-            .pointerInput(onOpenDrawer, thresholdPx) {
-                var totalDragX = 0f
-                var opened = false
-                detectHorizontalDragGestures(
-                    onDragStart = {
-                        totalDragX = 0f
-                        opened = false
-                    },
-                    onDragCancel = {
-                        totalDragX = 0f
-                        opened = false
-                    },
-                    onDragEnd = {
-                        totalDragX = 0f
-                        opened = false
-                    },
-                    onHorizontalDrag = { change, delta ->
-                        totalDragX = (totalDragX + delta).coerceAtLeast(0f)
-                        if (totalDragX > 0f) change.consume()
-                        if (!opened && totalDragX >= thresholdPx) {
-                            opened = true
-                            onOpenDrawer()
-                        }
-                    },
-                )
-            },
+        modifier =
+            Modifier.align(Alignment.CenterStart)
+                .fillMaxHeight()
+                .width(96.dp)
+                .systemGestureExclusion()
+                .pointerInput(onOpenDrawer, thresholdPx) {
+                    var totalDragX = 0f
+                    var opened = false
+                    detectHorizontalDragGestures(
+                        onDragStart = {
+                            totalDragX = 0f
+                            opened = false
+                        },
+                        onDragCancel = {
+                            totalDragX = 0f
+                            opened = false
+                        },
+                        onDragEnd = {
+                            totalDragX = 0f
+                            opened = false
+                        },
+                        onHorizontalDrag = { change, delta ->
+                            totalDragX = (totalDragX + delta).coerceAtLeast(0f)
+                            if (totalDragX > 0f) change.consume()
+                            if (!opened && totalDragX >= thresholdPx) {
+                                opened = true
+                                onOpenDrawer()
+                            }
+                        },
+                    )
+                }
     )
 }
 
 /** Which side of the screen the user double-tapped — drives the seek indicator. */
-private enum class SeekIndicator { Back, Forward }
+private enum class SeekIndicator {
+    Back,
+    Forward,
+}
 
 internal fun momentAuthorLabel(item: MomentItem): String {
     val normalizedHandle = normalizeHandle(item.authorHandle)
@@ -906,16 +747,4 @@ internal fun momentRepostLabel(item: MomentItem): String? {
         item.repostOtherCount == 1 -> stringResource(R.string.feed_reposted_one_other, author)
         else -> stringResource(R.string.feed_reposted_many_others, author, item.repostOtherCount)
     }
-}
-
-internal fun momentSlideUrl(baseUrl: String, videoId: String, index: Int): String? {
-    val root = baseUrl.trim().trimEnd('/')
-    if (root.isBlank()) return null
-    return "$root/api/media/slide/$videoId/$index"
-}
-
-internal fun momentAudioUrl(baseUrl: String, videoId: String): String? {
-    val root = baseUrl.trim().trimEnd('/')
-    if (root.isBlank()) return null
-    return "$root/api/media/audio/$videoId"
 }

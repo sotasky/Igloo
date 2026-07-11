@@ -6,8 +6,6 @@ import (
 	"os"
 	"strings"
 
-	"github.com/screwys/igloo/internal/devtools/androidsyncmaintenance"
-	"github.com/screwys/igloo/internal/devtools/assetinventoryreconcile"
 	"github.com/screwys/igloo/internal/devtools/lifecycleaudit"
 	"github.com/screwys/igloo/internal/devtools/persistenceaudit"
 	"github.com/screwys/igloo/internal/devtools/queryaudit"
@@ -27,10 +25,6 @@ func run(args []string, stdout, stderr io.Writer) int {
 	command := args[0]
 	rest := args[1:]
 	switch command {
-	case "android-sync-maintenance":
-		return androidsyncmaintenance.Run(rest, stdout, stderr)
-	case "asset-inventory-reconcile":
-		return assetinventoryreconcile.Run(rest, stdout, stderr)
 	case "lifecycle-audit":
 		return lifecycleaudit.Run(rest, stdout, stderr)
 	case "persistence-audit":
@@ -55,12 +49,10 @@ func printUsage(w io.Writer) {
 	_, _ = fmt.Fprint(w, strings.TrimSpace(`Usage: igloo-dev <command> [args]
 
 Commands:
-  android-sync-maintenance    Drain bounded Android sync derived-cache debt
-  asset-inventory-reconcile   Audit or repair missing asset inventory rows
   lifecycle-audit             Scan destructive SQL and table lifecycles
   persistence-audit           Group database size and rows by schema lifecycle
   query-audit                 Time and explain SQLite hot-path reads
   sqlite-repack               Report or create a compact SQLite database copy
-  storage-maintenance         Audit or apply storage dedupe, retention, and asset-state repairs
+  storage-maintenance         Audit or apply storage dedupe and retention
 `)+"\n")
 }

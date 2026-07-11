@@ -4,47 +4,56 @@ import androidx.room.ColumnInfo
 import androidx.room.Embedded
 
 /**
- * Typed projection classes returned by the composite read DAOs. Kept next to
- * entities because they are joined row shapes: data, not logic.
+ * Typed projection classes returned by the composite read DAOs. Kept next to entities because they
+ * are joined row shapes: data, not logic.
  *
- * `@Embedded(prefix = "")` wraps the base entity so Room can populate all of its columns
- * from the query result without re-enumerating every field. Joined columns live at the
- * top level of the projection.
+ * `@Embedded(prefix = "")` wraps the base entity so Room can populate all of its columns from the
+ * query result without re-enumerating every field. Joined columns live at the top level of the
+ * projection.
  */
 
 /** Feed query result row. */
 data class FeedRow(
     @Embedded val item: FeedItemEntity,
-
     @ColumnInfo(name = "channel_name") val channelName: String?,
-    @ColumnInfo(name = "channel_avatar_url") val channelAvatarUrl: String?,
     @ColumnInfo(name = "channel_platform") val channelPlatform: String?,
-
+    @ColumnInfo(name = "author_handle") val authorHandle: String? = null,
+    @ColumnInfo(name = "author_display_name") val authorDisplayName: String? = null,
+    @ColumnInfo(name = "source_handle") val sourceHandle: String? = null,
+    @ColumnInfo(name = "source_display_name") val sourceDisplayName: String? = null,
+    @ColumnInfo(name = "quote_author_handle") val quoteAuthorHandle: String? = null,
+    @ColumnInfo(name = "quote_author_display_name") val quoteAuthorDisplayName: String? = null,
+    @ColumnInfo(name = "reply_handle") val replyHandle: String? = null,
     @ColumnInfo(name = "is_liked") val isLiked: Int,
     @ColumnInfo(name = "liked_at") val likedAt: Long?,
-
     @ColumnInfo(name = "is_bookmarked") val isBookmarked: Int,
     @ColumnInfo(name = "bookmark_category_id") val bookmarkCategoryId: Long?,
     @ColumnInfo(name = "bookmark_custom_title") val bookmarkCustomTitle: String?,
     @ColumnInfo(name = "bookmarked_at") val bookmarkedAt: Long?,
     @ColumnInfo(name = "bookmark_account_handles") val bookmarkAccountHandles: String? = null,
     @ColumnInfo(name = "bookmark_media_indices") val bookmarkMediaIndices: String? = null,
-
     @ColumnInfo(name = "channel_is_followed") val channelIsFollowed: Int,
     @ColumnInfo(name = "channel_is_starred") val channelIsStarred: Int,
-
-    @ColumnInfo(name = "quote_channel_id") val quoteChannelId: String? = null,
     @ColumnInfo(name = "quote_channel_is_followed") val quoteChannelIsFollowed: Int = 0,
+    @ColumnInfo(name = "reposter_handle") val reposterHandle: String? = null,
+    @ColumnInfo(name = "reposter_display_name") val reposterDisplayName: String? = null,
+) {
+    val quoteChannelId: String?
+        get() = item.quoteChannelId
+}
+
+data class FeedThreadContext(
+    @ColumnInfo(name = "leaf_tweet_id") val leafTweetId: String,
+    @ColumnInfo(name = "root_tweet_id") val rootTweetId: String,
+    @ColumnInfo(name = "ancestor_tweet_id") val ancestorTweetId: String,
+    @ColumnInfo(name = "ancestor_order") val ancestorOrder: Int,
 )
 
 /**
- * A feed row plus its inline conversation context. [chain] contains ancestors
- * ordered root -> parent; [row] is the leaf and is not repeated in [chain].
+ * A feed row plus its inline conversation context. [chain] contains ancestors ordered root ->
+ * parent; [row] is the leaf and is not repeated in [chain].
  */
-data class ThreadedFeedRow(
-    val row: FeedRow,
-    val chain: List<FeedRow>,
-)
+data class ThreadedFeedRow(val row: FeedRow, val chain: List<FeedRow>)
 
 /** Live side-table state for rows already held in a stable feed snapshot. */
 data class FeedRowActionState(
@@ -67,10 +76,15 @@ data class FeedHeadCandidate(
     @ColumnInfo(name = "channel_id") val channelId: String?,
 )
 
+data class MutedChannelDisplay(
+    @Embedded val muted: MutedChannelEntity,
+    @ColumnInfo(name = "handle") val handle: String?,
+    @ColumnInfo(name = "display_name") val displayName: String?,
+)
+
 /** Shorts/moments grid item — TikTok + Instagram. */
 data class MomentItem(
     @Embedded val video: VideoEntity,
-
     @ColumnInfo(name = "is_viewed") val isViewed: Int,
     @ColumnInfo(name = "viewed_at") val viewedAt: Long?,
     @ColumnInfo(name = "channel_name") val channelName: String?,
@@ -99,31 +113,31 @@ data class StoryChannelItem(
 )
 
 /**
- * YouTube Videos tab row — long-form only, with resume progress. `wh_*` aliasing keeps
- * the joined `watch_history` columns from colliding with embedded `VideoEntity` names
- * (both tables carry `duration`).
+ * YouTube Videos tab row — long-form only, with resume progress. `wh_*` aliasing keeps the joined
+ * `watch_history` columns from colliding with embedded `VideoEntity` names (both tables carry
+ * `duration`).
  */
 data class VideoGridItem(
     @Embedded val video: VideoEntity,
-
     @ColumnInfo(name = "wh_playback_position") val playbackPosition: Double?,
     @ColumnInfo(name = "wh_duration") val watchDuration: Double?,
-    @ColumnInfo(name = "wh_last_watched") val lastWatched: Long?,
-
     @ColumnInfo(name = "channel_name") val channelName: String?,
     @ColumnInfo(name = "channel_source_id") val channelSourceId: String?,
 )
 
 /**
- * Bookmarks tab row — LEFT JOINs both `feed_items` and `videos`; exactly one side matches
- * per row (or both, in the astronomically-unlikely tweet_id/video_id collision case, in
- * which case UI renders as video per §7). Consumers dispatch on which side is non-null.
+ * Bookmarks tab row — LEFT JOINs both `feed_items` and `videos`; exactly one side matches per row
+ * (or both, in the astronomically-unlikely tweet_id/video_id collision case). Consumers dispatch on
+ * which side is non-null.
  */
 data class BookmarkItem(
     @Embedded val bookmark: BookmarkEntity,
-
     @Embedded(prefix = "tw_") val feedItem: FeedItemEntity?,
     @Embedded(prefix = "vd_") val video: VideoEntity?,
+    @ColumnInfo(name = "feed_author_handle") val feedAuthorHandle: String? = null,
+    @ColumnInfo(name = "feed_author_display_name") val feedAuthorDisplayName: String? = null,
+    @ColumnInfo(name = "feed_source_handle") val feedSourceHandle: String? = null,
+    @ColumnInfo(name = "feed_quote_author_handle") val feedQuoteAuthorHandle: String? = null,
     @ColumnInfo(name = "resolved_channel_id") val resolvedChannelId: String?,
     @ColumnInfo(name = "resolved_channel_name") val resolvedChannelName: String?,
     @ColumnInfo(name = "resolved_channel_source_id") val resolvedChannelSourceId: String?,
@@ -136,7 +150,6 @@ data class BookmarkItem(
 /** Channel drawer row — starred-first ordering. */
 data class ChannelDisplay(
     @Embedded val channel: ChannelEntity,
-
     @ColumnInfo(name = "is_starred") val isStarred: Int,
     @ColumnInfo(name = "is_followed") val isFollowed: Int,
     // Joined from channel_profiles — Twitter/TikTok near-100% coverage, YouTube ~95%.
@@ -157,10 +170,11 @@ val ChannelDisplay.displayOrName: String
         val normalizedPrimary = primary.removePrefix("@").trim()
         val normalizedHandle = handle?.trim()?.removePrefix("@")?.trim().orEmpty()
         val normalizedName = channel.name.trim().removePrefix("@").trim()
-        if (normalizedHandle.isNotBlank() &&
-            normalizedPrimary == normalizedHandle &&
-            normalizedName.isNotBlank() &&
-            normalizedName != normalizedHandle
+        if (
+            normalizedHandle.isNotBlank() &&
+                normalizedPrimary == normalizedHandle &&
+                normalizedName.isNotBlank() &&
+                normalizedName != normalizedHandle
         ) {
             return channel.name
         }

@@ -45,10 +45,14 @@ func TestVideoReadersUseProfileDisplayName(t *testing.T) {
 			('youtube_missing_profile', 'sample_missing_source', 'sample_missing_source', 'youtube');
 		INSERT INTO channel_profiles (channel_id, platform, handle, display_name)
 		VALUES ('youtube_sample_channel', 'youtube', '@sample_creator', 'Sample Creator');
-		INSERT INTO videos (video_id, channel_id, title, duration, file_path, published_at)
+		INSERT INTO videos (video_id, channel_id, owner_kind, title, duration, published_at)
 		VALUES
-			('sample_video', 'youtube_sample_channel', 'Sample Video', 0, 'media/sample_video.mp4', 1),
-			('missing_profile_video', 'youtube_missing_profile', 'Missing Profile', 0, 'media/missing_profile.mp4', 1)
+			('sample_video', 'youtube_sample_channel', 'youtube_video', 'Sample Video', 0, 1),
+			('missing_profile_video', 'youtube_missing_profile', 'youtube_video', 'Missing Profile', 0, 1);
+		INSERT INTO assets (asset_id, asset_kind, owner_kind, owner_id, media_index, file_path, state)
+		VALUES
+			('sample_video_stream', 'video_stream', 'youtube_video', 'sample_video', 0, 'media/sample_video.mp4', 'ready'),
+			('missing_profile_stream', 'video_stream', 'youtube_video', 'missing_profile_video', 0, 'media/missing_profile.mp4', 'ready')
 	`); err != nil {
 		t.Fatal(err)
 	}
@@ -129,15 +133,15 @@ func TestGetVideosIncludesUndownloadedShortsRows(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := d.ExecRaw(`
-		INSERT INTO channel_follows (user_id, channel_id) VALUES ('', 'tiktok_sample_slides_account')
+		INSERT INTO channel_follows (channel_id) VALUES ('tiktok_sample_slides_account')
 	`); err != nil {
 		t.Fatal(err)
 	}
 	if err := d.ExecRaw(`
 		INSERT INTO videos (
-			video_id, channel_id, title, duration, file_path, media_kind, slide_count, published_at
+			video_id, channel_id, owner_kind, title, duration, media_kind, slide_count, published_at
 		) VALUES (
-			'7201436805915266309', 'tiktok_sample_slides_account', 'Ghost station', 0, '', 'slideshow', 4, 1676678400000
+			'7201436805915266309', 'tiktok_sample_slides_account', 'tiktok_video', 'Ghost station', 0, 'slideshow', 4, 1676678400000
 		)
 	`); err != nil {
 		t.Fatal(err)
@@ -181,16 +185,16 @@ func TestGetVideosExcludesNativeStoriesFromNormalMoments(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := d.ExecRaw(`
-		INSERT INTO channel_follows (user_id, channel_id) VALUES ('', 'tiktok_native_story')
+		INSERT INTO channel_follows (channel_id) VALUES ('tiktok_native_story')
 	`); err != nil {
 		t.Fatal(err)
 	}
 	if err := d.ExecRaw(`
 		INSERT INTO videos (
-			video_id, channel_id, title, duration, file_path, media_kind, published_at, source_kind
+			video_id, channel_id, owner_kind, title, duration, media_kind, published_at, source_kind
 		) VALUES
-			('regular_short', 'tiktok_native_story', 'regular', 0, '', 'video', 1000, ''),
-			('native_story', 'tiktok_native_story', 'story', 0, '', 'video', 2000, 'story')
+			('regular_short', 'tiktok_native_story', 'tiktok_video', 'regular', 0, 'video', 1000, ''),
+			('native_story', 'tiktok_native_story', 'tiktok_video', 'story', 0, 'video', 2000, 'story')
 	`); err != nil {
 		t.Fatal(err)
 	}
@@ -229,7 +233,7 @@ func TestGetVideosExcludesNativeStoriesFromNormalMoments(t *testing.T) {
 
 func TestGetVideosAllMomentsUsesRepostEventForFollowedAuthor(t *testing.T) {
 	d := openWritableTestDB(t)
-	if err := d.SetSetting("", "moments_include_reposts_default", "true"); err != nil {
+	if err := d.SetSetting("moments_include_reposts_default", "true"); err != nil {
 		t.Fatalf("SetSetting moments_include_reposts_default: %v", err)
 	}
 
@@ -242,25 +246,25 @@ func TestGetVideosAllMomentsUsesRepostEventForFollowedAuthor(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := d.ExecRaw(`
-		INSERT INTO channel_follows (user_id, channel_id, followed_at) VALUES
-			('', 'tiktok_sample_author', 1),
-			('', 'tiktok_sample_reposter', 1),
-			('', 'tiktok_sample_author_b', 1)
+		INSERT INTO channel_follows (channel_id, followed_at) VALUES
+			('tiktok_sample_author', 1),
+			('tiktok_sample_reposter', 1),
+			('tiktok_sample_author_b', 1)
 	`); err != nil {
 		t.Fatal(err)
 	}
 	if err := d.ExecRaw(`
-		INSERT INTO videos (video_id, channel_id, title, duration, file_path, media_kind, published_at) VALUES
-			('sample_old_author_reposted_late', 'tiktok_sample_author', 'Old author clip', 0, '', 'video', 10),
-			('sample_plain_middle_clip', 'tiktok_sample_author_b', 'Plain clip', 0, '', 'video', 50)
+		INSERT INTO videos (video_id, channel_id, owner_kind, title, duration, media_kind, published_at) VALUES
+			('sample_old_author_reposted_late', 'tiktok_sample_author', 'tiktok_video', 'Old author clip', 0, 'video', 10),
+			('sample_plain_middle_clip', 'tiktok_sample_author_b', 'tiktok_video', 'Plain clip', 0, 'video', 50)
 	`); err != nil {
 		t.Fatal(err)
 	}
 	if err := d.ExecRaw(`
 		INSERT INTO video_repost_sources (
-			video_id, reposter_channel_id, reposter_handle, reposter_display_name, reposted_at_ms, first_seen_at_ms, updated_at_ms
+			video_id, reposter_channel_id, reposted_at_ms, first_seen_at_ms, updated_at_ms
 		) VALUES (
-			'sample_old_author_reposted_late', 'tiktok_sample_reposter', 'sample_reposter', 'Sample Reposter', 100, 90, 100
+			'sample_old_author_reposted_late', 'tiktok_sample_reposter', 100, 90, 100
 		)
 	`); err != nil {
 		t.Fatal(err)
@@ -305,15 +309,15 @@ func TestGetVideosKeepsUndownloadedYouTubeRowsHidden(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := d.ExecRaw(`
-		INSERT INTO channel_follows (user_id, channel_id) VALUES ('', 'youtube_test_channel')
+		INSERT INTO channel_follows (channel_id) VALUES ('youtube_test_channel')
 	`); err != nil {
 		t.Fatal(err)
 	}
 	if err := d.ExecRaw(`
 		INSERT INTO videos (
-			video_id, channel_id, title, duration, file_path, media_kind, slide_count, published_at
+			video_id, channel_id, owner_kind, title, duration, media_kind, slide_count, published_at
 		) VALUES (
-			'youtube_missing_file', 'youtube_test_channel', 'Missing local file', 0, '', 'video', 0, 1676678400000
+			'youtube_missing_file', 'youtube_test_channel', 'youtube_video', 'Missing local file', 0, 'video', 0, 1676678400000
 		)
 	`); err != nil {
 		t.Fatal(err)
@@ -347,19 +351,19 @@ func TestGetLatestVideosPerChannelIncludesUndownloadedShortsOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := d.ExecRaw(`
-		INSERT INTO channel_follows (user_id, channel_id) VALUES
-			('', 'tiktok_preview_channel'),
-			('', 'youtube_preview_channel')
+		INSERT INTO channel_follows (channel_id) VALUES
+			('tiktok_preview_channel'),
+			('youtube_preview_channel')
 	`); err != nil {
 		t.Fatal(err)
 	}
 	if err := d.ExecRaw(`
 		INSERT INTO videos (
-			video_id, channel_id, title, duration, file_path, media_kind, slide_count, published_at, source_kind
+			video_id, channel_id, owner_kind, title, duration, media_kind, slide_count, published_at, source_kind
 		) VALUES
-			('tiktok_preview_video', 'tiktok_preview_channel', 'Preview slideshow', 0, '', 'slideshow', 3, 1676678400000, ''),
-			('tiktok_preview_story', 'tiktok_preview_channel', 'Preview story', 0, '', 'video', 0, 1676678402000, 'story'),
-			('youtube_preview_video', 'youtube_preview_channel', 'Preview longform', 0, '', 'video', 0, 1676678401000, '')
+			('tiktok_preview_video', 'tiktok_preview_channel', 'tiktok_video', 'Preview slideshow', 0, 'slideshow', 3, 1676678400000, ''),
+			('tiktok_preview_story', 'tiktok_preview_channel', 'tiktok_video', 'Preview story', 0, 'video', 0, 1676678402000, 'story'),
+			('youtube_preview_video', 'youtube_preview_channel', 'youtube_video', 'Preview longform', 0, 'video', 0, 1676678401000, '')
 	`); err != nil {
 		t.Fatal(err)
 	}
@@ -396,32 +400,40 @@ func TestGetComments(t *testing.T) {
 	}
 }
 
+func TestAddCommentsDeclaresDurableAuthorAvatar(t *testing.T) {
+	d := openWritableTestDB(t)
+	const videoID = "fixture_comment_avatar"
+	seedTestVideo(t, d, videoID, "youtube_comment_fixture")
+
+	inserted, err := d.AddComments(videoID, []CommentInput{{
+		CommentID:       "comment_sample",
+		AuthorID:        "UCcommenterSample",
+		AuthorThumbnail: "https://cdn.example.test/avatar.jpg",
+		Text:            "sample",
+	}})
+	if err != nil {
+		t.Fatalf("AddComments: %v", err)
+	}
+	if inserted != 1 {
+		t.Fatalf("inserted comments = %d, want 1", inserted)
+	}
+	asset, err := d.GetAssetByOwnerIdentity("avatar", "comment_author", "youtube_UCcommenterSample", 0)
+	if err != nil {
+		t.Fatalf("GetAssetByOwnerIdentity: %v", err)
+	}
+	if asset == nil || asset.State != AssetStateQueued || asset.SourceURL != "https://cdn.example.test/avatar.jpg" || asset.RequiredReason != "comment_avatar" {
+		t.Fatalf("comment avatar asset = %+v", asset)
+	}
+}
+
 func TestGetPlaybackPosition(t *testing.T) {
 	d := openTestDB(t)
-	pos, err := d.GetPlaybackPosition("nonexistent_xyz", "")
+	pos, err := d.GetPlaybackPosition("nonexistent_xyz")
 	if err != nil {
 		t.Fatalf("GetPlaybackPosition: %v", err)
 	}
 	if pos != 0 {
 		t.Errorf("expected 0 for unknown video, got %f", pos)
-	}
-}
-
-func TestMarkWatched(t *testing.T) {
-	d := openWritableTestDB(t)
-	const videoID = "fixture_mark_watched"
-
-	seedTestVideo(t, d, videoID, "youtube_watch_fixture")
-	err := d.MarkWatched(videoID, true)
-	if err != nil {
-		t.Fatalf("MarkWatched: %v", err)
-	}
-	var watched int
-	if err := d.QueryRow(`SELECT COALESCE(watched, 0) FROM videos WHERE video_id = ?`, videoID).Scan(&watched); err != nil {
-		t.Fatalf("read watched: %v", err)
-	}
-	if watched != 1 {
-		t.Fatalf("watched = %d, want 1", watched)
 	}
 }
 
@@ -448,7 +460,7 @@ func TestSaveProgress(t *testing.T) {
 	const videoID = "fixture_save_progress"
 
 	seedTestVideo(t, d, videoID, "youtube_progress_fixture")
-	result, err := d.SaveProgress("test_user", videoID, 30.5, 120.0, 0, "web")
+	result, err := d.SaveProgress(videoID, 30.5, 120.0, 0)
 	if err != nil {
 		t.Fatalf("SaveProgress: %v", err)
 	}
@@ -459,16 +471,15 @@ func TestSaveProgress(t *testing.T) {
 		t.Errorf("expected position 30.5, got %f", result.ResolvedPosition)
 	}
 	var position, duration float64
-	var source string
 	if err := d.QueryRow(`
-		SELECT playback_position, duration, progress_source
+		SELECT playback_position, duration
 		FROM watch_history
-		WHERE user_id = 'test_user' AND video_id = ?
-	`, videoID).Scan(&position, &duration, &source); err != nil {
+		WHERE video_id = ?
+	`, videoID).Scan(&position, &duration); err != nil {
 		t.Fatalf("read watch history: %v", err)
 	}
-	if position != 30.5 || duration != 120 || source != "web" {
-		t.Fatalf("watch history = position %f duration %f source %q, want 30.5/120/web", position, duration, source)
+	if position != 30.5 || duration != 120 {
+		t.Fatalf("watch history = position %f duration %f, want 30.5/120", position, duration)
 	}
 }
 

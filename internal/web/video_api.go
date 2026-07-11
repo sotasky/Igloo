@@ -1,20 +1,11 @@
 package web
 
 import (
-	"bufio"
 	"context"
-	"database/sql"
-	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
-	"mime"
-	"net"
 	"net/http"
-	"net/netip"
-	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -26,13 +17,11 @@ import (
 	"github.com/screwys/igloo/internal/download"
 	"github.com/screwys/igloo/internal/model"
 	"github.com/screwys/igloo/internal/sponsorblock"
-	"github.com/screwys/igloo/internal/subtitlemeta"
 )
 
 // registerVideoAPIRoutes registers video-related API routes.
 func (s *Server) registerVideoAPIRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/videos", s.handleVideosList)
-	mux.HandleFunc("GET /api/videos/sync", s.handleVideosSync)
 	mux.HandleFunc("GET /api/shorts/history", s.handleShortsHistory)
 	mux.HandleFunc("POST /api/videos/{videoID}/watched", s.handleVideoWatched)
 	mux.HandleFunc("POST /api/videos/{videoID}/pin", s.handleVideoPin)
@@ -48,46 +37,21 @@ func (s *Server) registerVideoAPIRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/media/slide/{videoID}/{index}", s.handleSlide)
 }
 
-// batchCheckSubtitles returns a set of video IDs that have subtitle files.
-func batchCheckSubtitles(dataDir string, videos []model.Video) map[string]bool {
-	result := make(map[string]bool)
-	// Group by directory to avoid re-reading the same dir for every video
-	type entry struct {
-		videoID string
-		stem    string
+func (s *Server) batchCheckSubtitles(videos []model.Video) map[string]bool {
+	owners := make([]db.AssetOwnerRef, 0, len(videos))
+	for _, video := range videos {
+		switch video.OwnerKind {
+		case "tweet", "youtube_video", "tiktok_video", "instagram_reel":
+			owners = append(owners, db.AssetOwnerRef{OwnerKind: video.OwnerKind, OwnerID: video.VideoID})
+		}
 	}
-	byDir := make(map[string][]entry)
-	for _, v := range videos {
-		if v.FilePath == "" {
-			continue
-		}
-		abs := resolveDataPath(dataDir, v.FilePath)
-		dir := filepath.Dir(abs)
-		stem := strings.TrimSuffix(filepath.Base(abs), filepath.Ext(abs))
-		byDir[dir] = append(byDir[dir], entry{v.VideoID, stem})
+	assets, err := s.db.ListReadyAssetsForOwners(owners, []string{"subtitle"})
+	if err != nil {
+		return map[string]bool{}
 	}
-	for dir, entries := range byDir {
-		files, err := os.ReadDir(dir)
-		if err != nil {
-			continue
-		}
-		vttFiles := make([]string, 0)
-		for _, f := range files {
-			if strings.HasSuffix(f.Name(), ".vtt") {
-				vttFiles = append(vttFiles, f.Name())
-			}
-		}
-		if len(vttFiles) == 0 {
-			continue
-		}
-		for _, e := range entries {
-			for _, vtt := range vttFiles {
-				if strings.HasPrefix(vtt, e.stem) {
-					result[e.videoID] = true
-					break
-				}
-			}
-		}
+	result := make(map[string]bool, len(assets))
+	for _, asset := range assets {
+		result[asset.OwnerID] = true
 	}
 	return result
 }
@@ -98,6 +62,7 @@ func videoToJSON(v model.Video) map[string]any {
 		"video_id":          v.VideoID,
 		"title":             v.Title,
 		"channel_id":        v.ChannelID,
+		"owner_kind":        v.OwnerKind,
 		"channel_name":      v.ChannelName,
 		"platform":          v.Platform,
 		"duration":          float64(v.Duration),
@@ -140,7 +105,6 @@ func videoToJSON(v model.Video) map[string]any {
 	m["display_title_casual"] = displayTitleCasual
 	m["dearrow_title"] = ptrOrNil(v.DearrowTitle)
 	m["dearrow_title_casual"] = ptrOrNil(v.DearrowTitleCasual)
-	m["dearrow_thumb_path"] = ptrOrNil(v.DearrowThumbPath)
 	m["dearrow_checked_at_ms"] = ptrOrNilInt64(v.DearrowCheckedAtMs)
 	return m
 }
@@ -184,11 +148,6 @@ func (s *Server) handleVideosList(w http.ResponseWriter, r *http.Request) {
 		Offset:        offset,
 	}
 
-	user := userFromContext(r.Context())
-	if user != nil {
-		opts.UserID = user.Username
-	}
-
 	total, _ := s.db.GetVideoCount(opts)
 	videos, err := s.db.GetVideos(opts)
 	if err != nil {
@@ -203,8 +162,8 @@ func (s *Server) handleVideosList(w http.ResponseWriter, r *http.Request) {
 		videoIDs = append(videoIDs, v.VideoID)
 	}
 	bookmarkInfo, _ := s.db.GetBookmarksForVideoIDsRich(videoIDs)
-	positions, _ := s.db.GetPlaybackPositions(videoIDs, opts.UserID)
-	subtitleSet := batchCheckSubtitles(s.cfg.DataDir, videos)
+	positions, _ := s.db.GetPlaybackPositions(videoIDs)
+	subtitleSet := s.batchCheckSubtitles(videos)
 
 	var jsonVideos []map[string]any
 	for _, v := range videos {
@@ -234,61 +193,6 @@ func (s *Server) handleVideosList(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// DEPRECATED: replaced by /api/videos/delta + /api/shorts/delta (#6).
-func (s *Server) handleVideosSync(w http.ResponseWriter, r *http.Request) {
-	slog.Info("deprecated endpoint hit", "path", "/api/videos/sync", "ua", r.UserAgent())
-	opts := db.GetVideosOpts{
-		Limit: 100000,
-	}
-
-	user := userFromContext(r.Context())
-	if user != nil {
-		opts.UserID = user.Username
-	}
-
-	videos, err := s.db.GetVideos(opts)
-	if err != nil {
-		slog.Error("handleVideosSync", "err", err)
-		writeJSON(w, 500, map[string]any{"error": "db error"})
-		return
-	}
-
-	var videoIDs []string
-	for _, v := range videos {
-		videoIDs = append(videoIDs, v.VideoID)
-	}
-	bookmarkInfo, _ := s.db.GetBookmarksForVideoIDsRich(videoIDs)
-	positions, _ := s.db.GetPlaybackPositions(videoIDs, opts.UserID)
-	subtitleSet := batchCheckSubtitles(s.cfg.DataDir, videos)
-
-	var jsonVideos []map[string]any
-	for _, v := range videos {
-		v.EnrichForCard()
-		jv := videoToJSON(v)
-		if bi, ok := bookmarkInfo[v.VideoID]; ok {
-			jv["bookmarked"] = true
-			if bi.CategoryID != nil {
-				jv["bookmark_category_id"] = *bi.CategoryID
-			}
-		}
-		if pos, ok := positions[v.VideoID]; ok {
-			jv["playback_position"] = pos
-		}
-		if subtitleSet[v.VideoID] {
-			jv["has_subtitles"] = true
-		}
-		jsonVideos = append(jsonVideos, jv)
-	}
-	if jsonVideos == nil {
-		jsonVideos = []map[string]any{}
-	}
-
-	writeJSON(w, 200, map[string]any{
-		"videos": jsonVideos,
-		"total":  len(jsonVideos),
-	})
-}
-
 func (s *Server) handleShortsHistory(w http.ResponseWriter, r *http.Request) {
 	scope, ok := db.NormalizeMomentsCursorScope(r.URL.Query().Get("tab"))
 	if r.URL.Query().Get("tab") == "" {
@@ -305,28 +209,13 @@ func (s *Server) handleShortsHistory(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	user := userFromContext(r.Context())
-	username := ""
-	if user != nil {
-		username = user.Username
+	cursor, _, err := s.db.GetMomentsCursor(scope)
+	if err != nil {
+		slog.Error("GetMomentsCursor", "scope", scope, "err", err)
 	}
-	videoID, _ := s.db.GetSetting("shorts_cursor_video_id_"+username+"_"+scope, "")
-	if videoID == "" && scope == "all" {
-		videoID, _ = s.db.GetSetting("shorts_cursor_video_id_"+username, "")
-		if videoID == "" {
-			videoID, _ = s.db.GetSetting("shorts_cursor_video_id", "")
-		}
-	}
-	updatedAtStr, _ := s.db.GetSetting("shorts_cursor_updated_at_ms_"+username+"_"+scope, "0")
-	if updatedAtStr == "0" && scope == "all" {
-		updatedAtStr, _ = s.db.GetSetting("shorts_cursor_updated_at_ms", "0")
-	}
-	updatedAtMs, _ := strconv.ParseInt(updatedAtStr, 10, 64)
-	sortAtStr, _ := s.db.GetSetting("shorts_cursor_sort_at_ms_"+username+"_"+scope, "0")
-	if sortAtStr == "0" && scope == "all" {
-		sortAtStr, _ = s.db.GetSetting("shorts_cursor_sort_at_ms", "0")
-	}
-	sortAtMs, _ := strconv.ParseInt(sortAtStr, 10, 64)
+	videoID := cursor.VideoID
+	updatedAtMs := cursor.UpdatedAtMs
+	sortAtMs := cursor.SortAtMs
 
 	body := map[string]any{
 		"video_id":      videoID,
@@ -400,40 +289,22 @@ func (s *Server) handleVideoWatched(w http.ResponseWriter, r *http.Request) {
 		watched = *body.Watched
 	}
 
-	if err := s.db.MarkWatched(videoID, watched); err != nil {
-		slog.Error("MarkWatched", "video", videoID, "err", err)
-		writeJSON(w, 500, map[string]any{"success": false, "error": "db error"})
-		return
-	}
-
 	nowMs := time.Now().UnixMilli()
 	if watched {
-		if err := s.db.UpsertWatchHistoryFullyWatched(user.Username, videoID, nowMs); err != nil {
+		if err := s.db.UpsertWatchHistoryFullyWatched(videoID, nowMs); err != nil {
 			slog.Error("UpsertWatchHistoryFullyWatched", "user", user.Username, "video", videoID, "err", err)
 			writeJSON(w, 500, map[string]any{"success": false, "error": "db error"})
 			return
 		}
 	} else {
-		if err := s.db.DeleteWatchHistory(user.Username, videoID); err != nil {
+		if err := s.db.DeleteWatchHistory(videoID, nowMs); err != nil {
 			slog.Error("DeleteWatchHistory", "user", user.Username, "video", videoID, "err", err)
 			writeJSON(w, 500, map[string]any{"success": false, "error": "db error"})
 			return
 		}
 	}
 
-	valueJSON := `{"watched":true}`
-	if !watched {
-		valueJSON = `{"watched":false}`
-	}
-	if err := s.db.RecordSyncChange("video_watched", videoID, valueJSON); err != nil {
-		slog.Error("RecordSyncChange video_watched", "video", videoID, "err", err)
-	}
-	syncVersion, _ := s.db.GetCurrentSyncVersion()
-
-	writeJSON(w, 200, map[string]any{
-		"success":      true,
-		"sync_version": syncVersion,
-	})
+	writeJSON(w, 200, map[string]any{"success": true})
 }
 
 func (s *Server) handleVideoPin(w http.ResponseWriter, r *http.Request) {
@@ -487,7 +358,6 @@ func (s *Server) handleVideoPin(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleVideoDelete(w http.ResponseWriter, r *http.Request) {
 	videoID := r.PathValue("videoID")
 
-	// Fetch the record first so we have file_path before deleting
 	video, err := s.db.GetVideo(videoID)
 	if err != nil {
 		slog.Error("GetVideo for delete", "video", videoID, "err", err)
@@ -499,18 +369,7 @@ func (s *Server) handleVideoDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Delete video file and sibling thumbnails
-	if video.FilePath != "" {
-		absPath := resolveDataPath(s.cfg.DataDir, video.FilePath)
-		_ = os.Remove(absPath)
-		stem := strings.TrimSuffix(absPath, filepath.Ext(absPath))
-		for _, ext := range []string{".webp", ".jpg", ".png", ".image"} {
-			_ = os.Remove(stem + ext)
-		}
-	}
-
-	// Delete from DB (also cleans media_files in same transaction)
-	if err := s.db.DeleteVideo(videoID); err != nil {
+	if err := s.db.DeleteVideoWithFile(videoID); err != nil {
 		slog.Error("DeleteVideo", "video", videoID, "err", err)
 		writeJSON(w, 500, map[string]any{"success": false, "error": "db delete failed"})
 		return
@@ -522,13 +381,7 @@ func (s *Server) handleVideoDelete(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleVideoProgressGet(w http.ResponseWriter, r *http.Request) {
 	videoID := r.PathValue("videoID")
 
-	user := userFromContext(r.Context())
-	userID := ""
-	if user != nil {
-		userID = user.Username
-	}
-
-	pos, err := s.db.GetPlaybackPosition(videoID, userID)
+	pos, err := s.db.GetPlaybackPosition(videoID)
 	if err != nil {
 		slog.Error("GetPlaybackPosition", "video", videoID, "err", err)
 		pos = 0
@@ -553,14 +406,13 @@ func (s *Server) handleVideoProgressPost(w http.ResponseWriter, r *http.Request)
 		Position    float64 `json:"position"`
 		Duration    float64 `json:"duration"`
 		UpdatedAtMs int64   `json:"updated_at_ms"`
-		ClientType  string  `json:"client_type"`
 	}
 	if err := decodeJSON(w, r, &body); err != nil && requestBodyTooLarge(err) {
 		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]any{"success": false, "error": requestBodyTooLargeMessage})
 		return
 	}
 
-	result, err := s.db.SaveProgress(user.Username, videoID, body.Position, body.Duration, body.UpdatedAtMs, body.ClientType)
+	result, err := s.db.SaveProgress(videoID, body.Position, body.Duration, body.UpdatedAtMs)
 	if err != nil {
 		slog.Error("SaveProgress", "video", videoID, "err", err)
 		writeJSON(w, 500, map[string]any{"success": false, "error": "db error"})
@@ -573,7 +425,6 @@ func (s *Server) handleVideoProgressPost(w http.ResponseWriter, r *http.Request)
 		"resolved_updated_at_ms": result.ResolvedUpdatedAtMs,
 		"accepted":               result.Accepted,
 		"source_policy":          "latest_wins_v2",
-		"sync_version":           result.SyncVersion,
 	})
 }
 
@@ -603,6 +454,7 @@ func (s *Server) handleVideoComments(w http.ResponseWriter, r *http.Request) {
 	if comments == nil {
 		comments = []model.Comment{}
 	}
+	s.projectCommentAuthorAvatars(comments)
 
 	if r.URL.Query().Get("fmt") == "html" {
 		creatorAuthorID := ""
@@ -659,26 +511,6 @@ func (s *Server) handleVideoCommentsRefresh(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// Download English subtitles (separate call — --dump-json suppresses file writes).
-	if video.Platform == "youtube" && video.FilePath != "" {
-		absPath := resolveDataPath(s.cfg.DataDir, video.FilePath)
-		videoDir := filepath.Dir(absPath)
-		subTemplate := filepath.Join(videoDir, videoID+".%(ext)s")
-		subCtx, subCancel := context.WithTimeout(r.Context(), 30*time.Second)
-		subCmd := exec.CommandContext(subCtx, "yt-dlp",
-			"--no-download", "--no-warnings", "--no-config",
-			"--cookies-from-browser", "firefox",
-			"--write-subs", "--write-auto-subs",
-			"--sub-langs", "en", "--sub-format", "vtt",
-			"-o", subTemplate,
-			sourceURL,
-		)
-		if err := subCmd.Run(); err != nil {
-			slog.Warn("subtitle download failed", "video", videoID, "err", err)
-		}
-		subCancel()
-	}
-
 	// Fetch comments through the same yt-dlp wrapper used by normal and temp downloads.
 	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
 	defer cancel()
@@ -688,6 +520,9 @@ func (s *Server) handleVideoCommentsRefresh(w http.ResponseWriter, r *http.Reque
 		if dl := s.workers.Downloader(); dl != nil && dl.YtDlp != nil {
 			commentsDownloader = dl.YtDlp
 		}
+	}
+	if video.Platform == "youtube" {
+		s.refreshVideoSubtitles(r.Context(), commentsDownloader, videoID, sourceURL)
 	}
 	parsed, err := commentsDownloader.FetchComments(ctx, sourceURL, download.DefaultCommentFetchLimit, download.Opts{
 		CookiesFromBrowser: "firefox",
@@ -711,18 +546,12 @@ func (s *Server) handleVideoCommentsRefresh(w http.ResponseWriter, r *http.Reque
 	// Save: delete old, insert new
 	oldComments, _ := s.db.GetComments(videoID, 100000)
 	_, _ = s.db.DeleteComments(videoID)
-	saved, err := s.db.AddComments(videoID, parsed, video.Platform)
+	saved, err := s.db.AddComments(videoID, parsed)
 	if err != nil {
 		slog.Error("AddComments", "video", videoID, "err", err)
 	}
-	// yt-dlp already returns commenter thumbnails with comments. Commenters are
-	// not navigable Igloo profiles, so cache those public thumbnails directly.
-	if s.workers != nil && len(parsed) > 0 {
-		go func(comments []db.CommentInput) {
-			bgCtx, bgCancel := context.WithTimeout(context.Background(), 45*time.Second)
-			defer bgCancel()
-			s.workers.CacheYouTubeCommentAvatars(bgCtx, comments)
-		}(parsed)
+	if err == nil && s.workers != nil && len(parsed) > 0 {
+		s.workers.KickFeedMedia()
 	}
 
 	// If fetch returned nothing but had comments before, log warning
@@ -738,6 +567,7 @@ func (s *Server) handleVideoCommentsRefresh(w http.ResponseWriter, r *http.Reque
 	for i := range comments {
 		comments[i].SetPublishedAtMs()
 	}
+	s.projectCommentAuthorAvatars(comments)
 
 	if r.URL.Query().Get("fmt") == "html" {
 		creatorAuthorID := components.CommentCreatorAuthorID(video.ChannelID)
@@ -753,6 +583,61 @@ func (s *Server) handleVideoCommentsRefresh(w http.ResponseWriter, r *http.Reque
 		"comments": comments,
 		"count":    len(comments),
 	})
+}
+
+func (s *Server) refreshVideoSubtitles(parent context.Context, downloader *download.YtDlpWrapper, videoID, sourceURL string) {
+	owner, ok := s.videoAssetOwner(videoID)
+	if !ok {
+		return
+	}
+	stream := s.canonicalStreamAsset(owner)
+	if downloader == nil || stream == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(parent, 30*time.Second)
+	defer cancel()
+	subtitleDir, err := s.cfg.Storage.WritePath("subtitles/youtube")
+	if err != nil {
+		slog.Warn("subtitle storage path failed", "video", videoID, "err", err)
+		return
+	}
+	paths, err := downloader.DownloadSubtitles(ctx, sourceURL, download.Opts{
+		ID:                 fmt.Sprintf("%s-sub-%d", videoID, time.Now().UnixNano()),
+		SubtitleDir:        subtitleDir,
+		CookiesFromBrowser: "firefox",
+	})
+	if err != nil {
+		slog.Warn("subtitle download failed", "video", videoID, "err", err)
+		return
+	}
+	assets := make([]db.Asset, 0, len(paths))
+	for index, path := range paths {
+		key, keyErr := s.cfg.Storage.Key(path)
+		if keyErr != nil {
+			removePaths(paths)
+			slog.Warn("subtitle output escaped storage", "video", videoID, "err", keyErr)
+			return
+		}
+		assets = append(assets, db.Asset{
+			AssetKind:     "subtitle",
+			MediaIndex:    index,
+			FilePath:      key,
+			ContentType:   "text/vtt",
+			AudioLanguage: "en",
+		})
+	}
+	if err := s.db.StoreVideoSubtitleAssets(videoID, assets, time.Now().UnixMilli()); err != nil {
+		removePaths(paths)
+		slog.Warn("publish subtitle assets failed", "video", videoID, "err", err)
+	}
+}
+
+func removePaths(paths []string) {
+	for _, path := range paths {
+		if path != "" {
+			_ = os.Remove(path)
+		}
+	}
 }
 
 // stringFromAny safely extracts a string from an any value.
@@ -849,32 +734,23 @@ func sbAgeLabel(publishedAt *time.Time) string {
 
 func (s *Server) handleVideoSubtitlesList(w http.ResponseWriter, r *http.Request) {
 	videoID := r.PathValue("videoID")
-	video, err := s.db.GetVideo(videoID)
-	if err != nil || video == nil || video.FilePath == "" {
-		writeJSON(w, 200, map[string]any{"video_id": videoID, "tracks": []any{}, "count": 0})
-		return
+	owner, ok := s.videoAssetOwner(videoID)
+	var assets []canonicalAssetFile
+	if ok {
+		assets = s.canonicalAssets(owner, "subtitle")
 	}
-
-	absFilePath := resolveDataPath(s.cfg.DataDir, video.FilePath)
-	dir := filepath.Dir(absFilePath)
-	stem := strings.TrimSuffix(filepath.Base(absFilePath), filepath.Ext(absFilePath))
-	entries, _ := os.ReadDir(dir)
-
-	infoPath := filepath.Join(dir, stem+".info.json")
-	manualLangs := subtitlemeta.ManualLangs(infoPath)
-	audioLanguage := subtitlemeta.Language(infoPath)
-
 	var tracks []map[string]any
-	for _, e := range entries {
-		name := e.Name()
-		if !strings.HasPrefix(name, stem) || !strings.HasSuffix(name, ".vtt") {
-			continue
-		}
-		lang := subtitlemeta.TrackLang(stem, name)
-		isAuto := !manualLangs[lang]
+	audioLanguage := ""
+	for _, file := range assets {
+		name := filepath.Base(file.asset.FilePath)
+		lang := subtitleTrackLanguage(name)
+		isAuto := file.asset.IsAuto != nil && *file.asset.IsAuto
 		label := strings.ToUpper(lang[:1]) + lang[1:]
 		if isAuto {
 			label += " (auto)"
+		}
+		if audioLanguage == "" {
+			audioLanguage = file.asset.AudioLanguage
 		}
 		tracks = append(tracks, map[string]any{
 			"track_id":   name,
@@ -905,39 +781,23 @@ func (s *Server) handleVideoSubtitlesList(w http.ResponseWriter, r *http.Request
 	})
 }
 
+func subtitleTrackLanguage(name string) string {
+	name = strings.TrimSuffix(strings.ToLower(filepath.Base(name)), ".vtt")
+	parts := strings.Split(name, ".")
+	if len(parts) > 1 && strings.TrimSpace(parts[len(parts)-1]) != "" {
+		return parts[len(parts)-1]
+	}
+	return "und"
+}
+
 func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 	videoID := r.PathValue("videoID")
-
-	video, err := s.db.GetVideo(videoID)
-	if err != nil {
-		slog.Error("GetVideo", "video", videoID, "err", err)
-		writeJSON(w, 500, map[string]any{"success": false, "error": "db error", "video_id": videoID})
-		return
+	owner, ok := s.requestMediaAssetOwner(r, videoID)
+	var file *canonicalAssetFile
+	if ok {
+		file = s.canonicalStreamAsset(owner)
 	}
-
-	var filePath string
-	if video != nil {
-		filePath = resolveDataPath(s.cfg.DataDir, video.FilePath)
-	}
-
-	// Fall back to media_files for feed media videos (GIFs, tweet videos)
-	// which are not in the videos table. Check both feed_media and quote_media
-	// owner types — quote media is stored under the quote tweet ID. Prefer a
-	// video-typed file: mixed tweets (photo + video GIF) put the photo at
-	// index 0, so GetMediaFilePath(..., 0) would serve a JPG.
-	if filePath == "" {
-		filePath = s.findFeedMediaVideoFile(videoID)
-	}
-	if filePath == "" {
-		writeJSON(w, 404, map[string]any{
-			"success":  false,
-			"error":    "video not found",
-			"code":     "VIDEO_NOT_FOUND",
-			"video_id": videoID,
-		})
-		return
-	}
-	if filePath == "" {
+	if file == nil {
 		writeJSON(w, 404, map[string]any{
 			"success":  false,
 			"error":    "video file not found",
@@ -946,113 +806,39 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-
-	// Mixed media: file_path may point to a photo (e.g. slideshow with
-	// photo + video). Look for a video file in metadata slides instead.
-	fpLower := strings.ToLower(filePath)
-	if video != nil && (strings.HasSuffix(fpLower, ".jpg") || strings.HasSuffix(fpLower, ".jpeg") ||
-		strings.HasSuffix(fpLower, ".png") || strings.HasSuffix(fpLower, ".webp")) {
-		if meta := video.ParseMetadata(); meta != nil {
-			for i := range meta.Slides {
-				s := meta.SlidePath(i)
-				sl := strings.ToLower(s)
-				if strings.HasSuffix(sl, ".mp4") || strings.HasSuffix(sl, ".mkv") ||
-					strings.HasSuffix(sl, ".webm") || strings.HasSuffix(sl, ".mov") ||
-					strings.HasSuffix(sl, ".m4v") {
-					if _, err := os.Stat(s); err == nil {
-						filePath = s
-						break
-					}
-				}
-			}
-		}
-	}
-
-	if _, err := os.Stat(filePath); os.IsNotExist(err) {
-		writeJSON(w, 404, map[string]any{
-			"success":  false,
-			"error":    "video file not found",
-			"code":     "VIDEO_FILE_NOT_FOUND",
-			"video_id": videoID,
-		})
-		return
-	}
-
-	ext := strings.ToLower(filepath.Ext(filePath))
-	contentType := ""
-	switch ext {
-	case ".mp4":
-		contentType = "video/mp4"
-	case ".webm":
-		contentType = "video/webm"
-	case ".mkv":
-		contentType = "video/x-matroska"
-	case ".jpg", ".jpeg", ".image", ".png", ".webp", ".gif":
-		contentType = detectImageContentType(filePath)
-	case ".mp3":
-		contentType = "audio/mpeg"
-	case ".m4a", ".aac", ".ogg":
-		contentType = "audio/mp4"
-	default:
-		contentType = mime.TypeByExtension(ext)
-	}
-
+	contentType := file.asset.ContentType
 	if contentType != "" {
 		w.Header().Set("Content-Type", contentType)
 	}
 	w.Header().Set("Cache-Control", "private, no-transform")
-	if s.serveDataFileViaXAccel(w, r, filePath, contentType, "private, no-transform") {
+	if s.serveDataFileViaXAccel(w, r, file.path, contentType, "private, no-transform") {
 		return
 	}
-
-	f, err := os.Open(filePath)
-	if err != nil {
-		writeJSON(w, 404, map[string]any{"success": false, "error": "cannot open file", "video_id": videoID})
-		return
-	}
-	defer func() {
-		_ = f.Close()
-	}()
-
-	fi, _ := f.Stat()
-	http.ServeContent(w, r, "", fi.ModTime(), f)
+	http.ServeFile(w, r, file.path)
 }
 
 func (s *Server) handleAudio(w http.ResponseWriter, r *http.Request) {
 	videoID := r.PathValue("videoID")
-
-	video, _ := s.db.GetVideo(videoID)
-	audioExts := []string{".mp3", ".m4a", ".ogg", ".aac"}
-
-	if video != nil && video.FilePath != "" {
-		dir := filepath.Dir(resolveDataPath(s.cfg.DataDir, video.FilePath))
-		for _, ext := range audioExts {
-			for _, stem := range []string{videoID, videoID + "_0"} {
-				candidate := filepath.Join(dir, stem+ext)
-				if _, err := os.Stat(candidate); err == nil {
-					cacheControl := "public, max-age=3600"
-					w.Header().Set("Cache-Control", cacheControl)
-					if s.serveDataFileViaXAccel(w, r, candidate, "", cacheControl) {
-						return
-					}
-					http.ServeFile(w, r, candidate)
-					return
-				}
-			}
-		}
-	}
-
-	if path := s.findFeedMediaAudioFile(videoID); path != "" {
-		cacheControl := "public, max-age=3600"
-		w.Header().Set("Cache-Control", cacheControl)
-		if s.serveDataFileViaXAccel(w, r, path, "", cacheControl) {
-			return
-		}
-		http.ServeFile(w, r, path)
+	owner, ok := s.videoAssetOwner(videoID)
+	if !ok {
+		http.NotFound(w, r)
 		return
 	}
-
-	http.NotFound(w, r)
+	file := s.canonicalAsset(owner, "post_audio", 0)
+	if file == nil {
+		http.NotFound(w, r)
+		return
+	}
+	cacheControl := "public, max-age=3600"
+	contentType := file.asset.ContentType
+	w.Header().Set("Cache-Control", cacheControl)
+	if contentType != "" {
+		w.Header().Set("Content-Type", contentType)
+	}
+	if s.serveDataFileViaXAccel(w, r, file.path, contentType, cacheControl) {
+		return
+	}
+	http.ServeFile(w, r, file.path)
 }
 
 func (s *Server) handleSlide(w http.ResponseWriter, r *http.Request) {
@@ -1065,566 +851,28 @@ func (s *Server) handleSlide(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Try video record first (for downloaded videos with slides)
-	video, _ := s.db.GetVideo(videoID)
-	if video != nil {
-		meta := video.ParseMetadata()
-		if meta != nil && index < len(meta.Slides) {
-			if slide := meta.SlideAsMap(index); slide != nil {
-				if pathVal, ok := slide["path"].(string); ok && pathVal != "" {
-					absSlide := resolveDataPath(s.cfg.DataDir, pathVal)
-					if _, err := os.Stat(absSlide); err == nil {
-						s.serveSlideFile(w, r, absSlide)
-						return
-					}
-				}
-				if urlVal, ok := slide["url"].(string); ok && urlVal != "" && video.FilePath != "" {
-					absVideo := resolveDataPath(s.cfg.DataDir, video.FilePath)
-					candidate := filepath.Join(filepath.Dir(absVideo), urlVal)
-					if _, err := os.Stat(candidate); err == nil {
-						s.serveSlideFile(w, r, candidate)
-						return
-					}
-				}
-			}
-		}
-	}
-
-	// Slideshow fallback: slides are {videoID}_{1-based}.jpg in the video directory
-	if video != nil && video.FilePath != "" {
-		dir := filepath.Dir(resolveDataPath(s.cfg.DataDir, video.FilePath))
-		fileIndex := index + 1
-		for _, ext := range []string{".jpg", ".jpeg", ".png", ".webp"} {
-			candidate := filepath.Join(dir, fmt.Sprintf("%s_%d%s", videoID, fileIndex, ext))
-			if _, err := os.Stat(candidate); err == nil {
-				s.serveSlideFile(w, r, candidate)
-				return
-			}
-		}
-	}
-
-	// Feed media fallback: look up feed_items and find downloaded media files
-	if path := s.findFeedMediaFile(videoID, index); path != "" {
-		if fi, err := os.Stat(path); err == nil && fi.Size() >= 100 {
-			s.serveSlideFile(w, r, path)
-			return
-		}
-	}
-
-	// CDN proxy fallback: fetch from media_json URL and proxy to client
-	if cdnURL := s.findCDNSlideURL(videoID, index); cdnURL != "" {
-		s.proxyCDNMedia(w, r, cdnURL)
+	owner, ok := s.requestMediaAssetOwner(r, videoID)
+	if !ok {
+		http.NotFound(w, r)
 		return
 	}
-
-	http.NotFound(w, r)
+	file := s.canonicalAsset(owner, "post_media", index)
+	if file == nil {
+		http.NotFound(w, r)
+		return
+	}
+	s.serveSlideFile(w, r, *file)
 }
 
-func (s *Server) serveSlideFile(w http.ResponseWriter, r *http.Request, path string) {
+func (s *Server) serveSlideFile(w http.ResponseWriter, r *http.Request, file canonicalAssetFile) {
 	cacheControl := "public, max-age=3600"
 	w.Header().Set("Cache-Control", cacheControl)
-	contentType := slideContentType(path)
+	contentType := file.asset.ContentType
 	if contentType != "" {
 		w.Header().Set("Content-Type", contentType)
 	}
-	if s.serveDataFileViaXAccel(w, r, path, contentType, cacheControl) {
+	if s.serveDataFileViaXAccel(w, r, file.path, contentType, cacheControl) {
 		return
 	}
-	http.ServeFile(w, r, path)
-}
-
-func slideContentType(path string) string {
-	switch strings.ToLower(filepath.Ext(path)) {
-	case ".jpg", ".jpeg", ".png", ".webp", ".gif", ".image":
-		return detectImageContentType(path)
-	case ".mp4":
-		return "video/mp4"
-	case ".webm":
-		return "video/webm"
-	case ".mkv":
-		return "video/x-matroska"
-	case ".mov":
-		return "video/quicktime"
-	case ".m4v":
-		return "video/mp4"
-	default:
-		return mime.TypeByExtension(filepath.Ext(path))
-	}
-}
-
-type feedMediaOwnerRef struct {
-	ownerType string
-	ownerID   string
-	handle    string
-}
-
-func firstNonEmpty(vals ...string) string {
-	for _, v := range vals {
-		if strings.TrimSpace(v) != "" {
-			return v
-		}
-	}
-	return ""
-}
-
-func (s *Server) resolveFeedMediaRefs(tweetID string) []feedMediaOwnerRef {
-	items, err := s.db.GetFeedItemsForTweetIDs([]string{tweetID})
-	if err != nil {
-		return nil
-	}
-	fi, ok := items[tweetID]
-	if !ok {
-		return nil
-	}
-
-	refs := []feedMediaOwnerRef{{
-		ownerType: "feed_media",
-		ownerID:   tweetID,
-		handle:    firstNonEmpty(fi.SourceHandle, fi.AuthorHandle),
-	}}
-	if fi.QuoteTweetID != "" {
-		refs = append(refs, feedMediaOwnerRef{
-			ownerType: "quote_media",
-			ownerID:   fi.QuoteTweetID,
-			handle:    firstNonEmpty(fi.QuoteAuthorHandle, fi.AuthorHandle, fi.SourceHandle),
-		})
-	}
-	return refs
-}
-
-func (s *Server) findFeedMediaVideoFile(tweetID string) string {
-	for _, ref := range s.resolveFeedMediaRefs(tweetID) {
-		if relPath, err := s.db.GetMediaFileVideoPath(ref.ownerType, ref.ownerID); err == nil {
-			absPath := resolveDataPath(s.cfg.DataDir, relPath)
-			if _, err := os.Stat(absPath); err == nil {
-				return absPath
-			}
-		}
-		if path := s.probeMediaVideoFile(ref.handle, ref.ownerID); path != "" {
-			return path
-		}
-	}
-	if path := s.findDirectFeedMediaVideoFile(tweetID); path != "" {
-		return path
-	}
-	return ""
-}
-
-func (s *Server) findFeedMediaAudioFile(tweetID string) string {
-	for _, ref := range s.resolveFeedMediaRefs(tweetID) {
-		if relPath, err := s.db.GetMediaFileAudioPath(ref.ownerType, ref.ownerID); err == nil {
-			absPath := resolveDataPath(s.cfg.DataDir, relPath)
-			if _, err := os.Stat(absPath); err == nil {
-				return absPath
-			}
-		}
-	}
-	return ""
-}
-
-// findFeedMediaFile locates a downloaded feed media file for a tweet.
-// If the tweet is a quote wrapper, it follows quote_tweet_id to the local
-// quote_media rows/files instead of assuming the parent tweet owns the file.
-func (s *Server) findFeedMediaFile(tweetID string, index int) string {
-	refs := s.resolveFeedMediaRefs(tweetID)
-
-	// Primary: resolve from media_files DB (authoritative for Go-era downloads)
-	for _, ref := range refs {
-		if relPath, err := s.db.GetMediaFilePath(ref.ownerType, ref.ownerID, index); err == nil {
-			absPath := resolveDataPath(s.cfg.DataDir, relPath)
-			if _, err := os.Stat(absPath); err == nil {
-				return absPath
-			}
-		}
-	}
-	if path := s.findDirectFeedMediaFile(tweetID, index); path != "" {
-		return path
-	}
-
-	// Fallback: filesystem probe for legacy data not in media_files.
-	if len(refs) == 0 {
-		// Try as quote tweet
-		return s.findFeedMediaByQuoteTweetID(tweetID, index)
-	}
-	for _, ref := range refs {
-		if path := s.probeMediaFile(ref.handle, ref.ownerID, index); path != "" {
-			return path
-		}
-	}
-	return ""
-}
-
-func (s *Server) findDirectFeedMediaVideoFile(tweetID string) string {
-	for _, ownerType := range []string{"feed_media", "quote_media"} {
-		if relPath, err := s.db.GetMediaFileVideoPath(ownerType, tweetID); err == nil {
-			absPath := resolveDataPath(s.cfg.DataDir, relPath)
-			if _, err := os.Stat(absPath); err == nil {
-				return absPath
-			}
-		}
-	}
-	return ""
-}
-
-func (s *Server) findDirectFeedMediaFile(tweetID string, index int) string {
-	for _, ownerType := range []string{"feed_media", "quote_media"} {
-		if relPath, err := s.db.GetMediaFilePath(ownerType, tweetID, index); err == nil {
-			absPath := resolveDataPath(s.cfg.DataDir, relPath)
-			if _, err := os.Stat(absPath); err == nil {
-				return absPath
-			}
-		}
-	}
-	return ""
-}
-
-// findFeedMediaByQuoteTweetID searches for media from quote tweets.
-func (s *Server) findFeedMediaByQuoteTweetID(quoteTweetID string, index int) string {
-	var sourceHandle string
-	_ = s.db.WithRead(func(conn *sql.DB) error {
-		return conn.QueryRow(
-			"SELECT COALESCE(quote_author_handle, author_handle) FROM feed_items WHERE quote_tweet_id = ? LIMIT 1",
-			quoteTweetID,
-		).Scan(&sourceHandle)
-	})
-	if sourceHandle == "" {
-		return ""
-	}
-	return s.probeMediaFile(sourceHandle, quoteTweetID, index)
-}
-
-// probeMediaFile checks common extensions for a feed media file on disk.
-func (s *Server) probeMediaFile(handle, tweetID string, index int) string {
-	handle, ok := safeLegacyTwitterMediaSegment(handle)
-	if !ok {
-		return ""
-	}
-	tweetID, ok = safeLegacyTwitterMediaSegment(tweetID)
-	if !ok {
-		return ""
-	}
-
-	// Try both directories: media/ (Go-era) and videos/ (Python-era)
-	roots := []string{"media", "videos"}
-	// Try both 0-based (Go) and 1-based (legacy Python) file naming
-	fileIndices := []int{index, index + 1}
-
-	for _, root := range roots {
-		baseDir, ok := resolveDataPathUnder(s.cfg.DataDir, filepath.Join(root, "twitter", handle))
-		if !ok {
-			continue
-		}
-		for _, fi := range fileIndices {
-			for _, ext := range []string{".jpg", ".png", ".webp", ".mp4"} {
-				path := filepath.Join(baseDir, fmt.Sprintf("%s_%d%s", tweetID, fi, ext))
-				fullPath, ok := resolveDataPathUnder(s.cfg.DataDir, path)
-				if !ok {
-					continue
-				}
-				if _, err := os.Stat(fullPath); err == nil {
-					return fullPath
-				}
-			}
-		}
-	}
-
-	return ""
-}
-
-func (s *Server) probeMediaVideoFile(handle, tweetID string) string {
-	handle, ok := safeLegacyTwitterMediaSegment(handle)
-	if !ok {
-		return ""
-	}
-	tweetID, ok = safeLegacyTwitterMediaSegment(tweetID)
-	if !ok {
-		return ""
-	}
-
-	roots := []string{"media", "videos"}
-	fileIndices := []int{0, 1}
-	videoExts := []string{".mp4", ".webm", ".mkv", ".mov", ".m4v", ".gif"}
-
-	for _, root := range roots {
-		baseDir, ok := resolveDataPathUnder(s.cfg.DataDir, filepath.Join(root, "twitter", handle))
-		if !ok {
-			continue
-		}
-		for _, ext := range videoExts {
-			path := filepath.Join(baseDir, tweetID+ext)
-			fullPath, ok := resolveDataPathUnder(s.cfg.DataDir, path)
-			if !ok {
-				continue
-			}
-			if _, err := os.Stat(fullPath); err == nil {
-				return fullPath
-			}
-		}
-		for _, fi := range fileIndices {
-			for _, ext := range videoExts {
-				path := filepath.Join(baseDir, fmt.Sprintf("%s_%d%s", tweetID, fi, ext))
-				fullPath, ok := resolveDataPathUnder(s.cfg.DataDir, path)
-				if !ok {
-					continue
-				}
-				if _, err := os.Stat(fullPath); err == nil {
-					return fullPath
-				}
-			}
-		}
-	}
-
-	return ""
-}
-
-// Legacy media probing treats stored handles and tweet IDs as path segments
-// under Igloo's data directory, never as caller-supplied filesystem paths.
-func safeLegacyTwitterMediaSegment(raw string) (string, bool) {
-	raw = strings.TrimSpace(strings.TrimPrefix(raw, "@"))
-	if raw == "" || raw == "." || raw == ".." || filepath.Base(raw) != raw || filepath.Clean(raw) != raw {
-		return "", false
-	}
-	for _, r := range raw {
-		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '-' {
-			continue
-		}
-		return "", false
-	}
-	return raw, true
-}
-
-// findCDNSlideURL looks up the CDN URL for a feed item's media from media_json or quote_media_json.
-func (s *Server) findCDNSlideURL(tweetID string, index int) string {
-	// Try media_json from feed_items
-	items, _ := s.db.GetFeedItemsForTweetIDs([]string{tweetID})
-	if fi, ok := items[tweetID]; ok && fi.MediaJSON != "" {
-		if url := pickCDNURL(fi.MediaJSON, index); url != "" {
-			return url
-		}
-	}
-
-	// Try quote_media_json (tweet is a quoted post)
-	var quoteMediaJSON string
-	_ = s.db.WithRead(func(conn *sql.DB) error {
-		return conn.QueryRow(
-			"SELECT COALESCE(quote_media_json,'') FROM feed_items WHERE quote_tweet_id = ? LIMIT 1",
-			tweetID,
-		).Scan(&quoteMediaJSON)
-	})
-	if quoteMediaJSON != "" {
-		if url := pickCDNURL(quoteMediaJSON, index); url != "" {
-			return url
-		}
-	}
-
-	return ""
-}
-
-// pickCDNURL extracts a media URL from a JSON media array at the given index.
-// For photos: returns the url field. For video/gif: returns thumbnail_url.
-func pickCDNURL(mediaJSON string, index int) string {
-	var mediaList []map[string]any
-	if err := json.Unmarshal([]byte(mediaJSON), &mediaList); err != nil {
-		return ""
-	}
-	if index < 0 || index >= len(mediaList) {
-		return ""
-	}
-	entry := mediaList[index]
-	mtype, _ := entry["type"].(string)
-	if mtype == "photo" {
-		if url, _ := entry["url"].(string); url != "" {
-			return url
-		}
-	}
-	if mtype == "video" || mtype == "gif" {
-		if url, _ := entry["thumbnail_url"].(string); url != "" {
-			return url
-		}
-		if url, _ := entry["thumbnail"].(string); url != "" {
-			return url
-		}
-	}
-	// Fallback
-	if url, _ := entry["url"].(string); url != "" {
-		return url
-	}
-	return ""
-}
-
-func normalizeMediaContentType(contentType string) string {
-	if contentType == "" {
-		return ""
-	}
-	contentType = strings.ToLower(strings.TrimSpace(contentType))
-	if i := strings.Index(contentType, ";"); i >= 0 {
-		contentType = strings.TrimSpace(contentType[:i])
-	}
-	return contentType
-}
-
-func isProxyableMediaContentType(contentType string) bool {
-	switch {
-	case strings.HasPrefix(contentType, "image/"):
-		return true
-	case strings.HasPrefix(contentType, "video/"):
-		return true
-	case strings.HasPrefix(contentType, "audio/"):
-		return true
-	default:
-		return false
-	}
-}
-
-const maxCDNProxyBytes int64 = 25 << 20 // 25 MiB
-
-func isSafeCDNProxyURL(raw string) bool {
-	u, err := url.Parse(raw)
-	if err != nil {
-		return false
-	}
-	if u.Scheme != "https" && u.Scheme != "http" {
-		return false
-	}
-	hostname := u.Hostname()
-	if hostname == "" {
-		return false
-	}
-	if parsed, err := netip.ParseAddr(hostname); err == nil {
-		return isPublicAddr(parsed)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	addrs, err := net.DefaultResolver.LookupIPAddr(ctx, hostname)
-	if err != nil || len(addrs) == 0 {
-		return false
-	}
-	for _, addr := range addrs {
-		parsed, ok := netip.AddrFromSlice(addr.IP)
-		if !ok || !isPublicAddr(parsed) {
-			return false
-		}
-	}
-	return true
-}
-
-func isPublicAddr(addr netip.Addr) bool {
-	addr = addr.Unmap()
-	if !addr.IsGlobalUnicast() || addr.IsLoopback() || addr.IsPrivate() || addr.IsLinkLocalUnicast() || addr.IsUnspecified() {
-		return false
-	}
-	for _, prefix := range nonPublicAddrPrefixes {
-		if prefix.Contains(addr) {
-			return false
-		}
-	}
-	return true
-}
-
-var nonPublicAddrPrefixes = []netip.Prefix{
-	netip.MustParsePrefix("100.64.0.0/10"),
-	netip.MustParsePrefix("192.0.0.0/24"),
-	netip.MustParsePrefix("192.0.2.0/24"),
-	netip.MustParsePrefix("192.88.99.0/24"),
-	netip.MustParsePrefix("198.18.0.0/15"),
-	netip.MustParsePrefix("198.51.100.0/24"),
-	netip.MustParsePrefix("203.0.113.0/24"),
-	netip.MustParsePrefix("240.0.0.0/4"),
-	netip.MustParsePrefix("2001:db8::/32"),
-}
-
-// proxyCDNMedia fetches media from a CDN URL and proxies it to the client.
-func (s *Server) proxyCDNMedia(w http.ResponseWriter, r *http.Request, cdnURL string) {
-	if !isSafeCDNProxyURL(cdnURL) {
-		http.NotFound(w, r)
-		return
-	}
-	client := &http.Client{
-		Timeout: 15 * time.Second,
-		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-	}
-	req, err := http.NewRequest("GET", cdnURL, nil)
-	if err != nil {
-		http.NotFound(w, r)
-		return
-	}
-	req.Header.Set("User-Agent", "Mozilla/5.0")
-
-	resp, err := client.Do(req)
-	if err != nil || resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		http.NotFound(w, r)
-		return
-	}
-	defer func() {
-		_ = resp.Body.Close()
-	}()
-
-	reader := bufio.NewReader(resp.Body)
-	sniff, _ := reader.Peek(512)
-	if resp.ContentLength > maxCDNProxyBytes {
-		http.NotFound(w, r)
-		return
-	}
-
-	contentType := normalizeMediaContentType(resp.Header.Get("Content-Type"))
-	if !isProxyableMediaContentType(contentType) {
-		if len(sniff) == 0 {
-			http.NotFound(w, r)
-			return
-		}
-		contentType = normalizeMediaContentType(http.DetectContentType(sniff))
-	}
-	if !isProxyableMediaContentType(contentType) {
-		http.NotFound(w, r)
-		return
-	}
-	body, oversized, err := stageCDNProxyBody(reader, maxCDNProxyBytes)
-	if err != nil {
-		slog.Warn("proxyCDNMedia staging failed", "url", cdnURL, "err", err)
-		http.NotFound(w, r)
-		return
-	}
-	if oversized {
-		http.NotFound(w, r)
-		return
-	}
-	defer func() {
-		name := body.Name()
-		_ = body.Close()
-		_ = os.Remove(name)
-	}()
-	w.Header().Set("Content-Type", contentType)
-	w.Header().Set("Cache-Control", "public, max-age=3600")
-	if _, err := io.Copy(w, body); err != nil {
-		slog.Warn("proxyCDNMedia copy failed", "url", cdnURL, "err", err)
-	}
-}
-
-func stageCDNProxyBody(r io.Reader, limit int64) (*os.File, bool, error) {
-	body, err := os.CreateTemp("", "igloo-cdn-proxy-*")
-	if err != nil {
-		return nil, false, err
-	}
-	n, copyErr := io.CopyN(body, r, limit+1)
-	if copyErr != nil && copyErr != io.EOF {
-		name := body.Name()
-		_ = body.Close()
-		_ = os.Remove(name)
-		return nil, false, copyErr
-	}
-	if n > limit {
-		name := body.Name()
-		_ = body.Close()
-		_ = os.Remove(name)
-		return nil, true, nil
-	}
-	if _, err := body.Seek(0, io.SeekStart); err != nil {
-		name := body.Name()
-		_ = body.Close()
-		_ = os.Remove(name)
-		return nil, false, err
-	}
-	return body, false, nil
+	http.ServeFile(w, r, file.path)
 }

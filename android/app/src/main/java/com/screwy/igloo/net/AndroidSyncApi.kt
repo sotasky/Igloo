@@ -14,37 +14,37 @@ import io.ktor.http.isSuccess
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.json.JsonObject
 
 class AndroidSyncApi(
     private val client: HttpClient,
     private val baseUrlProvider: () -> String,
 ) {
-    suspend fun latestGeneration(retention: AndroidSyncRetentionRequest): AndroidSyncLatestResponse =
-        client.get(baseUrlProvider() + "/api/android/sync/generation/latest") {
+    suspend fun bootstrap(
+        retention: AndroidSyncRetentionRequest,
+        after: String?,
+    ): AndroidSyncPageResponse =
+        client.get(baseUrlProvider() + "/api/android/sync/bootstrap") {
             syncMetadataTimeout()
             parameter("feed_days", retention.feedDays)
             parameter("youtube_days", retention.youtubeDays)
             parameter("moments_days", retention.momentsDays)
             parameter("story_hours", retention.storyHours)
-        }.decodeSyncResponse("latest_generation")
-
-    suspend fun items(generationId: String, after: String? = null): AndroidSyncItemsResponse =
-        measuredItems(generationId, after).value
-
-    suspend fun measuredItems(
-        generationId: String,
-        after: String? = null,
-    ): AndroidSyncMeasuredResponse<AndroidSyncItemsResponse> =
-        client.get(baseUrlProvider() + "/api/android/sync/generation/$generationId/items") {
-            syncMetadataTimeout()
             if (!after.isNullOrEmpty()) parameter("after", after)
-        }.decodeMeasuredSyncResponse("items:$generationId")
+        }.decodeSyncResponse("bootstrap")
 
-    suspend fun assets(generationId: String, after: String? = null): AndroidSyncAssetsResponse =
-        client.get(baseUrlProvider() + "/api/android/sync/generation/$generationId/assets") {
+    suspend fun changes(
+        retention: AndroidSyncRetentionRequest,
+        after: String,
+    ): AndroidSyncPageResponse =
+        client.get(baseUrlProvider() + "/api/android/sync/changes") {
             syncMetadataTimeout()
-            if (!after.isNullOrEmpty()) parameter("after", after)
-        }.decodeSyncResponse("assets:$generationId")
+            parameter("feed_days", retention.feedDays)
+            parameter("youtube_days", retention.youtubeDays)
+            parameter("moments_days", retention.momentsDays)
+            parameter("story_hours", retention.storyHours)
+            parameter("after", after)
+        }.decodeSyncResponse("changes")
 
     suspend fun health(req: AndroidSyncHealthRequest): HttpResponse =
         client.post(baseUrlProvider() + "/api/android/sync/health") {
@@ -57,14 +57,13 @@ class AndroidSyncApi(
         timeout {
             requestTimeoutMillis = SYNC_METADATA_REQUEST_TIMEOUT_MS
             connectTimeoutMillis = SYNC_CONNECT_TIMEOUT_MS
-            socketTimeoutMillis = SYNC_SOCKET_TIMEOUT_MS
+            socketTimeoutMillis = SYNC_METADATA_REQUEST_TIMEOUT_MS
         }
     }
 
     private companion object {
-        const val SYNC_METADATA_REQUEST_TIMEOUT_MS = 5 * 60 * 1000L
-        const val SYNC_CONNECT_TIMEOUT_MS = 30 * 1000L
-        const val SYNC_SOCKET_TIMEOUT_MS = SYNC_METADATA_REQUEST_TIMEOUT_MS
+        const val SYNC_METADATA_REQUEST_TIMEOUT_MS = 60_000L
+        const val SYNC_CONNECT_TIMEOUT_MS = 15_000L
     }
 }
 
@@ -73,11 +72,21 @@ class AndroidSyncHttpException(
     val statusCode: Int,
     body: String,
 ) : IllegalStateException(syncHttpErrorMessage(label, statusCode, body)) {
+    val errorCode: String? =
+        runCatching { iglooJson.decodeFromString<AndroidSyncErrorEnvelope>(body).error_code }
+            .getOrNull()
+
     val isTransient: Boolean
         get() = statusCode == 408 || statusCode == 429 || statusCode in 500..599
 
     val downgradesReachability: Boolean
         get() = statusCode == 408 || statusCode == 502 || statusCode == 503 || statusCode == 504
+
+    val isSyncResetRequired: Boolean
+        get() = statusCode == 409 && errorCode == "sync_reset_required"
+
+    val isAssetChanged: Boolean
+        get() = statusCode == 409 && errorCode == "asset_changed"
 }
 
 class AndroidSyncDecodeException(
@@ -86,102 +95,31 @@ class AndroidSyncDecodeException(
     cause: Throwable,
 ) : IllegalStateException("Sync decode failed for $label: ${body.syncErrorPreview()}", cause)
 
-data class AndroidSyncMeasuredResponse<T>(
-    val value: T,
-    val byteCount: Int,
-    val decodeDurationMs: Long,
-)
-
 private suspend inline fun <reified T> HttpResponse.decodeSyncResponse(label: String): T {
     val raw = bodyAsText()
-    if (!status.isSuccess()) {
-        throw AndroidSyncHttpException(label, status.value, raw)
-    }
-    return raw.decodeSync(label)
-}
-
-private suspend inline fun <reified T> HttpResponse.decodeMeasuredSyncResponse(
-    label: String,
-): AndroidSyncMeasuredResponse<T> {
-    val raw = bodyAsText()
-    if (!status.isSuccess()) {
-        throw AndroidSyncHttpException(label, status.value, raw)
-    }
-    val decodeStartedAt = System.nanoTime()
-    val value = raw.decodeSync<T>(label)
-    return AndroidSyncMeasuredResponse(
-        value = value,
-        byteCount = raw.utf8ByteCount(),
-        decodeDurationMs = (System.nanoTime() - decodeStartedAt) / 1_000_000L,
-    )
-}
-
-private fun String.utf8ByteCount(): Int {
-    var bytes = 0
-    var index = 0
-    while (index < length) {
-        val ch = this[index]
-        val code = ch.code
-        bytes += when {
-            code <= 0x7F -> 1
-            code <= 0x7FF -> 2
-            Character.isHighSurrogate(ch) &&
-                index + 1 < length &&
-                Character.isLowSurrogate(this[index + 1]) -> {
-                index++
-                4
-            }
-            else -> 3
-        }
-        index++
-    }
-    return bytes
-}
-
-private inline fun <reified T> String.decodeSync(label: String): T =
-    try {
-        iglooJson.decodeFromString(this)
+    if (!status.isSuccess()) throw AndroidSyncHttpException(label, status.value, raw)
+    return try {
+        iglooJson.decodeFromString(raw)
     } catch (e: Exception) {
-        throw AndroidSyncDecodeException(label, this, e)
+        throw AndroidSyncDecodeException(label, raw, e)
     }
+}
 
 private fun syncHttpErrorMessage(label: String, statusCode: Int, body: String): String {
     val preview = body.syncErrorPreview()
-    if (preview.isBlank() || preview.startsWith("<")) {
-        return "Sync HTTP $statusCode for $label"
+    return if (preview.isBlank() || preview.startsWith("<")) {
+        "Sync HTTP $statusCode for $label"
+    } else {
+        "Sync HTTP $statusCode for $label: $preview"
     }
-    return "Sync HTTP $statusCode for $label: $preview"
 }
 
 private val syncWhitespace = Regex("\\s+")
 
-private fun String.syncErrorPreview(): String =
-    trim().replace(syncWhitespace, " ").take(200)
+private fun String.syncErrorPreview(): String = trim().replace(syncWhitespace, " ").take(200)
 
 @Serializable
-data class AndroidSyncLatestResponse(
-    val generation: AndroidSyncGenerationDto,
-    val refreshing: Boolean = false,
-    @SerialName("dearrow_mode") val dearrowMode: String? = null,
-    val ok: Boolean = true,
-    val server_time_ms: Long? = null,
-)
-
-@Serializable
-data class AndroidSyncGenerationDto(
-    val generation_id: String,
-    val created_at_ms: Long,
-    val status: String,
-    val source_version: String,
-    val retention: Map<String, Int> = emptyMap(),
-    val item_count: Int = 0,
-    val asset_count: Int = 0,
-    val ready_asset_count: Int = 0,
-    val server_missing_asset_count: Int = 0,
-    val total_bytes: Long = 0,
-    val content_counts: Map<String, Int> = emptyMap(),
-    val asset_counts: Map<String, Int> = emptyMap(),
-)
+private data class AndroidSyncErrorEnvelope(val error_code: String? = null)
 
 @Serializable
 data class AndroidSyncRetentionRequest(
@@ -192,56 +130,41 @@ data class AndroidSyncRetentionRequest(
 )
 
 @Serializable
-data class AndroidSyncItemsResponse(
-    val generation_id: String,
-    val items: List<AndroidSyncItemDto> = emptyList(),
-    val next: String = "",
-    val end_of_stream: Boolean = false,
-    val ok: Boolean = true,
-    val server_time_ms: Long? = null,
+data class AndroidSyncPageResponse(
+    val changes: List<AndroidSyncChangeDto>,
+    val next_cursor: String,
+    val end_of_stream: Boolean,
 )
 
 @Serializable
-data class AndroidSyncItemDto(
-    val seq: Long,
-    val item_kind: String,
-    val item_id: String,
-    val payload: BundleEnvelope,
-)
-
-@Serializable
-data class AndroidSyncAssetsResponse(
-    val generation_id: String,
-    val assets: List<AndroidSyncAssetDto> = emptyList(),
-    val next: String = "",
-    val end_of_stream: Boolean = false,
-    val ok: Boolean = true,
-    val server_time_ms: Long? = null,
+data class AndroidSyncChangeDto(
+    val owner_kind: String,
+    val owner_id: String,
+    val operation: String,
+    val retention_bucket: String,
+    val retain_at_ms: Long,
+    val payload: JsonObject? = null,
 )
 
 @Serializable
 data class AndroidSyncAssetDto(
-    val seq: Long,
     val asset_id: String,
     val asset_kind: String,
-    val media_index: Int = 0,
+    val media_index: Int,
     val owner_id: String,
     val owner_kind: String,
     val bucket: String,
-    val server_url: String,
-    val content_type: String? = null,
-    val size_bytes: Long = 0,
-    val sha256: String? = null,
-    val state: String = "ready",
-    val required_reason: String? = null,
-    val is_auto: Boolean? = null,
-    val audio_language: String? = null,
-    val effective_recency_ms: Long = 0,
+    val content_type: String,
+    val size_bytes: Long,
+    val sha256: String,
+    val revision: Long,
+    val state: String,
+    val is_auto: Boolean?,
 )
 
 @Serializable
 data class AndroidSyncHealthRequest(
-    val generation_id: String,
+    val cursor: String,
     val reported_at_ms: Long,
     val retention: AndroidSyncRetentionRequest,
     val counts: AndroidSyncHealthCountPayload,
@@ -253,11 +176,7 @@ data class AndroidSyncHealthCountPayload(
     val total: Int,
     val verified: Int,
     val pending: Int,
-    val failed: Int,
     val missing: Int,
 )
 
-@Serializable
-data class AndroidSyncHealthBytePayload(
-    val verified: Long,
-)
+@Serializable data class AndroidSyncHealthBytePayload(val verified: Long)

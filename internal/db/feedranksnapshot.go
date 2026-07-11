@@ -44,25 +44,17 @@ func (db *DB) feedAbsenceBoostConfig() (capHours, seenMaxBoost, neverSeenBoost f
 	return capHours, seenMaxBoost, neverSeenBoost
 }
 
-func feedNormalizedTwitterHandleSQL(expr string) string {
-	return fmt.Sprintf("LOWER(LTRIM(TRIM(COALESCE(%s, '')), '@'))", expr)
-}
-
 func feedPrioritySourceSQL(alias string) string {
-	author := feedNormalizedTwitterHandleSQL(alias + ".author_handle")
-	source := feedNormalizedTwitterHandleSQL(alias + ".source_handle")
-	return fmt.Sprintf(`NULLIF(%[2]s, '') IS NOT NULL
-				 AND %[2]s != %[1]s
-				 AND (cf_source.channel_id IS NOT NULL OR cs_source.channel_id IS NOT NULL)`, author, source)
+	return fmt.Sprintf(`NULLIF(%[1]s.source_channel_id, '') IS NOT NULL
+				 AND %[1]s.source_channel_id != COALESCE(%[1]s.channel_id, '')
+				 AND (cf_source.channel_id IS NOT NULL OR cs_source.channel_id IS NOT NULL)`, alias)
 }
 
-func feedRankingAccountHandleSQL(alias string) string {
-	author := feedNormalizedTwitterHandleSQL(alias + ".author_handle")
-	source := feedNormalizedTwitterHandleSQL(alias + ".source_handle")
+func feedRankingAccountIDSQL(alias string) string {
 	return fmt.Sprintf(`CASE
-				WHEN %[3]s THEN %[2]s
-				ELSE %[1]s
-			END`, author, source, feedPrioritySourceSQL(alias))
+				WHEN %[2]s THEN %[1]s.source_channel_id
+				ELSE %[1]s.channel_id
+			END`, alias, feedPrioritySourceSQL(alias))
 }
 
 func feedRankingAccountIsPrioritySQL(alias string) string {
@@ -75,15 +67,14 @@ func feedRankingAccountIsPrioritySQL(alias string) string {
 
 func feedAbsenceBoostSelect(alias string) string {
 	return fmt.Sprintf(`CASE
-				WHEN ? != ''
-				 AND NULLIF(%[2]s, '') IS NOT NULL
+				WHEN NULLIF(%[2]s, '') IS NOT NULL
 				 AND %[3]s = 1
 				THEN CASE
 					WHEN lps.last_seen_at IS NULL THEN ?
 					ELSE ? * MIN(?, MAX(0, ((CAST(strftime('%%s','now') AS INTEGER) * 1000) - lps.last_seen_at) / 3600000.0)) / ?
 				END
 				ELSE 0
-		END`, alias, feedRankingAccountHandleSQL(alias), feedRankingAccountIsPrioritySQL(alias))
+		END`, alias, feedRankingAccountIDSQL(alias), feedRankingAccountIsPrioritySQL(alias))
 }
 
 func feedRankingFromSQL(relatedSeenExpr, absenceExpr string) string {
@@ -95,59 +86,43 @@ func feedRankingFromSQL(relatedSeenExpr, absenceExpr string) string {
 				           %s AS absence_boost
 				    FROM feed_items fi
 				    LEFT JOIN (
-				        SELECT fs_related.username,
-				               %s AS related_key,
+				        SELECT %s AS related_key,
 				               COUNT(*) AS related_seen_count
 				        FROM feed_seen fs_related
 				        JOIN feed_items seen_fi ON seen_fi.tweet_id = fs_related.tweet_id
-				        GROUP BY fs_related.username, %s
-				    ) rsc ON rsc.username = NULLIF(?, '')
-				        AND rsc.related_key = %s
-		    LEFT JOIN channel_follows cf_author
-		      ON cf_author.user_id = ''
-		     AND cf_author.channel_id = 'twitter_' || %s
-		    LEFT JOIN channel_stars cs_author
-		      ON cs_author.user_id = ''
-		     AND cs_author.channel_id = 'twitter_' || %s
-		    LEFT JOIN channel_follows cf_source
-		      ON cf_source.user_id = ''
-		     AND cf_source.channel_id = 'twitter_' || %s
-		    LEFT JOIN channel_stars cs_source
-		      ON cs_source.user_id = ''
-		     AND cs_source.channel_id = 'twitter_' || %s
+				        GROUP BY %s
+				    ) rsc ON rsc.related_key = %s
+			    LEFT JOIN channel_follows cf_author
+			      ON cf_author.channel_id = fi.channel_id
+			    LEFT JOIN channel_stars cs_author
+			      ON cs_author.channel_id = fi.channel_id
+			    LEFT JOIN channel_follows cf_source
+			      ON cf_source.channel_id = fi.source_channel_id
+			    LEFT JOIN channel_stars cs_source
+			      ON cs_source.channel_id = fi.source_channel_id
 				    LEFT JOIN (
-				        SELECT handle, MAX(seen_at) AS last_seen_at
+				        SELECT channel_id, MAX(seen_at) AS last_seen_at
 				        FROM (
-				            SELECT %s AS handle, fs.seen_at
-				            FROM feed_seen fs
-				            JOIN feed_items parent ON parent.tweet_id = fs.tweet_id
-				            WHERE fs.username = ?
-				              AND NULLIF(%s, '') IS NOT NULL
+			            SELECT parent.channel_id, fs.seen_at
+			            FROM feed_seen fs
+			            JOIN feed_items parent ON parent.tweet_id = fs.tweet_id
+			            WHERE NULLIF(parent.channel_id, '') IS NOT NULL
 				              AND COALESCE(parent.is_ghost, 0) = 0
 				            UNION ALL
-				            SELECT %s AS handle, fs.seen_at
-				            FROM feed_seen fs
-				            JOIN feed_items parent ON parent.tweet_id = fs.tweet_id
-				            WHERE fs.username = ?
-				              AND NULLIF(%s, '') IS NOT NULL
+			            SELECT parent.source_channel_id, fs.seen_at
+			            FROM feed_seen fs
+			            JOIN feed_items parent ON parent.tweet_id = fs.tweet_id
+			            WHERE NULLIF(parent.source_channel_id, '') IS NOT NULL
 				              AND COALESCE(parent.is_ghost, 0) = 0
-				        ) seen_handles
-				        GROUP BY handle
-				    ) lps ON lps.handle = %s
+				        ) seen_channels
+				        GROUP BY channel_id
+				    ) lps ON lps.channel_id = %s
 			) fi
 			`, relatedSeenExpr, absenceExpr,
 		feedRelatedContentKeySQL("seen_fi"),
 		feedRelatedContentKeySQL("seen_fi"),
 		feedRelatedContentKeySQL("fi"),
-		feedNormalizedTwitterHandleSQL("fi.author_handle"),
-		feedNormalizedTwitterHandleSQL("fi.author_handle"),
-		feedNormalizedTwitterHandleSQL("fi.source_handle"),
-		feedNormalizedTwitterHandleSQL("fi.source_handle"),
-		feedNormalizedTwitterHandleSQL("parent.author_handle"),
-		feedNormalizedTwitterHandleSQL("parent.author_handle"),
-		feedNormalizedTwitterHandleSQL("parent.source_handle"),
-		feedNormalizedTwitterHandleSQL("parent.source_handle"),
-		feedRankingAccountHandleSQL("fi"),
+		feedRankingAccountIDSQL("fi"),
 	)
 }
 
@@ -186,18 +161,15 @@ func feedReplyPenaltySQL(alias string) string {
 	END`, alias, feedReplyPenalty)
 }
 
-func feedAbsenceBoostArgs(username string, capHours, seenMaxBoost, neverSeenBoost float64) []any {
+func feedAbsenceBoostArgs(capHours, seenMaxBoost, neverSeenBoost float64) []any {
 	return []any{
-		username,
 		neverSeenBoost,
 		seenMaxBoost, capHours, capHours,
 	}
 }
 
-func feedRankingArgs(username string, capHours, seenMaxBoost, neverSeenBoost float64) []any {
-	args := feedAbsenceBoostArgs(username, capHours, seenMaxBoost, neverSeenBoost)
-	args = append(args, username, username, username)
-	return args
+func feedRankingArgs(capHours, seenMaxBoost, neverSeenBoost float64) []any {
+	return feedAbsenceBoostArgs(capHours, seenMaxBoost, neverSeenBoost)
 }
 
 func safeFeedAbsenceCapHours(capHours float64) float64 {
@@ -234,16 +206,13 @@ type SnapshotRow struct {
 	FinalScore         float64
 }
 
-// ReplaceFeedRankSnapshot replaces the snapshot for `username` atomically.
-// All existing rows for the user are deleted and `rows` are inserted in one transaction.
+// ReplaceFeedRankSnapshot replaces the snapshot atomically.
+// All existing rows are deleted and `rows` are inserted in one transaction.
 // `computed_at` is recorded on every row so callers can see snapshot age.
 //
 // If `rows` is empty, the existing snapshot is preserved and nil is returned.
 // This prevents a transient computation failure from wiping a good snapshot.
-func (db *DB) ReplaceFeedRankSnapshot(username string, rows []SnapshotRow) error {
-	if username == "" {
-		return fmt.Errorf("ReplaceFeedRankSnapshot: empty username")
-	}
+func (db *DB) ReplaceFeedRankSnapshot(rows []SnapshotRow) error {
 	if len(rows) == 0 {
 		return nil
 	}
@@ -251,21 +220,20 @@ func (db *DB) ReplaceFeedRankSnapshot(username string, rows []SnapshotRow) error
 	return db.WithWrite(func(tx *sql.Tx) error {
 		var previous sql.NullInt64
 		if err := tx.QueryRow(
-			"SELECT MAX(computed_at) FROM feed_rank_snapshot WHERE username = ?",
-			username,
+			"SELECT MAX(computed_at) FROM feed_rank_snapshot",
 		).Scan(&previous); err != nil {
 			return fmt.Errorf("read previous snapshot time: %w", err)
 		}
 		if previous.Valid && now <= previous.Int64 {
 			now = previous.Int64 + 1
 		}
-		if _, err := tx.Exec("DELETE FROM feed_rank_snapshot WHERE username = ?", username); err != nil {
+		if _, err := tx.Exec("DELETE FROM feed_rank_snapshot"); err != nil {
 			return fmt.Errorf("delete old snapshot: %w", err)
 		}
 		stmt, err := tx.Prepare(`INSERT INTO feed_rank_snapshot
-			(username, tweet_id, rank_position, base_score, decay_factor, freshness_bonus,
+			(tweet_id, rank_position, base_score, decay_factor, freshness_bonus,
 			 jitter, diversity_demoted_by, final_score, computed_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 		if err != nil {
 			return fmt.Errorf("prepare insert: %w", err)
 		}
@@ -274,7 +242,7 @@ func (db *DB) ReplaceFeedRankSnapshot(username string, rows []SnapshotRow) error
 		}()
 		for _, r := range rows {
 			if _, err := stmt.Exec(
-				username, r.TweetID, r.RankPosition,
+				r.TweetID, r.RankPosition,
 				r.BaseScore, r.DecayFactor, r.FreshnessBonus,
 				r.Jitter, r.DiversityDemotedBy, r.FinalScore, now,
 			); err != nil {
@@ -285,13 +253,12 @@ func (db *DB) ReplaceFeedRankSnapshot(username string, rows []SnapshotRow) error
 	})
 }
 
-// SnapshotComputedAt returns the most recent computed_at for `username` (unix ms),
+// SnapshotComputedAt returns the most recent computed_at (unix ms),
 // or 0 if no snapshot exists.
-func (db *DB) SnapshotComputedAt(username string) (int64, error) {
+func (db *DB) SnapshotComputedAt() (int64, error) {
 	var at sql.NullInt64
-	err := db.conn.QueryRow(
-		"SELECT MAX(computed_at) FROM feed_rank_snapshot WHERE username = ?",
-		username,
+	err := db.reader().QueryRow(
+		"SELECT MAX(computed_at) FROM feed_rank_snapshot",
 	).Scan(&at)
 	if err != nil {
 		return 0, err
@@ -306,8 +273,8 @@ func (db *DB) SnapshotComputedAt(username string) (int64, error) {
 // before diversity MMR and jitter are applied in Go.
 type PreDiversitySnapshotRow struct {
 	TweetID                  string
-	AuthorHandle             string
-	SourceHandle             string
+	ChannelID                string
+	SourceChannelID          string
 	RelatedContentKey        string
 	ContentHash              string
 	IsRetweet                bool
@@ -332,33 +299,30 @@ type PreDiversitySnapshotRow struct {
 // reposts stay in the candidate set so the snapshot presentation layer can
 // decide whether a nearby repost should own the main-feed card without
 // rewriting stored canonical identity.
-func (db *DB) ListPreDiversityRanked(username string) ([]PreDiversitySnapshotRow, error) {
-	return db.ListPreDiversityRankedContext(context.Background(), username)
+func (db *DB) ListPreDiversityRanked() ([]PreDiversitySnapshotRow, error) {
+	return db.ListPreDiversityRankedContext(context.Background())
 }
 
-func (db *DB) ListPreDiversityRankedContext(ctx context.Context, username string) ([]PreDiversitySnapshotRow, error) {
+func (db *DB) ListPreDiversityRankedContext(ctx context.Context) ([]PreDiversitySnapshotRow, error) {
 	var where []string
 	var args []any
 	where = append(where, feedPrimaryItemPredicate("fi"))
 
-	muted, _ := db.GetMutedAccounts()
+	muted, _ := db.GetMutedChannelIDs()
 	if len(muted) > 0 {
 		ph := strings.Repeat("?,", len(muted))
 		ph = ph[:len(ph)-1]
-		where = append(where, "fi.author_handle NOT IN ("+ph+")")
-		for _, h := range muted {
-			args = append(args, h)
+		where = append(where, "fi.channel_id NOT IN ("+ph+")")
+		for _, channelID := range muted {
+			args = append(args, channelID)
 		}
-		where = append(where, "COALESCE(fi.source_handle,'') NOT IN ("+ph+")")
-		for _, h := range muted {
-			args = append(args, h)
+		where = append(where, "COALESCE(fi.source_channel_id,'') NOT IN ("+ph+")")
+		for _, channelID := range muted {
+			args = append(args, channelID)
 		}
 	}
 
-	if username != "" {
-		where = append(where, feedUnseenPredicate("fi"))
-		args = append(args, feedUnseenPredicateArgs(username)...)
-	}
+	where = append(where, feedUnseenPredicate("fi"))
 
 	where = append(where, `(
 		fi.canonical_tweet_id IS NULL
@@ -391,14 +355,14 @@ func (db *DB) ListPreDiversityRankedContext(ctx context.Context, username string
 	absenceExpr := feedAbsenceBoostSelect("fi")
 	relatedSeenExpr := feedRelatedSeenCountSelect("fi")
 	fromSQL := feedRankingFromSQL(relatedSeenExpr, absenceExpr)
-	args = append(feedRankingArgs(username, capHours, seenMaxBoost, neverSeenBoost), args...)
+	args = append(feedRankingArgs(capHours, seenMaxBoost, neverSeenBoost), args...)
 	decaySQL := feedDecaySQL()
 	freshnessSQL := feedFreshnessSQL()
 
 	query := fmt.Sprintf(`
 			SELECT fi.tweet_id,
-				       fi.author_handle,
-				       COALESCE(fi.source_handle,''),
+				       COALESCE(fi.channel_id,''),
+				       COALESCE(fi.source_channel_id,''),
 				       %s AS related_content_key,
 				       COALESCE(fi.content_hash, '') AS content_hash,
 				       COALESCE(fi.is_retweet, 0) AS is_retweet,
@@ -416,7 +380,7 @@ func (db *DB) ListPreDiversityRankedContext(ctx context.Context, username string
 			LIMIT %d
 			`, feedRelatedContentKeySQL("fi"), feedRankingBaseScoreSQL("fi"), decaySQL, freshnessSQL, feedReplyPenaltySQL("fi"), fromSQL, whereClause, snapshotMaxItems)
 
-	rows, err := db.conn.QueryContext(ctx, query, args...)
+	rows, err := db.reader().QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -430,7 +394,7 @@ func (db *DB) ListPreDiversityRankedContext(ctx context.Context, username string
 		var r PreDiversitySnapshotRow
 		var isRetweet, isReply int
 		var canonicalURL string
-		if err := rows.Scan(&r.TweetID, &r.AuthorHandle, &r.SourceHandle,
+		if err := rows.Scan(&r.TweetID, &r.ChannelID, &r.SourceChannelID,
 			&r.RelatedContentKey, &r.ContentHash, &isRetweet, &isReply, &r.QuoteTweetID, &canonicalURL, &r.PublishedAtMs,
 			&r.BaseScore, &r.DecayFactor, &r.FreshnessBonus, &r.ReplyPenalty); err != nil {
 			return nil, err
@@ -487,7 +451,7 @@ func (db *DB) threadRootIDsForTweetIDsContext(ctx context.Context, tweetIDs []st
 		args = append(args, id)
 	}
 
-	rows, err := db.conn.QueryContext(ctx, `
+	rows, err := db.reader().QueryContext(ctx, `
 		WITH RECURSIVE chain(seed_id, tweet_id, reply_to_status, depth) AS (
 			SELECT tweet_id, tweet_id, COALESCE(reply_to_status, ''), 0
 			FROM feed_items
@@ -546,12 +510,12 @@ type SnapshotPageItem struct {
 // greater than `afterPos`, joined with their feed_item content. afterPos < 1
 // returns from the start. The result is ordered by rank_position ASC.
 //
-// Items present in feed_seen for `username` are excluded at query time. The
+// Items present in feed_seen are excluded at query time. The
 // snapshot builder also excludes seen items, but items marked seen between
 // rebuilds would otherwise surface at their stale rank position and break
 // pagination (a caller fetching limit+1 to detect hasMore can't distinguish
 // "no more items" from "some items were filtered").
-func (db *DB) ListSnapshotPage(username string, afterPos int, limit int) ([]SnapshotPageItem, error) {
+func (db *DB) ListSnapshotPage(afterPos int, limit int) ([]SnapshotPageItem, error) {
 	if limit <= 0 || limit > 200 {
 		limit = 40
 	}
@@ -559,35 +523,19 @@ func (db *DB) ListSnapshotPage(username string, afterPos int, limit int) ([]Snap
 		afterPos = 0
 	}
 
-	rows, err := db.conn.Query(`
-		SELECT s.tweet_id, s.rank_position, s.final_score, s.base_score,
+	rows, err := db.reader().Query(`
+		SELECT s.rank_position, s.final_score, s.base_score,
 		       s.decay_factor, s.freshness_bonus, s.jitter, s.diversity_demoted_by,
 		       s.computed_at,
-		       COALESCE(fi.source_handle,''), fi.author_handle,
-		       COALESCE(fi.author_display_name,''), COALESCE(fi.author_avatar_url,''),
-		       COALESCE(fi.body_text,''), COALESCE(fi.lang,''),
-		       COALESCE(fi.is_retweet,0), COALESCE(fi.retweeted_by_handle,''),
-		       COALESCE(fi.retweeted_by_display_name,''),
-		       COALESCE(fi.quote_tweet_id,''), COALESCE(fi.quote_author_handle,''),
-		       COALESCE(fi.quote_author_display_name,''), COALESCE(fi.quote_author_avatar_url,''),
-		       COALESCE(fi.quote_body_text,''), COALESCE(fi.quote_lang,''),
-		       COALESCE(fi.quote_media_json,''), COALESCE(fi.media_json,''),
-		       COALESCE(fi.canonical_url,''), COALESCE(fi.reply_to_handle,''),
-		       COALESCE(fi.reply_to_status,''),
-		       COALESCE(fi.is_reply,0), COALESCE(fi.is_ghost,0),
-		       fi.quote_published_at,
-		       COALESCE(fi.views,0), COALESCE(fi.likes,0), COALESCE(fi.retweets,0),
-		       fi.published_at, fi.fetched_at,
-		       COALESCE(fi.content_hash,''), COALESCE(fi.canonical_tweet_id,'')
+		       `+feedItemSelectSQL("fi")+`
 		FROM feed_rank_snapshot s
-		JOIN feed_items fi ON fi.tweet_id = s.tweet_id
-		WHERE s.username = ?
-		  AND s.rank_position > ?
+		JOIN feed_items_resolved fi ON fi.tweet_id = s.tweet_id
+		WHERE s.rank_position > ?
 		  AND `+feedPrimaryItemPredicate("fi")+`
-		  AND `+feedUnseenPredicateForUser("fi", "s.username")+`
+		  AND `+feedUnseenPredicate("fi")+`
 		ORDER BY s.rank_position ASC
 		LIMIT ?
-	`, username, afterPos, limit)
+	`, afterPos, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -600,9 +548,10 @@ func (db *DB) ListSnapshotPage(username string, afterPos int, limit int) ([]Snap
 		var p SnapshotPageItem
 		var quotePubAt, pubAt, fetchedAt sql.NullInt64
 		if err := rows.Scan(
-			&p.Item.TweetID, &p.RankPosition, &p.FinalScore, &p.BaseScore,
+			&p.RankPosition, &p.FinalScore, &p.BaseScore,
 			&p.DecayFactor, &p.FreshnessBonus, &p.Jitter, &p.DiversityDemotedBy,
 			&p.ComputedAt,
+			&p.Item.TweetID,
 			&p.Item.SourceHandle, &p.Item.AuthorHandle,
 			&p.Item.AuthorDisplayName, &p.Item.AuthorAvatarURL,
 			&p.Item.BodyText, &p.Item.Lang,
@@ -619,6 +568,8 @@ func (db *DB) ListSnapshotPage(username string, afterPos int, limit int) ([]Snap
 			&p.Item.Views, &p.Item.Likes, &p.Item.Retweets,
 			&pubAt, &fetchedAt,
 			&p.Item.ContentHash, &p.Item.CanonicalTweetID,
+			&p.Item.SourceChannelID, &p.Item.ChannelID, &p.Item.QuoteChannelID,
+			&p.Item.ReplyChannelID, &p.Item.ReposterChannelID,
 		); err != nil {
 			return nil, err
 		}

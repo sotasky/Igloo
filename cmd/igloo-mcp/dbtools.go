@@ -383,9 +383,9 @@ func dbSummary() (string, error) {
 	// Queue statuses
 	sb.WriteString("\nQueue statuses:\n")
 	queueQueries := map[string]string{
-		"feed_media_jobs": `SELECT status, COUNT(*) FROM feed_media_jobs GROUP BY status ORDER BY COUNT(*) DESC`,
-		"download_queue":  `SELECT status, COUNT(*) FROM download_queue GROUP BY status ORDER BY COUNT(*) DESC`,
-		"channel_queue":   `SELECT status, COUNT(*) FROM channel_queue GROUP BY status ORDER BY COUNT(*) DESC`,
+		"assets":         `SELECT state, COUNT(*) FROM assets GROUP BY state ORDER BY COUNT(*) DESC`,
+		"download_queue": `SELECT status, COUNT(*) FROM download_queue GROUP BY status ORDER BY COUNT(*) DESC`,
+		"channel_queue":  `SELECT status, COUNT(*) FROM channel_queue GROUP BY status ORDER BY COUNT(*) DESC`,
 	}
 	for table, q := range queueQueries {
 		qrows, err := conn.Query(q)
@@ -413,7 +413,7 @@ func dbSummary() (string, error) {
 		{"Latest feed item", `SELECT published_at FROM feed_items ORDER BY published_at DESC LIMIT 1`},
 		{"Latest video", `SELECT downloaded_at FROM videos ORDER BY downloaded_at DESC LIMIT 1`},
 		{"Latest ingest", `SELECT datetime(last_success_at, 'unixepoch') FROM ingest_state ORDER BY last_success_at DESC LIMIT 1`},
-		{"Latest media job", `SELECT updated_at FROM feed_media_jobs ORDER BY updated_at DESC LIMIT 1`},
+		{"Latest asset update", `SELECT updated_at_ms FROM assets ORDER BY updated_at_ms DESC LIMIT 1`},
 	}
 	for _, ts := range timestamps {
 		var val sql.NullString

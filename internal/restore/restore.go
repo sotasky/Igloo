@@ -1,20 +1,17 @@
 // Package restore implements pending-restore staging and on-startup application
-// for disaster-recovery archives (igloo.db + config dir, with optional
-// full-export runtime/media extras) produced by the backup worker or manual
-// Full Export. The flow is:
+// for database and config archives produced by the backup worker or manual Full
+// Export. The flow is:
 //
-//  1. Import handler receives a backup archive upload, calls StageTarball() or StageZip() to
-//     extract it into <DataDir>/restore-staging/ and write a marker file.
+//  1. Import handler receives a backup archive upload and calls StageZip() to
+//     validate and stage it below the state root.
 //  2. Process exits; systemd restarts igloo.
 //  3. Startup calls ApplyPending() before opening the database. If the
-//     marker exists, the staged db, config files, and supported media files
-//     replace the live ones, and the staging directory is cleaned up.
+//     marker exists, the staged database and config files replace the live
+//     ones, and the staging directory is cleaned up.
 package restore
 
 import (
-	"archive/tar"
 	"archive/zip"
-	"compress/gzip"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -23,11 +20,12 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 
+	"github.com/screwys/igloo/internal/auth"
 	"github.com/screwys/igloo/internal/config"
 	"github.com/screwys/igloo/internal/db"
+	"github.com/screwys/igloo/internal/storage"
 )
 
 const (
@@ -44,105 +42,47 @@ func markerPath(dataDir string) string { return filepath.Join(stagingDir(dataDir
 
 // HasPending reports whether a restore has been staged and is awaiting startup.
 func HasPending(dataDir string) bool {
-	_, err := os.Stat(markerPath(dataDir))
-	return err == nil
+	info, err := os.Lstat(markerPath(dataDir))
+	return err == nil && info.Mode().IsRegular()
 }
 
-// StageTarball extracts a legacy gzipped tar backup into the staging directory
-// and writes the marker file.
-func StageTarball(reader io.Reader, dataDir string) error {
-	return stageBackup(dataDir, func(stage string) (bool, error) {
-		return extractTarBackup(reader, stage)
-	})
-}
-
-// StageZip extracts a DB-bearing backup or Full Export zip into the staging
-// directory and writes the marker file. It returns ErrMissingDatabase when the
-// zip is not a restore archive, allowing callers to fall through to legacy zip
-// import formats.
-func StageZip(readerAt io.ReaderAt, size int64, dataDir string) error {
-	return stageBackup(dataDir, func(stage string) (bool, error) {
-		return extractZipBackup(readerAt, size, stage)
-	})
-}
-
-func stageBackup(dataDir string, extract func(stage string) (bool, error)) error {
-	stage := stagingDir(dataDir)
-	if err := os.RemoveAll(stage); err != nil {
+// StageZip extracts and validates a current DB-bearing zip before making it
+// visible to startup restore.
+func StageZip(readerAt io.ReaderAt, size int64, layout storage.Layout) (stageErr error) {
+	if err := layout.Ensure(); err != nil {
+		return fmt.Errorf("validate storage layout: %w", err)
+	}
+	stage := stagingDir(layout.StateRoot())
+	if err := cleanupStaging(stage); err != nil {
 		return fmt.Errorf("clear staging dir: %w", err)
 	}
-	if err := os.MkdirAll(stage, 0o755); err != nil {
+	defer func() {
+		if stageErr != nil {
+			stageErr = errors.Join(stageErr, cleanupStaging(stage))
+		}
+	}()
+	if err := storage.EnsureDirectory(stage, 0o755); err != nil {
 		return fmt.Errorf("create staging dir: %w", err)
 	}
 
-	dbSeen, err := extract(stage)
+	dbSeen, err := extractZipBackup(readerAt, size, stage)
 	if err != nil {
 		return err
 	}
 	if !dbSeen {
-		_ = os.RemoveAll(stage)
 		return ErrMissingDatabase
 	}
-
-	if err := os.WriteFile(markerPath(dataDir), []byte(""), 0o644); err != nil {
+	stagedDB := filepath.Join(stage, config.DatabaseFilename)
+	if err := validateStagedDatabase(stagedDB, layout); err != nil {
+		return fmt.Errorf("validate staged db: %w", err)
+	}
+	if err := validateStagedRestoreConfig(stage); err != nil {
+		return fmt.Errorf("validate staged config: %w", err)
+	}
+	if err := replaceFile(markerPath(layout.StateRoot()), 0o644, func(io.Writer) error { return nil }); err != nil {
 		return fmt.Errorf("write marker: %w", err)
 	}
 	return nil
-}
-
-func extractTarBackup(reader io.Reader, stage string) (bool, error) {
-	gz, err := gzip.NewReader(reader)
-	if err != nil {
-		return false, fmt.Errorf("gzip reader: %w", err)
-	}
-	defer func() {
-		_ = gz.Close()
-	}()
-
-	tr := tar.NewReader(gz)
-	dbSeen := false
-	for {
-		hdr, err := tr.Next()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return false, fmt.Errorf("tar next: %w", err)
-		}
-
-		clean, dbEntry, ok, err := backupArchiveEntry(hdr.Name)
-		if err != nil {
-			return false, err
-		}
-		if !ok {
-			slog.Warn("restore: skipping unexpected tar entry", "name", filepath.Clean(hdr.Name))
-			continue
-		}
-
-		dest := filepath.Join(stage, clean)
-		switch hdr.Typeflag {
-		case tar.TypeDir:
-			if err := os.MkdirAll(dest, 0o755); err != nil {
-				return false, fmt.Errorf("mkdir %s: %w", dest, err)
-			}
-		case tar.TypeReg:
-			if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
-				return false, fmt.Errorf("mkdir parent of %s: %w", dest, err)
-			}
-			mode := os.FileMode(hdr.Mode).Perm()
-			if mode == 0 {
-				mode = 0o644
-			}
-			if err := writeStream(dest, tr, mode); err != nil {
-				return false, err
-			}
-			if dbEntry {
-				dbSeen = true
-			}
-		}
-	}
-
-	return dbSeen, nil
 }
 
 func extractZipBackup(readerAt io.ReaderAt, size int64, stage string) (bool, error) {
@@ -151,6 +91,7 @@ func extractZipBackup(readerAt io.ReaderAt, size int64, stage string) (bool, err
 		return false, fmt.Errorf("open zip: %w", err)
 	}
 	dbSeen := false
+	seen := make(map[string]struct{})
 	for _, f := range zr.File {
 		clean, dbEntry, ok, err := backupArchiveEntry(f.Name)
 		if err != nil {
@@ -163,17 +104,15 @@ func extractZipBackup(readerAt io.ReaderAt, size int64, stage string) (bool, err
 		dest := filepath.Join(stage, clean)
 		info := f.FileInfo()
 		if info.IsDir() {
-			if err := os.MkdirAll(dest, 0o755); err != nil {
-				return false, fmt.Errorf("mkdir %s: %w", dest, err)
-			}
 			continue
 		}
 		if !info.Mode().IsRegular() {
 			continue
 		}
-		if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
-			return false, fmt.Errorf("mkdir parent of %s: %w", dest, err)
+		if _, exists := seen[clean]; exists {
+			return false, fmt.Errorf("duplicate backup entry: %s", f.Name)
 		}
+		seen[clean] = struct{}{}
 		rc, err := f.Open()
 		if err != nil {
 			return false, fmt.Errorf("open zip entry %s: %w", f.Name, err)
@@ -182,13 +121,13 @@ func extractZipBackup(readerAt io.ReaderAt, size int64, stage string) (bool, err
 		if mode == 0 {
 			mode = 0o644
 		}
-		writeErr := writeStream(dest, rc, mode)
+		writeErr := replaceFile(dest, mode, func(dst io.Writer) error {
+			_, err := io.Copy(dst, rc)
+			return err
+		})
 		closeErr := rc.Close()
-		if writeErr != nil {
-			return false, writeErr
-		}
-		if closeErr != nil {
-			return false, closeErr
+		if err := errors.Join(writeErr, closeErr); err != nil {
+			return false, err
 		}
 		if dbEntry {
 			dbSeen = true
@@ -212,163 +151,294 @@ func backupArchiveEntry(name string) (clean string, dbEntry bool, ok bool, err e
 		slash == strings.TrimSuffix(configPrefix, "/") {
 		return clean, dbEntry, true, nil
 	}
-	if mapped, ok := restoreMediaArchiveEntry(slash); ok {
-		return filepath.FromSlash(mapped), false, true, nil
-	}
 	return clean, false, false, nil
 }
 
-func restoreMediaArchiveEntry(clean string) (string, bool) {
-	parts := strings.Split(clean, "/")
-	if len(parts) == 3 && parts[0] == "media" && parts[1] == "avatars" {
-		fileName := filepath.Base(parts[2])
-		if safeArchiveLeaf(fileName) && avatarMediaName(fileName) {
-			return filepath.ToSlash(filepath.Join("thumbnails", "avatars", fileName)), true
-		}
-		return "", false
+func cleanupStaging(stage string) error {
+	if err := os.RemoveAll(stage); err != nil {
+		return fmt.Errorf("remove staging dir %q: %w", stage, err)
 	}
-	if len(parts) == 4 && parts[0] == "media" && parts[1] == "bookmarks" {
-		bookmarkID := strings.TrimSpace(parts[2])
-		fileName := filepath.Base(parts[3])
-		if safeArchiveLeaf(bookmarkID) && safeArchiveLeaf(fileName) {
-			return filepath.ToSlash(filepath.Join("media", "imported", "bookmarks", bookmarkID, fileName)), true
-		}
-	}
-	return "", false
+	return nil
 }
 
-func safeArchiveLeaf(name string) bool {
-	return name != "" && name != "." && name != ".." &&
-		name == filepath.Base(name) &&
-		!strings.ContainsAny(name, `/\`)
-}
-
-func avatarMediaName(name string) bool {
-	switch strings.ToLower(filepath.Ext(name)) {
-	case ".jpg", ".jpeg", ".png", ".webp", ".gif":
-		return true
-	default:
-		return false
-	}
-}
-
-// ApplyPending runs at startup before the database is opened. If a staged
-// restore is present, it swaps the staged database and config files into
-// place. The staging directory is removed regardless of success so the next
-// boot does not loop on a broken restore.
 func ApplyPending(cfg *config.Config) error {
-	if !HasPending(cfg.DataDir) {
+	if !HasPending(cfg.Storage.StateRoot()) {
 		return nil
 	}
-	stage := stagingDir(cfg.DataDir)
-	defer func() {
-		if err := os.RemoveAll(stage); err != nil {
-			slog.Warn("restore: cleanup failed", "dir", stage, "err", err)
-		}
-	}()
-
+	if err := cfg.Storage.Ensure(); err != nil {
+		return fmt.Errorf("validate storage layout: %w", err)
+	}
+	stage := stagingDir(cfg.Storage.StateRoot())
 	stagedDB := filepath.Join(stage, config.DatabaseFilename)
 	if _, err := os.Stat(stagedDB); err != nil {
 		return fmt.Errorf("staged db missing: %w", err)
 	}
-
-	slog.Info("restore: applying pending restore", "stage", stage)
-
-	if _, err := os.Stat(cfg.DatabasePath); err == nil {
-		bak := cfg.DatabasePath + ".pre-restore.bak"
-		_ = os.Remove(bak)
-		if err := os.Rename(cfg.DatabasePath, bak); err != nil {
-			return fmt.Errorf("backup current db: %w", err)
-		}
-		// WAL/SHM siblings belong to the previous db file.
-		_ = os.Remove(cfg.DatabasePath + "-wal")
-		_ = os.Remove(cfg.DatabasePath + "-shm")
+	if err := validateStagedDatabase(stagedDB, cfg.Storage); err != nil {
+		return fmt.Errorf("validate staged db: %w", err)
 	}
-	if err := os.Rename(stagedDB, cfg.DatabasePath); err != nil {
-		return fmt.Errorf("install restored db: %w", err)
+	if err := validateStagedRestoreConfig(stage); err != nil {
+		return fmt.Errorf("validate staged config: %w", err)
 	}
-	slog.Info("restore: database swapped", "path", cfg.DatabasePath)
-
-	stagedConfig := filepath.Join(stage, "config")
-	if fi, err := os.Stat(stagedConfig); err == nil && fi.IsDir() {
-		count, err := mirrorConfigDir(stagedConfig, cfg)
-		if err != nil {
-			return fmt.Errorf("apply config: %w", err)
-		}
-		slog.Info("restore: config files restored", "count", count, "dir", cfg.ConfDir)
-	}
-
-	restoredMedia, err := mirrorStagedDataFiles(stage, cfg.DataDir)
+	configFiles, err := collectRestoreConfigFiles(stage, cfg)
 	if err != nil {
-		return fmt.Errorf("apply media: %w", err)
+		return fmt.Errorf("read staged config: %w", err)
 	}
-	if restoredMedia > 0 {
-		slog.Info("restore: media files restored", "count", restoredMedia, "dir", cfg.DataDir)
-		if err := reconcileRestoredBookmarkMedia(cfg); err != nil {
-			return fmt.Errorf("reconcile restored media: %w", err)
+	if err := validateEffectiveStartupConfig(cfg, configFiles); err != nil {
+		return fmt.Errorf("validate effective startup config: %w", err)
+	}
+	slog.Info("restore: applying pending restore", "stage", stage)
+	for _, file := range configFiles {
+		if err := storage.ValidateContainedPath(cfg.ConfDir, file.target); err != nil {
+			return fmt.Errorf("revalidate config destination %s: %w", file.target, err)
+		}
+		if err := installRestoreConfigFile(file); err != nil {
+			return fmt.Errorf("restore config %s: %w", file.rel, err)
 		}
 	}
-
+	if err := cfg.Storage.Ensure(); err != nil {
+		return fmt.Errorf("revalidate storage layout: %w", err)
+	}
+	if err := storage.ValidateContainedPath(cfg.Storage.StateRoot(), cfg.Storage.DatabasePath()); err != nil {
+		return fmt.Errorf("validate database destination: %w", err)
+	}
+	preparedDB, err := prepareFileFromPath(stagedDB, cfg.Storage.DatabasePath(), 0o600)
+	if err != nil {
+		return fmt.Errorf("prepare restored database: %w", err)
+	}
+	defer func() { _ = os.Remove(preparedDB) }()
+	if err := resetPreparedAndroidSyncIdentity(preparedDB); err != nil {
+		return fmt.Errorf("reset restored Android sync identity: %w", err)
+	}
+	for _, suffix := range []string{"-wal", "-shm"} {
+		if err := validateRemovableFile(cfg.Storage.DatabasePath() + suffix); err != nil {
+			return fmt.Errorf("validate old database%s: %w", suffix, err)
+		}
+	}
+	if err := os.Rename(preparedDB, cfg.Storage.DatabasePath()); err != nil {
+		return fmt.Errorf("restore database: %w", err)
+	}
+	for _, suffix := range []string{"-wal", "-shm"} {
+		if err := removeFile(cfg.Storage.DatabasePath() + suffix); err != nil {
+			return fmt.Errorf("remove old database%s: %w", suffix, err)
+		}
+	}
+	if err := storage.SyncDirectory(filepath.Dir(cfg.Storage.DatabasePath())); err != nil {
+		return fmt.Errorf("sync restored database: %w", err)
+	}
+	if err := os.Remove(markerPath(cfg.Storage.StateRoot())); err != nil {
+		return fmt.Errorf("clear restore marker: %w", err)
+	}
+	if err := storage.SyncDirectory(stage); err != nil {
+		slog.Warn("restore: marker directory sync failed", "err", err)
+	}
+	if err := cleanupStaging(stage); err != nil {
+		slog.Warn("restore: staging cleanup failed", "state_dir", stage, "err", err)
+	}
+	slog.Info("restore: database swapped", "path", cfg.Storage.DatabasePath())
+	if len(configFiles) > 0 {
+		slog.Info("restore: config files restored", "count", len(configFiles), "dir", cfg.ConfDir)
+	}
 	return nil
 }
 
-func writeStream(path string, src io.Reader, mode os.FileMode) error {
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, mode)
+func resetPreparedAndroidSyncIdentity(path string) error {
+	conn, err := sql.Open("sqlite", "file:"+path+"?_pragma=journal_mode(delete)&_pragma=busy_timeout(30000)")
 	if err != nil {
-		return fmt.Errorf("open %s: %w", path, err)
+		return err
 	}
-	if _, err := io.Copy(f, src); err != nil {
-		_ = f.Close()
-		return fmt.Errorf("write %s: %w", path, err)
+	defer func() { _ = conn.Close() }()
+	tx, err := conn.Begin()
+	if err != nil {
+		return err
 	}
-	return f.Close()
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.Exec(`DELETE FROM android_sync_heads`); err != nil {
+		return err
+	}
+	result, err := tx.Exec(`
+		UPDATE android_sync_clock
+		SET epoch = lower(hex(randomblob(16))), revision = 0
+		WHERE id = 1
+	`)
+	if err != nil {
+		return err
+	}
+	if changed, err := result.RowsAffected(); err != nil {
+		return err
+	} else if changed != 1 {
+		return fmt.Errorf("android sync clock row is missing")
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	file, err := os.OpenFile(path, os.O_RDONLY, 0)
+	if err != nil {
+		return err
+	}
+	return errors.Join(file.Sync(), file.Close())
 }
 
-// mirrorDir copies every regular file from src into dst, creating directories
-// as needed. Files in dst that are not present in src are left untouched.
-func mirrorDir(src, dst string) (int, error) {
-	return mirrorDirWithRewrite(src, dst, nil)
+func validateStagedDatabase(path string, layout storage.Layout) error {
+	staged, err := db.OpenReadOnlyLayout(path, layout)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = staged.Close() }()
+	if err := validateDatabaseIntegrity(staged); err != nil {
+		return err
+	}
+	return staged.WithRead(db.ValidateCurrentSchema)
 }
 
-func mirrorConfigDir(src string, cfg *config.Config) (int, error) {
-	sourceRuntime := readStagedRuntimeManifest(filepath.Dir(src))
-	targetRuntime := runtimeManifest{
-		Version:   1,
-		DataDir:   cfg.DataDir,
-		ConfigDir: cfg.ConfDir,
-		RepoDir:   cfg.RepoDir,
-	}
-	return mirrorDirWithRewrite(src, cfg.ConfDir, func(rel string, data []byte) []byte {
-		return rewriteRuntimeConfigPaths(rel, data, sourceRuntime, targetRuntime)
+func validateDatabaseIntegrity(store *db.DB) error {
+	return store.WithRead(func(conn *sql.DB) error {
+		var quickCheck string
+		if err := conn.QueryRow(`PRAGMA quick_check`).Scan(&quickCheck); err != nil {
+			return err
+		}
+		if quickCheck != "ok" {
+			return fmt.Errorf("quick_check failed: %s", quickCheck)
+		}
+		fkRows, err := conn.Query(`PRAGMA foreign_key_check`)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = fkRows.Close() }()
+		if fkRows.Next() {
+			return fmt.Errorf("foreign_key_check failed")
+		}
+		return fkRows.Err()
 	})
 }
 
-func mirrorStagedDataFiles(stage, dataDir string) (int, error) {
-	total := 0
-	for _, rel := range []string{"media", "thumbnails"} {
-		src := filepath.Join(stage, rel)
-		info, err := os.Stat(src)
-		if os.IsNotExist(err) {
-			continue
-		}
-		if err != nil {
-			return total, err
-		}
-		if !info.IsDir() {
-			continue
-		}
-		count, err := mirrorDir(src, filepath.Join(dataDir, rel))
-		total += count
-		if err != nil {
-			return total, err
-		}
+func prepareFileFromPath(sourcePath, targetPath string, mode os.FileMode) (string, error) {
+	source, err := os.Open(sourcePath)
+	if err != nil {
+		return "", err
 	}
-	return total, nil
+	preparedPath, prepareErr := prepareFile(targetPath, mode, func(dst io.Writer) error {
+		_, err := io.Copy(dst, source)
+		return err
+	})
+	if err := errors.Join(prepareErr, source.Close()); err != nil {
+		_ = os.Remove(preparedPath)
+		return "", err
+	}
+	return preparedPath, nil
 }
 
-func mirrorDirWithRewrite(src, dst string, rewrite func(rel string, data []byte) []byte) (int, error) {
-	count := 0
-	err := filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
+func replaceFile(target string, mode os.FileMode, write func(io.Writer) error) error {
+	tmpPath, err := prepareFile(target, mode, write)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.Remove(tmpPath) }()
+	if err := os.Rename(tmpPath, target); err != nil {
+		return err
+	}
+	return storage.SyncDirectory(filepath.Dir(target))
+}
+
+func prepareFile(target string, mode os.FileMode, write func(io.Writer) error) (string, error) {
+	if target == "" || write == nil {
+		return "", fmt.Errorf("restore target and writer are required")
+	}
+	if info, err := os.Lstat(target); err == nil {
+		if !info.Mode().IsRegular() {
+			return "", fmt.Errorf("restore target %q is not a regular file", target)
+		}
+	} else if !os.IsNotExist(err) {
+		return "", err
+	}
+	dir := filepath.Dir(target)
+	if err := storage.EnsureDirectory(dir, 0o755); err != nil {
+		return "", err
+	}
+	tmp, err := os.CreateTemp(dir, ".igloo-restore-*.tmp")
+	if err != nil {
+		return "", err
+	}
+	tmpPath := tmp.Name()
+	remove := func(err error) (string, error) {
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
+		return "", err
+	}
+	if err := write(tmp); err != nil {
+		return remove(err)
+	}
+	if err := tmp.Chmod(mode); err != nil {
+		return remove(err)
+	}
+	if err := tmp.Sync(); err != nil {
+		return remove(err)
+	}
+	if err := tmp.Close(); err != nil {
+		return remove(err)
+	}
+	return tmpPath, nil
+}
+
+func validateRemovableFile(path string) error {
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("restore sidecar %q is not a regular file", path)
+	}
+	return nil
+}
+
+func removeFile(path string) error {
+	if err := validateRemovableFile(path); err != nil {
+		return err
+	}
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
+type restoreConfigFile struct {
+	rel    string
+	source string
+	target string
+	data   []byte
+	mode   os.FileMode
+}
+
+func collectRestoreConfigFiles(stage string, cfg *config.Config) ([]restoreConfigFile, error) {
+	src := filepath.Join(stage, "config")
+	info, err := os.Stat(src)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if !info.IsDir() {
+		return nil, fmt.Errorf("staged config is not a directory")
+	}
+	if strings.TrimSpace(cfg.ConfDir) == "" {
+		return nil, fmt.Errorf("config directory is not configured")
+	}
+	sourceRuntime, err := readStagedRuntimeManifest(stage)
+	if err != nil {
+		return nil, err
+	}
+	targetRuntime := runtimeManifest{
+		Version:   2,
+		DataDir:   cfg.Storage.StateRoot(),
+		MediaDir:  cfg.Storage.MediaRoot(),
+		ConfigDir: cfg.ConfDir,
+		RepoDir:   cfg.RepoDir,
+	}
+	files := make([]restoreConfigFile, 0)
+	err = filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
@@ -377,95 +447,206 @@ func mirrorDirWithRewrite(src, dst string, rewrite func(rel string, data []byte)
 			return err
 		}
 		if rel == "." {
-			return os.MkdirAll(dst, 0o755)
+			return nil
 		}
-		target := filepath.Join(dst, rel)
 		if info.IsDir() {
-			return os.MkdirAll(target, info.Mode().Perm())
+			return nil
 		}
 		if !info.Mode().IsRegular() {
 			return nil
 		}
-		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-			return err
+		target := filepath.Join(cfg.ConfDir, rel)
+		if err := storage.ValidateContainedPath(cfg.ConfDir, target); err != nil {
+			return fmt.Errorf("staged config path escapes destination: %s: %w", rel, err)
 		}
 		mode := info.Mode().Perm()
 		if mode == 0 {
 			mode = 0o644
 		}
-		in, err := os.Open(path)
+		data, err := os.ReadFile(path)
 		if err != nil {
 			return err
 		}
-		out, err := os.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, mode)
-		if err != nil {
-			_ = in.Close()
-			return err
-		}
-		if rewrite == nil {
-			_, err = io.Copy(out, in)
-		} else {
-			var data []byte
-			data, err = io.ReadAll(in)
-			if err == nil {
-				_, err = out.Write(rewrite(rel, data))
-			}
-		}
-		closeInErr := in.Close()
-		if err != nil {
-			_ = out.Close()
-			return err
-		}
-		if closeInErr != nil {
-			_ = out.Close()
-			return closeInErr
-		}
-		if err := out.Close(); err != nil {
-			return err
-		}
-		count++
+		files = append(files, restoreConfigFile{
+			rel: rel, source: path, target: target, mode: mode,
+			data: rewriteRuntimeConfigPaths(rel, data, sourceRuntime, targetRuntime),
+		})
 		return nil
 	})
-	return count, err
+	if err != nil {
+		return nil, err
+	}
+	return files, nil
+}
+
+func installRestoreConfigFile(file restoreConfigFile) error {
+	return replaceFile(file.target, file.mode, func(dst io.Writer) error {
+		_, err := dst.Write(file.data)
+		return err
+	})
+}
+
+func validateEffectiveStartupConfig(cfg *config.Config, files []restoreConfigFile) error {
+	runtimeConfigPath := strings.TrimSpace(cfg.RuntimeConfigPath)
+	if runtimeConfigPath == "" {
+		runtimeConfigPath = filepath.Join(cfg.ConfDir, "config.json")
+	}
+	if err := config.ValidateEffectiveRuntimeConfigFile(effectiveRestorePath(runtimeConfigPath, files)); err != nil {
+		return err
+	}
+	authUsersPath := strings.TrimSpace(cfg.AuthUsersPath)
+	if authUsersPath == "" {
+		authUsersPath = filepath.Join(cfg.ConfDir, "auth_users.json")
+	}
+	if _, err := auth.LoadUsers(effectiveRestorePath(authUsersPath, files)); err != nil {
+		return err
+	}
+	if strings.TrimSpace(os.Getenv("AUTH_SECRET_KEY")) == "" {
+		authSecretPath := effectiveRestorePath(filepath.Join(cfg.ConfDir, "auth_secret"), files)
+		secret, err := os.ReadFile(authSecretPath)
+		if err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		if err == nil && len(secret) == 0 {
+			return fmt.Errorf("effective auth secret is empty")
+		}
+	}
+	return nil
+}
+
+func effectiveRestorePath(target string, files []restoreConfigFile) string {
+	for _, file := range files {
+		if file.target == target {
+			return file.source
+		}
+	}
+	return target
 }
 
 type runtimeManifest struct {
 	Version   int    `json:"version"`
 	DataDir   string `json:"data_dir,omitempty"`
+	MediaDir  string `json:"media_dir,omitempty"`
 	ConfigDir string `json:"config_dir,omitempty"`
 	RepoDir   string `json:"repo_dir,omitempty"`
 }
 
-func readStagedRuntimeManifest(stage string) runtimeManifest {
-	raw, err := os.ReadFile(filepath.Join(stage, runtimeName))
+func validateStagedRestoreConfig(stage string) error {
+	if _, err := readStagedRuntimeManifest(stage); err != nil {
+		return err
+	}
+	runtimeConfigPath := filepath.Join(stage, "config", "config.json")
+	if exists, err := stagedRegularFile(runtimeConfigPath); err != nil {
+		return err
+	} else if exists {
+		if err := config.ValidateRuntimeConfigFile(runtimeConfigPath); err != nil {
+			return err
+		}
+	}
+	authUsersPath := filepath.Join(stage, "config", "auth_users.json")
+	if exists, err := stagedRegularFile(authUsersPath); err != nil {
+		return err
+	} else if exists {
+		if _, err := auth.LoadUsers(authUsersPath); err != nil {
+			return err
+		}
+	}
+	authSecretPath := filepath.Join(stage, "config", "auth_secret")
+	if exists, err := stagedRegularFile(authSecretPath); err != nil {
+		return err
+	} else if exists {
+		secret, err := os.ReadFile(authSecretPath)
+		if err != nil {
+			return err
+		}
+		if len(secret) == 0 {
+			return fmt.Errorf("staged auth secret is empty")
+		}
+	}
+	return nil
+}
+
+func stagedRegularFile(path string) (bool, error) {
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
 	if err != nil {
-		return runtimeManifest{}
+		return false, err
 	}
+	if !info.Mode().IsRegular() {
+		return false, fmt.Errorf("staged config file %q is not a regular file", path)
+	}
+	return true, nil
+}
+
+func readStagedRuntimeManifest(stage string) (runtimeManifest, error) {
+	path := filepath.Join(stage, runtimeName)
+	exists, err := stagedRegularFile(path)
+	if err != nil || !exists {
+		return runtimeManifest{}, err
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return runtimeManifest{}, err
+	}
+	decoder := json.NewDecoder(file)
+	decoder.DisallowUnknownFields()
 	var manifest runtimeManifest
-	if err := json.Unmarshal(raw, &manifest); err != nil {
-		return runtimeManifest{}
+	decodeErr := decoder.Decode(&manifest)
+	var trailing any
+	if decodeErr == nil {
+		if err := decoder.Decode(&trailing); err != io.EOF {
+			if err == nil {
+				decodeErr = fmt.Errorf("trailing JSON value")
+			} else {
+				decodeErr = err
+			}
+		}
 	}
-	return manifest
+	closeErr := file.Close()
+	if err := errors.Join(decodeErr, closeErr); err != nil {
+		return runtimeManifest{}, fmt.Errorf("parse staged %s: %w", runtimeName, err)
+	}
+	if manifest.Version != 2 {
+		return runtimeManifest{}, fmt.Errorf("unsupported staged %s version %d", runtimeName, manifest.Version)
+	}
+	return manifest, nil
 }
 
 func rewriteRuntimeConfigPaths(rel string, data []byte, source, target runtimeManifest) []byte {
 	if filepath.ToSlash(rel) != "nginx.conf" {
 		return data
 	}
-	text := string(data)
-	for _, pair := range [][2]string{
+	replacements := [][2]string{
+		{runtimeMediaDir(source), runtimeMediaDir(target)},
 		{source.DataDir, target.DataDir},
 		{source.ConfigDir, target.ConfigDir},
 		{source.RepoDir, target.RepoDir},
-	} {
+	}
+	args := make([]string, 0, len(replacements)*2)
+	for _, pair := range replacements {
 		oldPath := cleanReplacementPath(pair[0])
 		newPath := cleanReplacementPath(pair[1])
 		if oldPath == "" || newPath == "" || oldPath == newPath {
 			continue
 		}
-		text = strings.ReplaceAll(text, oldPath, newPath)
+		args = append(args, oldPath, newPath)
 	}
-	return []byte(text)
+	if len(args) == 0 {
+		return data
+	}
+	return []byte(strings.NewReplacer(args...).Replace(string(data)))
+}
+
+func runtimeMediaDir(manifest runtimeManifest) string {
+	if strings.TrimSpace(manifest.MediaDir) != "" {
+		return manifest.MediaDir
+	}
+	if strings.TrimSpace(manifest.DataDir) == "" {
+		return ""
+	}
+	return filepath.Join(manifest.DataDir, "media")
 }
 
 func cleanReplacementPath(path string) string {
@@ -478,121 +659,4 @@ func cleanReplacementPath(path string) string {
 		return ""
 	}
 	return clean
-}
-
-func reconcileRestoredBookmarkMedia(cfg *config.Config) error {
-	root := filepath.Join(cfg.DataDir, "media", "imported", "bookmarks")
-	if info, err := os.Stat(root); os.IsNotExist(err) {
-		return nil
-	} else if err != nil {
-		return err
-	} else if !info.IsDir() {
-		return nil
-	}
-
-	store, err := db.Open(cfg.DatabasePath, cfg.DataDir)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		_ = store.Close()
-	}()
-
-	type restoredFile struct {
-		videoID    string
-		relPath    string
-		mediaIndex int
-		mediaType  string
-		fileSize   int64
-	}
-	var files []restoredFile
-	if err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if entry.IsDir() {
-			return nil
-		}
-		info, err := entry.Info()
-		if err != nil {
-			return err
-		}
-		if !info.Mode().IsRegular() {
-			return nil
-		}
-		rel, err := filepath.Rel(cfg.DataDir, path)
-		if err != nil {
-			return err
-		}
-		parts := strings.Split(filepath.ToSlash(rel), "/")
-		if len(parts) != 5 || parts[0] != "media" || parts[1] != "imported" || parts[2] != "bookmarks" {
-			return nil
-		}
-		videoID := strings.TrimSpace(parts[3])
-		fileName := parts[4]
-		if videoID == "" || !safeArchiveLeaf(videoID) || !safeArchiveLeaf(fileName) {
-			return nil
-		}
-		files = append(files, restoredFile{
-			videoID:    videoID,
-			relPath:    filepath.ToSlash(rel),
-			mediaIndex: restoredMediaIndex(fileName),
-			mediaType:  mediaTypeForPath(fileName),
-			fileSize:   info.Size(),
-		})
-		return nil
-	}); err != nil {
-		return err
-	}
-	if len(files) == 0 {
-		return nil
-	}
-
-	return store.WithWrite(func(tx *sql.Tx) error {
-		for _, file := range files {
-			if _, err := tx.Exec(`
-				INSERT INTO media_files
-					(owner_type, owner_id, media_index, file_path, media_type, file_size)
-				VALUES ('feed_media', ?, ?, ?, ?, ?)
-				ON CONFLICT(owner_type, owner_id, media_index) DO UPDATE SET
-					file_path = excluded.file_path,
-					media_type = excluded.media_type,
-					file_size = excluded.file_size
-			`, file.videoID, file.mediaIndex, file.relPath, file.mediaType, file.fileSize); err != nil {
-				return err
-			}
-			if file.mediaIndex == 0 {
-				if _, err := tx.Exec(`
-					UPDATE videos
-					SET file_path = ?
-					WHERE video_id = ?
-				`, filepath.Join(cfg.DataDir, file.relPath), file.videoID); err != nil {
-					return err
-				}
-			}
-		}
-		return nil
-	})
-}
-
-func restoredMediaIndex(fileName string) int {
-	stem := strings.TrimSuffix(fileName, filepath.Ext(fileName))
-	idx, err := strconv.Atoi(stem)
-	if err != nil || idx < 0 {
-		return 0
-	}
-	return idx
-}
-
-func mediaTypeForPath(path string) string {
-	switch strings.ToLower(filepath.Ext(path)) {
-	case ".jpg", ".jpeg", ".png", ".webp", ".image":
-		return "photo"
-	case ".gif":
-		return "gif"
-	case ".mp3", ".m4a", ".ogg", ".aac", ".wav":
-		return "audio"
-	default:
-		return "video"
-	}
 }

@@ -1,8 +1,5 @@
 package com.screwy.igloo.ui.component
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
@@ -27,47 +24,6 @@ import com.screwy.igloo.media.MediaUri
 import com.screwy.igloo.ui.theme.iglooColors
 
 @Composable
-internal fun MediaPosterCell(
-    thumbnailUri: MediaUri?,
-    contentDescription: String?,
-    modifier: Modifier = Modifier,
-    contentScale: ContentScale = ContentScale.Crop,
-    fallbackRemoteUrl: String = "",
-    showFallbackWhenNull: Boolean = true,
-    showMissingWhenNull: Boolean = true,
-    mediaType: MediaType? = null,
-    onClick: (() -> Unit)? = null,
-) {
-    val colors = MaterialTheme.iglooColors
-    val fallbackUri = fallbackRemoteUrl.takeIf { it.isNotBlank() }?.let(MediaUri::Remote)
-    val badgeUri = thumbnailUri?.takeUnless { it is MediaUri.Missing } ?: fallbackUri
-    val alpha = badgeUri?.let { mediaAlpha(it) } ?: 1f
-    val showBadge = badgeUri?.let { isIglooRemoteOffline(it) } ?: false
-    val clickableModifier = if (onClick == null) {
-        modifier
-    } else {
-        modifier.clickable(onClick = onClick)
-    }
-
-    Box(
-        modifier = clickableModifier.background(colors.surface),
-        contentAlignment = Alignment.Center,
-    ) {
-        MediaCellArtwork(
-            thumbnailUri = thumbnailUri,
-            contentDescription = contentDescription,
-            contentScale = contentScale,
-            artworkAlpha = alpha,
-            fallbackRemoteUrl = fallbackRemoteUrl,
-            showFallbackWhenNull = showFallbackWhenNull,
-            showMissingWhenNull = showMissingWhenNull,
-        )
-        mediaType?.let { MediaTypeBadge(it) }
-        if (showBadge) DownloadPendingBadge()
-    }
-}
-
-@Composable
 internal fun BoxScope.MediaCellArtwork(
     thumbnailUri: MediaUri?,
     contentDescription: String?,
@@ -75,14 +31,8 @@ internal fun BoxScope.MediaCellArtwork(
     contentScale: ContentScale = ContentScale.Crop,
     missingIconSize: Dp = 28.dp,
     artworkAlpha: Float = 1f,
-    fallbackRemoteUrl: String = "",
-    showFallbackWhenNull: Boolean = false,
     showMissingWhenNull: Boolean = false,
 ) {
-    @Composable
-    fun fallbackModel(): Any? =
-        fallbackRemoteUrl.takeIf { it.isNotBlank() }?.let { rememberRemoteImageModel(it) }
-
     when (thumbnailUri) {
         is MediaUri.Local -> AsyncImage(
             model = rememberMediaImageModel(
@@ -95,37 +45,16 @@ internal fun BoxScope.MediaCellArtwork(
         )
         is MediaUri.Remote -> AsyncImage(
             model = rememberMediaImageModel(
-                uri = MediaUri.Remote(thumbnailUri.url.ifBlank { fallbackRemoteUrl }),
+                uri = thumbnailUri,
                 memoryCacheKey = mediaImageMemoryCacheKey(thumbnailUri),
             ),
             contentDescription = contentDescription,
             modifier = modifier.alpha(artworkAlpha),
             contentScale = contentScale,
         )
-        is MediaUri.Missing -> {
-            val model = fallbackModel()
-            if (model != null) {
-                AsyncImage(
-                    model = model,
-                    contentDescription = contentDescription,
-                    modifier = modifier.alpha(artworkAlpha),
-                    contentScale = contentScale,
-                )
-            } else {
-                MissingMediaCellIcon(contentDescription, missingIconSize, artworkAlpha)
-            }
-        }
-        null -> {
-            val model = if (showFallbackWhenNull) fallbackModel() else null
-            when {
-                model != null -> AsyncImage(
-                    model = model,
-                    contentDescription = contentDescription,
-                    modifier = modifier.alpha(artworkAlpha),
-                    contentScale = contentScale,
-                )
-                showMissingWhenNull -> MissingMediaCellIcon(contentDescription, missingIconSize, artworkAlpha)
-            }
+        is MediaUri.Missing -> MissingMediaCellIcon(contentDescription, missingIconSize, artworkAlpha)
+        null -> if (showMissingWhenNull) {
+            MissingMediaCellIcon(contentDescription, missingIconSize, artworkAlpha)
         }
     }
 }

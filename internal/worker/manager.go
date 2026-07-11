@@ -6,9 +6,7 @@ import (
 	"encoding/json"
 	"log"
 	"path/filepath"
-	"regexp"
 	"runtime/debug"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -17,7 +15,6 @@ import (
 	"github.com/screwys/igloo/internal/db"
 	"github.com/screwys/igloo/internal/dearrow"
 	"github.com/screwys/igloo/internal/download"
-	"github.com/screwys/igloo/internal/model"
 	"github.com/screwys/igloo/internal/sponsorblock"
 	"github.com/screwys/igloo/internal/xfeed"
 )
@@ -43,7 +40,7 @@ type Manager struct {
 	downloadKick     chan struct{} // buffered(1): coalescing kick for download pool
 	discoveryKick    chan struct{} // buffered(1): coalescing kick for platform discovery
 	discoveryJobs    chan db.ChannelQueueRow
-	avatarRequest    chan string // buffered(256): on-demand avatar/profile fetch requests
+	profileKick      chan struct{} // buffered(1): durable profile job wake-up
 	xStatusEnrich    chan xfeed.StatusEnrichmentRequest
 	previewChan      chan PreviewRequest // buffered(256): FIFO preview queue
 	ingestKick       chan struct{}       // buffered(1): trigger immediate ingest
@@ -100,10 +97,6 @@ type sponsorblockFetcher interface {
 	Fetch(ctx context.Context, videoID string) ([]sponsorblock.Segment, error)
 }
 
-var instagramHandleRe = regexp.MustCompile(`^[a-z0-9_.]{1,64}$`)
-
-const androidSyncMaintenanceInterval = time.Hour
-
 // NewManager creates a Manager; call StartAll to launch goroutines.
 func NewManager(database *db.DB, cfg *config.Config) *Manager {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -117,7 +110,7 @@ func NewManager(database *db.DB, cfg *config.Config) *Manager {
 		downloadKick:    make(chan struct{}, 1),
 		discoveryKick:   make(chan struct{}, 1),
 		discoveryJobs:   make(chan db.ChannelQueueRow, discoveryWorkerCount),
-		avatarRequest:   make(chan string, 256),
+		profileKick:     make(chan struct{}, 1),
 		xStatusEnrich:   make(chan xfeed.StatusEnrichmentRequest, 1024),
 		previewChan:     make(chan PreviewRequest, 256),
 		ingestKick:      make(chan struct{}, 1),
@@ -133,15 +126,14 @@ func NewManager(database *db.DB, cfg *config.Config) *Manager {
 	m.dearrowFetcher = &dearrow.Fetcher{
 		Client:   dearrow.NewClient(dearrow.DefaultBaseURL),
 		Extract:  dearrow.ExtractFrame,
-		ThumbDir: filepath.Join(cfg.DataDir, "thumbnails", "dearrow"),
+		ThumbDir: filepath.Join(cfg.Storage.StateRoot(), "thumbnails", "dearrow"),
 	}
 	m.sponsorblockClient = sponsorblock.NewClient(sponsorblock.DefaultBaseURL)
 	m.downloader.SetOperationSink(database)
 	return m
 }
 
-// StartAll clears stale in-flight queue state, launches long-running workers,
-// then runs heavier startup maintenance in the background.
+// StartAll clears stale in-flight queue state and launches the normal workers.
 func (m *Manager) StartAll() {
 	startupStarted := time.Now()
 	log.Printf("[worker] startup recovery started")
@@ -159,94 +151,23 @@ func (m *Manager) StartAll() {
 	} else if n > 0 {
 		log.Printf("[worker] reset %d stale download jobs to pending", n)
 	}
-	if n, err := m.db.ResetStaleFeedMediaJobs(); err != nil {
-		log.Printf("[worker] ResetStaleFeedMediaJobs: %v", err)
-	} else if n > 0 {
-		log.Printf("[worker] reset %d stale feed media jobs to queued", n)
-	}
 	log.Printf("[worker] startup recovery completed in %s", time.Since(startupStarted).Round(time.Millisecond))
 
 	// One-shot startup tasks — not tracked in status map.
-	m.startOnceDelayed("startup_maintenance", 2*time.Minute, m.runStartupMaintenance)
 	m.startOnce("feed_bootstrap", m.runFeedBootstrap)
 	m.launch(xIngestWorkerName, m.runXIngestLoop)
 	m.launch("x_status_enrichment", m.runXStatusEnrichmentLoop)
 	m.launch("feed_media", m.runFeedMediaWorker)
-	m.launch("profile_refresh", m.runProfileRefreshLoop)
+	m.launch("profile_refresh", m.runProfileJobLoop)
 	m.launch("dearrow", m.runDearrowWorker)
 	m.launch("scheduler", m.runScheduler)
 	m.launch("download_pool", m.runDownloadPool)
 	m.launch("preview", m.runPreviewWorker)
-	m.launch("channel_metadata_prune", m.runChannelMetadataPruner)
-	m.launch("android_sync_maintenance", m.runAndroidSyncMaintenanceWorker)
-	m.startOnceDelayed("search_index", 3*time.Minute, m.buildSearchIndex)
 	m.startOnceDelayed("ranked_queue_warmup", 3*time.Minute, m.runRankedQueueWarmup)
-	m.startOnceDelayed("preview_backfill", 4*time.Minute, m.backfillPreviews)
-	m.startOnceDelayed("thumbnail_backfill", 4*time.Minute, m.backfillThumbnails)
 	m.launchDelayed("feed_scoring", 3*time.Minute, m.runFeedScoringWorker)
 	m.launchDelayed("downloader_operation_prune", 5*time.Minute, m.runDownloaderOperationPruner)
 	m.launchDelayed("backup", 5*time.Minute, m.runBackupWorker)
 
-}
-
-func (m *Manager) runStartupMaintenance(ctx context.Context) {
-	started := time.Now()
-	log.Printf("[worker] startup maintenance started")
-	defer func() {
-		log.Printf("[worker] startup maintenance completed in %s", time.Since(started).Round(time.Millisecond))
-	}()
-	if ctx.Err() != nil {
-		return
-	}
-	if n, err := m.db.MarkTwitterProfileDriftDueFromFeedRows(200); err != nil {
-		log.Printf("[worker] MarkTwitterProfileDriftDueFromFeedRows: %v", err)
-	} else if n > 0 {
-		log.Printf("[worker] marked %d twitter profile rows refresh-due after feed identity drift", n)
-	}
-	if ctx.Err() != nil {
-		return
-	}
-	if n, err := m.db.SeedChannelProfileRows(); err != nil {
-		log.Printf("[worker] SeedChannelProfileRows: %v", err)
-	} else if n > 0 {
-		log.Printf("[worker] seeded/updated %d channel profile rows", n)
-	}
-	if ctx.Err() != nil {
-		return
-	}
-	if n, err := m.db.SeedSyntheticTwitterAvatarProfiles(); err != nil {
-		log.Printf("[worker] SeedSyntheticTwitterAvatarProfiles: %v", err)
-	} else if n > 0 {
-		log.Printf("[worker] seeded %d synthetic twitter avatar profile rows", n)
-	}
-	if ctx.Err() != nil {
-		return
-	}
-	if n, err := m.db.EnsureBookmarkVideoStubs(); err != nil {
-		log.Printf("[worker] EnsureBookmarkVideoStubs: %v", err)
-	} else if n > 0 {
-		log.Printf("[worker] created %d video stubs for bookmarked feed items", n)
-	}
-	if ctx.Err() != nil {
-		return
-	}
-	if n, err := m.db.EnsureProtectedFeedItemStubs(); err != nil {
-		log.Printf("[worker] EnsureProtectedFeedItemStubs: %v", err)
-	} else if n > 0 {
-		log.Printf("[worker] created %d protected feed-item stubs", n)
-	}
-	if ctx.Err() != nil {
-		return
-	}
-	if n, err := m.db.EnqueueMissingBookmarkLikeMedia(); err != nil {
-		log.Printf("[worker] EnqueueMissingBookmarkLikeMedia: %v", err)
-	} else if n > 0 {
-		log.Printf("[worker] enqueued %d feed media jobs for bookmarked/liked items", n)
-	}
-	if ctx.Err() != nil {
-		return
-	}
-	m.migrateMediaPaths()
 }
 
 // Shutdown cancels the context and waits for all goroutines to stop.
@@ -276,93 +197,6 @@ func (m *Manager) runDownloaderOperationPruner(ctx context.Context) {
 	}
 }
 
-func (m *Manager) runChannelMetadataPruner(ctx context.Context) {
-	if m == nil || m.db == nil {
-		return
-	}
-	ticker := time.NewTicker(6 * time.Hour)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			cutoffMs := time.Now().Add(-db.StaleOrphanChannelMetadataTTL).UnixMilli()
-			result, err := m.db.PruneStaleOrphanChannelMetadata(cutoffMs, db.ChannelMetadataPruneBatchSize)
-			if err != nil {
-				log.Printf("[worker] PruneStaleOrphanChannelMetadata: %v", err)
-				continue
-			}
-			if result.Channels > 0 || result.ChannelProfiles > 0 || result.MediaFiles > 0 {
-				log.Printf("[worker] pruned stale orphan channel metadata: channels=%d profiles=%d media_files=%d",
-					result.Channels, result.ChannelProfiles, result.MediaFiles)
-			}
-		}
-	}
-}
-
-func (m *Manager) runAndroidSyncMaintenanceWorker(ctx context.Context) {
-	if m == nil || m.db == nil {
-		return
-	}
-	m.runAndroidSyncMaintenanceCycle()
-
-	ticker := time.NewTicker(androidSyncMaintenanceInterval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			m.runAndroidSyncMaintenanceCycle()
-		}
-	}
-}
-
-func (m *Manager) runAndroidSyncMaintenanceCycle() {
-	result, err := m.runAndroidSyncMaintenanceOnce(time.Now().UnixMilli())
-	if err != nil {
-		log.Printf("[worker] RunAndroidSyncMaintenance: %v", err)
-		return
-	}
-	if result.Drain.GenerationsDeleted == 0 &&
-		result.Drain.ItemsDeleted == 0 &&
-		result.Drain.AssetsDeleted == 0 &&
-		result.Drain.HealthReportsDeleted == 0 &&
-		result.After.EligibleGenerations == 0 &&
-		result.After.EligibleItems == 0 &&
-		result.After.EligibleAssets == 0 &&
-		result.After.EligibleHealthReports == 0 {
-		return
-	}
-	log.Printf(
-		"[worker] android sync maintenance: deleted generations=%d items=%d assets=%d health_reports=%d remaining_generations=%d remaining_items=%d remaining_assets=%d remaining_health_reports=%d passes=%d",
-		result.Drain.GenerationsDeleted,
-		result.Drain.ItemsDeleted,
-		result.Drain.AssetsDeleted,
-		result.Drain.HealthReportsDeleted,
-		result.After.EligibleGenerations,
-		result.After.EligibleItems,
-		result.After.EligibleAssets,
-		result.After.EligibleHealthReports,
-		result.Drain.Passes,
-	)
-}
-
-func (m *Manager) runAndroidSyncMaintenanceOnce(nowMs int64) (db.AndroidSyncMaintenanceResult, error) {
-	if m == nil || m.db == nil {
-		return db.AndroidSyncMaintenanceResult{}, nil
-	}
-	return m.db.RunAndroidSyncMaintenance(db.AndroidSyncMaintenanceOptions{
-		NowMs:     nowMs,
-		Policy:    db.DefaultAndroidSyncPrunePolicy(),
-		MaxPasses: db.DefaultAndroidSyncPruneDrainPasses,
-	})
-}
-
-// ShutdownTimeout cancels workers and waits up to timeout for them to exit.
-// It returns false when a worker ignored cancellation long enough that the
-// caller should continue process shutdown instead of waiting indefinitely.
 func (m *Manager) ShutdownTimeout(timeout time.Duration) bool {
 	m.cancel()
 	done := make(chan struct{})
@@ -405,112 +239,15 @@ func (m *Manager) KickDiscovery() {
 	}
 }
 
-// RequestAvatar enqueues channelID for an on-demand avatar fetch.
-// The send is non-blocking; if the buffer is full, a skeleton channel_profiles
-// row or stale existing avatar row still ensures the next refresh cycle will
-// pick it up.
-func (m *Manager) RequestAvatar(channelID string) {
-	channelID = normalizeProfileRequestChannelID(channelID)
-	if channelID == "" {
-		return
-	}
-	if m == nil || m.db == nil {
-		return
-	}
-	if model.IsSyntheticTwitterAvatarChannelID(channelID) {
-		existing, _ := m.db.GetChannelProfile(channelID)
-		if existing == nil || existing.AvatarURL == "" {
-			return
-		}
-		if m.avatarRequest == nil {
-			return
-		}
-		select {
-		case m.avatarRequest <- channelID:
-		default:
-			m.markAvatarRecoveryDue(channelID, existing)
-		}
-		return
-	}
-	row := model.ChannelProfile{
-		ChannelID: channelID,
-		Platform:  platformForChannelID(channelID),
-		Handle:    trimChannelIDPrefix(channelID),
-	}
-	if row.Platform == "" {
-		return
-	}
-	if m.cfg != nil && !m.cfg.PlatformEnabled(row.Platform) {
-		return
-	}
-	isInstagram := strings.HasPrefix(channelID, "instagram_")
-	existing, err := m.db.GetChannelProfile(channelID)
-	if err != nil {
-		log.Printf("[profile] GetChannelProfile %s: %v", channelID, err)
-		if isInstagram {
-			return
-		}
-	} else if isInstagram && existing == nil {
-		return
-	} else if existing == nil {
-		if err := m.db.UpsertChannelProfile(row); err != nil {
-			log.Printf("[profile] seed %s: %v", channelID, err)
-		}
-	}
-	if m.avatarRequest == nil {
+// KickProfileJobs sends a non-blocking wake-up to the durable identity worker.
+func (m *Manager) KickProfileJobs() {
+	if m == nil || m.profileKick == nil {
 		return
 	}
 	select {
-	case m.avatarRequest <- channelID:
+	case m.profileKick <- struct{}{}:
 	default:
-		m.markAvatarRecoveryDue(channelID, existing)
 	}
-}
-
-func (m *Manager) markAvatarRecoveryDue(channelID string, existing *model.ChannelProfile) {
-	if m == nil || m.db == nil || existing == nil || existing.AvatarURL == "" {
-		return
-	}
-	if !profileRetryDue(existing, time.Now()) {
-		return
-	}
-	if err := m.db.MarkChannelProfileRefreshDue(channelID); err != nil {
-		log.Printf("[profile] mark avatar recovery due %s: %v", channelID, err)
-	}
-}
-
-func normalizeProfileRequestChannelID(channelID string) string {
-	channelID = strings.TrimSpace(channelID)
-	if channelID == "" {
-		return ""
-	}
-	lower := strings.ToLower(channelID)
-	switch {
-	case strings.HasPrefix(lower, "twitter_"),
-		strings.HasPrefix(lower, "tiktok_"):
-		return lower
-	case strings.HasPrefix(lower, "instagram_"):
-		handle := strings.TrimPrefix(lower, "instagram_")
-		if !instagramHandleRe.MatchString(handle) {
-			return ""
-		}
-		return lower
-	case strings.HasPrefix(lower, "youtube_"):
-		idx := strings.IndexByte(channelID, '_')
-		if idx < 0 || idx+1 >= len(channelID) {
-			return ""
-		}
-		return "youtube_" + channelID[idx+1:]
-	default:
-		return channelID
-	}
-}
-
-func trimChannelIDPrefix(channelID string) string {
-	if idx := strings.IndexByte(channelID, '_'); idx >= 0 && idx+1 < len(channelID) {
-		return channelID[idx+1:]
-	}
-	return channelID
 }
 
 // KickIngest sends a non-blocking signal to trigger an immediate ingest cycle.

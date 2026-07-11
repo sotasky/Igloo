@@ -786,8 +786,7 @@ export async function openBookmarkMenu(anchorEl, root, opts) {
         body: JSON.stringify(bookmarkBody)
       }).then(function (result) {
         if (!result || !result.success) { revert(); return false }
-        if (result.sync_version && window.SyncPoller) window.SyncPoller.advance(result.sync_version)
-        return true
+		return true
       }).catch(function () { revert(); return false })
     }
 

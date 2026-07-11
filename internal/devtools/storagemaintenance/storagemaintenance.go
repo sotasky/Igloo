@@ -5,12 +5,12 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"sort"
 	"strings"
 	"time"
 
 	"github.com/screwys/igloo/internal/config"
 	"github.com/screwys/igloo/internal/db"
+	"github.com/screwys/igloo/internal/storage"
 )
 
 type options struct {
@@ -21,6 +21,7 @@ type options struct {
 	JSON           bool
 	DBPath         string
 	DataDir        string
+	MediaDir       string
 }
 
 type report struct {
@@ -28,6 +29,7 @@ type report struct {
 	Action     string `json:"action"`
 	Database   string `json:"database"`
 	DataDir    string `json:"data_dir"`
+	MediaDir   string `json:"media_dir"`
 	DurationMs int64  `json:"duration_ms"`
 	Result     any    `json:"result"`
 }
@@ -38,26 +40,24 @@ func parseOptions(args []string) (options, error) {
 	}
 	fs := flag.NewFlagSet("storage-maintenance", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	fs.StringVar(&opts.Action, "action", "", "maintenance action: x-dedupe, x-retention, or asset-file-state")
-	fs.IntVar(&opts.Limit, "limit", opts.Limit, "maximum duplicate groups, X sources, or assets to inspect; 0 means unlimited")
+	fs.StringVar(&opts.Action, "action", "", "maintenance action: x-retention")
+	fs.IntVar(&opts.Limit, "limit", opts.Limit, "maximum X sources to inspect; 0 means unlimited")
 	fs.IntVar(&opts.RetentionLimit, "retention-limit", 0, "override X media rows kept per followed source; 0 uses each channel setting")
 	fs.BoolVar(&opts.Apply, "apply", false, "write DB changes and remove unreferenced files; without this flag the command only reports")
 	fs.BoolVar(&opts.JSON, "json", false, "print JSON output")
 	fs.StringVar(&opts.DBPath, "db", "", "database path; defaults to configured Igloo database")
 	fs.StringVar(&opts.DataDir, "data-dir", "", "data directory; defaults to configured Igloo data dir")
+	fs.StringVar(&opts.MediaDir, "media-dir", "", "media directory; defaults to configured Igloo media dir")
 	if err := fs.Parse(args); err != nil {
 		return options{}, err
 	}
 	opts.Action = strings.TrimSpace(opts.Action)
 	switch opts.Action {
-	case "x-dedupe", "x-retention", "asset-file-state", "asset-state":
+	case "x-retention":
 	case "":
 		return options{}, fmt.Errorf("action is required")
 	default:
 		return options{}, fmt.Errorf("unknown action %q", opts.Action)
-	}
-	if opts.Action == "asset-state" {
-		opts.Action = "asset-file-state"
 	}
 	if opts.Limit < 0 {
 		return options{}, fmt.Errorf("limit must be >= 0")
@@ -80,20 +80,30 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		_, _ = fmt.Fprintf(stderr, "storage maintenance: invalid configuration: %v\n", cfg.ConfigError)
 		return 1
 	}
+	layout := cfg.Storage
+	if strings.TrimSpace(opts.DataDir) != "" || strings.TrimSpace(opts.MediaDir) != "" {
+		stateRoot := strings.TrimSpace(opts.DataDir)
+		if stateRoot == "" {
+			stateRoot = cfg.Storage.StateRoot()
+		}
+		mediaRoot := strings.TrimSpace(opts.MediaDir)
+		var layoutErr error
+		layout, layoutErr = storage.New(stateRoot, mediaRoot)
+		if layoutErr != nil {
+			_, _ = fmt.Fprintf(stderr, "storage maintenance: storage layout: %v\n", layoutErr)
+			return 1
+		}
+	}
 	dbPath := strings.TrimSpace(opts.DBPath)
 	if dbPath == "" {
-		dbPath = cfg.DatabasePath
-	}
-	dataDir := strings.TrimSpace(opts.DataDir)
-	if dataDir == "" {
-		dataDir = cfg.DataDir
+		dbPath = layout.DatabasePath()
 	}
 
 	var store *db.DB
 	if opts.Apply {
-		store, err = db.Open(dbPath, dataDir)
+		store, err = db.OpenLayoutPath(dbPath, layout)
 	} else {
-		store, err = db.OpenReadOnly(dbPath, dataDir)
+		store, err = db.OpenReadOnlyLayout(dbPath, layout)
 	}
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "storage maintenance: open db: %v\n", err)
@@ -107,24 +117,12 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	nowMs := time.Now().UnixMilli()
 	var result any
 	switch opts.Action {
-	case "x-dedupe":
-		result, err = store.DedupeXMediaBySourceURL(db.XMediaDedupeOptions{
-			NowMs:  nowMs,
-			Limit:  opts.Limit,
-			DryRun: !opts.Apply,
-		})
 	case "x-retention":
 		result, err = store.PruneXMediaRetention(db.XMediaRetentionOptions{
 			NowMs:          nowMs,
 			Limit:          opts.Limit,
 			RetentionLimit: opts.RetentionLimit,
 			DryRun:         !opts.Apply,
-		})
-	case "asset-file-state":
-		result, err = store.MaintainReadyAssetFileStates(db.AssetFileStateMaintenanceOptions{
-			NowMs:  nowMs,
-			Limit:  opts.Limit,
-			DryRun: !opts.Apply,
 		})
 	}
 	if err != nil {
@@ -140,7 +138,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		Mode:       mode,
 		Action:     opts.Action,
 		Database:   dbPath,
-		DataDir:    dataDir,
+		DataDir:    layout.StateRoot(),
+		MediaDir:   layout.MediaRoot(),
 		DurationMs: time.Since(started).Milliseconds(),
 		Result:     result,
 	}
@@ -163,26 +162,15 @@ func formatText(r report) string {
 	fmt.Fprintf(&b, "action=%s\n", r.Action)
 	fmt.Fprintf(&b, "database=%s\n", r.Database)
 	fmt.Fprintf(&b, "data_dir=%s\n", r.DataDir)
+	fmt.Fprintf(&b, "media_dir=%s\n", r.MediaDir)
 	switch result := r.Result.(type) {
-	case db.XMediaDedupeResult:
-		formatXMediaDedupe(&b, result)
 	case db.XMediaRetentionResult:
 		formatXMediaRetention(&b, result)
-	case db.AssetFileStateMaintenanceResult:
-		formatAssetFileState(&b, result)
 	default:
 		fmt.Fprintf(&b, "result=%v\n", result)
 	}
 	fmt.Fprintf(&b, "duration_ms=%d\n", r.DurationMs)
 	return b.String()
-}
-
-func formatXMediaDedupe(b *strings.Builder, result db.XMediaDedupeResult) {
-	fmt.Fprintf(b, "limit=%d limit_reached=%t\n", result.Limit, result.LimitReached)
-	fmt.Fprintf(b, "groups=%d rows=%d rows_rewritten=%d asset_rows_updated=%d groups_without_live_file=%d\n",
-		result.Groups, result.Rows, result.RowsRewritten, result.AssetRowsUpdated, result.GroupsWithoutLiveFile)
-	fmt.Fprintf(b, "duplicate_paths=%d duplicate_bytes=%d\n", result.DuplicatePaths, result.DuplicateBytes)
-	formatRemoval(b, result.FileRemoval)
 }
 
 func formatXMediaRetention(b *strings.Builder, result db.XMediaRetentionResult) {
@@ -193,36 +181,8 @@ func formatXMediaRetention(b *strings.Builder, result db.XMediaRetentionResult) 
 	fmt.Fprintf(b, "limit=%d limit_reached=%t retention_limit=%s\n", result.Limit, result.LimitReached, limit)
 	fmt.Fprintf(b, "sources_scanned=%d sources_over_limit=%d protected_items=%d kept_items=%d pruned_items=%d\n",
 		result.SourcesScanned, result.SourcesOverLimit, result.ProtectedItems, result.KeptItems, result.PrunedItems)
-	fmt.Fprintf(b, "media_rows_deleted=%d asset_rows_deleted=%d jobs_marked_pruned=%d candidate_file_bytes=%d\n",
-		result.MediaRowsDeleted, result.AssetRowsDeleted, result.JobsMarkedPruned, result.CandidateFileBytes)
+	fmt.Fprintf(b, "assets_pruned=%d candidate_file_bytes=%d\n", result.AssetsPruned, result.CandidateFileBytes)
 	formatRemoval(b, result.FileRemoval)
-}
-
-func formatAssetFileState(b *strings.Builder, result db.AssetFileStateMaintenanceResult) {
-	fmt.Fprintf(b, "limit=%d limit_reached=%t\n", result.Limit, result.LimitReached)
-	fmt.Fprintf(b, "checked=%d missing=%d size_changed=%d updated=%d\n",
-		result.Checked, result.Missing, result.SizeChanged, result.Updated)
-	if len(result.ByKind) == 0 {
-		return
-	}
-	b.WriteString("by_kind:\n")
-	kinds := make([]string, 0, len(result.ByKind))
-	for kind := range result.ByKind {
-		kinds = append(kinds, kind)
-	}
-	sort.Strings(kinds)
-	for _, kind := range kinds {
-		kindResult := result.ByKind[kind]
-		fmt.Fprintf(b, "  %s: checked=%d missing=%d size_changed=%d updated=%d missing_bytes=%d previous_bytes=%d actual_bytes=%d\n",
-			kind,
-			kindResult.Checked,
-			kindResult.Missing,
-			kindResult.SizeChanged,
-			kindResult.Updated,
-			kindResult.MissingBytes,
-			kindResult.PreviousBytes,
-			kindResult.ActualBytes)
-	}
 }
 
 func formatRemoval(b *strings.Builder, result db.DataFileRemovalResult) {

@@ -78,9 +78,8 @@ func TestFetchAndProcess_WritesThumbFromTimestamp(t *testing.T) {
 	if got.CasualTitle == nil || *got.CasualTitle != "Casual Title" {
 		t.Errorf("CasualTitle = %v, want 'Casual Title'", got.CasualTitle)
 	}
-	wantThumb := filepath.Join(dir, "vid1.jpg")
-	if got.ThumbPath == nil || *got.ThumbPath != wantThumb {
-		t.Errorf("ThumbPath = %v, want %q", got.ThumbPath, wantThumb)
+	if got.ThumbPath == nil || *got.ThumbPath != ext.gotOut {
+		t.Errorf("ThumbPath = %v, extractor output = %q", got.ThumbPath, ext.gotOut)
 	}
 	if !ext.called {
 		t.Fatal("extractor was not called")
@@ -88,8 +87,8 @@ func TestFetchAndProcess_WritesThumbFromTimestamp(t *testing.T) {
 	if ext.gotTs != 12.5 {
 		t.Errorf("extractor timestamp = %v, want 12.5", ext.gotTs)
 	}
-	if !strings.HasSuffix(ext.gotOut, "vid1.jpg") {
-		t.Errorf("extractor outPath = %q, want suffix 'vid1.jpg'", ext.gotOut)
+	if filepath.Dir(ext.gotOut) != dir || !strings.HasPrefix(filepath.Base(ext.gotOut), "dearrow-") || !strings.HasSuffix(ext.gotOut, ".jpg") {
+		t.Errorf("extractor outPath = %q, want unique jpg under %q", ext.gotOut, dir)
 	}
 }
 
@@ -116,7 +115,7 @@ func TestFetchAndProcess_NoThumbTimestamp_NoExtraction(t *testing.T) {
 	}
 }
 
-func TestFetchAndProcess_NoVideoPath_NoExtraction(t *testing.T) {
+func TestFetchAndProcess_NoVideoPathIsExtractionFailure(t *testing.T) {
 	dir := t.TempDir()
 	ext := &stubExtractor{}
 	client := &stubClient{res: Result{
@@ -126,8 +125,8 @@ func TestFetchAndProcess_NoVideoPath_NoExtraction(t *testing.T) {
 	f := newFetcher(t, client, ext, dir)
 
 	got, err := f.FetchAndProcess(context.Background(), "vid3", "")
-	if err != nil {
-		t.Fatalf("FetchAndProcess: %v", err)
+	if err == nil {
+		t.Fatal("FetchAndProcess succeeded without the requested video input")
 	}
 	if ext.called {
 		t.Error("extractor should not be called when videoPath is empty")
@@ -186,7 +185,7 @@ func TestFetchAndProcess_ExtractorErrorPreservesTitles(t *testing.T) {
 	}
 }
 
-func TestFetchAndProcess_MissingOutputFileDoesNotSetThumbPath(t *testing.T) {
+func TestFetchAndProcess_MissingOutputFileIsExtractionFailure(t *testing.T) {
 	dir := t.TempDir()
 	// Extractor succeeds but writes no bytes — file won't exist.
 	ext := &stubExtractor{}
@@ -202,8 +201,8 @@ func TestFetchAndProcess_MissingOutputFileDoesNotSetThumbPath(t *testing.T) {
 	}
 
 	got, err := f.FetchAndProcess(context.Background(), "vid6", "/videos/vid6.mp4")
-	if err != nil {
-		t.Fatalf("FetchAndProcess: %v", err)
+	if err == nil {
+		t.Fatal("FetchAndProcess succeeded without an output file")
 	}
 	if got.ThumbPath != nil {
 		t.Errorf("ThumbPath = %v, want nil when output file is missing", got.ThumbPath)
@@ -227,9 +226,8 @@ func TestFetchAndProcess_CreatesThumbDirIfMissing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FetchAndProcess: %v", err)
 	}
-	wantThumb := filepath.Join(nested, "vid7.jpg")
-	if got.ThumbPath == nil || *got.ThumbPath != wantThumb {
-		t.Errorf("ThumbPath = %v, want %q", got.ThumbPath, wantThumb)
+	if got.ThumbPath == nil || filepath.Dir(*got.ThumbPath) != nested || !strings.HasSuffix(*got.ThumbPath, ".jpg") {
+		t.Errorf("ThumbPath = %v, want unique jpg under %q", got.ThumbPath, nested)
 	}
 	if _, statErr := os.Stat(nested); statErr != nil {
 		t.Errorf("ThumbDir was not created: %v", statErr)

@@ -125,8 +125,7 @@ if (layout) {
       if (!clean || state.viewedIds.has(clean)) return
       state.viewedIds.add(clean)
       apiFetch('/api/shorts/watched/' + encodeURIComponent(clean), { method: 'POST' })
-        .then(function (data) {
-          if (data && data.sync_version && window.SyncPoller) window.SyncPoller.advance(data.sync_version)
+		.then(function () {
           refreshStorySurfaces(true)
         })
         .catch(function () {
@@ -191,11 +190,7 @@ if (layout) {
         apiFetch('/api/sync/moments-cursor', {
           method: 'POST',
           body: JSON.stringify(body)
-        }).then(function (data) {
-          if (data && data.sync_version && window.SyncPoller) {
-            window.SyncPoller.advance(data.sync_version)
-          }
-        }).catch(function () {})
+		}).catch(function () {})
       } catch (_) { }
     }
 
@@ -1635,32 +1630,5 @@ if (layout) {
     }
 
     init()
-
-    // ── Unified sync: moments cursor from another device ──
-    if (window.SyncPoller) {
-      window.SyncPoller.on('moment_view', function () {
-        scheduleStorySurfaceRefresh(true)
-      })
-      window.SyncPoller.on('moments_cursor', function (videoId, value) {
-        if (!state.persistLastViewed) return
-        value = value || {}
-        videoId = String(videoId || value.video_id || '').trim()
-        if (!videoId) return
-        var scope = String(value.scope || 'all').trim().toLowerCase()
-        if (scope !== 'all' && scope !== 'following') return
-        if (scope !== currentTab) return
-        if (state.overlayOpen) return
-        var local = readStoredShortResume()
-        var localTs = Number((local && local.ts) || 0)
-        var remoteTs = Number(value.updated_at_ms || 0)
-        if (local && local.videoId === videoId) return
-        if (localTs > 0 && remoteTs <= localTs) return
-        if (remoteTs <= 0) remoteTs = Date.now()
-        var remote = { videoId: videoId, page: 1, index: 0, ts: remoteTs, scope: currentTab }
-        var sortAt = Math.max(0, parseInt(value.sort_at_ms, 10) || 0)
-        if (sortAt > 0) remote.sortAtMs = sortAt
-        writeStoredShortResume(remote)
-      })
-    }
-  })()
+	})()
 }

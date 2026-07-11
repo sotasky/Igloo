@@ -6,7 +6,6 @@ import androidx.compose.ui.Modifier
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavController
 import com.screwy.igloo.R
-import com.screwy.igloo.feed.buildFeedMediaOpenSnapshot
 import com.screwy.igloo.feed.buildProfileOpenSnapshot
 import com.screwy.igloo.net.ServerBaseUrlProvider
 import com.screwy.igloo.ui.component.NativeFeedSurface
@@ -29,7 +28,7 @@ fun LikedRoute(
     val uiState by vm.uiState.collectAsStateWithLifecycle()
     val pendingBookmark by vm.pendingBookmark.collectAsStateWithLifecycle()
     val categories by vm.bookmarkCategories.collectAsStateWithLifecycle()
-    val mutedHandles by vm.mutedHandles.collectAsStateWithLifecycle()
+    val mutedChannelIds by vm.mutedChannelIds.collectAsStateWithLifecycle()
     val mediaModels by vm.mediaModels.collectAsStateWithLifecycle()
     val baseUrlProvider: ServerBaseUrlProvider = koinInject()
     val baseUrl = baseUrlProvider.baseUrl()
@@ -41,7 +40,7 @@ fun LikedRoute(
         isRefreshing = isRefreshing,
         pendingBookmark = pendingBookmark,
         bookmarkCategories = categories,
-        mutedHandles = mutedHandles,
+        mutedChannelIds = mutedChannelIds,
         mediaModels = mediaModels,
         onRefresh = vm::refresh,
         onChannelClick = { channelId ->
@@ -52,7 +51,7 @@ fun LikedRoute(
                 channelId = post.author.channelId,
                 source = IglooNavigationSource.Liked,
                 originItemId = post.row.item.tweetId,
-                snapshot = buildProfileOpenSnapshot(post, baseUrl),
+				snapshot = buildProfileOpenSnapshot(post),
             )
         },
         onMentionClick = vm::resolveMentionAndNavigate,
@@ -61,20 +60,12 @@ fun LikedRoute(
         onFollowToggle = vm::toggleFollow,
         onStarToggle = vm::toggleStar,
         onMuteToggle = vm::toggleMute,
-        onMediaOpen = { row, mediaIndex, visibleMediaModel ->
-            val snapshot = buildFeedMediaOpenSnapshot(
-                row = row,
-                mediaIndex = mediaIndex,
-                mediaModels = mediaModels,
-                visibleMediaModel = visibleMediaModel,
-            )
+        onMediaOpen = { row, mediaIndex, _ ->
             navigator.openMedia(
                 ownerKind = "tweet",
                 ownerId = row.item.tweetId,
                 index = mediaIndex,
                 source = IglooNavigationSource.Liked,
-                posterUri = snapshot.posterUri,
-                snapshot = snapshot,
             )
         },
         onSeenReached = vm::markSeen,
@@ -82,7 +73,7 @@ fun LikedRoute(
         onRemoveBookmark = vm::removePendingBookmark,
         onDismissBookmarkSheet = vm::dismissBookmarkSheet,
         onCreateCategory = vm::createCategory,
-        onWarmMediaRows = vm::warmMediaModels,
+        onMediaRowsChanged = vm::setMediaModelRows,
         onQuoteOpen = { tweetId ->
             navigator.openThread(tweetId, IglooNavigationSource.Liked)
         },

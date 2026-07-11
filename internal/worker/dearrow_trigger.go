@@ -3,12 +3,12 @@ package worker
 import (
 	"context"
 	"log"
-	"path/filepath"
+	"os"
 	"time"
 )
 
 // triggerDearrowFetch runs a DeArrow check for videoID in the background.
-// videoRelPath is the video's file_path (relative to DataDir); it is used
+// videoRelPath is the video's logical storage key; it is used
 // for ffmpeg frame extraction when DeArrow returns a thumbnail timestamp.
 //
 // Swallowed errors are logged. On complete failure (network error, all nil)
@@ -22,9 +22,14 @@ func (m *Manager) triggerDearrowFetch(ctx context.Context, videoID, videoRelPath
 		return
 	}
 
-	absPath := videoRelPath
-	if absPath != "" && !filepath.IsAbs(absPath) {
-		absPath = filepath.Join(m.cfg.DataDir, videoRelPath)
+	absPath := ""
+	if videoRelPath != "" {
+		var pathErr error
+		absPath, pathErr = m.cfg.Storage.Path(videoRelPath)
+		if pathErr != nil {
+			log.Printf("[dearrow] storage path %s: %v", videoID, pathErr)
+			return
+		}
 	}
 
 	res, err := m.dearrowFetcher.FetchAndProcess(ctx, videoID, absPath)
@@ -38,22 +43,31 @@ func (m *Manager) triggerDearrowFetch(ctx context.Context, videoID, videoRelPath
 			}
 			return
 		}
-		// Fall through: persist whatever we got.
+		if saveErr := m.db.SetDearrowTitles(videoID, res.Title, res.CasualTitle, nowMs); saveErr != nil {
+			log.Printf("[dearrow] save partial %s: %v", videoID, saveErr)
+		}
+		return
 	}
 
 	var thumbRel *string
 	if res.ThumbPath != nil {
-		rel, rErr := filepath.Rel(m.cfg.DataDir, *res.ThumbPath)
+		rel, rErr := m.cfg.Storage.Key(*res.ThumbPath)
 		if rErr == nil {
 			thumbRel = &rel
 		} else {
-			// Path outside DataDir — store the absolute path.
-			abs := *res.ThumbPath
-			thumbRel = &abs
+			log.Printf("[dearrow] reject thumbnail path %s: %v", videoID, rErr)
+			_ = os.Remove(*res.ThumbPath)
+			if saveErr := m.db.SetDearrowTitles(videoID, res.Title, res.CasualTitle, nowMs); saveErr != nil {
+				log.Printf("[dearrow] save partial %s: %v", videoID, saveErr)
+			}
+			return
 		}
 	}
 	if sErr := m.db.SetDearrowData(videoID, res.Title, res.CasualTitle, thumbRel, nowMs); sErr != nil {
 		log.Printf("[dearrow] save %s: %v", videoID, sErr)
+		if res.ThumbPath != nil {
+			_ = os.Remove(*res.ThumbPath)
+		}
 	}
 }
 

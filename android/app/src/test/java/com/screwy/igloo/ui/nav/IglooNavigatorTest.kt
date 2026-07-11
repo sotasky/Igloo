@@ -1,6 +1,5 @@
 package com.screwy.igloo.ui.nav
 
-import com.screwy.igloo.media.MediaUri
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -36,9 +35,7 @@ class IglooNavigatorTest {
             handle = "alice",
             platform = "twitter",
             isFollowed = true,
-            isStarred = false,
-            avatarUri = MediaUri.Remote("https://igloo.example/api/media/avatar/twitter_alice"),
-            bannerUri = MediaUri.Remote("https://igloo.example/api/media/banner/twitter_alice"),
+			isStarred = false,
         )
         val target = IglooNavigation.targetFor(
             IglooNavigationIntent.OpenChannel(
@@ -54,34 +51,26 @@ class IglooNavigatorTest {
     }
 
     @Test
-    fun targetForOpenVideoBuildsPlayerRouteAndOptionalTransition() {
-        val poster = MediaUri.Remote("https://igloo.example/thumb.jpg")
+    fun targetForOpenVideoBuildsPlayerRoute() {
         val target = IglooNavigation.targetFor(
             IglooNavigationIntent.OpenVideo(
                 videoId = " video/id ",
                 source = IglooNavigationSource.Videos,
-                posterUri = poster,
             ),
         )
 
         assertEquals("player/video%2Fid", target?.route)
         assertEquals("video/id", target?.videoId)
-        assertEquals(
-            FullscreenMediaTransition(mediaId = "video/id", posterUri = poster),
-            target?.fullscreenTransition,
-        )
     }
 
     @Test
-    fun targetForOpenShortsBuildsMomentsRouteAndTransition() {
-        val poster = MediaUri.Remote("https://igloo.example/poster.jpg")
+    fun targetForOpenShortsBuildsMomentsRoute() {
         val target = IglooNavigation.targetFor(
             IglooNavigationIntent.OpenShorts(
                 playlistType = " channel ",
                 playlistId = " tiktok_creator ",
                 videoId = " video/id ",
                 source = IglooNavigationSource.Channel,
-                posterUri = poster,
             ),
         )
 
@@ -89,22 +78,16 @@ class IglooNavigatorTest {
         assertEquals("channel", target?.playlistType)
         assertEquals("tiktok_creator", target?.playlistId)
         assertEquals("video/id", target?.videoId)
-        assertEquals(
-            FullscreenMediaTransition(mediaId = "video/id", posterUri = poster),
-            target?.fullscreenTransition,
-        )
     }
 
     @Test
-    fun targetForOpenMediaBuildsFullscreenRouteAndTransition() {
-        val poster = MediaUri.Local(java.io.File("/tmp/poster.jpg"))
+    fun targetForOpenMediaBuildsFullscreenRoute() {
         val target = IglooNavigation.targetFor(
             IglooNavigationIntent.OpenMedia(
                 ownerKind = " tweet ",
                 ownerId = " status/123 ",
                 index = 2,
                 source = IglooNavigationSource.Feed,
-                posterUri = poster,
             ),
         )
 
@@ -112,10 +95,6 @@ class IglooNavigatorTest {
         assertEquals("tweet", target?.mediaOwnerKind)
         assertEquals("status/123", target?.mediaOwnerId)
         assertEquals(2, target?.mediaIndex)
-        assertEquals(
-            FullscreenMediaTransition(mediaId = "status/123", posterUri = poster),
-            target?.fullscreenTransition,
-        )
     }
 
     @Test
@@ -129,7 +108,6 @@ class IglooNavigatorTest {
 
         assertEquals("tweet/status%2F123", target?.route)
         assertEquals("status/123", target?.tweetId)
-        assertNull(target?.fullscreenTransition)
     }
 
     @Test

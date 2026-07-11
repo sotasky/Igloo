@@ -9,35 +9,29 @@ type AffinityRow struct {
 	EventCount  int
 }
 
-// GetAccountAffinityScores reads from feed_account_affinity + feed_share_account_affinity.
-// Returns combined scores per handle (state scores from likes/bookmarks + decay scores from shares).
-func (db *DB) GetAccountAffinityScores(username string, handles []string) (map[string]AffinityRow, error) {
+// GetAccountAffinityScores reads share-based account affinity.
+func (db *DB) GetAccountAffinityScores(handles []string) (map[string]AffinityRow, error) {
 	if len(handles) == 0 {
 		return nil, nil
 	}
 	result := make(map[string]AffinityRow)
-	db.queryAffinityTable("feed_account_affinity", "handle", username, handles, result)
-	db.queryAffinityTable("feed_share_account_affinity", "handle", username, handles, result)
+	db.queryAffinityTable("feed_share_account_affinity", "handle", handles, result)
 	return result, nil
 }
 
-// GetTokenAffinityScores reads from feed_token_affinity + feed_share_token_affinity.
-func (db *DB) GetTokenAffinityScores(username string, tokens []string) (map[string]AffinityRow, error) {
+// GetTokenAffinityScores reads share-based token affinity.
+func (db *DB) GetTokenAffinityScores(tokens []string) (map[string]AffinityRow, error) {
 	if len(tokens) == 0 {
 		return nil, nil
 	}
 	result := make(map[string]AffinityRow)
-	db.queryAffinityTable("feed_token_affinity", "token", username, tokens, result)
-	db.queryAffinityTable("feed_share_token_affinity", "token", username, tokens, result)
+	db.queryAffinityTable("feed_share_token_affinity", "token", tokens, result)
 	return result, nil
 }
 
-// queryAffinityTable is a helper that queries one of the 4 affinity tables
-// and accumulates scores into the result map.
-func (db *DB) queryAffinityTable(table, keyCol, username string, keys []string, result map[string]AffinityRow) {
+func (db *DB) queryAffinityTable(table, keyCol string, keys []string, result map[string]AffinityRow) {
 	placeholders := make([]byte, 0, len(keys)*2)
-	args := make([]any, 0, len(keys)+1)
-	args = append(args, username)
+	args := make([]any, 0, len(keys))
 	for i, k := range keys {
 		if i > 0 {
 			placeholders = append(placeholders, ',')
@@ -47,7 +41,7 @@ func (db *DB) queryAffinityTable(table, keyCol, username string, keys []string, 
 	}
 
 	query := "SELECT " + keyCol + ", COALESCE(score,0), COALESCE(last_event_at_ms,0), COALESCE(event_count,0) " +
-		"FROM " + table + " WHERE username = ? AND " + keyCol + " IN (" + string(placeholders) + ")"
+		"FROM " + table + " WHERE " + keyCol + " IN (" + string(placeholders) + ")"
 
 	rows, err := db.conn.Query(query, args...)
 	if err != nil {
@@ -74,63 +68,62 @@ func (db *DB) queryAffinityTable(table, keyCol, username string, keys []string, 
 }
 
 // UpsertShareAccountAffinity updates the share-based account affinity score.
-func (db *DB) UpsertShareAccountAffinity(username, handle string, scoreDelta float64, eventAtMs int64) error {
+func (db *DB) UpsertShareAccountAffinity(handle string, scoreDelta float64, eventAtMs int64) error {
 	return db.WithWrite(func(tx *sql.Tx) error {
 		_, err := tx.Exec(`
-			INSERT INTO feed_share_account_affinity (username, handle, score, last_event_at_ms, event_count)
-			VALUES (?, ?, ?, ?, 1)
-			ON CONFLICT(username, handle) DO UPDATE SET
+			INSERT INTO feed_share_account_affinity (handle, score, last_event_at_ms, event_count)
+			VALUES (?, ?, ?, 1)
+			ON CONFLICT(handle) DO UPDATE SET
 				score = feed_share_account_affinity.score + excluded.score,
 				last_event_at_ms = MAX(feed_share_account_affinity.last_event_at_ms, excluded.last_event_at_ms),
 				event_count = feed_share_account_affinity.event_count + 1
-		`, username, handle, scoreDelta, eventAtMs)
+		`, handle, scoreDelta, eventAtMs)
 		return err
 	})
 }
 
 // UpsertShareTokenAffinity updates the share-based token affinity score.
-func (db *DB) UpsertShareTokenAffinity(username, token string, scoreDelta float64, eventAtMs int64) error {
+func (db *DB) UpsertShareTokenAffinity(token string, scoreDelta float64, eventAtMs int64) error {
 	return db.WithWrite(func(tx *sql.Tx) error {
 		_, err := tx.Exec(`
-			INSERT INTO feed_share_token_affinity (username, token, score, last_event_at_ms, event_count)
-			VALUES (?, ?, ?, ?, 1)
-			ON CONFLICT(username, token) DO UPDATE SET
+			INSERT INTO feed_share_token_affinity (token, score, last_event_at_ms, event_count)
+			VALUES (?, ?, ?, 1)
+			ON CONFLICT(token) DO UPDATE SET
 				score = feed_share_token_affinity.score + excluded.score,
 				last_event_at_ms = MAX(feed_share_token_affinity.last_event_at_ms, excluded.last_event_at_ms),
 				event_count = feed_share_token_affinity.event_count + 1
-		`, username, token, scoreDelta, eventAtMs)
+		`, token, scoreDelta, eventAtMs)
 		return err
 	})
 }
 
-// PruneShareTokenAffinity keeps only the top N token affinities for a user.
-func (db *DB) PruneShareTokenAffinity(username string, keepTop int) error {
+// PruneShareTokenAffinity keeps only the top N token affinities.
+func (db *DB) PruneShareTokenAffinity(keepTop int) error {
 	return db.WithWrite(func(tx *sql.Tx) error {
 		_, err := tx.Exec(`
 			DELETE FROM feed_share_token_affinity
-			WHERE username = ? AND token NOT IN (
+			WHERE token NOT IN (
 				SELECT token FROM feed_share_token_affinity
-				WHERE username = ?
 				ORDER BY score DESC
 				LIMIT ?
 			)
-		`, username, username, keepTop)
+		`, keepTop)
 		return err
 	})
 }
 
 // BuildStateAccountScores builds retroactive account interest scores from current likes + bookmarks.
-func (db *DB) BuildStateAccountScores(username string) (map[string]float64, error) {
+func (db *DB) BuildStateAccountScores() (map[string]float64, error) {
 	accountScores := make(map[string]float64)
 
 	rows, err := db.conn.Query(`
-		SELECT LOWER(COALESCE(fl.author_handle, fl.source_handle)), COUNT(*)
+		SELECT LOWER(COALESCE(fi.author_handle, fi.source_handle)), COUNT(*)
 		FROM feed_likes fl
-		WHERE fl.username = ?
-		  AND COALESCE(fl.author_handle, fl.source_handle) IS NOT NULL
-		  AND COALESCE(fl.author_handle, fl.source_handle) <> ''
-		GROUP BY LOWER(COALESCE(fl.author_handle, fl.source_handle))
-	`, username)
+		JOIN feed_items_resolved fi ON fi.tweet_id = fl.tweet_id
+		WHERE COALESCE(fi.author_handle, fi.source_handle) IS NOT NULL
+		  AND COALESCE(fi.author_handle, fi.source_handle) <> ''
+		GROUP BY LOWER(COALESCE(fi.author_handle, fi.source_handle))
+	`)
 	if err == nil {
 		defer func() {
 			_ = rows.Close()
@@ -146,12 +139,11 @@ func (db *DB) BuildStateAccountScores(username string) (map[string]float64, erro
 	bRows, err := db.conn.Query(`
 		SELECT LOWER(COALESCE(fi.source_handle, fi.author_handle)), COUNT(*)
 		FROM bookmarks b
-		JOIN feed_items fi ON b.video_id = fi.tweet_id
-		WHERE b.user_id = ?
-		  AND COALESCE(fi.source_handle, fi.author_handle) IS NOT NULL
+		JOIN feed_items_resolved fi ON b.video_id = fi.tweet_id
+		WHERE COALESCE(fi.source_handle, fi.author_handle) IS NOT NULL
 		  AND COALESCE(fi.source_handle, fi.author_handle) <> ''
 		GROUP BY LOWER(COALESCE(fi.source_handle, fi.author_handle))
-	`, username)
+	`)
 	if err == nil {
 		defer func() {
 			_ = bRows.Close()

@@ -1,9 +1,11 @@
 package fetchprofile
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
@@ -32,7 +34,7 @@ func FetchTikTok(ctx context.Context, handle string) (*Profile, error) {
 		}
 		return nil, fmt.Errorf("gallery-dl: %w", result.Err)
 	}
-	return parseTikTokAvatar(h, out)
+	return parseTikTokAvatar(h, result.Stdout)
 }
 
 func isTikTokNotFound(stderr []byte) bool {
@@ -45,23 +47,29 @@ func isTikTokNotFound(stderr []byte) bool {
 // [code, url-or-dict, metadata]; the user-detail we want is the dict entry
 // where "type" == "avatar".
 func parseTikTokAvatar(handle string, out []byte) (*Profile, error) {
-	var raw []any
-	if err := json.Unmarshal(out, &raw); err != nil {
-		return nil, fmt.Errorf("decode: %w", err)
-	}
 	var user map[string]any
-	for _, item := range raw {
-		arr, ok := item.([]any)
-		if !ok || len(arr) < 2 {
-			continue
+	decoder := json.NewDecoder(bytes.NewReader(out))
+	for user == nil {
+		var raw []any
+		if err := decoder.Decode(&raw); err != nil {
+			if err == io.EOF {
+				break
+			}
+			return nil, fmt.Errorf("decode: %w", err)
 		}
-		d, ok := arr[1].(map[string]any)
-		if !ok {
-			continue
-		}
-		if t, _ := d["type"].(string); t == "avatar" {
-			user = d
-			break
+		for _, item := range raw {
+			arr, ok := item.([]any)
+			if !ok || len(arr) < 2 {
+				continue
+			}
+			d, ok := arr[1].(map[string]any)
+			if !ok {
+				continue
+			}
+			if t, _ := d["type"].(string); t == "avatar" {
+				user = d
+				break
+			}
 		}
 	}
 	if user == nil {

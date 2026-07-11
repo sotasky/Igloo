@@ -41,19 +41,16 @@ func ScanWorkerManager(source string) []WorkerInfo {
 
 // workerDescriptions provides human-readable descriptions for known workers.
 var workerDescriptions = map[string]string{
-	"x_ingest":            "Fetches X posts via gallery-dl, stores in feed_items, creates feed_media_jobs",
-	"feed_media":          "Downloads images/videos/GIFs for feed items, stores in media_files",
-	"avatar_refresh":      "Fetches and caches channel avatars via unavatar.io and yt-dlp",
-	"scheduler":           "Periodic channel refresh scheduler — queues channels for download check",
-	"download_pool":       "Processes download_queue — downloads videos via yt-dlp, creates preview sprites",
-	"preview":             "Generates VTT preview sprite sheets for downloaded videos",
-	"search_index":        "Builds FTS5 full-text search index on startup",
-	"feed_bootstrap":      "Triggers immediate ingest if feed is sparse (< threshold items)",
-	"ranked_queue_warmup": "Pre-scores feed items for ranking on startup",
-	"preview_backfill":    "Generates missing preview sprites for existing videos",
-	"profile_refresh":     "Refreshes channel profile metadata (names, descriptions, follower counts)",
-	"feed_scoring":        "Continuously re-scores feed items for ranking based on engagement and freshness",
-	"thumbnail_backfill":  "Generates missing thumbnails for existing feed items",
+	"x_ingest":               "Fetches X posts, stores feed items, and declares canonical content assets",
+	"x_status_enrichment":    "Completes missing stored X status metadata without owning media readiness",
+	"feed_media":             "Claims and downloads canonical X content assets",
+	"profile_refresh":        "Processes durable profile jobs and atomically publishes identity assets",
+	"dearrow":                "Fetches DeArrow metadata and publishes canonical thumbnails",
+	"scheduler":              "Queues subscribed channels for refresh",
+	"download_pool":          "Downloads queued videos and atomically publishes their canonical assets",
+	"preview":                "Generates preview assets for canonical video streams",
+	"channel_metadata_prune": "Prunes stale unreferenced channel metadata and its canonical assets",
+	"feed_bootstrap":         "Triggers immediate ingest when the feed is sparse",
 }
 
 // FormatWorkerMap returns a formatted worker map string.

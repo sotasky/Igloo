@@ -42,9 +42,6 @@ fun VideosRoute(
                 onVideoClick = { videoId ->
                     navigator.openVideo(videoId, IglooNavigationSource.Videos)
                 },
-                onVideoClickWithPoster = { videoId, posterUri ->
-                    navigator.openVideo(videoId, IglooNavigationSource.Videos, posterUri)
-                },
                 onChannelClick = { channelId ->
                     navigator.openChannel(channelId, IglooNavigationSource.Videos)
                 },

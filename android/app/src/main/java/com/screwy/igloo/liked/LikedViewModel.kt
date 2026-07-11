@@ -11,8 +11,8 @@ import com.screwy.igloo.feed.FeedMediaModelStore
 import com.screwy.igloo.outbox.OutboxKind
 import com.screwy.igloo.outbox.OutboxWriter
 import com.screwy.igloo.net.ServerBaseUrlProvider
-import com.screwy.igloo.sync.SchedulerActions
-import com.screwy.igloo.sync.SyncStream
+import com.screwy.igloo.net.Reachability
+import com.screwy.igloo.sync.SyncCoordinator
 import com.screwy.igloo.ui.UiEffect
 import com.screwy.igloo.ui.UiEffects
 import com.screwy.igloo.ui.UiState
@@ -43,9 +43,10 @@ import kotlinx.coroutines.launch
 class LikedViewModel(
     private val db: IglooDatabase,
     private val outboxWriter: OutboxWriter,
-    private val scheduler: SchedulerActions,
+    private val scheduler: SyncCoordinator,
     private val uiEffects: UiEffects,
     baseUrlProvider: ServerBaseUrlProvider,
+    reachability: Reachability,
 ) : ViewModel() {
 
     private val rowsRaw: StateFlow<List<FeedRow>?> = db.feedReadDao()
@@ -82,6 +83,7 @@ class LikedViewModel(
     private val mediaModelStore = FeedMediaModelStore(
         db = db,
         baseUrlProvider = baseUrlProvider,
+        reachability = reachability,
         scope = viewModelScope,
     )
     val mediaModels: StateFlow<Map<String, FeedMediaGridModel>> = mediaModelStore.mediaModels
@@ -98,14 +100,14 @@ class LikedViewModel(
             .map { entities -> entities.map { BookmarkCategoryDisplay(it.categoryId, it.name) } }
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), emptyList())
 
-    val mutedHandles: StateFlow<Set<String>> = db.mutedAccountDao().allFlow()
-        .map { rows -> rows.mapTo(linkedSetOf()) { it.handle.lowercase() } }
+    val mutedChannelIds: StateFlow<Set<String>> = db.mutedChannelDao().allFlow()
+        .map { rows -> rows.mapTo(linkedSetOf()) { it.channelId } }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), emptySet())
 
     fun refresh() {
         viewModelScope.launch {
             _isRefreshing.value = true
-            scheduler.triggerStream(SyncStream.Feed)
+            scheduler.triggerAll()
             // Same pragmatic handshake as FeedViewModel.refresh — hold briefly so the
             // spinner paints; Room re-emits when the delta lands.
             delay(1_000L)
@@ -134,10 +136,10 @@ class LikedViewModel(
         }
     }
 
-    fun toggleMute(handle: String, newValue: Boolean) {
+    fun toggleMute(channelId: String, newValue: Boolean) {
         val action = if (newValue) OutboxKind.Action.Set else OutboxKind.Action.Clear
         viewModelScope.launch {
-            outboxWriter.enqueue(OutboxKind.Mute(handle = handle, action = action))
+            outboxWriter.enqueue(OutboxKind.Mute(channelId = channelId, action = action))
         }
     }
 
@@ -162,7 +164,6 @@ class LikedViewModel(
         val target = _pendingBookmark.value ?: return
         _pendingBookmark.value = null
         viewModelScope.launch {
-            val prev = outboxWriter.capturePreviousBookmark(target.itemId)
             outboxWriter.enqueue(
                 OutboxKind.Bookmark(
                     videoId = target.itemId,
@@ -171,7 +172,6 @@ class LikedViewModel(
                     customTitle = payload.customTitle,
                     accountHandles = payload.accountHandles?.joinToString(","),
                     mediaIndices = payload.mediaIndices?.joinToString(","),
-                    prevRow = prev,
                 )
             )
         }
@@ -181,12 +181,10 @@ class LikedViewModel(
         val target = _pendingBookmark.value ?: return
         _pendingBookmark.value = null
         viewModelScope.launch {
-            val prev = outboxWriter.capturePreviousBookmark(target.itemId)
             outboxWriter.enqueue(
                 OutboxKind.Bookmark(
                     videoId = target.itemId,
                     action = OutboxKind.Action.Clear,
-                    prevRow = prev,
                 )
             )
         }
@@ -198,12 +196,12 @@ class LikedViewModel(
     ): BookmarkTarget =
         BookmarkTarget(
             itemId = row.item.tweetId,
-            authorHandle = row.item.authorHandle,
+            authorHandle = row.authorHandle.orEmpty(),
             mediaCount = feedMediaCount(row.item),
             currentBookmark = currentBookmark,
             defaultTitle = row.item.bodyText?.lineSequence()?.firstOrNull(),
-            sourceHandle = row.item.sourceHandle,
-            quoteAuthorHandle = row.item.quoteAuthorHandle,
+            sourceHandle = row.sourceHandle,
+            quoteAuthorHandle = row.quoteAuthorHandle,
             bodyText = row.item.bodyText,
             isRetweet = row.item.isRetweet,
         )
@@ -223,8 +221,8 @@ class LikedViewModel(
         }
     }
 
-    fun warmMediaModels(rows: List<FeedRow>) {
-        mediaModelStore.warmMediaModels(rows)
+    fun setMediaModelRows(rows: List<FeedRow>) {
+        mediaModelStore.setMediaModelRows(rows)
     }
 
     fun resolveMentionAndNavigate(handle: String) {

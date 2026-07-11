@@ -2,17 +2,37 @@ package db
 
 import (
 	"database/sql"
-	"encoding/json"
+	"fmt"
 	"strings"
 	"time"
 
 	"github.com/screwys/igloo/internal/model"
 )
 
+func feedItemSelectSQL(alias string) string {
+	return fmt.Sprintf(`%[1]s.tweet_id, COALESCE(%[1]s.source_handle,''), COALESCE(%[1]s.author_handle,''),
+		COALESCE(%[1]s.author_display_name,''), COALESCE(%[1]s.author_avatar_url,''),
+		COALESCE(%[1]s.body_text,''), COALESCE(%[1]s.lang,''),
+		COALESCE(%[1]s.is_retweet,0), COALESCE(%[1]s.retweeted_by_handle,''),
+		COALESCE(%[1]s.retweeted_by_display_name,''),
+		COALESCE(%[1]s.quote_tweet_id,''), COALESCE(%[1]s.quote_author_handle,''),
+		COALESCE(%[1]s.quote_author_display_name,''), COALESCE(%[1]s.quote_author_avatar_url,''),
+		COALESCE(%[1]s.quote_body_text,''), COALESCE(%[1]s.quote_lang,''),
+		COALESCE(%[1]s.quote_media_json,''), COALESCE(%[1]s.media_json,''),
+		COALESCE(%[1]s.canonical_url,''), COALESCE(%[1]s.reply_to_handle,''),
+		COALESCE(%[1]s.reply_to_status,''), COALESCE(%[1]s.is_reply,0), COALESCE(%[1]s.is_ghost,0),
+		%[1]s.quote_published_at,
+		COALESCE(%[1]s.views,0), COALESCE(%[1]s.likes,0), COALESCE(%[1]s.retweets,0),
+		%[1]s.published_at, %[1]s.fetched_at,
+		COALESCE(%[1]s.content_hash,''), COALESCE(%[1]s.canonical_tweet_id,''),
+		COALESCE(%[1]s.source_channel_id,''), COALESCE(%[1]s.channel_id,''),
+		COALESCE(%[1]s.quote_channel_id,''), COALESCE(%[1]s.reply_channel_id,''),
+		COALESCE(%[1]s.reposter_channel_id,'')`, alias)
+}
+
 // ListFeedItemsPage returns feed items with cursor-based keyset pagination.
-// When username is non-empty and cursor is nil (first page), seen items are
-// excluded so the ranking pool contains only unseen content.
-func (db *DB) ListFeedItemsPage(limit int, cursor *model.FeedCursor, username string) ([]model.FeedItem, error) {
+// When excludeSeen is true, the ranking pool contains only unseen content.
+func (db *DB) ListFeedItemsPage(limit int, cursor *model.FeedCursor, excludeSeen bool) ([]model.FeedItem, error) {
 	if limit <= 0 {
 		limit = 40
 	}
@@ -21,17 +41,17 @@ func (db *DB) ListFeedItemsPage(limit int, cursor *model.FeedCursor, username st
 	var args []any
 	where = append(where, feedPrimaryItemPredicate("feed_items"))
 
-	muted, _ := db.GetMutedAccounts()
+	muted, _ := db.GetMutedChannelIDs()
 	if len(muted) > 0 {
 		placeholders := strings.Repeat("?,", len(muted))
 		placeholders = placeholders[:len(placeholders)-1]
-		where = append(where, "author_handle NOT IN ("+placeholders+")")
-		for _, h := range muted {
-			args = append(args, h)
+		where = append(where, "channel_id NOT IN ("+placeholders+")")
+		for _, channelID := range muted {
+			args = append(args, channelID)
 		}
-		where = append(where, "COALESCE(source_handle,'') NOT IN ("+placeholders+")")
-		for _, h := range muted {
-			args = append(args, h)
+		where = append(where, "COALESCE(source_channel_id,'') NOT IN ("+placeholders+")")
+		for _, channelID := range muted {
+			args = append(args, channelID)
 		}
 	}
 
@@ -41,9 +61,8 @@ func (db *DB) ListFeedItemsPage(limit int, cursor *model.FeedCursor, username st
 	}
 
 	// Exclude seen items on every page so the scroll tail is genuinely unseen content.
-	if username != "" {
+	if excludeSeen {
 		where = append(where, feedUnseenPredicate("feed_items"))
-		args = append(args, feedUnseenPredicateArgs(username)...)
 	}
 
 	where = append(where, "(canonical_tweet_id IS NULL OR canonical_tweet_id = '' OR canonical_tweet_id = tweet_id)")
@@ -59,30 +78,15 @@ func (db *DB) ListFeedItemsPage(limit int, cursor *model.FeedCursor, username st
 	}
 
 	query := `
-		SELECT tweet_id, COALESCE(source_handle,''), author_handle,
-		       COALESCE(author_display_name,''), COALESCE(author_avatar_url,''),
-		       COALESCE(body_text,''), COALESCE(lang,''),
-		       COALESCE(is_retweet,0), COALESCE(retweeted_by_handle,''),
-		       COALESCE(retweeted_by_display_name,''),
-		       COALESCE(quote_tweet_id,''), COALESCE(quote_author_handle,''),
-		       COALESCE(quote_author_display_name,''), COALESCE(quote_author_avatar_url,''),
-		       COALESCE(quote_body_text,''), COALESCE(quote_lang,''),
-		       COALESCE(quote_media_json,''), COALESCE(media_json,''),
-		       COALESCE(canonical_url,''), COALESCE(reply_to_handle,''),
-		       COALESCE(reply_to_status,''),
-		       COALESCE(is_reply,0), COALESCE(is_ghost,0),
-		       quote_published_at,
-		       COALESCE(views,0), COALESCE(likes,0), COALESCE(retweets,0),
-		       published_at, fetched_at,
-		       COALESCE(content_hash,''), COALESCE(canonical_tweet_id,'')
-		FROM feed_items
+		SELECT ` + feedItemSelectSQL("feed_items") + `
+		FROM feed_items_resolved AS feed_items
 		` + whereClause + `
 		ORDER BY published_at DESC, tweet_id DESC
 		LIMIT ?
 	`
 	args = append(args, limit)
 
-	rows, err := db.conn.Query(query, args...)
+	rows, err := db.reader().Query(query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -90,88 +94,6 @@ func (db *DB) ListFeedItemsPage(limit int, cursor *model.FeedCursor, username st
 		_ = rows.Close()
 	}()
 	return scanFeedItems(rows)
-}
-
-// ListFeedItemsSince returns feed items with sync_seq > afterSeq, ordered by sync_seq ASC.
-// This is the delta sync query — Android calls it with the last sync_seq it received.
-// Applies the same retweet/quote filter the web feed uses so Android never sees
-// items hidden by a channel's x_include_retweets=0 setting.
-func (db *DB) ListFeedItemsSince(afterSeq int64, limit int) ([]model.FeedItem, error) {
-	if limit <= 0 || limit > 500 {
-		limit = 500
-	}
-
-	query := `
-		SELECT tweet_id, COALESCE(source_handle,''), author_handle,
-		       COALESCE(author_display_name,''), COALESCE(author_avatar_url,''),
-		       COALESCE(body_text,''), COALESCE(lang,''),
-		       COALESCE(is_retweet,0), COALESCE(retweeted_by_handle,''),
-		       COALESCE(retweeted_by_display_name,''),
-		       COALESCE(quote_tweet_id,''), COALESCE(quote_author_handle,''),
-		       COALESCE(quote_author_display_name,''), COALESCE(quote_author_avatar_url,''),
-		       COALESCE(quote_body_text,''), COALESCE(quote_lang,''),
-		       COALESCE(quote_media_json,''), COALESCE(media_json,''),
-		       COALESCE(canonical_url,''), COALESCE(reply_to_handle,''),
-		       COALESCE(reply_to_status,''),
-		       COALESCE(is_reply,0), COALESCE(is_ghost,0),
-		       quote_published_at,
-		       COALESCE(views,0), COALESCE(likes,0), COALESCE(retweets,0),
-		       published_at, fetched_at,
-		       COALESCE(content_hash,''), COALESCE(canonical_tweet_id,''),
-		       COALESCE(sync_seq,0)
-		FROM feed_items
-		WHERE sync_seq > ?
-		  AND ` + retweetFilterClause("feed_items") + `
-		ORDER BY sync_seq ASC
-		LIMIT ?
-	`
-	rows, err := db.conn.Query(query, afterSeq, limit)
-	if err != nil {
-		return nil, err
-	}
-	defer func() {
-		_ = rows.Close()
-	}()
-	return scanFeedItemsWithSeq(rows)
-}
-
-// scanFeedItemsWithSeq scans feed item rows that include sync_seq as the last column.
-func scanFeedItemsWithSeq(rows *sql.Rows) ([]model.FeedItem, error) {
-	var items []model.FeedItem
-	for rows.Next() {
-		var f model.FeedItem
-		var quotePubAt, pubAt, fetchedAt sql.NullInt64
-		err := rows.Scan(
-			&f.TweetID, &f.SourceHandle, &f.AuthorHandle,
-			&f.AuthorDisplayName, &f.AuthorAvatarURL,
-			&f.BodyText, &f.Lang,
-			&f.IsRetweet, &f.RetweetedByHandle,
-			&f.RetweetedByDisplayName,
-			&f.QuoteTweetID, &f.QuoteAuthorHandle,
-			&f.QuoteAuthorDisplayName, &f.QuoteAuthorAvatarURL,
-			&f.QuoteBodyText, &f.QuoteLang,
-			&f.QuoteMediaJSON, &f.MediaJSON,
-			&f.CanonicalURL, &f.ReplyToHandle,
-			&f.ReplyToStatus,
-			&f.IsReply, &f.IsGhost,
-			&quotePubAt,
-			&f.Views, &f.Likes, &f.Retweets,
-			&pubAt, &fetchedAt,
-			&f.ContentHash, &f.CanonicalTweetID,
-			&f.SyncSeq,
-		)
-		if err != nil {
-			return nil, err
-		}
-		f.QuotePublishedAt = millisToTimePtr(quotePubAt)
-		f.PublishedAt = millisToTimePtr(pubAt)
-		if t := millisToTimePtr(fetchedAt); t != nil {
-			f.FetchedAt = *t
-		}
-		f.ParseMedia()
-		items = append(items, f)
-	}
-	return items, rows.Err()
 }
 
 // GetFeedItemsForTweetIDs fetches full feed items by tweet IDs.
@@ -187,24 +109,9 @@ func (db *DB) GetFeedItemsForTweetIDs(tweetIDs []string) (map[string]model.FeedI
 		args = append(args, id)
 	}
 
-	rows, err := db.conn.Query(`
-		SELECT tweet_id, COALESCE(source_handle,''), author_handle,
-		       COALESCE(author_display_name,''), COALESCE(author_avatar_url,''),
-		       COALESCE(body_text,''), COALESCE(lang,''),
-		       COALESCE(is_retweet,0), COALESCE(retweeted_by_handle,''),
-		       COALESCE(retweeted_by_display_name,''),
-		       COALESCE(quote_tweet_id,''), COALESCE(quote_author_handle,''),
-		       COALESCE(quote_author_display_name,''), COALESCE(quote_author_avatar_url,''),
-		       COALESCE(quote_body_text,''), COALESCE(quote_lang,''),
-		       COALESCE(quote_media_json,''), COALESCE(media_json,''),
-		       COALESCE(canonical_url,''), COALESCE(reply_to_handle,''),
-		       COALESCE(reply_to_status,''),
-		       COALESCE(is_reply,0), COALESCE(is_ghost,0),
-		       quote_published_at,
-		       COALESCE(views,0), COALESCE(likes,0), COALESCE(retweets,0),
-		       published_at, fetched_at,
-		       COALESCE(content_hash,''), COALESCE(canonical_tweet_id,'')
-		FROM feed_items
+	rows, err := db.reader().Query(`
+		SELECT `+feedItemSelectSQL("feed_items")+`
+		FROM feed_items_resolved AS feed_items
 		WHERE tweet_id IN (`+placeholders+`)
 	`, args...)
 	if err != nil {
@@ -234,7 +141,7 @@ func (db *DB) ResolveFeedStateID(id string) (string, error) {
 		return "", nil
 	}
 	var canonicalURL string
-	err := db.conn.QueryRow(
+	err := db.reader().QueryRow(
 		`SELECT COALESCE(canonical_url, '') FROM feed_items WHERE tweet_id = ?`,
 		id,
 	).Scan(&canonicalURL)
@@ -301,85 +208,61 @@ func (db *DB) materializeResolvedFeedStateTx(tx *sql.Tx, sourceID, stateID strin
 	if strings.TrimSpace(sourceID) == "" || strings.TrimSpace(stateID) == "" || sourceID == stateID {
 		return nil
 	}
-	seq := db.NextSyncSeq()
 	if _, err := tx.Exec(`
 		INSERT INTO feed_items (
-			tweet_id, source_handle, author_handle, author_display_name,
-			author_avatar_url, body_text, media_json, canonical_url,
+			tweet_id, source_channel_id, channel_id,
+			body_text, media_json, canonical_url,
 			published_at, fetched_at,
-			content_hash, canonical_tweet_id,
-			sync_seq
+			content_hash, canonical_tweet_id
 		)
 		SELECT
 			?,
-			source_handle,
-			COALESCE(NULLIF(TRIM(author_handle), ''), 'unknown'),
-			author_display_name,
-			author_avatar_url,
+			source_channel_id,
+			channel_id,
 			body_text,
 			media_json,
 			canonical_url,
 			published_at,
 			fetched_at,
-			content_hash, ?,
-			?
+			content_hash, ?
 		FROM feed_items
 		WHERE tweet_id = ?
 		ON CONFLICT(tweet_id) DO UPDATE SET
-			source_handle = CASE WHEN COALESCE(feed_items.source_handle, '') = '' THEN excluded.source_handle ELSE feed_items.source_handle END,
-			author_handle = CASE
-				WHEN LOWER(TRIM(COALESCE(feed_items.author_handle, ''))) IN ('', 'unknown', 'undefined')
-				 AND LOWER(TRIM(COALESCE(excluded.author_handle, ''))) NOT IN ('', 'unknown', 'undefined')
-				THEN excluded.author_handle
-				ELSE feed_items.author_handle
-			END,
-			author_display_name = CASE WHEN COALESCE(feed_items.author_display_name, '') = '' THEN excluded.author_display_name ELSE feed_items.author_display_name END,
-			author_avatar_url = CASE WHEN COALESCE(feed_items.author_avatar_url, '') = '' THEN excluded.author_avatar_url ELSE feed_items.author_avatar_url END,
+			source_channel_id = CASE WHEN COALESCE(feed_items.source_channel_id, '') = '' THEN excluded.source_channel_id ELSE feed_items.source_channel_id END,
+			channel_id = CASE WHEN COALESCE(feed_items.channel_id, '') = '' THEN excluded.channel_id ELSE feed_items.channel_id END,
 			body_text = CASE WHEN COALESCE(feed_items.body_text, '') = '' THEN excluded.body_text ELSE feed_items.body_text END,
 			media_json = CASE WHEN COALESCE(feed_items.media_json, '') IN ('', '[]') THEN excluded.media_json ELSE feed_items.media_json END,
 			canonical_url = CASE WHEN COALESCE(feed_items.canonical_url, '') = '' THEN excluded.canonical_url ELSE feed_items.canonical_url END,
 			published_at = CASE WHEN COALESCE(feed_items.published_at, 0) = 0 THEN excluded.published_at ELSE feed_items.published_at END,
 			fetched_at = CASE WHEN COALESCE(feed_items.fetched_at, 0) = 0 THEN excluded.fetched_at ELSE feed_items.fetched_at END,
 			content_hash = CASE WHEN COALESCE(feed_items.content_hash, '') = '' THEN excluded.content_hash ELSE feed_items.content_hash END,
-			canonical_tweet_id = CASE WHEN COALESCE(feed_items.canonical_tweet_id, '') = '' THEN excluded.canonical_tweet_id ELSE feed_items.canonical_tweet_id END,
-			sync_seq = excluded.sync_seq
-	`, stateID, stateID, seq, sourceID); err != nil {
-		return err
-	}
-	if _, err := tx.Exec(`
-		INSERT INTO media_files
-			(owner_type, owner_id, media_index, file_path, media_type, source_url, file_size)
-		SELECT owner_type, ?, media_index, file_path, media_type, source_url, file_size
-		FROM media_files
-		WHERE owner_type = 'feed_media'
-		  AND owner_id = ?
-		ON CONFLICT(owner_type, owner_id, media_index) DO UPDATE SET
-			file_path = excluded.file_path,
-			media_type = excluded.media_type,
-			source_url = excluded.source_url,
-			file_size = excluded.file_size
-	`, stateID, sourceID); err != nil {
+			canonical_tweet_id = CASE WHEN COALESCE(feed_items.canonical_tweet_id, '') = '' THEN excluded.canonical_tweet_id ELSE feed_items.canonical_tweet_id END
+	`, stateID, stateID, sourceID); err != nil {
 		return err
 	}
 	nowMs := time.Now().UnixMilli()
 	if _, err := tx.Exec(`
 		INSERT INTO assets (
 			asset_id, asset_kind, owner_kind, owner_id, media_index,
-			source_url, file_path, content_type, size_bytes, sha256, state,
+			source_url, file_path, content_type, size_bytes, sha256, file_mtime_ns, state,
 			required_reason, last_error_kind, last_error, attempts,
 			next_attempt_at_ms, lease_owner, lease_until_ms, created_at_ms, updated_at_ms
 		)
 		SELECT
-			'twitter_tweet_' || ? || '_post_media' ||
+			'twitter_tweet_' || ? || '_' || asset_kind ||
 				CASE WHEN media_index > 0 THEN '_' || CAST(media_index AS TEXT) ELSE '' END,
 			asset_kind, owner_kind, ?, media_index,
-			source_url, file_path, content_type, size_bytes, sha256, state,
+			source_url, file_path, content_type, size_bytes, sha256, file_mtime_ns, state,
 			required_reason, last_error_kind, last_error, attempts,
 			next_attempt_at_ms, lease_owner, lease_until_ms, ?, ?
 		FROM assets
-		WHERE asset_kind = 'post_media'
-		  AND owner_kind = 'tweet'
+		WHERE owner_kind = 'tweet'
 		  AND owner_id = ?
+		  AND asset_kind IN ('post_audio', 'post_media', 'post_thumbnail')
+		  AND (
+			state != 'ready'
+			OR (file_path != '' AND size_bytes > 0)
+		  )
 		ON CONFLICT(asset_kind, owner_kind, owner_id, media_index) DO UPDATE SET
 			asset_id = excluded.asset_id,
 			source_url = excluded.source_url,
@@ -387,7 +270,9 @@ func (db *DB) materializeResolvedFeedStateTx(tx *sql.Tx, sourceID, stateID strin
 			content_type = excluded.content_type,
 			size_bytes = excluded.size_bytes,
 			sha256 = excluded.sha256,
+			file_mtime_ns = excluded.file_mtime_ns,
 			state = excluded.state,
+			required_reason = excluded.required_reason,
 			updated_at_ms = excluded.updated_at_ms
 	`, stateID, stateID, nowMs, nowMs, sourceID); err != nil {
 		return err
@@ -395,21 +280,21 @@ func (db *DB) materializeResolvedFeedStateTx(tx *sql.Tx, sourceID, stateID strin
 	return nil
 }
 
-// GetSeenTweetIDs returns which tweet IDs have been seen by username.
-func (db *DB) GetSeenTweetIDs(username string, tweetIDs []string) (map[string]bool, error) {
-	if len(tweetIDs) == 0 || username == "" {
+// GetSeenTweetIDs returns which tweet IDs have been seen.
+func (db *DB) GetSeenTweetIDs(tweetIDs []string) (map[string]bool, error) {
+	if len(tweetIDs) == 0 {
 		return make(map[string]bool), nil
 	}
 	placeholders := strings.Repeat("?,", len(tweetIDs))
 	placeholders = placeholders[:len(placeholders)-1]
 
-	args := []any{username}
+	var args []any
 	for _, id := range tweetIDs {
 		args = append(args, id)
 	}
 
-	rows, err := db.conn.Query(
-		"SELECT tweet_id FROM feed_seen WHERE username = ? AND tweet_id IN ("+placeholders+")",
+	rows, err := db.reader().Query(
+		"SELECT tweet_id FROM feed_seen WHERE tweet_id IN ("+placeholders+")",
 		args...,
 	)
 	if err != nil {
@@ -430,21 +315,21 @@ func (db *DB) GetSeenTweetIDs(username string, tweetIDs []string) (map[string]bo
 	return seen, rows.Err()
 }
 
-// GetFeedLikesForTweetIDs returns which tweet IDs are liked by username.
-func (db *DB) GetFeedLikesForTweetIDs(username string, tweetIDs []string) (map[string]bool, error) {
-	if len(tweetIDs) == 0 || username == "" {
+// GetFeedLikesForTweetIDs returns which tweet IDs are liked.
+func (db *DB) GetFeedLikesForTweetIDs(tweetIDs []string) (map[string]bool, error) {
+	if len(tweetIDs) == 0 {
 		return make(map[string]bool), nil
 	}
 	placeholders := strings.Repeat("?,", len(tweetIDs))
 	placeholders = placeholders[:len(placeholders)-1]
 
-	args := []any{username}
+	var args []any
 	for _, id := range tweetIDs {
 		args = append(args, id)
 	}
 
-	rows, err := db.conn.Query(
-		"SELECT tweet_id FROM feed_likes WHERE username = ? AND tweet_id IN ("+placeholders+")",
+	rows, err := db.reader().Query(
+		"SELECT tweet_id FROM feed_likes WHERE tweet_id IN ("+placeholders+")",
 		args...,
 	)
 	if err != nil {
@@ -478,7 +363,7 @@ func (db *DB) GetBookmarksForVideoIDs(videoIDs []string) (map[string]bool, error
 		args = append(args, id)
 	}
 
-	rows, err := db.conn.Query(
+	rows, err := db.reader().Query(
 		"SELECT DISTINCT video_id FROM bookmarks WHERE video_id IN ("+placeholders+")",
 		args...,
 	)
@@ -521,12 +406,12 @@ func (db *DB) GetBookmarksForVideoIDsRich(videoIDs []string) (map[string]Bookmar
 	for _, id := range videoIDs {
 		args = append(args, id)
 	}
-
-	rows, err := db.conn.Query(
+	rows, err := db.reader().Query(
 		`SELECT video_id, category_id, custom_title, account_handles, media_indices,
 		        COALESCE(bookmarked_at, 0)
 		   FROM bookmarks
-		  WHERE video_id IN (`+placeholders+`)`,
+		  WHERE video_id IN (`+placeholders+`)
+		  ORDER BY video_id`,
 		args...,
 	)
 	if err != nil {
@@ -552,6 +437,9 @@ func (db *DB) GetBookmarksForVideoIDsRich(videoIDs []string) (map[string]Bookmar
 		); err != nil {
 			continue
 		}
+		if _, exists := result[id]; exists {
+			continue
+		}
 		info := BookmarkInfo{BookmarkedAtMs: bookmarkedAtMs}
 		if categoryID.Valid {
 			value := categoryID.Int64
@@ -574,9 +462,31 @@ func (db *DB) GetBookmarksForVideoIDsRich(videoIDs []string) (map[string]Bookmar
 	return result, rows.Err()
 }
 
-// GetMutedAccounts returns all muted account handles.
+func (db *DB) GetMutedChannelIDs() ([]string, error) {
+	rows, err := db.reader().Query("SELECT channel_id FROM muted_channels ORDER BY channel_id")
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var channelIDs []string
+	for rows.Next() {
+		var channelID string
+		if err := rows.Scan(&channelID); err != nil {
+			return nil, err
+		}
+		channelIDs = append(channelIDs, channelID)
+	}
+	return channelIDs, rows.Err()
+}
+
+// GetMutedAccounts returns presentation handles for the settings UI.
 func (db *DB) GetMutedAccounts() ([]string, error) {
-	rows, err := db.conn.Query("SELECT handle FROM muted_accounts")
+	rows, err := db.reader().Query(`
+		SELECT coalesce(nullif(profile.handle, ''), muted.channel_id)
+		FROM muted_channels muted
+		LEFT JOIN channel_profiles profile ON profile.channel_id = muted.channel_id
+		ORDER BY lower(coalesce(nullif(profile.handle, ''), muted.channel_id))
+	`)
 	if err != nil {
 		return nil, err
 	}
@@ -596,7 +506,7 @@ func (db *DB) GetMutedAccounts() ([]string, error) {
 }
 
 // GetFeedLikedPage returns liked items with cursor-based pagination.
-func (db *DB) GetFeedLikedPage(username string, limit int, cursor *model.FeedCursor) ([]model.FeedLike, error) {
+func (db *DB) GetFeedLikedPage(limit int, cursor *model.FeedCursor) ([]model.FeedLike, error) {
 	if limit <= 0 {
 		limit = 40
 	}
@@ -604,27 +514,27 @@ func (db *DB) GetFeedLikedPage(username string, limit int, cursor *model.FeedCur
 	var where []string
 	var args []any
 
-	where = append(where, "username = ?")
-	args = append(args, username)
-
 	if cursor != nil && cursor.BeforePublishedAtMs > 0 && cursor.BeforeTweetID != "" {
-		where = append(where, "(liked_at < ? OR (liked_at = ? AND tweet_id < ?))")
+		where = append(where, "(fl.liked_at < ? OR (fl.liked_at = ? AND fl.tweet_id < ?))")
 		args = append(args, cursor.BeforePublishedAtMs, cursor.BeforePublishedAtMs, cursor.BeforeTweetID)
 	}
 
-	whereClause := "WHERE " + strings.Join(where, " AND ")
+	whereClause := ""
+	if len(where) > 0 {
+		whereClause = "WHERE " + strings.Join(where, " AND ")
+	}
 
-	rows, err := db.conn.Query(`
-		SELECT username, tweet_id, liked_at,
-		       COALESCE(source_handle,''), COALESCE(author_handle,''),
-		       COALESCE(author_display_name,''), COALESCE(link,''),
-		       COALESCE(canonical_x_link,''), COALESCE(body_text,''),
-		       published_at, COALESCE(media_url,''), COALESCE(avatar_url,''),
-		       COALESCE(media_json,''), COALESCE(platform,''),
-		       COALESCE(quote_payload_json,'')
-		FROM feed_likes
+	rows, err := db.reader().Query(`
+		SELECT fl.tweet_id, fl.liked_at,
+		       COALESCE(fi.source_handle,''), COALESCE(fi.author_handle,''),
+		       COALESCE(fi.author_display_name,''), COALESCE(fi.canonical_url,''),
+		       COALESCE(fi.canonical_url,''), COALESCE(fi.body_text,''),
+		       fi.published_at, '', COALESCE(fi.author_avatar_url,''),
+		       COALESCE(fi.media_json,''), 'twitter', ''
+		FROM feed_likes fl
+		JOIN feed_items_resolved fi ON fi.tweet_id = fl.tweet_id
 		`+whereClause+`
-		ORDER BY liked_at DESC, tweet_id DESC
+		ORDER BY fl.liked_at DESC, fl.tweet_id DESC
 		LIMIT ?
 	`, append(args, limit)...)
 	if err != nil {
@@ -639,7 +549,7 @@ func (db *DB) GetFeedLikedPage(username string, limit int, cursor *model.FeedCur
 		var l model.FeedLike
 		var likedAt, publishedAt sql.NullInt64
 		err := rows.Scan(
-			&l.Username, &l.TweetID, &likedAt,
+			&l.TweetID, &likedAt,
 			&l.SourceHandle, &l.AuthorHandle,
 			&l.AuthorDisplayName, &l.Link,
 			&l.CanonicalXLink, &l.BodyText,
@@ -659,43 +569,6 @@ func (db *DB) GetFeedLikedPage(username string, limit int, cursor *model.FeedCur
 	return likes, rows.Err()
 }
 
-// GetFeedMediaJobs returns media job status for tweet IDs.
-func (db *DB) GetFeedMediaJobs(tweetIDs []string) (map[string]model.FeedMediaJob, error) {
-	if len(tweetIDs) == 0 {
-		return make(map[string]model.FeedMediaJob), nil
-	}
-	placeholders := strings.Repeat("?,", len(tweetIDs))
-	placeholders = placeholders[:len(placeholders)-1]
-
-	var args []any
-	for _, id := range tweetIDs {
-		args = append(args, id)
-	}
-
-	rows, err := db.conn.Query(`
-		SELECT tweet_id, COALESCE(status,''), COALESCE(media_kind,'unknown'),
-		       COALESCE(slide_count,0)
-		FROM feed_media_jobs
-		WHERE tweet_id IN (`+placeholders+`)
-	`, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer func() {
-		_ = rows.Close()
-	}()
-
-	jobs := make(map[string]model.FeedMediaJob)
-	for rows.Next() {
-		var j model.FeedMediaJob
-		if err := rows.Scan(&j.TweetID, &j.Status, &j.MediaKind, &j.SlideCount); err != nil {
-			return nil, err
-		}
-		jobs[j.TweetID] = j
-	}
-	return jobs, rows.Err()
-}
-
 // GetRetweetSources returns retweeters grouped by content hash.
 func (db *DB) GetRetweetSources(contentHashes []string) (map[string][]model.RetweeterInfo, error) {
 	if len(contentHashes) == 0 {
@@ -709,10 +582,10 @@ func (db *DB) GetRetweetSources(contentHashes []string) (map[string][]model.Retw
 		args = append(args, h)
 	}
 
-	rows, err := db.conn.Query(`
-		SELECT content_hash, retweeter_handle, COALESCE(retweeter_display_name,''),
-		       tweet_id
-		FROM retweet_sources
+	rows, err := db.reader().Query(`
+		SELECT content_hash, retweeter_channel_id, retweeter_handle,
+		       COALESCE(retweeter_display_name,''), tweet_id
+		FROM retweet_sources_resolved
 		WHERE content_hash IN (`+placeholders+`)
 		ORDER BY content_hash, published_at DESC
 	`, args...)
@@ -725,17 +598,16 @@ func (db *DB) GetRetweetSources(contentHashes []string) (map[string][]model.Retw
 
 	result := make(map[string][]model.RetweeterInfo)
 	for rows.Next() {
-		var hash, handle, displayName, tweetID string
-		if err := rows.Scan(&hash, &handle, &displayName, &tweetID); err != nil {
+		var hash, channelID, handle, displayName, tweetID string
+		if err := rows.Scan(&hash, &channelID, &handle, &displayName, &tweetID); err != nil {
 			return nil, err
 		}
 		_ = tweetID
-		normHandle := strings.ToLower(strings.TrimPrefix(handle, "@"))
 		result[hash] = append(result[hash], model.RetweeterInfo{
 			Handle:      handle,
 			DisplayName: displayName,
-			ChannelID:   "twitter_" + normHandle,
-			AvatarURL:   "/api/media/avatar/twitter_" + normHandle,
+			ChannelID:   channelID,
+			AvatarURL:   "/api/media/avatar/" + channelID,
 		})
 	}
 	return result, rows.Err()
@@ -744,11 +616,12 @@ func (db *DB) GetRetweetSources(contentHashes []string) (map[string][]model.Retw
 // RetweetSourceRow is the Android sync contract row for retweet_sources.
 // It mirrors the server table columns and matches Android's RetweetSourceEntity.
 type RetweetSourceRow struct {
-	ContentHash          string  `json:"content_hash"`
-	RetweeterHandle      string  `json:"retweeter_handle"`
-	RetweeterDisplayName *string `json:"retweeter_display_name,omitempty"`
-	TweetID              string  `json:"tweet_id"`
-	PublishedAt          int64   `json:"published_at"`
+	ContentHash          string `json:"content_hash"`
+	RetweeterChannelID   string `json:"retweeter_channel_id"`
+	RetweeterHandle      string `json:"retweeter_handle"`
+	RetweeterDisplayName string `json:"retweeter_display_name"`
+	TweetID              string `json:"tweet_id"`
+	PublishedAt          int64  `json:"published_at"`
 }
 
 // GetRetweetSourceRows returns raw retweet_sources rows grouped by content_hash.
@@ -766,10 +639,9 @@ func (db *DB) GetRetweetSourceRows(contentHashes []string) (map[string][]Retweet
 		args = append(args, h)
 	}
 
-	rows, err := db.conn.Query(`
+	rows, err := db.reader().Query(`
 		SELECT content_hash,
-		       retweeter_handle,
-		       retweeter_display_name,
+		       retweeter_channel_id,
 		       tweet_id,
 		       COALESCE(published_at, 0)
 		FROM retweet_sources
@@ -786,13 +658,13 @@ func (db *DB) GetRetweetSourceRows(contentHashes []string) (map[string][]Retweet
 	out := make(map[string][]RetweetSourceRow)
 	for rows.Next() {
 		var row RetweetSourceRow
-		var displayName sql.NullString
-		if err := rows.Scan(&row.ContentHash, &row.RetweeterHandle, &displayName, &row.TweetID, &row.PublishedAt); err != nil {
+		if err := rows.Scan(
+			&row.ContentHash,
+			&row.RetweeterChannelID,
+			&row.TweetID,
+			&row.PublishedAt,
+		); err != nil {
 			return nil, err
-		}
-		if displayName.Valid {
-			v := displayName.String
-			row.RetweeterDisplayName = &v
 		}
 		out[row.ContentHash] = append(out[row.ContentHash], row)
 	}
@@ -812,9 +684,8 @@ func (db *DB) GetVideosByIDs(videoIDs []string) (map[string]model.Video, error) 
 		args = append(args, id)
 	}
 
-	rows, err := db.conn.Query(`
+	rows, err := db.reader().Query(`
 		SELECT video_id, COALESCE(channel_id,''), COALESCE(title,''),
-		       COALESCE(file_path,''), COALESCE(thumbnail_path,''),
 		       COALESCE(metadata_json,'')
 		FROM videos
 		WHERE video_id IN (`+placeholders+`)
@@ -829,7 +700,7 @@ func (db *DB) GetVideosByIDs(videoIDs []string) (map[string]model.Video, error) 
 	result := make(map[string]model.Video)
 	for rows.Next() {
 		var v model.Video
-		if err := rows.Scan(&v.VideoID, &v.ChannelID, &v.Title, &v.FilePath, &v.ThumbnailPath, &v.MetadataJSON); err != nil {
+		if err := rows.Scan(&v.VideoID, &v.ChannelID, &v.Title, &v.MetadataJSON); err != nil {
 			return nil, err
 		}
 		result[v.VideoID] = v
@@ -837,8 +708,7 @@ func (db *DB) GetVideosByIDs(videoIDs []string) (map[string]model.Video, error) 
 	return result, rows.Err()
 }
 
-// GetDisplayNamesForHandles returns a map of handle → display name for the given
-// handles, using the most recently published feed item that has a non-empty display name.
+// GetDisplayNamesForHandles returns profile-owned display names by handle.
 func (db *DB) GetDisplayNamesForHandles(handles []string) (map[string]string, error) {
 	if len(handles) == 0 {
 		return make(map[string]string), nil
@@ -848,29 +718,15 @@ func (db *DB) GetDisplayNamesForHandles(handles []string) (map[string]string, er
 
 	var args []any
 	for _, h := range handles {
-		args = append(args, h)
+		args = append(args, strings.ToLower(strings.TrimPrefix(strings.TrimSpace(h), "@")))
 	}
-
-	// Also check quote_author_display_name as a fallback for handles that
-	// only appear as quote authors (e.g. retweeted accounts whose original
-	// author_display_name is empty in the RSS feed).
-	var allArgs []any
-	allArgs = append(allArgs, args...)
-	allArgs = append(allArgs, args...)
-	rows, err := db.conn.Query(`
-		SELECT handle, display_name FROM (
-			SELECT author_handle AS handle, author_display_name AS display_name
-			FROM feed_items
-			WHERE author_handle IN (`+ph+`)
-			  AND author_display_name IS NOT NULL AND author_display_name != ''
-			UNION ALL
-			SELECT quote_author_handle AS handle, quote_author_display_name AS display_name
-			FROM feed_items
-			WHERE quote_author_handle IN (`+ph+`)
-			  AND quote_author_display_name IS NOT NULL AND quote_author_display_name != ''
-		)
-		GROUP BY handle
-	`, allArgs...)
+	rows, err := db.reader().Query(`
+		SELECT handle, display_name
+		FROM channel_profiles
+		WHERE LOWER(COALESCE(handle, '')) IN (`+ph+`)
+		  AND COALESCE(display_name, '') != ''
+		  AND tombstone = 0
+	`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -896,12 +752,16 @@ func (db *DB) GetFeedItemsByAuthor(handle string, limit int) ([]model.FeedItem, 
 
 // CountFeedItemsByAuthor returns the total locally stored feed rows for a handle.
 func (db *DB) CountFeedItemsByAuthor(handle string) (int, error) {
+	channelID := model.TwitterChannelIDFromHandle(handle)
+	if channelID == "" {
+		return 0, nil
+	}
 	var count int
-	err := db.conn.QueryRow(`
+	err := db.reader().QueryRow(`
 		SELECT COUNT(*)
 		FROM feed_items
-		WHERE LOWER(author_handle) = LOWER(?) OR LOWER(source_handle) = LOWER(?) OR LOWER(quote_author_handle) = LOWER(?)
-	`, handle, handle, handle).Scan(&count)
+		WHERE channel_id = ? OR source_channel_id = ? OR quote_channel_id = ?
+	`, channelID, channelID, channelID).Scan(&count)
 	return count, err
 }
 
@@ -909,34 +769,23 @@ func (db *DB) CountFeedItemsByAuthor(handle string) (int, error) {
 // source handle, newest first. The caller owns pagination; this method is not a
 // retention policy.
 func (db *DB) GetFeedItemsByAuthorPage(handle string, limit int, offset int) ([]model.FeedItem, error) {
+	channelID := model.TwitterChannelIDFromHandle(handle)
+	if channelID == "" {
+		return nil, nil
+	}
 	if limit <= 0 {
 		limit = 40
 	}
 	if offset < 0 {
 		offset = 0
 	}
-	rows, err := db.conn.Query(`
-		SELECT tweet_id, COALESCE(source_handle,''), author_handle,
-		       COALESCE(author_display_name,''), COALESCE(author_avatar_url,''),
-		       COALESCE(body_text,''), COALESCE(lang,''),
-		       COALESCE(is_retweet,0), COALESCE(retweeted_by_handle,''),
-		       COALESCE(retweeted_by_display_name,''),
-		       COALESCE(quote_tweet_id,''), COALESCE(quote_author_handle,''),
-		       COALESCE(quote_author_display_name,''), COALESCE(quote_author_avatar_url,''),
-		       COALESCE(quote_body_text,''), COALESCE(quote_lang,''),
-		       COALESCE(quote_media_json,''), COALESCE(media_json,''),
-		       COALESCE(canonical_url,''), COALESCE(reply_to_handle,''),
-		       COALESCE(reply_to_status,''),
-		       COALESCE(is_reply,0), COALESCE(is_ghost,0),
-		       quote_published_at,
-		       COALESCE(views,0), COALESCE(likes,0), COALESCE(retweets,0),
-		       published_at, fetched_at,
-		       COALESCE(content_hash,''), COALESCE(canonical_tweet_id,'')
-		FROM feed_items
-		WHERE LOWER(author_handle) = LOWER(?) OR LOWER(source_handle) = LOWER(?) OR LOWER(quote_author_handle) = LOWER(?)
+	rows, err := db.reader().Query(`
+		SELECT `+feedItemSelectSQL("feed_items")+`
+		FROM feed_items_resolved AS feed_items
+		WHERE channel_id = ? OR source_channel_id = ? OR quote_channel_id = ?
 		ORDER BY published_at DESC
 		LIMIT ? OFFSET ?
-	`, handle, handle, handle, limit, offset)
+	`, channelID, channelID, channelID, limit, offset)
 	if err != nil {
 		return nil, err
 	}
@@ -951,18 +800,22 @@ func (db *DB) GetFeedItemsByAuthorPage(handle string, limit int, offset int) ([]
 // newest matching row so profile infinite scroll cannot render the same thread
 // again on a later page.
 func (db *DB) GetFeedThreadItemsByAuthorPage(handle string, limit int, offset int) ([]model.FeedItem, error) {
+	channelID := model.TwitterChannelIDFromHandle(handle)
+	if channelID == "" {
+		return nil, nil
+	}
 	if limit <= 0 {
 		limit = 40
 	}
 	if offset < 0 {
 		offset = 0
 	}
-	rows, err := db.conn.Query(`
+	rows, err := db.reader().Query(`
 		WITH RECURSIVE
 		matched(tweet_id) AS (
 			SELECT tweet_id
 			FROM feed_items
-			WHERE (LOWER(author_handle) = LOWER(?) OR LOWER(source_handle) = LOWER(?) OR LOWER(quote_author_handle) = LOWER(?))
+			WHERE (channel_id = ? OR source_channel_id = ? OR quote_channel_id = ?)
 			  AND `+feedPrimaryItemPredicate("feed_items")+`
 		),
 		chain(seed_id, tweet_id, reply_to_status, depth) AS (
@@ -995,28 +848,13 @@ func (db *DB) GetFeedThreadItemsByAuthorPage(handle string, limit int, offset in
 			JOIN matched m ON m.tweet_id = f.tweet_id
 			LEFT JOIN roots r ON r.seed_id = f.tweet_id
 		)
-		SELECT f.tweet_id, COALESCE(f.source_handle,''), f.author_handle,
-		       COALESCE(f.author_display_name,''), COALESCE(f.author_avatar_url,''),
-		       COALESCE(f.body_text,''), COALESCE(f.lang,''),
-		       COALESCE(f.is_retweet,0), COALESCE(f.retweeted_by_handle,''),
-		       COALESCE(f.retweeted_by_display_name,''),
-		       COALESCE(f.quote_tweet_id,''), COALESCE(f.quote_author_handle,''),
-		       COALESCE(f.quote_author_display_name,''), COALESCE(f.quote_author_avatar_url,''),
-		       COALESCE(f.quote_body_text,''), COALESCE(f.quote_lang,''),
-		       COALESCE(f.quote_media_json,''), COALESCE(f.media_json,''),
-		       COALESCE(f.canonical_url,''), COALESCE(f.reply_to_handle,''),
-		       COALESCE(f.reply_to_status,''),
-		       COALESCE(f.is_reply,0), COALESCE(f.is_ghost,0),
-		       f.quote_published_at,
-		       COALESCE(f.views,0), COALESCE(f.likes,0), COALESCE(f.retweets,0),
-		       f.published_at, f.fetched_at,
-		       COALESCE(f.content_hash,''), COALESCE(f.canonical_tweet_id,'')
+		SELECT `+feedItemSelectSQL("f")+`
 		FROM ranked
-		JOIN feed_items f ON f.tweet_id = ranked.tweet_id
+		JOIN feed_items_resolved f ON f.tweet_id = ranked.tweet_id
 		WHERE ranked.rn = 1
 		ORDER BY f.published_at DESC, f.tweet_id DESC
 		LIMIT ? OFFSET ?
-	`, handle, handle, handle, limit, offset)
+	`, channelID, channelID, channelID, limit, offset)
 	if err != nil {
 		return nil, err
 	}
@@ -1030,167 +868,70 @@ func (db *DB) GetFeedThreadItemsByAuthorPage(handle string, limit int, offset in
 func scanFeedItems(rows *sql.Rows) ([]model.FeedItem, error) {
 	var items []model.FeedItem
 	for rows.Next() {
-		var f model.FeedItem
-		var quotePubAt, pubAt, fetchedAt sql.NullInt64
-		err := rows.Scan(
-			&f.TweetID, &f.SourceHandle, &f.AuthorHandle,
-			&f.AuthorDisplayName, &f.AuthorAvatarURL,
-			&f.BodyText, &f.Lang,
-			&f.IsRetweet, &f.RetweetedByHandle,
-			&f.RetweetedByDisplayName,
-			&f.QuoteTweetID, &f.QuoteAuthorHandle,
-			&f.QuoteAuthorDisplayName, &f.QuoteAuthorAvatarURL,
-			&f.QuoteBodyText, &f.QuoteLang,
-			&f.QuoteMediaJSON, &f.MediaJSON,
-			&f.CanonicalURL, &f.ReplyToHandle,
-			&f.ReplyToStatus,
-			&f.IsReply, &f.IsGhost,
-			&quotePubAt,
-			&f.Views, &f.Likes, &f.Retweets,
-			&pubAt, &fetchedAt,
-			&f.ContentHash, &f.CanonicalTweetID,
-		)
+		f, err := scanFeedItem(rows)
 		if err != nil {
 			return nil, err
 		}
-		f.QuotePublishedAt = millisToTimePtr(quotePubAt)
-		f.PublishedAt = millisToTimePtr(pubAt)
-		if t := millisToTimePtr(fetchedAt); t != nil {
-			f.FetchedAt = *t
-		}
-		f.ParseMedia()
 		items = append(items, f)
 	}
 	return items, rows.Err()
+}
+
+type feedItemScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanFeedItem(row feedItemScanner) (model.FeedItem, error) {
+	var f model.FeedItem
+	var quotePubAt, pubAt, fetchedAt sql.NullInt64
+	err := row.Scan(
+		&f.TweetID, &f.SourceHandle, &f.AuthorHandle,
+		&f.AuthorDisplayName, &f.AuthorAvatarURL,
+		&f.BodyText, &f.Lang,
+		&f.IsRetweet, &f.RetweetedByHandle, &f.RetweetedByDisplayName,
+		&f.QuoteTweetID, &f.QuoteAuthorHandle,
+		&f.QuoteAuthorDisplayName, &f.QuoteAuthorAvatarURL,
+		&f.QuoteBodyText, &f.QuoteLang,
+		&f.QuoteMediaJSON, &f.MediaJSON,
+		&f.CanonicalURL, &f.ReplyToHandle, &f.ReplyToStatus,
+		&f.IsReply, &f.IsGhost, &quotePubAt,
+		&f.Views, &f.Likes, &f.Retweets,
+		&pubAt, &fetchedAt,
+		&f.ContentHash, &f.CanonicalTweetID,
+		&f.SourceChannelID, &f.ChannelID, &f.QuoteChannelID,
+		&f.ReplyChannelID, &f.ReposterChannelID,
+	)
+	if err != nil {
+		return model.FeedItem{}, err
+	}
+	f.QuotePublishedAt = millisToTimePtr(quotePubAt)
+	f.PublishedAt = millisToTimePtr(pubAt)
+	if t := millisToTimePtr(fetchedAt); t != nil {
+		f.FetchedAt = *t
+	}
+	f.ParseMedia()
+	return f, nil
 }
 
 // InsertFeedLike creates or updates a feed like record.
 // fields map can include: source_handle, author_handle, author_display_name,
 // body_text, link, canonical_x_link, published_at, media_url, avatar_url,
 // media_json, platform, quote_payload_json.
-func (db *DB) InsertFeedLike(username, tweetID string, fields map[string]string) error {
-	return db.WithWrite(func(tx *sql.Tx) error {
-		var err error
-		tweetID, err = db.resolveFeedStateIDForWriteTx(tx, tweetID)
-		if err != nil {
-			return err
-		}
-		nowMs := time.Now().UnixMilli()
-		if err := db.ensureFeedItemStubFromLikeTx(tx, tweetID, fields); err != nil {
-			return err
-		}
-		publishedAtMs := parseTimestampString(fields["published_at"])
-		_, err = tx.Exec(`
-			INSERT INTO feed_likes (
-				username, tweet_id, source_handle, author_handle, author_display_name,
-				body_text, link, canonical_x_link, published_at, media_url, avatar_url,
-				media_json, platform, quote_payload_json, liked_at, updated_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-			ON CONFLICT(username, tweet_id) DO UPDATE SET
-				source_handle = COALESCE(excluded.source_handle, feed_likes.source_handle),
-				author_handle = COALESCE(excluded.author_handle, feed_likes.author_handle),
-				author_display_name = COALESCE(excluded.author_display_name, feed_likes.author_display_name),
-				body_text = COALESCE(excluded.body_text, feed_likes.body_text),
-				link = COALESCE(excluded.link, feed_likes.link),
-				published_at = CASE WHEN excluded.published_at > 0 THEN excluded.published_at ELSE feed_likes.published_at END,
-				media_url = COALESCE(excluded.media_url, feed_likes.media_url),
-				avatar_url = COALESCE(excluded.avatar_url, feed_likes.avatar_url),
-				media_json = CASE WHEN excluded.media_json IS NULL OR excluded.media_json = '' THEN feed_likes.media_json ELSE excluded.media_json END,
-				platform = COALESCE(excluded.platform, feed_likes.platform),
-				liked_at = excluded.liked_at,
-				updated_at = excluded.updated_at
-		`,
-			username, tweetID,
-			fields["source_handle"], fields["author_handle"], fields["author_display_name"],
-			fields["body_text"], fields["link"], fields["canonical_x_link"],
-			publishedAtMs, fields["media_url"], fields["avatar_url"],
-			fields["media_json"], fields["platform"], fields["quote_payload_json"],
-			nowMs, nowMs,
-		)
-		if err != nil {
-			return err
-		}
-		if err := db.bumpFeedItemSyncSeqTx(tx, tweetID); err != nil {
-			return err
-		}
-		if _, err := tx.Exec(`INSERT OR IGNORE INTO feed_seen (username, tweet_id, seen_at) VALUES (?, ?, ?)`,
-			username, tweetID, nowMs); err != nil {
-			return err
-		}
-		if err := db.recordSyncChangeTx(tx, "like", tweetID, `{"liked":true}`); err != nil {
-			return err
-		}
-		seenValue, _ := json.Marshal(map[string]any{
-			"tweet_ids":     []string{tweetID},
-			"updated_at_ms": nowMs,
-		})
-		return db.recordSyncChangeTx(tx, "seen", tweetID, string(seenValue))
-	})
+func (db *DB) InsertFeedLike(tweetID string, fields map[string]string) error {
+	_, err := db.MutateLike(LikeMutation{TweetID: tweetID, Action: "set", Fields: fields})
+	return err
 }
 
 // DeleteFeedLike removes a feed like record.
-func (db *DB) DeleteFeedLike(username, tweetID string) error {
-	return db.WithWrite(func(tx *sql.Tx) error {
-		var err error
-		tweetID, err = resolveFeedStateIDTx(tx, tweetID)
-		if err != nil {
-			return err
-		}
-		_, err = tx.Exec("DELETE FROM feed_likes WHERE username = ? AND tweet_id = ?", username, tweetID)
-		if err != nil {
-			return err
-		}
-		if err := db.bumpFeedItemSyncSeqTx(tx, tweetID); err != nil {
-			return err
-		}
-		return db.recordSyncChangeTx(tx, "like", tweetID, `{"liked":false}`)
-	})
+func (db *DB) DeleteFeedLike(tweetID string) error {
+	_, err := db.MutateLike(LikeMutation{TweetID: tweetID, Action: "clear"})
+	return err
 }
 
-// MarkSeen marks tweet IDs as seen for a user. Returns count of rows affected.
-func (db *DB) MarkSeen(username string, tweetIDs []string) (int, error) {
-	if len(tweetIDs) == 0 {
-		return 0, nil
-	}
-	var total int
-	err := db.WithWrite(func(tx *sql.Tx) error {
-		nowMs := time.Now().UnixMilli()
-		cleanIDs := make([]string, 0, len(tweetIDs))
-		seenIDs := make(map[string]bool, len(tweetIDs))
-		for _, id := range tweetIDs {
-			id = strings.TrimSpace(id)
-			if id == "" || seenIDs[id] {
-				continue
-			}
-			seenIDs[id] = true
-			cleanIDs = append(cleanIDs, id)
-		}
-		if len(cleanIDs) == 0 {
-			return nil
-		}
-		expandedIDs, err := expandSeenConversationIDsTx(tx, cleanIDs)
-		if err != nil {
-			return err
-		}
-		for _, id := range expandedIDs {
-			res, err := tx.Exec(`
-				INSERT INTO feed_seen (username, tweet_id, seen_at)
-				VALUES (?, ?, ?)
-				ON CONFLICT(username, tweet_id) DO UPDATE SET seen_at = excluded.seen_at
-			`, username, id, nowMs)
-			if err != nil {
-				return err
-			}
-			n, _ := res.RowsAffected()
-			total += int(n)
-		}
-		valueJSON, _ := json.Marshal(map[string]any{
-			"tweet_ids":     expandedIDs,
-			"updated_at_ms": nowMs,
-		})
-		return db.recordSyncChangeTx(tx, "seen", expandedIDs[0], string(valueJSON))
-	})
-	return total, err
+// MarkSeen marks tweet IDs as seen. Returns count of rows affected.
+func (db *DB) MarkSeen(tweetIDs []string) (int, error) {
+	result, err := db.MutateSeen(tweetIDs, 0)
+	return result.Affected, err
 }
 
 func expandSeenConversationIDsTx(tx *sql.Tx, tweetIDs []string) ([]string, error) {
@@ -1273,36 +1014,24 @@ func expandSeenConversationIDsTx(tx *sql.Tx, tweetIDs []string) ([]string, error
 	return out, nil
 }
 
-// MuteAccount adds a handle to the muted list.
+// MuteAccount resolves a presentation handle to its persisted channel identity.
 func (db *DB) MuteAccount(handle string) error {
-	return db.WithWrite(func(tx *sql.Tx) error {
-		nowMs := time.Now().UnixMilli()
-		_, err := tx.Exec("INSERT OR IGNORE INTO muted_accounts (handle, muted_at) VALUES (?, ?)", handle, nowMs)
-		if err != nil {
-			return err
-		}
-		valueJSON, _ := json.Marshal(map[string]any{
-			"action":        "set",
-			"updated_at_ms": nowMs,
-		})
-		return db.recordSyncChangeTx(tx, "mute", handle, string(valueJSON))
-	})
+	channelID := model.TwitterChannelIDFromHandle(handle)
+	if channelID == "" {
+		return fmt.Errorf("invalid handle")
+	}
+	_, err := db.MutateMute(channelID, "set", 0)
+	return err
 }
 
 // UnmuteAccount removes a handle from the muted list.
 func (db *DB) UnmuteAccount(handle string) error {
-	return db.WithWrite(func(tx *sql.Tx) error {
-		nowMs := time.Now().UnixMilli()
-		_, err := tx.Exec("DELETE FROM muted_accounts WHERE handle = ?", handle)
-		if err != nil {
-			return err
-		}
-		valueJSON, _ := json.Marshal(map[string]any{
-			"action":        "clear",
-			"updated_at_ms": nowMs,
-		})
-		return db.recordSyncChangeTx(tx, "mute", handle, string(valueJSON))
-	})
+	channelID := model.TwitterChannelIDFromHandle(handle)
+	if channelID == "" {
+		return fmt.Errorf("invalid handle")
+	}
+	_, err := db.MutateMute(channelID, "clear", 0)
+	return err
 }
 
 // UpsertFeedItems inserts or updates feed_items rows, matching the Python upsert logic.
@@ -1311,55 +1040,47 @@ func (db *DB) UpsertFeedItems(items []model.FeedItem) (int, error) {
 	if len(items) == 0 {
 		return 0, nil
 	}
+	normalizedItems := make([]model.FeedItem, 0, len(items))
+	for _, item := range items {
+		if strings.TrimSpace(item.TweetID) == "" {
+			continue
+		}
+		item.ParseMedia()
+		item = normalizeFeedItemIdentity(item)
+		assignFeedRoleIdentities(&item)
+		normalizedItems = append(normalizedItems, item)
+	}
+	if len(normalizedItems) == 0 {
+		return 0, nil
+	}
 
 	var total int
 	err := db.WithWrite(func(tx *sql.Tx) error {
 		stmt, err := tx.Prepare(`
 			INSERT INTO feed_items (
-				tweet_id, source_handle, author_handle, author_display_name,
-				author_avatar_url, body_text, lang, is_retweet,
-				retweeted_by_handle, retweeted_by_display_name,
-				quote_tweet_id, quote_author_handle, quote_author_display_name,
-				quote_author_avatar_url, quote_body_text, quote_lang, quote_media_json,
-				media_json, canonical_url, reply_to_handle, reply_to_status,
-				is_reply, is_ghost,
+				tweet_id, source_channel_id, channel_id,
+				body_text, lang, is_retweet,
+				quote_tweet_id, quote_channel_id,
+				quote_body_text, quote_lang, quote_media_json,
+				media_json, canonical_url, reply_channel_id, reply_to_status,
+				is_reply, is_ghost, reposter_channel_id,
 				quote_published_at, views, likes, retweets,
 				published_at, fetched_at,
-				content_hash, canonical_tweet_id,
-				sync_seq
+				content_hash, canonical_tweet_id
 			) VALUES (
-				?, ?, ?, ?,
-				?, ?, ?, ?,
+				?, ?, ?,
+				?, ?, ?,
 				?, ?,
 				?, ?, ?,
 				?, ?, ?, ?,
+				?, ?, ?,
 				?, ?, ?, ?,
 				?, ?,
-				?, ?, ?, ?,
-				?, ?,
-				?, ?,
-				?
+				?, ?
 			)
 			ON CONFLICT(tweet_id) DO UPDATE SET
-				source_handle = COALESCE(excluded.source_handle, feed_items.source_handle),
-				author_handle = CASE
-					WHEN LOWER(COALESCE(feed_items.author_handle, '')) IN ('', 'unknown', 'undefined')
-					 AND LOWER(COALESCE(excluded.author_handle, '')) NOT IN ('', 'unknown', 'undefined')
-					THEN excluded.author_handle
-					ELSE feed_items.author_handle
-				END,
-				author_display_name = COALESCE(excluded.author_display_name, feed_items.author_display_name),
-				author_avatar_url = CASE
-					WHEN excluded.author_avatar_url IS NOT NULL THEN excluded.author_avatar_url
-					WHEN LOWER(COALESCE(feed_items.author_avatar_url, '')) LIKE '%/status/undefined%' THEN NULL
-					WHEN (
-						LOWER(COALESCE(feed_items.author_avatar_url, '')) LIKE 'https://x.com/%/status/%'
-						OR LOWER(COALESCE(feed_items.author_avatar_url, '')) LIKE 'http://x.com/%/status/%'
-						OR LOWER(COALESCE(feed_items.author_avatar_url, '')) LIKE 'https://twitter.com/%/status/%'
-						OR LOWER(COALESCE(feed_items.author_avatar_url, '')) LIKE 'http://twitter.com/%/status/%'
-					) THEN NULL
-					ELSE feed_items.author_avatar_url
-				END,
+				source_channel_id = COALESCE(excluded.source_channel_id, feed_items.source_channel_id),
+				channel_id = CASE WHEN COALESCE(feed_items.channel_id, '') = '' THEN excluded.channel_id ELSE feed_items.channel_id END,
 				body_text = CASE
 					WHEN excluded.body_text IS NULL OR excluded.body_text = '' THEN feed_items.body_text
 					ELSE excluded.body_text
@@ -1391,25 +1112,7 @@ func (db *DB) UpsertFeedItems(items []model.FeedItem) (int, error) {
 					WHEN COALESCE(feed_items.quote_tweet_id, '') = '' THEN excluded.quote_tweet_id
 					ELSE feed_items.quote_tweet_id
 				END,
-				quote_author_handle = CASE
-					WHEN COALESCE(feed_items.quote_author_handle, '') = '' THEN COALESCE(excluded.quote_author_handle, feed_items.quote_author_handle)
-					ELSE feed_items.quote_author_handle
-				END,
-				quote_author_display_name = CASE
-					WHEN COALESCE(feed_items.quote_author_display_name, '') = '' THEN COALESCE(excluded.quote_author_display_name, feed_items.quote_author_display_name)
-					ELSE feed_items.quote_author_display_name
-				END,
-				quote_author_avatar_url = CASE
-					WHEN COALESCE(feed_items.quote_author_avatar_url, '') = '' THEN COALESCE(excluded.quote_author_avatar_url, feed_items.quote_author_avatar_url)
-					WHEN LOWER(COALESCE(feed_items.quote_author_avatar_url, '')) LIKE '%/status/undefined%' THEN excluded.quote_author_avatar_url
-					WHEN (
-						LOWER(COALESCE(feed_items.quote_author_avatar_url, '')) LIKE 'https://x.com/%/status/%'
-						OR LOWER(COALESCE(feed_items.quote_author_avatar_url, '')) LIKE 'http://x.com/%/status/%'
-						OR LOWER(COALESCE(feed_items.quote_author_avatar_url, '')) LIKE 'https://twitter.com/%/status/%'
-						OR LOWER(COALESCE(feed_items.quote_author_avatar_url, '')) LIKE 'http://twitter.com/%/status/%'
-					) THEN excluded.quote_author_avatar_url
-					ELSE feed_items.quote_author_avatar_url
-				END,
+				quote_channel_id = CASE WHEN COALESCE(feed_items.quote_channel_id, '') = '' THEN excluded.quote_channel_id ELSE feed_items.quote_channel_id END,
 				quote_body_text = CASE
 					WHEN COALESCE(feed_items.quote_body_text, '') = '' THEN COALESCE(excluded.quote_body_text, feed_items.quote_body_text)
 					ELSE feed_items.quote_body_text
@@ -1450,15 +1153,18 @@ func (db *DB) UpsertFeedItems(items []model.FeedItem) (int, error) {
 					WHEN COALESCE(feed_items.is_ghost,0) > 0 AND COALESCE(excluded.is_ghost,0) = 0 THEN 0
 					ELSE feed_items.is_ghost
 				END,
-				reply_to_handle = CASE
-					WHEN excluded.reply_to_handle IS NOT NULL AND excluded.reply_to_handle != '' THEN excluded.reply_to_handle
-					ELSE feed_items.reply_to_handle
+				reply_channel_id = CASE
+					WHEN excluded.reply_channel_id IS NOT NULL AND excluded.reply_channel_id != '' THEN excluded.reply_channel_id
+					ELSE feed_items.reply_channel_id
 				END,
 				reply_to_status = CASE
 					WHEN excluded.reply_to_status IS NOT NULL AND excluded.reply_to_status != '' THEN excluded.reply_to_status
 					ELSE feed_items.reply_to_status
 				END,
-				sync_seq = excluded.sync_seq
+				reposter_channel_id = CASE
+					WHEN COALESCE(feed_items.reposter_channel_id, '') = '' THEN excluded.reposter_channel_id
+					ELSE feed_items.reposter_channel_id
+				END
 		`)
 		if err != nil {
 			return err
@@ -1468,38 +1174,28 @@ func (db *DB) UpsertFeedItems(items []model.FeedItem) (int, error) {
 		}()
 
 		nowMs := time.Now().UnixMilli()
-		for _, item := range items {
-			if item.TweetID == "" {
-				continue
-			}
-			item = normalizeFeedItemIdentity(item)
-			seq := db.NextSyncSeq()
+		for _, item := range normalizedItems {
 			pubMs := timePtrToMillis(item.PublishedAt)
 			quotePubMs := timePtrToMillis(item.QuotePublishedAt)
 			_, err := stmt.Exec(
 				item.TweetID,
-				nilIfEmpty(item.SourceHandle),
-				nilIfEmpty(item.AuthorHandle),
-				nilIfEmpty(item.AuthorDisplayName),
-				nilIfEmpty(model.CleanFeedAvatarURL(item.AuthorAvatarURL)),
+				nilIfEmpty(item.SourceChannelID),
+				nilIfEmpty(item.ChannelID),
 				nilIfEmpty(item.BodyText),
 				nilIfEmpty(item.Lang),
 				boolToInt(item.IsRetweet),
-				nilIfEmpty(item.RetweetedByHandle),
-				nilIfEmpty(item.RetweetedByDisplayName),
 				nilIfEmpty(item.QuoteTweetID),
-				nilIfEmpty(item.QuoteAuthorHandle),
-				nilIfEmpty(item.QuoteAuthorDisplayName),
-				nilIfEmpty(model.CleanFeedAvatarURL(item.QuoteAuthorAvatarURL)),
+				nilIfEmpty(item.QuoteChannelID),
 				nilIfEmpty(item.QuoteBodyText),
 				nilIfEmpty(item.QuoteLang),
 				nilIfEmpty(item.QuoteMediaJSON),
 				nilIfEmpty(item.MediaJSON),
 				nilIfEmpty(item.CanonicalURL),
-				nilIfEmpty(item.ReplyToHandle),
+				nilIfEmpty(item.ReplyChannelID),
 				nilIfEmpty(item.ReplyToStatus),
 				boolToInt(item.IsReply),
 				boolToInt(item.IsGhost),
+				nilIfEmpty(item.ReposterChannelID),
 				quotePubMs,
 				nilIfZero(item.Views),
 				nilIfZero(item.Likes),
@@ -1508,7 +1204,6 @@ func (db *DB) UpsertFeedItems(items []model.FeedItem) (int, error) {
 				nowMs,
 				nilIfEmpty(item.ContentHash),
 				nilIfEmpty(item.CanonicalTweetID),
-				seq,
 			)
 			if err != nil {
 				return err
@@ -1516,11 +1211,22 @@ func (db *DB) UpsertFeedItems(items []model.FeedItem) (int, error) {
 			total++
 		}
 
+		for _, observation := range collectFeedProfileObservations(normalizedItems, nowMs) {
+			if err := observeProfileTx(tx, observation); err != nil {
+				return err
+			}
+		}
+		for _, item := range normalizedItems {
+			if err := declareXContentAssetsTx(tx, item, nowMs); err != nil {
+				return err
+			}
+		}
+
 		// --- Populate retweet_sources for retweet items ---
 		rtStmt, err := tx.Prepare(`
 			INSERT OR REPLACE INTO retweet_sources
-				(content_hash, retweeter_handle, retweeter_display_name, tweet_id, published_at)
-			VALUES (?, ?, ?, ?, ?)
+				(content_hash, retweeter_channel_id, tweet_id, published_at)
+			VALUES (?, ?, ?, ?)
 		`)
 		if err != nil {
 			return err
@@ -1530,21 +1236,16 @@ func (db *DB) UpsertFeedItems(items []model.FeedItem) (int, error) {
 		}()
 
 		hashSet := make(map[string]bool)
-		for _, item := range items {
+		for _, item := range normalizedItems {
 			if item.ContentHash == "" || !item.IsRetweet {
 				continue
 			}
 			hashSet[item.ContentHash] = true
-			retweeter := item.SourceHandle
-			if item.RetweetedByHandle != "" {
-				retweeter = item.RetweetedByHandle
-			}
-			if retweeter == "" {
+			if item.ReposterChannelID == "" {
 				continue
 			}
 			if _, err := rtStmt.Exec(
-				item.ContentHash, retweeter,
-				nilIfEmpty(item.RetweetedByDisplayName),
+				item.ContentHash, item.ReposterChannelID,
 				item.TweetID, timePtrToMillis(item.PublishedAt),
 			); err != nil {
 				return err
@@ -1584,7 +1285,10 @@ func (db *DB) UpsertFeedItems(items []model.FeedItem) (int, error) {
 
 		return nil
 	})
-	return total, err
+	if err != nil {
+		return 0, err
+	}
+	return total, nil
 }
 
 func normalizeFeedItemIdentity(item model.FeedItem) model.FeedItem {
@@ -1605,6 +1309,87 @@ func normalizeFeedItemIdentity(item model.FeedItem) model.FeedItem {
 	return item
 }
 
+func assignFeedRoleIdentities(item *model.FeedItem) {
+	if item == nil {
+		return
+	}
+	item.SourceChannelID = model.TwitterChannelIDFromHandle(item.SourceHandle)
+	item.ChannelID = model.TwitterChannelIDFromHandle(item.AuthorHandle)
+	item.QuoteChannelID = model.TwitterChannelIDFromHandle(item.QuoteAuthorHandle)
+	item.ReplyChannelID = model.TwitterChannelIDFromHandle(item.ReplyToHandle)
+	item.ReposterChannelID = ""
+	if !item.IsRetweet {
+		return
+	}
+	reposterHandle := item.RetweetedByHandle
+	if model.IsPlaceholderTwitterHandle(reposterHandle) {
+		reposterHandle = item.SourceHandle
+	}
+	item.ReposterChannelID = model.TwitterChannelIDFromHandle(reposterHandle)
+}
+
+func collectFeedProfileObservations(items []model.FeedItem, observedAt int64) []profileObservation {
+	byChannel := make(map[string]profileObservation)
+	add := func(channelID, handle, displayName, avatarURL string, seenAt int64) {
+		if channelID == "" {
+			return
+		}
+		if seenAt <= 0 {
+			seenAt = observedAt
+		}
+		observation := byChannel[channelID]
+		if observation.observedAt > seenAt {
+			return
+		}
+		observation.channelID = channelID
+		observation.platform = "twitter"
+		observation.handle = handle
+		if displayName = strings.TrimSpace(displayName); displayName != "" {
+			observation.displayName = displayName
+		}
+		if model.IsRawTwitterProfileAvatar(avatarURL) {
+			observation.avatarURL = strings.TrimSpace(avatarURL)
+		}
+		observation.observedAt = seenAt
+		byChannel[channelID] = observation
+	}
+	for _, item := range items {
+		seenAt := feedIdentityObservedAtMs(item)
+		add(item.SourceChannelID, item.SourceHandle, "", "", seenAt)
+		add(item.ChannelID, item.AuthorHandle, item.AuthorDisplayName, item.AuthorAvatarURL, seenAt)
+		add(item.QuoteChannelID, item.QuoteAuthorHandle, item.QuoteAuthorDisplayName, item.QuoteAuthorAvatarURL, seenAt)
+		add(item.ReplyChannelID, item.ReplyToHandle, "", "", seenAt)
+		if item.ReposterChannelID != "" {
+			handle := item.RetweetedByHandle
+			if model.IsPlaceholderTwitterHandle(handle) {
+				handle = item.SourceHandle
+			}
+			add(item.ReposterChannelID, handle, item.RetweetedByDisplayName, "", seenAt)
+		}
+		for _, body := range []string{item.BodyText, item.QuoteBodyText} {
+			for _, mention := range model.LinkableTwitterMentions(body) {
+				add(model.TwitterChannelIDFromHandle(mention.Handle), mention.Handle, "", "", seenAt)
+			}
+		}
+	}
+	observations := make([]profileObservation, 0, len(byChannel))
+	for _, observation := range byChannel {
+		observations = append(observations, observation)
+	}
+	return observations
+}
+
+func feedIdentityObservedAtMs(item model.FeedItem) int64 {
+	var observedAt int64
+	if item.PublishedAt != nil {
+		observedAt = item.PublishedAt.UnixMilli()
+	}
+	if !item.FetchedAt.IsZero() && item.FetchedAt.UnixMilli() > observedAt {
+		observedAt = item.FetchedAt.UnixMilli()
+	}
+	return observedAt
+}
+
 func shouldRewritePlaceholderXStatusURL(raw string) bool {
 	normalized := strings.ToLower(strings.TrimSpace(raw))
 	return normalized == "" ||
@@ -1618,24 +1403,9 @@ func shouldRewritePlaceholderXStatusURL(raw string) bool {
 
 // GetLatestFeedItem returns the most recently published feed item, or nil if none.
 func (db *DB) GetLatestFeedItem() (*model.FeedItem, error) {
-	rows, err := db.conn.Query(`
-		SELECT tweet_id, COALESCE(source_handle,''), author_handle,
-		       COALESCE(author_display_name,''), COALESCE(author_avatar_url,''),
-		       COALESCE(body_text,''), COALESCE(lang,''),
-		       COALESCE(is_retweet,0), COALESCE(retweeted_by_handle,''),
-		       COALESCE(retweeted_by_display_name,''),
-		       COALESCE(quote_tweet_id,''), COALESCE(quote_author_handle,''),
-		       COALESCE(quote_author_display_name,''), COALESCE(quote_author_avatar_url,''),
-		       COALESCE(quote_body_text,''), COALESCE(quote_lang,''),
-		       COALESCE(quote_media_json,''), COALESCE(media_json,''),
-		       COALESCE(canonical_url,''), COALESCE(reply_to_handle,''),
-		       COALESCE(reply_to_status,''),
-		       COALESCE(is_reply,0), COALESCE(is_ghost,0),
-		       quote_published_at,
-		       COALESCE(views,0), COALESCE(likes,0), COALESCE(retweets,0),
-		       published_at, fetched_at,
-		       COALESCE(content_hash,''), COALESCE(canonical_tweet_id,'')
-		FROM feed_items
+	rows, err := db.reader().Query(`
+		SELECT ` + feedItemSelectSQL("feed_items") + `
+		FROM feed_items_resolved AS feed_items
 		ORDER BY published_at DESC, tweet_id DESC
 		LIMIT 1
 	`)
@@ -1657,24 +1427,9 @@ func (db *DB) GetLatestFeedItem() (*model.FeedItem, error) {
 
 // GetLatestFetchedFeedItem returns the most recently fetched feed item, or nil if none.
 func (db *DB) GetLatestFetchedFeedItem() (*model.FeedItem, error) {
-	rows, err := db.conn.Query(`
-		SELECT tweet_id, COALESCE(source_handle,''), author_handle,
-		       COALESCE(author_display_name,''), COALESCE(author_avatar_url,''),
-		       COALESCE(body_text,''), COALESCE(lang,''),
-		       COALESCE(is_retweet,0), COALESCE(retweeted_by_handle,''),
-		       COALESCE(retweeted_by_display_name,''),
-		       COALESCE(quote_tweet_id,''), COALESCE(quote_author_handle,''),
-		       COALESCE(quote_author_display_name,''), COALESCE(quote_author_avatar_url,''),
-		       COALESCE(quote_body_text,''), COALESCE(quote_lang,''),
-		       COALESCE(quote_media_json,''), COALESCE(media_json,''),
-		       COALESCE(canonical_url,''), COALESCE(reply_to_handle,''),
-		       COALESCE(reply_to_status,''),
-		       COALESCE(is_reply,0), COALESCE(is_ghost,0),
-		       quote_published_at,
-		       COALESCE(views,0), COALESCE(likes,0), COALESCE(retweets,0),
-		       published_at, fetched_at,
-		       COALESCE(content_hash,''), COALESCE(canonical_tweet_id,'')
-		FROM feed_items
+	rows, err := db.reader().Query(`
+		SELECT ` + feedItemSelectSQL("feed_items") + `
+		FROM feed_items_resolved AS feed_items
 		WHERE ` + feedPrimaryItemPredicate("feed_items") + `
 		  AND (canonical_tweet_id IS NULL OR canonical_tweet_id = '' OR canonical_tweet_id = tweet_id)
 		  AND ` + retweetFilterClause("feed_items") + `
@@ -1703,18 +1458,17 @@ func (db *DB) GetLatestFetchedFeedItem() (*model.FeedItem, error) {
 //
 // Ranking: snapshot winners first (ordered by final_score DESC), then
 // newly fetched fill (fetched_at DESC) for authors not yet represented.
-// Dedupes by lower(author_handle). Avatar URLs prefer channel_profiles.avatar_url
-// (direct twimg URL) and fall back to /api/media/avatar/twitter_<handle_lower>
-// so already-cached local avatars still render through the proxy.
+// Dedupes by lower(author_handle). Avatar URLs use the canonical local profile
+// asset endpoint.
 //
 // Returns an empty slice when knownHeadTweetID is empty or not found.
-func (db *DB) GetNewPosterAvatars(username, knownHeadTweetID string, limit int) ([]model.NewPosterAvatar, error) {
+func (db *DB) GetNewPosterAvatars(knownHeadTweetID string, limit int) ([]model.NewPosterAvatar, error) {
 	if limit <= 0 || knownHeadTweetID == "" {
 		return nil, nil
 	}
 
 	var knownFetchedAt sql.NullInt64
-	if err := db.conn.QueryRow(
+	if err := db.reader().QueryRow(
 		"SELECT fetched_at FROM feed_items WHERE tweet_id = ? LIMIT 1",
 		knownHeadTweetID,
 	).Scan(&knownFetchedAt); err != nil {
@@ -1727,7 +1481,7 @@ func (db *DB) GetNewPosterAvatars(username, knownHeadTweetID string, limit int) 
 		return nil, nil
 	}
 
-	muted, _ := db.GetMutedAccounts()
+	muted, _ := db.GetMutedChannelIDs()
 	muteClauses, muteArgs := buildMuteClauses(muted)
 	muteSQL := ""
 	for _, c := range muteClauses {
@@ -1737,68 +1491,50 @@ func (db *DB) GetNewPosterAvatars(username, knownHeadTweetID string, limit int) 
 	out := make([]model.NewPosterAvatar, 0, limit)
 	seen := make(map[string]bool, limit)
 
-	appendRow := func(handle, display, avatarURL string) {
-		if handle == "" {
+	appendRow := func(channelID, handle, display string) {
+		if channelID == "" || handle == "" {
 			return
 		}
-		key := strings.ToLower(handle)
-		if seen[key] {
+		if seen[channelID] {
 			return
 		}
-		if avatarURL == "" {
-			avatarURL = "/api/media/avatar/twitter_" + key
-		}
-		seen[key] = true
+		seen[channelID] = true
 		out = append(out, model.NewPosterAvatar{
 			AuthorHandle:      handle,
 			AuthorDisplayName: display,
-			AuthorAvatarURL:   avatarURL,
+			AuthorAvatarURL:   "/api/media/avatar/" + channelID,
 		})
 	}
-	const avatarSelect = `COALESCE(
-		NULLIF(cp.avatar_url, ''),
-		CASE
-			WHEN COALESCE(fi.author_avatar_url, '') LIKE 'https://pbs.twimg.com/%' THEN fi.author_avatar_url
-			ELSE ''
-		END
-	)`
 	const profileJoin = `LEFT JOIN channel_profiles cp
-		ON cp.channel_id = 'twitter_' || lower(fi.author_handle)
+		ON cp.channel_id = fi.channel_id
 		AND cp.tombstone = 0`
 
 	// Primary: ranked by snapshot final_score.
-	if username != "" {
-		snapQuery := `
-			SELECT fi.author_handle,
-			       COALESCE(NULLIF(fi.author_display_name,''), COALESCE(cp.display_name,'')),
-			       ` + avatarSelect + `
+	snapQuery := `
+			SELECT fi.channel_id, COALESCE(cp.handle,''), COALESCE(cp.display_name,'')
 			FROM feed_rank_snapshot s
 			JOIN feed_items fi ON fi.tweet_id = s.tweet_id
 			` + profileJoin + `
-			WHERE s.username = ?
-			  AND fi.fetched_at > ?` + muteSQL + `
+			WHERE fi.fetched_at > ?` + muteSQL + `
 			ORDER BY s.final_score DESC
 		`
-		snapArgs := append([]any{username, knownFetchedAt.Int64}, muteArgs...)
-		rows, err := db.conn.Query(snapQuery, snapArgs...)
-		if err == nil {
-			for rows.Next() && len(out) < limit {
-				var handle, display, avatarURL string
-				if err := rows.Scan(&handle, &display, &avatarURL); err != nil {
-					break
-				}
-				appendRow(handle, display, avatarURL)
+	snapArgs := append([]any{knownFetchedAt.Int64}, muteArgs...)
+	rows, err := db.reader().Query(snapQuery, snapArgs...)
+	if err == nil {
+		for rows.Next() && len(out) < limit {
+			var channelID, handle, display string
+			if err := rows.Scan(&channelID, &handle, &display); err != nil {
+				break
 			}
-			_ = rows.Close()
+			appendRow(channelID, handle, display)
 		}
+		_ = rows.Close()
 	}
 
 	// Supplement: fill remaining slots from recency.
 	if len(out) < limit {
 		recentQuery := `
-			SELECT fi.author_handle,
-			       COALESCE(NULLIF(fi.author_display_name,''), COALESCE(cp.display_name,'')),
-			       ` + avatarSelect + `
+			SELECT fi.channel_id, COALESCE(cp.handle,''), COALESCE(cp.display_name,'')
 			FROM feed_items fi
 			` + profileJoin + `
 			WHERE fi.fetched_at > ?` + muteSQL + `
@@ -1806,14 +1542,14 @@ func (db *DB) GetNewPosterAvatars(username, knownHeadTweetID string, limit int) 
 			LIMIT 50
 		`
 		recentArgs := append([]any{knownFetchedAt.Int64}, muteArgs...)
-		rows, err := db.conn.Query(recentQuery, recentArgs...)
+		rows, err := db.reader().Query(recentQuery, recentArgs...)
 		if err == nil {
 			for rows.Next() && len(out) < limit {
-				var handle, display, avatarURL string
-				if err := rows.Scan(&handle, &display, &avatarURL); err != nil {
+				var channelID, handle, display string
+				if err := rows.Scan(&channelID, &handle, &display); err != nil {
 					break
 				}
-				appendRow(handle, display, avatarURL)
+				appendRow(channelID, handle, display)
 			}
 			_ = rows.Close()
 		}
@@ -1822,9 +1558,7 @@ func (db *DB) GetNewPosterAvatars(username, knownHeadTweetID string, limit int) 
 	return out, nil
 }
 
-// buildMuteClauses returns SQL fragments that filter against muted
-// author_handle / source_handle. Each clause references `fi.<col>` so it
-// slots into JOINs that alias feed_items as `fi`.
+// buildMuteClauses returns SQL fragments that filter persisted channel identities.
 func buildMuteClauses(muted []string) ([]string, []any) {
 	if len(muted) == 0 {
 		return nil, nil
@@ -1832,28 +1566,28 @@ func buildMuteClauses(muted []string) ([]string, []any) {
 	placeholders := strings.Repeat("?,", len(muted))
 	placeholders = placeholders[:len(placeholders)-1]
 	args := make([]any, 0, len(muted)*2)
-	for _, h := range muted {
-		args = append(args, h)
+	for _, channelID := range muted {
+		args = append(args, channelID)
 	}
-	for _, h := range muted {
-		args = append(args, h)
+	for _, channelID := range muted {
+		args = append(args, channelID)
 	}
 	return []string{
-		"fi.author_handle NOT IN (" + placeholders + ")",
-		"COALESCE(fi.source_handle,'') NOT IN (" + placeholders + ")",
+		"fi.channel_id NOT IN (" + placeholders + ")",
+		"COALESCE(fi.source_channel_id,'') NOT IN (" + placeholders + ")",
 	}, args
 }
 
 // CountFeedItems returns the total number of rows in feed_items.
 func (db *DB) CountFeedItems() (int, error) {
 	var count int
-	err := db.conn.QueryRow("SELECT COUNT(*) FROM feed_items").Scan(&count)
+	err := db.reader().QueryRow("SELECT COUNT(*) FROM feed_items").Scan(&count)
 	return count, err
 }
 
 // ListFeedItemsFiltered returns feed items with cursor pagination, optional
-// handle filter, and per-user seen suppression when username is set.
-func (db *DB) ListFeedItemsFiltered(limit int, cursor *model.FeedCursor, sourceHandle string, username string) ([]model.FeedItem, error) {
+// handle filter, and optional seen suppression.
+func (db *DB) ListFeedItemsFiltered(limit int, cursor *model.FeedCursor, sourceHandle string, excludeSeen bool) ([]model.FeedItem, error) {
 	if limit <= 0 {
 		limit = 40
 	}
@@ -1862,28 +1596,31 @@ func (db *DB) ListFeedItemsFiltered(limit int, cursor *model.FeedCursor, sourceH
 	var args []any
 	where = append(where, feedPrimaryItemPredicate("feed_items"))
 
-	muted, _ := db.GetMutedAccounts()
+	muted, _ := db.GetMutedChannelIDs()
 	if len(muted) > 0 {
 		placeholders := strings.Repeat("?,", len(muted))
 		placeholders = placeholders[:len(placeholders)-1]
-		where = append(where, "author_handle NOT IN ("+placeholders+")")
+		where = append(where, "channel_id NOT IN ("+placeholders+")")
 		for _, h := range muted {
 			args = append(args, h)
 		}
-		where = append(where, "COALESCE(source_handle,'') NOT IN ("+placeholders+")")
+		where = append(where, "COALESCE(source_channel_id,'') NOT IN ("+placeholders+")")
 		for _, h := range muted {
 			args = append(args, h)
 		}
 	}
 
 	if sourceHandle != "" {
-		where = append(where, "LOWER(source_handle) = LOWER(?)")
-		args = append(args, sourceHandle)
+		sourceChannelID := model.TwitterChannelIDFromHandle(sourceHandle)
+		if sourceChannelID == "" {
+			return nil, nil
+		}
+		where = append(where, "source_channel_id = ?")
+		args = append(args, sourceChannelID)
 	}
 
-	if username != "" {
+	if excludeSeen {
 		where = append(where, feedUnseenPredicate("feed_items"))
-		args = append(args, feedUnseenPredicateArgs(username)...)
 	}
 
 	if cursor != nil && cursor.BeforePublishedAtMs > 0 && cursor.BeforeTweetID != "" {
@@ -1899,30 +1636,15 @@ func (db *DB) ListFeedItemsFiltered(limit int, cursor *model.FeedCursor, sourceH
 	}
 
 	query := `
-		SELECT tweet_id, COALESCE(source_handle,''), author_handle,
-		       COALESCE(author_display_name,''), COALESCE(author_avatar_url,''),
-		       COALESCE(body_text,''), COALESCE(lang,''),
-		       COALESCE(is_retweet,0), COALESCE(retweeted_by_handle,''),
-		       COALESCE(retweeted_by_display_name,''),
-		       COALESCE(quote_tweet_id,''), COALESCE(quote_author_handle,''),
-		       COALESCE(quote_author_display_name,''), COALESCE(quote_author_avatar_url,''),
-		       COALESCE(quote_body_text,''), COALESCE(quote_lang,''),
-		       COALESCE(quote_media_json,''), COALESCE(media_json,''),
-		       COALESCE(canonical_url,''), COALESCE(reply_to_handle,''),
-		       COALESCE(reply_to_status,''),
-		       COALESCE(is_reply,0), COALESCE(is_ghost,0),
-		       quote_published_at,
-		       COALESCE(views,0), COALESCE(likes,0), COALESCE(retweets,0),
-		       published_at, fetched_at,
-		       COALESCE(content_hash,''), COALESCE(canonical_tweet_id,'')
-		FROM feed_items
+		SELECT ` + feedItemSelectSQL("feed_items") + `
+		FROM feed_items_resolved AS feed_items
 		` + whereClause + `
 		ORDER BY published_at DESC, tweet_id DESC
 		LIMIT ?
 	`
 	args = append(args, limit)
 
-	rows, err := db.conn.Query(query, args...)
+	rows, err := db.reader().Query(query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -1943,25 +1665,10 @@ func (db *DB) ListFeedItemsBySourceID(sourceID string, limit int) ([]model.FeedI
 		limit = 40
 	}
 
-	rows, err := db.conn.Query(`
-		SELECT f.tweet_id, COALESCE(f.source_handle,''), f.author_handle,
-		       COALESCE(f.author_display_name,''), COALESCE(f.author_avatar_url,''),
-		       COALESCE(f.body_text,''), COALESCE(f.lang,''),
-		       COALESCE(f.is_retweet,0), COALESCE(f.retweeted_by_handle,''),
-		       COALESCE(f.retweeted_by_display_name,''),
-		       COALESCE(f.quote_tweet_id,''), COALESCE(f.quote_author_handle,''),
-		       COALESCE(f.quote_author_display_name,''), COALESCE(f.quote_author_avatar_url,''),
-		       COALESCE(f.quote_body_text,''), COALESCE(f.quote_lang,''),
-		       COALESCE(f.quote_media_json,''), COALESCE(f.media_json,''),
-		       COALESCE(f.canonical_url,''), COALESCE(f.reply_to_handle,''),
-		       COALESCE(f.reply_to_status,''),
-		       COALESCE(f.is_reply,0), COALESCE(f.is_ghost,0),
-		       f.quote_published_at,
-		       COALESCE(f.views,0), COALESCE(f.likes,0), COALESCE(f.retweets,0),
-		       f.published_at, f.fetched_at,
-		       COALESCE(f.content_hash,''), COALESCE(f.canonical_tweet_id,'')
+	rows, err := db.reader().Query(`
+		SELECT `+feedItemSelectSQL("f")+`
 		FROM feed_item_sources fis
-		JOIN feed_items f ON f.tweet_id = fis.tweet_id
+		JOIN feed_items_resolved f ON f.tweet_id = fis.tweet_id
 		WHERE fis.source_id = ?
 		  AND `+feedPrimaryItemPredicate("f")+`
 		ORDER BY f.published_at DESC, f.tweet_id DESC
@@ -1995,23 +1702,8 @@ func (db *DB) GetBookmarkedFeedItems(limit int, cursor *model.FeedCursor) ([]mod
 	whereClause := "WHERE " + strings.Join(where, " AND ")
 
 	query := `
-		SELECT f.tweet_id, COALESCE(f.source_handle,''), f.author_handle,
-		       COALESCE(f.author_display_name,''), COALESCE(f.author_avatar_url,''),
-		       COALESCE(f.body_text,''), COALESCE(f.lang,''),
-		       COALESCE(f.is_retweet,0), COALESCE(f.retweeted_by_handle,''),
-		       COALESCE(f.retweeted_by_display_name,''),
-		       COALESCE(f.quote_tweet_id,''), COALESCE(f.quote_author_handle,''),
-		       COALESCE(f.quote_author_display_name,''), COALESCE(f.quote_author_avatar_url,''),
-		       COALESCE(f.quote_body_text,''), COALESCE(f.quote_lang,''),
-		       COALESCE(f.quote_media_json,''), COALESCE(f.media_json,''),
-		       COALESCE(f.canonical_url,''), COALESCE(f.reply_to_handle,''),
-		       COALESCE(f.reply_to_status,''),
-		       COALESCE(f.is_reply,0), COALESCE(f.is_ghost,0),
-		       f.quote_published_at,
-		       COALESCE(f.views,0), COALESCE(f.likes,0), COALESCE(f.retweets,0),
-		       f.published_at, f.fetched_at,
-		       COALESCE(f.content_hash,''), COALESCE(f.canonical_tweet_id,'')
-		FROM feed_items f
+		SELECT ` + feedItemSelectSQL("f") + `
+		FROM feed_items_resolved f
 		INNER JOIN bookmarks b ON b.video_id = f.tweet_id
 		` + whereClause + `
 		ORDER BY b.bookmarked_at DESC, f.tweet_id DESC
@@ -2019,7 +1711,7 @@ func (db *DB) GetBookmarkedFeedItems(limit int, cursor *model.FeedCursor) ([]mod
 	`
 	args = append(args, limit)
 
-	rows, err := db.conn.Query(query, args...)
+	rows, err := db.reader().Query(query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -2032,13 +1724,13 @@ func (db *DB) GetBookmarkedFeedItems(limit int, cursor *model.FeedCursor) ([]mod
 // CountBookmarkedFeedItems returns the count of bookmarked feed items.
 func (db *DB) CountBookmarkedFeedItems() (int, error) {
 	var count int
-	err := db.conn.QueryRow("SELECT COUNT(*) FROM bookmarks b INNER JOIN feed_items f ON f.tweet_id = b.video_id").Scan(&count)
+	err := db.reader().QueryRow("SELECT COUNT(*) FROM bookmarks b INNER JOIN feed_items f ON f.tweet_id = b.video_id").Scan(&count)
 	return count, err
 }
 
 // CountFeedLikes returns the count of liked feed items for a user.
-func (db *DB) CountFeedLikes(username string) (int, error) {
+func (db *DB) CountFeedLikes() (int, error) {
 	var count int
-	err := db.conn.QueryRow("SELECT COUNT(*) FROM feed_likes WHERE username = ?", username).Scan(&count)
+	err := db.reader().QueryRow("SELECT COUNT(*) FROM feed_likes").Scan(&count)
 	return count, err
 }

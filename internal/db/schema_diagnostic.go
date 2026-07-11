@@ -26,17 +26,16 @@ func schemaDiagnosticStatements() []string {
 
 		`CREATE TABLE IF NOT EXISTS android_sync_health_reports (
 			id              INTEGER PRIMARY KEY AUTOINCREMENT,
-			generation_id   TEXT NOT NULL,
+			cursor          TEXT NOT NULL,
 			reported_at_ms  INTEGER NOT NULL,
 			payload_json    TEXT NOT NULL,
 			verified_assets INTEGER NOT NULL DEFAULT 0,
 			pending_assets  INTEGER NOT NULL DEFAULT 0,
-			failed_assets   INTEGER NOT NULL DEFAULT 0,
 			missing_assets  INTEGER NOT NULL DEFAULT 0,
 			total_assets    INTEGER NOT NULL DEFAULT 0,
 			verified_bytes  INTEGER NOT NULL DEFAULT 0
 		)`,
-		`CREATE INDEX IF NOT EXISTS idx_android_sync_health_generation ON android_sync_health_reports(generation_id, reported_at_ms DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_android_sync_health_cursor ON android_sync_health_reports(cursor, reported_at_ms DESC)`,
 
 		`CREATE TABLE IF NOT EXISTS analytics_events (
 			event_id     TEXT PRIMARY KEY,

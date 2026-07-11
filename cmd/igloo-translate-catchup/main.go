@@ -79,11 +79,13 @@ func main() {
 	}
 	skip := splitCSV(skipRaw)
 
-	openFn := db.OpenReadOnly
+	var database *db.DB
+	var err error
 	if (mode == "backfill-lang" && apply) || mode == "import" {
-		openFn = db.Open
+		database, err = db.OpenPath(dbPath, dataDir)
+	} else {
+		database, err = db.OpenReadOnly(dbPath, dataDir)
 	}
-	database, err := openFn(dbPath, dataDir)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -168,7 +170,7 @@ func runBackfillLang(ctx context.Context, database *db.DB, target string, skip [
 			if u.field == "quote" {
 				col = "quote_lang"
 			}
-			if _, err := tx.Exec(`UPDATE feed_items SET `+col+` = ?, sync_seq = ? WHERE tweet_id = ?`, u.lang, database.NextSyncSeq(), u.tweetID); err != nil {
+			if _, err := tx.Exec(`UPDATE feed_items SET `+col+` = ? WHERE tweet_id = ?`, u.lang, u.tweetID); err != nil {
 				return err
 			}
 		}

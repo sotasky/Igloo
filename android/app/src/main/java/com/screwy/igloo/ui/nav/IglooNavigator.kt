@@ -4,7 +4,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.navigation.NavController
-import com.screwy.igloo.media.MediaUri
 
 enum class IglooNavigationSource {
     Feed,
@@ -52,7 +51,6 @@ sealed interface IglooNavigationIntent {
     data class OpenVideo(
         val videoId: String?,
         override val source: IglooNavigationSource,
-        val posterUri: MediaUri = MediaUri.Missing,
     ) : IglooNavigationIntent
 
     data class OpenShorts(
@@ -60,7 +58,6 @@ sealed interface IglooNavigationIntent {
         val playlistId: String?,
         val videoId: String?,
         override val source: IglooNavigationSource,
-        val posterUri: MediaUri = MediaUri.Missing,
     ) : IglooNavigationIntent
 
     data class OpenMedia(
@@ -68,8 +65,6 @@ sealed interface IglooNavigationIntent {
         val ownerId: String?,
         val index: Int,
         override val source: IglooNavigationSource,
-        val posterUri: MediaUri = MediaUri.Missing,
-        val snapshot: MediaOpenSnapshot? = null,
     ) : IglooNavigationIntent
 
     data class OpenThread(
@@ -93,8 +88,6 @@ data class IglooNavigationTarget(
     val mediaOwnerId: String? = null,
     val mediaIndex: Int? = null,
     val tweetId: String? = null,
-    val fullscreenTransition: FullscreenMediaTransition? = null,
-    val mediaOpenSnapshot: MediaOpenSnapshot? = null,
     val profileOpenSnapshot: ProfileOpenSnapshot? = null,
 )
 
@@ -126,9 +119,6 @@ object IglooNavigation {
                 IglooNavigationTarget(
                     route = RouteRegistry.playerRoute(videoId),
                     videoId = videoId,
-                    fullscreenTransition = intent.posterUri
-                        .takeUnless { it is MediaUri.Missing }
-                        ?.let { FullscreenMediaTransition(mediaId = videoId, posterUri = it) },
                 )
             }
             is IglooNavigationIntent.OpenShorts -> {
@@ -140,9 +130,6 @@ object IglooNavigation {
                     playlistType = playlistType,
                     playlistId = playlistId,
                     videoId = videoId,
-                    fullscreenTransition = intent.posterUri
-                        .takeUnless { it is MediaUri.Missing }
-                        ?.let { FullscreenMediaTransition(mediaId = videoId, posterUri = it) },
                 )
             }
             is IglooNavigationIntent.OpenMedia -> {
@@ -154,10 +141,6 @@ object IglooNavigation {
                     mediaOwnerKind = ownerKind,
                     mediaOwnerId = ownerId,
                     mediaIndex = index,
-                    fullscreenTransition = intent.posterUri
-                        .takeUnless { it is MediaUri.Missing }
-                        ?.let { FullscreenMediaTransition(mediaId = ownerId, posterUri = it) },
-                    mediaOpenSnapshot = intent.snapshot,
                 )
             }
             is IglooNavigationIntent.OpenThread -> {
@@ -259,9 +242,8 @@ class IglooNavigator internal constructor(
     fun openVideo(
         videoId: String?,
         source: IglooNavigationSource,
-        posterUri: MediaUri = MediaUri.Missing,
     ) {
-        open(IglooNavigationIntent.OpenVideo(videoId, source, posterUri))
+        open(IglooNavigationIntent.OpenVideo(videoId, source))
     }
 
     fun openShorts(
@@ -269,9 +251,8 @@ class IglooNavigator internal constructor(
         playlistId: String?,
         videoId: String?,
         source: IglooNavigationSource,
-        posterUri: MediaUri = MediaUri.Missing,
     ) {
-        open(IglooNavigationIntent.OpenShorts(playlistType, playlistId, videoId, source, posterUri))
+        open(IglooNavigationIntent.OpenShorts(playlistType, playlistId, videoId, source))
     }
 
     fun openMedia(
@@ -279,10 +260,8 @@ class IglooNavigator internal constructor(
         ownerId: String?,
         index: Int,
         source: IglooNavigationSource,
-        posterUri: MediaUri = MediaUri.Missing,
-        snapshot: MediaOpenSnapshot? = null,
     ) {
-        open(IglooNavigationIntent.OpenMedia(ownerKind, ownerId, index, source, posterUri, snapshot))
+        open(IglooNavigationIntent.OpenMedia(ownerKind, ownerId, index, source))
     }
 
     fun openThread(tweetId: String?, source: IglooNavigationSource) {
@@ -315,8 +294,6 @@ class IglooNavigator internal constructor(
         ) {
             return
         }
-        target.fullscreenTransition?.let(navController::prepareFullscreenMediaTransitionForNext)
-        target.mediaOpenSnapshot?.let(navController::prepareMediaOpenSnapshotForNext)
         target.profileOpenSnapshot?.let(navController::prepareProfileOpenSnapshotForNext)
         val launchSingleTop = IglooNavigation.shouldLaunchSingleTop(currentRoute, intent)
         navController.navigate(target.route) {

@@ -26,11 +26,23 @@ import (
 )
 
 func main() {
-	startupStart := time.Now()
 	toolenv.ApplyCommonToolPaths()
 	cfg := config.Load()
+	stateRoot := strings.TrimSpace(cfg.Storage.StateRoot())
+	hadPendingRestore := stateRoot != "" && restore.HasPending(stateRoot)
+	phaseStart := time.Now()
+	if err := restore.ApplyPending(cfg); err != nil {
+		slog.Error("restore: apply failed", "err", err)
+		os.Exit(1)
+	}
+	if err := initialConfigError(cfg, hadPendingRestore); err != nil {
+		slog.Error("invalid configuration", "err", err)
+		os.Exit(1)
+	}
+	logStartupPhase("restore", time.Since(phaseStart))
+	cfg = config.Load()
 	if cfg.ConfigError != nil {
-		slog.Error("invalid configuration", "err", cfg.ConfigError)
+		slog.Error("invalid restored configuration", "err", cfg.ConfigError)
 		os.Exit(1)
 	}
 	if err := cfg.EnsureRuntimeDirs(); err != nil {
@@ -42,31 +54,24 @@ func main() {
 			_ = logFile.Close()
 		}()
 	}
-
+	phaseStart = time.Now()
 	auth.InitCache(cfg.AuthUsersPath)
-	logStartupPhase("config_auth", time.Since(startupStart))
-
-	phaseStart := time.Now()
-	if err := restore.ApplyPending(cfg); err != nil {
-		slog.Error("restore: apply failed", "err", err)
-		os.Exit(1)
-	}
-	logStartupPhase("restore", time.Since(phaseStart))
+	logStartupPhase("config_auth", time.Since(phaseStart))
 
 	phaseStart = time.Now()
-	database, err := db.OpenWithOptions(cfg.DatabasePath, cfg.DataDir, db.OpenOptions{
+	database, err := db.OpenWithOptions(cfg.Storage, db.OpenOptions{
 		Phase: func(name string, elapsed time.Duration) {
 			logStartupPhase(name, elapsed)
 		},
 	})
 	if err != nil {
-		slog.Error("failed to open database", "path", cfg.DatabasePath, "err", err)
+		slog.Error("failed to open database", "path", cfg.Storage.DatabasePath(), "err", err)
 		os.Exit(1)
 	}
 	defer func() {
 		_ = database.Close()
 	}()
-	slog.Info("database opened", "path", cfg.DatabasePath)
+	slog.Info("database opened", "path", cfg.Storage.DatabasePath())
 	logStartupPhase("db_open", time.Since(phaseStart))
 
 	// Build static version cache
@@ -130,6 +135,16 @@ func main() {
 	}
 }
 
+func initialConfigError(cfg *config.Config, hadPendingRestore bool) error {
+	if cfg == nil || cfg.ConfigError == nil {
+		return nil
+	}
+	if hadPendingRestore {
+		return nil
+	}
+	return cfg.ConfigError
+}
+
 func newHTTPServer(addr string, handler http.Handler) *http.Server {
 	return &http.Server{
 		Addr:              addr,
@@ -142,7 +157,7 @@ func newHTTPServer(addr string, handler http.Handler) *http.Server {
 }
 
 func setupServerLogging(cfg *config.Config) io.Closer {
-	logDir := filepath.Join(cfg.DataDir, "logs", "server")
+	logDir := filepath.Join(cfg.Storage.StateRoot(), "logs", "server")
 	if err := os.MkdirAll(logDir, 0o755); err != nil {
 		return nil
 	}

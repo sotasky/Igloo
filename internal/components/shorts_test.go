@@ -392,39 +392,6 @@ func TestShortsArrowKeysPreferSlideshowSlidesBeforeStoryNavigation(t *testing.T)
 	}
 }
 
-func TestShortsMomentViewSyncRefreshesStorySurfaces(t *testing.T) {
-	srcBytes, err := os.ReadFile("../../static/js/src/shorts/index.js")
-	if err != nil {
-		t.Fatal(err)
-	}
-	src := string(srcBytes)
-	checks := []string{
-		"function refreshStorySurfaces(silent)",
-		"function scheduleStorySurfaceRefresh(silent)",
-		"refreshStorySurfaces(true)",
-		"window.SyncPoller.on('moment_view'",
-		"scheduleStorySurfaceRefresh(true)",
-		"tabGridCache.delete('stories')",
-	}
-	for _, check := range checks {
-		if !strings.Contains(src, check) {
-			t.Errorf("story sync refresh wiring missing %q", check)
-		}
-	}
-	handlerStart := strings.Index(src, "window.SyncPoller.on('moment_view'")
-	if handlerStart < 0 {
-		t.Fatal("moment_view sync handler missing")
-	}
-	handlerEnd := strings.Index(src[handlerStart:], "window.SyncPoller.on('moments_cursor'")
-	if handlerEnd < 0 {
-		t.Fatal("moments_cursor sync handler missing after moment_view handler")
-	}
-	handler := src[handlerStart : handlerStart+handlerEnd]
-	if strings.Contains(handler, "state.viewedIds.add") {
-		t.Fatal("remote moment_view sync must not mutate local viewedIds")
-	}
-}
-
 func TestShortsOverlayPrewarmsNearbyVideosBeforeScrollActivation(t *testing.T) {
 	srcBytes, err := os.ReadFile("../../static/js/src/shorts/overlay.js")
 	if err != nil {

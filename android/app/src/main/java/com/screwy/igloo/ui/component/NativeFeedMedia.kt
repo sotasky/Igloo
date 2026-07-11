@@ -4,7 +4,6 @@
 package com.screwy.igloo.ui.component
 
 import android.content.Context
-import android.graphics.BitmapFactory
 import android.graphics.Rect
 import android.view.View
 import android.widget.ImageView
@@ -218,30 +217,7 @@ internal fun nativeStableSingleMediaAspectRatio(cell: com.screwy.igloo.feed.Feed
     }
 
 internal fun nativeStableSingleMediaAspectRatio(cell: FeedMediaCellModel): Float =
-    when {
-        cell.descriptor.aspectRatioKnown -> cell.descriptor.aspectRatio.coerceIn(0.55f, 2.4f)
-        else -> nativeLocalMediaAspectRatio(cell.previewItem)?.coerceIn(0.55f, 2.4f)
-            ?: nativeStableSingleMediaAspectRatio(cell.descriptor)
-    }
-
-internal fun nativeLocalMediaAspectRatio(item: MediaItem?): Float? {
-    val uri = when (item) {
-        is MediaItem.Image -> item.uri
-        is MediaItem.Video -> item.thumbnailUri
-        is MediaItem.Gif, null -> return null
-    }
-    return nativeLocalImageAspectRatio(uri)
-}
-
-private fun nativeLocalImageAspectRatio(uri: MediaUri): Float? {
-    if (uri !is MediaUri.Local) return null
-    val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-    BitmapFactory.decodeFile(uri.file.absolutePath, options)
-    val width = options.outWidth
-    val height = options.outHeight
-    if (width <= 0 || height <= 0) return null
-    return width.toFloat() / height.toFloat()
-}
+    nativeStableSingleMediaAspectRatio(cell.descriptor)
 
 internal data class NativeMediaDimensions(
     val widthPx: Int,
@@ -277,8 +253,7 @@ internal fun FeedMediaCellModel.artworkUri(): MediaUri {
         is MediaItem.Gif -> return item.streamUri
         null -> Unit
     }
-    val url = descriptor.posterUrl.ifBlank { descriptor.displayUrl }
-    return url.takeIf { it.isNotBlank() }?.let(MediaUri::Remote) ?: MediaUri.Missing
+	return MediaUri.Missing
 }
 
 internal fun FeedMediaCellModel.streamUri(): MediaUri {
@@ -287,7 +262,7 @@ internal fun FeedMediaCellModel.streamUri(): MediaUri {
         is MediaItem.Gif -> return item.streamUri
         is MediaItem.Image, null -> Unit
     }
-    return descriptor.streamUrl.takeIf { it.isNotBlank() }?.let(MediaUri::Remote) ?: MediaUri.Missing
+	return MediaUri.Missing
 }
 
 private fun MediaUri.toMedia3ItemOrNull(): Media3Item? = when (this) {

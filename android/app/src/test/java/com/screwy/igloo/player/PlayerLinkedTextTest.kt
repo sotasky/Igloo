@@ -10,10 +10,11 @@ class PlayerLinkedTextTest {
 
     @Test
     fun annotate_links_mentions_and_timestamps() {
-        val annotated = annotatePlayerLinkedText(
-            text = "Hi @alice see https://example.com at 1:23",
-            linkColor = Color.Red,
-        )
+        val annotated =
+            annotatePlayerLinkedText(
+                text = "Hi @alice see https://example.com at 1:23",
+                linkColor = Color.Red,
+            )
 
         val annotations = annotated.getStringAnnotations(0, annotated.length)
         assertEquals(3, annotations.size)
@@ -27,10 +28,11 @@ class PlayerLinkedTextTest {
 
     @Test
     fun timestamp_inside_url_is_not_annotated_twice() {
-        val annotated = annotatePlayerLinkedText(
-            text = "https://example.com/watch?v=1:23",
-            linkColor = Color.Red,
-        )
+        val annotated =
+            annotatePlayerLinkedText(
+                text = "https://example.com/watch?v=1:23",
+                linkColor = Color.Red,
+            )
 
         val annotations = annotated.getStringAnnotations(0, annotated.length)
         assertEquals(1, annotations.size)
@@ -39,26 +41,31 @@ class PlayerLinkedTextTest {
 
     @Test
     fun youtube_comment_patreon_link_is_clickable_and_themed() {
-        val annotated = annotatePlayerLinkedText(
-            text = "If it matters to you: https://www.patreon.com/c/thehatedone",
-            linkColor = Color.Red,
-        )
+        val annotated =
+            annotatePlayerLinkedText(
+                text = "If it matters to you: https://www.patreon.com/c/thehatedone",
+                linkColor = Color.Red,
+            )
 
         val url = annotated.getStringAnnotations(0, annotated.length).single { it.tag == TAG_URL }
         assertEquals("https://www.patreon.com/c/thehatedone", url.item)
-        val style = annotated.spanStyles.single {
-            it.start == "If it matters to you: ".length && it.end == annotated.length
-        }.item
+        val style =
+            annotated.spanStyles
+                .single {
+                    it.start == "If it matters to you: ".length && it.end == annotated.length
+                }
+                .item
         assertEquals(Color.Red, style.color)
         assertEquals(TextDecoration.Underline, style.textDecoration)
     }
 
     @Test
     fun scheme_less_comment_links_get_https_without_trailing_punctuation() {
-        val annotated = annotatePlayerLinkedText(
-            text = "support me at patreon.com/example.",
-            linkColor = Color.Red,
-        )
+        val annotated =
+            annotatePlayerLinkedText(
+                text = "support me at patreon.com/example.",
+                linkColor = Color.Red,
+            )
 
         val url = annotated.getStringAnnotations(0, annotated.length).single { it.tag == TAG_URL }
         assertEquals("https://patreon.com/example", url.item)
@@ -67,32 +74,32 @@ class PlayerLinkedTextTest {
 
     @Test
     fun email_domains_are_not_annotated_as_urls() {
-        val annotated = annotatePlayerLinkedText(
-            text = "mail support@example.com",
-            linkColor = Color.Red,
-        )
+        val annotated =
+            annotatePlayerLinkedText(text = "mail support@example.com", linkColor = Color.Red)
 
         assertTrue(annotated.getStringAnnotations(0, annotated.length).none { it.tag == TAG_URL })
     }
 
     @Test
     fun mention_parser_supports_dots_and_hyphens_without_trailing_punctuation() {
-        val annotated = annotatePlayerLinkedText(
-            text = "See @creator.name-youtube, then @second_handle.",
-            linkColor = Color.Red,
-        )
+        val annotated =
+            annotatePlayerLinkedText(
+                text = "See @creator.name-youtube, then @second_handle.",
+                linkColor = Color.Red,
+            )
 
-        val mentions = annotated.getStringAnnotations(0, annotated.length)
-            .filter { it.tag == TAG_MENTION }
+        val mentions =
+            annotated.getStringAnnotations(0, annotated.length).filter { it.tag == TAG_MENTION }
 
         assertEquals(listOf("creator.name-youtube", "second_handle"), mentions.map { it.item })
     }
 
     @Test
     fun parse_metadata_counts_reads_server_labels() {
-        val counts = parseVideoMetadataCounts(
-            """{"view_count":182191,"view_count_label":"182K","like_count":9051,"like_count_label":"9.1K"}""",
-        )
+        val counts =
+            parseVideoMetadataCounts(
+                """{"view_count":182191,"view_count_label":"182K","like_count":9051,"like_count_label":"9.1K"}"""
+            )
 
         assertEquals(182_191L, counts.viewCount)
         assertEquals("182K", counts.viewCountLabel)
@@ -102,9 +109,10 @@ class PlayerLinkedTextTest {
 
     @Test
     fun parse_metadata_counts_ignores_non_primitive_labels() {
-        val counts = parseVideoMetadataCounts(
-            """{"view_count":"x","view_count_label":{},"like_count":"y","like_count_label":["bad"]}""",
-        )
+        val counts =
+            parseVideoMetadataCounts(
+                """{"view_count":"x","view_count_label":{},"like_count":"y","like_count_label":["bad"]}"""
+            )
 
         assertEquals(null, counts.viewCount)
         assertEquals(null, counts.viewCountLabel)
@@ -124,39 +132,4 @@ class PlayerLinkedTextTest {
         assertEquals("youtube_UCabc123", youtubeCommentAuthorChannelId(" youtube_UCabc123 "))
         assertEquals(null, youtubeCommentAuthorChannelId("@handle"))
     }
-
-    @Test
-    fun comment_render_metadata_uses_synced_presentation_fields() {
-        val comment = com.screwy.igloo.data.entity.VideoCommentEntity(
-            videoId = "vid",
-            commentId = "reply",
-            authorName = "@reply",
-            text = "child",
-            publishedAt = 10,
-            threadDepth = 2,
-            replyToAuthor = "Creator",
-            isCreator = true,
-            likeCountLabel = "12.3K",
-        )
-
-        assertEquals(2, commentRenderDepth(comment))
-        assertEquals("Creator", commentReplyAuthor(comment))
-        assertTrue(commentIsCreator(comment))
-        assertEquals("12.3K", commentLikeCountLabel(comment))
-    }
-
-    @Test
-    fun comment_reply_author_hides_blank_reply_targets() {
-        val comment = com.screwy.igloo.data.entity.VideoCommentEntity(
-            videoId = "vid",
-            commentId = "root",
-            authorName = "Creator",
-            text = "root",
-            publishedAt = 10,
-            replyToAuthor = "   ",
-        )
-
-        assertEquals(null, commentReplyAuthor(comment))
-    }
-
 }

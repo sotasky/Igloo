@@ -10,6 +10,7 @@ import com.screwy.igloo.feed.FeedMediaGridModel
 import com.screwy.igloo.feed.FeedMediaModelStore
 import com.screwy.igloo.feed.feedMediaCount
 import com.screwy.igloo.net.ServerBaseUrlProvider
+import com.screwy.igloo.net.Reachability
 import com.screwy.igloo.outbox.OutboxKind
 import com.screwy.igloo.outbox.OutboxWriter
 import com.screwy.igloo.ui.UiEffect
@@ -33,6 +34,7 @@ class ThreadViewModel(
     private val outboxWriter: OutboxWriter,
     private val uiEffects: UiEffects,
     baseUrlProvider: ServerBaseUrlProvider,
+    reachability: Reachability,
 ) : ViewModel() {
     private val _chain = MutableStateFlow<List<FeedRow>>(emptyList())
     val chain: StateFlow<List<FeedRow>> = _chain.asStateFlow()
@@ -40,6 +42,7 @@ class ThreadViewModel(
     private val mediaModelStore = FeedMediaModelStore(
         db = db,
         baseUrlProvider = baseUrlProvider,
+        reachability = reachability,
         scope = viewModelScope,
     )
     val mediaModels: StateFlow<Map<String, FeedMediaGridModel>> = mediaModelStore.mediaModels
@@ -54,8 +57,8 @@ class ThreadViewModel(
             .map { entities -> entities.map { BookmarkCategoryDisplay(it.categoryId, it.name) } }
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), emptyList())
 
-    val mutedHandles: StateFlow<Set<String>> = db.mutedAccountDao().allFlow()
-        .map { rows -> rows.mapTo(linkedSetOf()) { it.handle.lowercase() } }
+    val mutedChannelIds: StateFlow<Set<String>> = db.mutedChannelDao().allFlow()
+        .map { rows -> rows.mapTo(linkedSetOf()) { it.channelId } }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), emptySet())
 
     fun load(tweetId: String) {
@@ -69,7 +72,7 @@ class ThreadViewModel(
         currentTweetId = tweetId
         val rows = loadThreadRows(tweetId)
         _chain.value = rows
-        mediaModelStore.warmMediaModels(rows)
+        mediaModelStore.setMediaModelRows(rows)
     }
 
     fun toggleLike(tweetId: String, newValue: Boolean) {
@@ -101,7 +104,6 @@ class ThreadViewModel(
         val target = _pendingBookmark.value ?: return
         _pendingBookmark.value = null
         viewModelScope.launch {
-            val prev = outboxWriter.capturePreviousBookmark(target.itemId)
             outboxWriter.enqueue(
                 OutboxKind.Bookmark(
                     videoId = target.itemId,
@@ -110,7 +112,6 @@ class ThreadViewModel(
                     customTitle = payload.customTitle,
                     accountHandles = payload.accountHandles?.joinToString(","),
                     mediaIndices = payload.mediaIndices?.joinToString(","),
-                    prevRow = prev,
                 )
             )
             reloadCurrentThread()
@@ -121,12 +122,10 @@ class ThreadViewModel(
         val target = _pendingBookmark.value ?: return
         _pendingBookmark.value = null
         viewModelScope.launch {
-            val prev = outboxWriter.capturePreviousBookmark(target.itemId)
             outboxWriter.enqueue(
                 OutboxKind.Bookmark(
                     videoId = target.itemId,
                     action = OutboxKind.Action.Clear,
-                    prevRow = prev,
                 )
             )
             reloadCurrentThread()
@@ -156,10 +155,10 @@ class ThreadViewModel(
         }
     }
 
-    fun toggleMute(handle: String, newValue: Boolean) {
+    fun toggleMute(channelId: String, newValue: Boolean) {
         val action = if (newValue) OutboxKind.Action.Set else OutboxKind.Action.Clear
         viewModelScope.launch {
-            outboxWriter.enqueue(OutboxKind.Mute(handle = handle, action = action))
+            outboxWriter.enqueue(OutboxKind.Mute(channelId = channelId, action = action))
             reloadCurrentThread()
         }
     }
@@ -175,15 +174,15 @@ class ThreadViewModel(
         }
     }
 
-    fun warmMediaModels(rows: List<FeedRow>) {
-        mediaModelStore.warmMediaModels(rows)
+    fun setMediaModelRows(rows: List<FeedRow>) {
+        mediaModelStore.setMediaModelRows(rows)
     }
 
     private suspend fun reloadCurrentThread() {
         val tweetId = currentTweetId ?: return
         val rows = loadThreadRows(tweetId)
         _chain.value = rows
-        mediaModelStore.warmMediaModels(rows)
+        mediaModelStore.setMediaModelRows(rows)
     }
 
     private suspend fun loadThreadRows(tweetId: String): List<FeedRow> {
@@ -201,8 +200,8 @@ class ThreadViewModel(
     private suspend fun quoteFallbackRow(tweetId: String, sourceRow: FeedRow): FeedRow? {
         val source = sourceRow.item
         val quoteId = source.quoteTweetId?.trim()?.takeIf { it == tweetId } ?: return null
-        val quoteHandle = normalizeHandle(source.quoteAuthorHandle)
-        val quoteDisplayName = source.quoteAuthorDisplayName.trimOrNull()
+        val quoteHandle = normalizeHandle(sourceRow.quoteAuthorHandle)
+        val quoteDisplayName = sourceRow.quoteAuthorDisplayName.trimOrNull()
         val quoteBody = source.quoteBodyText.trimOrNull()
         val quoteMediaJson = source.quoteMediaJson.trimOrNull()
         val hasUsableQuotePayload = quoteHandle.isNotBlank() ||
@@ -213,7 +212,6 @@ class ThreadViewModel(
         if (!hasUsableQuotePayload) return null
 
         val quoteChannelId = sourceRow.quoteChannelId.trimOrNull()
-            ?: quoteHandle.takeIf { it.isNotBlank() }?.let { "twitter_${it.lowercase()}" }
         val quoteChannel = quoteChannelId?.let { db.channelDao().getById(it) }
         val quoteProfile = quoteChannelId?.let { db.channelProfileDao().getById(it) }
         val bookmark = db.bookmarkDao().getById(quoteId)
@@ -227,12 +225,7 @@ class ThreadViewModel(
         return FeedRow(
             item = FeedItemEntity(
                 tweetId = quoteId,
-                sourceHandle = quoteHandle.takeIf { it.isNotBlank() },
-                authorHandle = quoteHandle,
-                authorDisplayName = quoteDisplayName,
-                authorAvatarUrl = quoteProfile?.avatarUrl.trimOrNull()
-                    ?: quoteChannel?.avatarUrl.trimOrNull()
-                    ?: source.quoteAuthorAvatarUrl.trimOrNull(),
+                sourceChannelId = quoteChannelId,
                 bodyText = quoteBody,
                 lang = source.quoteLang.trimOrNull(),
                 mediaJson = quoteMediaJson,
@@ -245,12 +238,12 @@ class ThreadViewModel(
                 ?: quoteChannel?.name.trimOrNull()
                 ?: quoteDisplayName
                 ?: quoteHandle.takeIf { it.isNotBlank() },
-            channelAvatarUrl = quoteProfile?.avatarUrl.trimOrNull()
-                ?: quoteChannel?.avatarUrl.trimOrNull()
-                ?: source.quoteAuthorAvatarUrl.trimOrNull(),
             channelPlatform = quoteProfile?.platform.trimOrNull()
                 ?: quoteChannel?.platform.trimOrNull()
                 ?: "twitter",
+            authorHandle = quoteHandle,
+            authorDisplayName = quoteDisplayName,
+            sourceHandle = quoteHandle,
             isLiked = quoteIsLiked,
             likedAt = null,
             isBookmarked = if (bookmark != null) 1 else 0,
@@ -270,12 +263,12 @@ class ThreadViewModel(
     ): BookmarkTarget =
         BookmarkTarget(
             itemId = row.item.tweetId,
-            authorHandle = row.item.authorHandle,
+            authorHandle = row.authorHandle.orEmpty(),
             mediaCount = feedMediaCount(row.item),
             currentBookmark = currentBookmark,
             defaultTitle = row.item.bodyText?.lineSequence()?.firstOrNull(),
-            sourceHandle = row.item.sourceHandle,
-            quoteAuthorHandle = row.item.quoteAuthorHandle,
+            sourceHandle = row.sourceHandle,
+            quoteAuthorHandle = row.quoteAuthorHandle,
             bodyText = row.item.bodyText,
             isRetweet = row.item.isRetweet,
         )

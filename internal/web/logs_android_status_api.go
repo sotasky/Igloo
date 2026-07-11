@@ -1,6 +1,7 @@
 package web
 
 import (
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -12,208 +13,46 @@ import (
 	"github.com/screwys/igloo/internal/db"
 )
 
+type androidStatusLogEntry struct {
+	TimestampMs int64          `json:"timestamp_ms"`
+	Level       string         `json:"level"`
+	Event       string         `json:"event"`
+	Fields      map[string]any `json:"fields"`
+}
+
+type androidStatusError struct {
+	Tag       string `json:"tag"`
+	Message   string `json:"message"`
+	Timestamp string `json:"timestamp"`
+	Count     int    `json:"count"`
+}
+
 func (s *Server) handleAndroidStatus(w http.ResponseWriter, r *http.Request) {
-	android.mu.Lock()
-	buf := make([]androidLogEvent, len(android.eventBuffer))
-	copy(buf, android.eventBuffer)
-	pending := android.forceSyncFlag
-	android.mu.Unlock()
-
-	// Bootstrap from log file if buffer is empty
-	if len(buf) == 0 {
-		path := filepath.Join(s.cfg.DataDir, "logs", "android", "android.log")
-		if lines, err := readLastLines(path, 200); err == nil {
-			for _, line := range lines {
-				buf = append(buf, parseLogLine(line))
-			}
-		}
+	clock, err := s.db.GetAndroidSyncClock()
+	if err != nil {
+		slog.Warn("android dashboard sync clock failed", "err", err)
+	}
+	health, err := s.db.GetLatestAndroidSyncHealthReport()
+	if err != nil {
+		slog.Warn("android dashboard health failed", "err", err)
 	}
 
-	android.mu.Lock()
-	cacheHealth := android.cacheHealth
-	if cacheHealth == nil {
-		cacheHealth = loadCacheHealthFromDisk(s.cfg.DataDir)
-		android.cacheHealth = cacheHealth
-	}
-	android.mu.Unlock()
-
-	clientEntries := readAndroidClientLogEntries(s.cfg.DataDir, 500)
-	if len(clientEntries) > 0 {
-		buf = structuredEventsToLogEvents(clientEntries)
+	ready, missing := 0, 0
+	if err := s.db.QueryRow(`
+		SELECT
+			COALESCE(SUM(state = 'ready'), 0),
+			COALESCE(SUM(state IN ('server_missing', 'permanent_missing')), 0)
+		FROM assets
+		WHERE state != 'pruned'
+	`).Scan(&ready, &missing); err != nil {
+		slog.Warn("android dashboard asset summary failed", "err", err)
 	}
 
-	latestGeneration, genErr := s.db.GetLatestAndroidSyncGeneration()
-	if genErr != nil {
-		slog.Warn("android dashboard latest generation failed", "err", genErr)
-	}
-	latestHealth, healthErr := s.db.GetLatestAndroidSyncHealthReport()
-	if healthErr != nil {
-		slog.Warn("android dashboard latest health failed", "err", healthErr)
-	}
-	latestGenerationID := ""
-	if latestGeneration != nil {
-		latestGenerationID = latestGeneration.GenerationID
-	}
-	if latestHealth != nil && latestHealth.GenerationID != "" {
-		latestGenerationID = latestHealth.GenerationID
-	}
-	healthReportedAtMs := int64(0)
-	if latestHealth != nil {
-		healthReportedAtMs = latestHealth.ReportedAtMs
-	}
-
-	lastSync, syncSteps := parseSyncCycle(buf)
-	structuredSync := parseStructuredSync(clientEntries, cacheHealth, latestGenerationID, latestGeneration != nil, healthReportedAtMs)
-	if structuredSync.Available {
-		syncSteps = structuredSync.Steps
-	}
-	if !structuredSync.Started.IsZero() {
-		lastSync = map[string]any{
-			"started": structuredSync.Started.Format(time.RFC3339),
-		}
-		if structuredSync.CompletedAt {
-			lastSync["completed"] = structuredSync.Completed.Format(time.RFC3339)
-			lastSync["ago"] = formatAgo(time.Since(structuredSync.Completed).Seconds())
-			lastSync["elapsed"] = formatDuration(structuredSync.Completed.Sub(structuredSync.Started))
-		}
-	}
-
-	// Compute elapsed/ago for lastSync
-	if lastSync != nil {
-		if completedStr, ok := lastSync["completed"].(string); ok && completedStr != "" {
-			if completedT, err := parseAndroidTimestamp(completedStr); err == nil {
-				if startedStr, ok := lastSync["started"].(string); ok && startedStr != "" {
-					if startedT, err := parseAndroidTimestamp(startedStr); err == nil {
-						lastSync["elapsed"] = fmt.Sprintf("%.1fs", completedT.Sub(startedT).Seconds())
-					}
-				}
-				lastSync["ago"] = formatAgo(time.Since(completedT).Seconds())
-			}
-		}
-		if _, ok := lastSync["elapsed"]; !ok {
-			lastSync["elapsed"] = "?"
-		}
-		if _, ok := lastSync["ago"]; !ok {
-			lastSync["ago"] = "?"
-		}
-	}
-	if latestHealth != nil {
-		completed := time.UnixMilli(latestHealth.ReportedAtMs)
-		lastSync = map[string]any{
-			"completed": completed.Format(time.RFC3339),
-			"ago":       formatAgo(time.Since(completed).Seconds()),
-		}
-		if structuredSync.CompletedAt && !structuredSync.Started.IsZero() {
-			lastSync["started"] = structuredSync.Started.Format(time.RFC3339)
-			lastSync["elapsed"] = formatDuration(structuredSync.Completed.Sub(structuredSync.Started))
-		} else if duration := androidSyncGenerationDuration(clientEntries, latestHealth.GenerationID); duration > 0 {
-			lastSync["elapsed"] = formatDuration(duration)
-		}
-	} else if lastSync == nil && latestGeneration != nil {
-		generated := time.UnixMilli(latestGeneration.CreatedAtMs)
-		lastSync = map[string]any{
-			"completed": generated.Format(time.RFC3339),
-			"ago":       "generation ready",
-		}
-	}
-
-	user := userFromContext(r.Context())
-	username := ""
-	if user != nil {
-		username = user.Username
-	}
-	retention := cacheHealthSettings(cacheHealth)
-	if latestGeneration != nil {
-		if genRetention, ok := androidRetentionSettingsFromGeneration(latestGeneration.Retention); ok {
-			retention = genRetention
-		}
-	}
-	if latestHealth != nil && latestHealth.HasRetention {
-		retention = latestHealth.Retention
-	}
-	var expectations db.AndroidDashboardExpectations
-	var expErr error
-	if latestGeneration == nil {
-		expectations, expErr = s.db.GetAndroidDashboardExpectations(username, retention, time.Now().UnixMilli())
-		if expErr != nil {
-			slog.Warn("android dashboard expectations failed", "err", expErr)
-		}
-	}
-	feedItemsTotal := 0
-	feedItemsMedia := 0
-	if latestGeneration != nil {
-		feedItemsTotal = latestGeneration.ContentCounts["feed_items"]
-		feedItemsMedia = androidGenerationFeedAssetCount(latestGeneration.AssetCounts)
-	} else {
-		feedItemsTotal = expectations.FeedItems
-		feedItemsMedia = expectations.FeedMedia
-		if feedItemsTotal == 0 {
-			feedItemsTotal = parseAndroidFeedItemCounts(buf)
-		}
-	}
-	feedItems := map[string]any{"total": feedItemsTotal, "with_media": feedItemsMedia}
-
-	stepsCompleted := 0
-	for _, step := range syncSteps {
-		if step.Status == "done" {
-			stepsCompleted++
-		}
-	}
-
-	// Activity: newest first, cap 50
-	activityCap := min(50, len(buf))
-	activity := make([]androidLogEvent, activityCap)
-	for i := range activityCap {
-		activity[i] = buf[len(buf)-1-i]
-	}
-
-	// Errors: deduplicated; warnings: up to 20
-	type errorEntry struct {
-		Tag       string `json:"tag"`
-		Message   string `json:"message"`
-		Timestamp string `json:"timestamp"`
-		FirstSeen string `json:"first_seen"`
-		Count     int    `json:"count"`
-	}
-	type errKey struct{ tag, msg string }
-	var errors []errorEntry
-	errorKeys := make(map[errKey]int)
-	var warnings []map[string]any
-	warningCount := 0
-
-	for i := len(buf) - 1; i >= 0; i-- {
-		e := buf[i]
-		switch strings.ToUpper(e.Level) {
-		case "ERROR":
-			msgKey := e.Message
-			if len(msgKey) > 80 {
-				msgKey = msgKey[:80]
-			}
-			k := errKey{e.Tag, msgKey}
-			if idx, exists := errorKeys[k]; exists {
-				errors[idx].Count++
-			} else {
-				errorKeys[k] = len(errors)
-				errors = append(errors, errorEntry{
-					Tag: e.Tag, Message: e.Message,
-					Timestamp: e.Timestamp, FirstSeen: e.Timestamp, Count: 1,
-				})
-			}
-		case "WARN", "WARNING":
-			warningCount++
-			if len(warnings) < 20 {
-				warnings = append(warnings, map[string]any{
-					"tag": e.Tag, "message": e.Message, "timestamp": e.Timestamp,
-				})
-			}
-		}
-	}
-
-	if errors == nil {
-		errors = []errorEntry{}
-	}
-	if warnings == nil {
-		warnings = []map[string]any{}
+	entries := readAndroidStatusLogEntries(s.cfg.Storage.StateRoot(), 500)
+	activity, errors, warnings := summarizeAndroidStatusLogs(entries)
+	retention := db.AndroidRetentionSettings{FeedDays: 7, YoutubeDays: 7, MomentsDays: 7, StoryHours: 48}
+	if health != nil && health.HasRetention {
+		retention = health.Retention
 	}
 
 	if r.URL.Query().Get("fmt") == "html" {
@@ -221,190 +60,187 @@ func (s *Server) handleAndroidStatus(w http.ResponseWriter, r *http.Request) {
 		if filter == "" {
 			filter = "all"
 		}
-		generationItems, generationAssets, generationReady, generationMissing := 0, 0, 0, 0
-		if latestGeneration != nil {
-			generationItems = latestGeneration.ItemCount
-			generationAssets = latestGeneration.AssetCount
-			generationReady = latestGeneration.ReadyAssetCount
-			generationMissing = latestGeneration.ServerMissingAssetCount
+		data := components.AndroidDashboardData{
+			ErrorCount:   len(errors),
+			WarningCount: len(warnings),
+			LogFilter:    filter,
 		}
-		deviceVerified, devicePending, deviceFailed, deviceMissing, deviceTotal := 0, 0, 0, 0, 0
-		deviceBytes := ""
-		if latestHealth != nil {
-			deviceVerified = latestHealth.VerifiedAssets
-			devicePending = latestHealth.PendingAssets
-			deviceFailed = latestHealth.FailedAssets
-			deviceMissing = latestHealth.MissingAssets
-			deviceTotal = latestHealth.TotalAssets
-			deviceBytes = formatAndroidBytes(latestHealth.VerifiedBytes)
-		} else if latestGeneration != nil {
-			deviceTotal = latestGeneration.AssetCount
+		if health != nil {
+			data.DeviceVerified = health.VerifiedAssets
+			data.DevicePending = health.PendingAssets
+			data.DeviceMissing = health.MissingAssets
+			data.DeviceTotal = health.TotalAssets
+			data.DevicePercent = androidStatusPercent(health.VerifiedAssets, health.TotalAssets)
+			data.DeviceBytes = formatAndroidStatusBytes(health.VerifiedBytes)
+			data.SyncCompletedHMS = time.UnixMilli(health.ReportedAtMs).Local().Format("15:04:05")
+			data.SyncAgo = formatAndroidStatusAgo(time.Since(time.UnixMilli(health.ReportedAtMs)))
 		}
-		d := components.AndroidDashboardData{
-			StepsCompleted:    stepsCompleted,
-			StepsTotal:        len(syncSteps),
-			FeedItemsTotal:    feedItemsTotal,
-			FeedItemsMedia:    feedItemsMedia,
-			GenerationItems:   generationItems,
-			GenerationAssets:  generationAssets,
-			GenerationReady:   generationReady,
-			GenerationMissing: generationMissing,
-			DevicePercent:     androidPercent(deviceVerified, deviceTotal),
-			DeviceVerified:    deviceVerified,
-			DevicePending:     devicePending,
-			DeviceFailed:      deviceFailed,
-			DeviceMissing:     deviceMissing,
-			DeviceTotal:       deviceTotal,
-			DeviceBytes:       deviceBytes,
-			ErrorCount:        len(errors),
-			WarningCount:      warningCount,
-			LogFilter:         filter,
-			ForceSyncPending:  pending,
-		}
-		if lastSync != nil {
-			d.SyncAgo, _ = lastSync["ago"].(string)
-			d.SyncDuration, _ = lastSync["elapsed"].(string)
-			if completedStr, ok := lastSync["completed"].(string); ok && completedStr != "" {
-				if t, err := parseAndroidTimestamp(completedStr); err == nil {
-					d.SyncCompletedHMS = t.Local().Format("15:04:05")
-				}
-			}
-			if startedStr, ok := lastSync["started"].(string); ok && startedStr != "" {
-				startedHMS, endedHMS := "", ""
-				if t, err := parseAndroidTimestamp(startedStr); err == nil {
-					startedHMS = t.Local().Format("15:04:05")
-				}
-				if completedStr, ok := lastSync["completed"].(string); ok && completedStr != "" {
-					if t, err := parseAndroidTimestamp(completedStr); err == nil {
-						endedHMS = t.Local().Format("15:04:05")
-					}
-				}
-				if startedHMS != "" && endedHMS != "" {
-					d.PipelineFooter = "Sync started " + startedHMS + " \u00b7 completed " + endedHMS + " \u00b7 " + d.SyncDuration + " total"
-				}
-			}
-		}
-		if structuredSync.Footer != "" {
-			d.PipelineFooter = structuredSync.Footer
-		}
-		for _, step := range syncSteps {
-			ps := components.AndroidPipelineStep{Name: step.Name, Status: step.Status}
-			if step.DurationMs != nil {
-				if ms, ok := step.DurationMs.(int); ok {
-					if ms >= 1000 {
-						ps.Duration = fmt.Sprintf("%.1fs", float64(ms)/1000)
-					} else {
-						ps.Duration = fmt.Sprintf("%dms", ms)
-					}
-				} else if ms, ok := step.DurationMs.(float64); ok {
-					if ms >= 1000 {
-						ps.Duration = fmt.Sprintf("%.1fs", ms/1000)
-					} else {
-						ps.Duration = fmt.Sprintf("%.0fms", ms)
-					}
-				} else if ms, ok := step.DurationMs.(int64); ok {
-					if ms >= 1000 {
-						ps.Duration = fmt.Sprintf("%.1fs", float64(ms)/1000)
-					} else {
-						ps.Duration = fmt.Sprintf("%dms", ms)
-					}
-				}
-			}
-			d.Pipeline = append(d.Pipeline, ps)
-		}
-		d.CacheHealth = androidAssetHealthRows(latestHealth, latestGeneration != nil, generationReady, generationAssets)
-		// Activity with dedup
-		prevKey := ""
-		for _, e := range activity {
-			tsSec := e.Timestamp
-			if len(tsSec) > 19 {
-				tsSec = tsSec[:19]
-			}
-			key := tsSec + "|" + e.Tag + "|" + e.Message
-			if key == prevKey {
-				continue
-			}
-			prevKey = key
-			levelCSS := "log-lvl-info"
-			switch strings.ToUpper(e.Level) {
-			case "ERROR":
-				levelCSS = "log-lvl-err"
-			case "WARN", "WARNING":
-				levelCSS = "log-lvl-warn"
-			}
-			tsDisp := e.Timestamp
-			if t, err := parseAndroidTimestamp(e.Timestamp); err == nil {
-				tsDisp = t.Local().Format("15:04:05")
-			}
-			d.Activity = append(d.Activity, components.AndroidLogEntry{
-				Timestamp: tsDisp, Tag: e.Tag, Message: e.Message, LevelCSS: levelCSS,
+		data.CacheHealth = androidStatusAssetRows(health, ready+missing > 0, ready, missing)
+		for _, entry := range activity {
+			data.Activity = append(data.Activity, components.AndroidLogEntry{
+				Timestamp: androidStatusClock(entry.TimestampMs),
+				Tag:       entry.Event, Message: androidStatusMessage(entry),
+				LevelCSS: androidStatusLevelCSS(entry.Level),
 			})
 		}
-		for _, e := range errors {
-			tsDisp := e.Timestamp
-			if t, err := parseAndroidTimestamp(e.Timestamp); err == nil {
-				tsDisp = t.Local().Format("15:04:05")
-			}
-			firstDisp := ""
-			if e.FirstSeen != "" && e.FirstSeen != e.Timestamp {
-				if t, err := parseAndroidTimestamp(e.FirstSeen); err == nil {
-					firstDisp = t.Local().Format("15:04:05")
-				}
-			}
-			d.Errors = append(d.Errors, components.AndroidErrorEntry{
-				Tag: e.Tag, Message: e.Message, Timestamp: tsDisp, FirstSeen: firstDisp, Count: e.Count,
+		for _, entry := range errors {
+			data.Errors = append(data.Errors, components.AndroidErrorEntry{
+				Tag: entry.Tag, Message: entry.Message, Timestamp: entry.Timestamp, Count: entry.Count,
 			})
 		}
-		for _, w := range warnings {
-			tag, _ := w["tag"].(string)
-			msg, _ := w["message"].(string)
-			d.Warnings = append(d.Warnings, components.AndroidWarningEntry{Tag: tag, Message: msg})
+		for _, entry := range warnings {
+			data.Warnings = append(data.Warnings, components.AndroidWarningEntry{
+				Tag: entry.Tag, Message: entry.Message,
+			})
 		}
 		w.Header().Set("Content-Type", "text/html")
-		_ = components.AndroidDashboard(s.pageProps(w, r), d).Render(r.Context(), w)
+		_ = components.AndroidDashboard(s.pageProps(w, r), data).Render(r.Context(), w)
 		return
 	}
 
-	writeJSON(w, 200, map[string]any{
-		"last_sync":          lastSync,
-		"sync_steps":         syncSteps,
-		"feed_items":         feedItems,
-		"steps_completed":    stepsCompleted,
-		"steps_total":        len(syncSteps),
-		"activity":           activity,
-		"errors":             errors,
-		"warnings":           warnings,
-		"error_count":        len(errors),
-		"warning_count":      warningCount,
-		"force_sync_pending": pending,
-		"cache_health":       cacheHealth,
-		"cache_expected": map[string]any{
-			"videos":  expectations.Videos,
-			"moments": expectations.Moments,
-			"feed":    expectations.FeedMedia,
-			"avatars": expectations.Avatars,
+	writeJSON(w, http.StatusOK, map[string]any{
+		"sync_revision": clock.Revision,
+		"health":        health,
+		"retention": map[string]int{
+			"feed_days": retention.FeedDays, "youtube_days": retention.YoutubeDays,
+			"moments_days": retention.MomentsDays, "story_hours": retention.StoryHours,
 		},
+		"server_assets": map[string]int{"ready": ready, "missing": missing},
+		"activity":      activity,
+		"errors":        errors,
+		"warnings":      warnings,
 	})
 }
 
-func (s *Server) handleAndroidForceSync(w http.ResponseWriter, r *http.Request) {
-	android.mu.Lock()
-	android.forceSyncFlag = true
-	android.mu.Unlock()
-	writeJSON(w, 200, map[string]any{"success": true})
+func readAndroidStatusLogEntries(dataRoot string, limit int) []androidStatusLogEntry {
+	lines, err := readLastLines(filepath.Join(dataRoot, "logs", "android", "server.log"), limit)
+	if err != nil {
+		return []androidStatusLogEntry{}
+	}
+	out := make([]androidStatusLogEntry, 0, len(lines))
+	for _, line := range lines {
+		var entry androidStatusLogEntry
+		if json.Unmarshal([]byte(line), &entry) != nil || strings.TrimSpace(entry.Event) == "" {
+			continue
+		}
+		out = append(out, entry)
+	}
+	return out
 }
 
-func (s *Server) handleAndroidForceSyncCheck(w http.ResponseWriter, r *http.Request) {
-	android.mu.Lock()
-	pending := android.forceSyncFlag
-	android.forceSyncFlag = false
-	android.mu.Unlock()
-	writeJSON(w, 200, map[string]any{"force_sync": pending})
+func summarizeAndroidStatusLogs(entries []androidStatusLogEntry) ([]androidStatusLogEntry, []androidStatusError, []androidStatusError) {
+	activity := make([]androidStatusLogEntry, 0, min(50, len(entries)))
+	errors := make([]androidStatusError, 0)
+	warnings := make([]androidStatusError, 0)
+	errorIndex := map[string]int{}
+	for i := len(entries) - 1; i >= 0; i-- {
+		entry := entries[i]
+		if len(activity) < 50 {
+			activity = append(activity, entry)
+		}
+		level := strings.ToLower(entry.Level)
+		if level != "error" && level != "warn" && level != "warning" {
+			continue
+		}
+		row := androidStatusError{
+			Tag: entry.Event, Message: androidStatusMessage(entry),
+			Timestamp: androidStatusClock(entry.TimestampMs), Count: 1,
+		}
+		if level == "error" {
+			key := row.Tag + "\x00" + row.Message
+			if index, ok := errorIndex[key]; ok {
+				errors[index].Count++
+				continue
+			}
+			errorIndex[key] = len(errors)
+			errors = append(errors, row)
+		} else if len(warnings) < 20 {
+			warnings = append(warnings, row)
+		}
+	}
+	return activity, errors, warnings
 }
 
-func (s *Server) handleAndroidFetch(w http.ResponseWriter, r *http.Request) {
-	android.mu.Lock()
-	android.fetchRequested = true
-	android.mu.Unlock()
-	writeJSON(w, 200, map[string]any{"success": true})
+func androidStatusMessage(entry androidStatusLogEntry) string {
+	for _, key := range []string{"message", "error", "reason"} {
+		if value, ok := entry.Fields[key].(string); ok && strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func androidStatusClock(timestampMs int64) string {
+	if timestampMs <= 0 {
+		return ""
+	}
+	return time.UnixMilli(timestampMs).Local().Format("15:04:05")
+}
+
+func androidStatusLevelCSS(level string) string {
+	switch strings.ToLower(level) {
+	case "error":
+		return "log-lvl-err"
+	case "warn", "warning":
+		return "log-lvl-warn"
+	default:
+		return "log-lvl-info"
+	}
+}
+
+func formatAndroidStatusAgo(age time.Duration) string {
+	seconds := max(0, int(age.Seconds()))
+	switch {
+	case seconds < 60:
+		return fmt.Sprintf("%ds ago", seconds)
+	case seconds < 3600:
+		return fmt.Sprintf("%dm ago", seconds/60)
+	case seconds < 86400:
+		return fmt.Sprintf("%dh %dm ago", seconds/3600, (seconds%3600)/60)
+	default:
+		return fmt.Sprintf("%dd ago", seconds/86400)
+	}
+}
+
+func formatAndroidStatusBytes(bytes int64) string {
+	switch {
+	case bytes >= 1<<30:
+		return fmt.Sprintf("%.1f GiB", float64(bytes)/(1<<30))
+	case bytes >= 1<<20:
+		return fmt.Sprintf("%.1f MiB", float64(bytes)/(1<<20))
+	case bytes >= 1<<10:
+		return fmt.Sprintf("%.1f KiB", float64(bytes)/(1<<10))
+	case bytes > 0:
+		return fmt.Sprintf("%d B", bytes)
+	default:
+		return ""
+	}
+}
+
+func androidStatusPercent(value, total int) int {
+	if total <= 0 {
+		return 0
+	}
+	return min(100, max(0, value*100/total))
+}
+
+func androidStatusAssetRows(report *db.AndroidSyncHealthReport, hasSnapshot bool, ready, missing int) []components.AndroidCacheRow {
+	if report == nil {
+		if !hasSnapshot || ready+missing == 0 {
+			return nil
+		}
+		total := ready + missing
+		return []components.AndroidCacheRow{
+			{Label: "Server ready", Cached: ready, Total: total, Percent: androidStatusPercent(ready, total), BarCSS: "an-cache-bar-good"},
+			{Label: "Server missing", Cached: missing, Total: total, Percent: androidStatusPercent(missing, total), BarCSS: "an-cache-bar-bad"},
+		}
+	}
+	if report.TotalAssets <= 0 {
+		return nil
+	}
+	return []components.AndroidCacheRow{
+		{Label: "Verified", Cached: report.VerifiedAssets, Total: report.TotalAssets, Percent: androidStatusPercent(report.VerifiedAssets, report.TotalAssets), BarCSS: "an-cache-bar-good"},
+		{Label: "Pending", Cached: report.PendingAssets, Total: report.TotalAssets, Percent: androidStatusPercent(report.PendingAssets, report.TotalAssets), BarCSS: "an-cache-bar-ok"},
+		{Label: "Server missing", Cached: report.MissingAssets, Total: report.TotalAssets, Percent: androidStatusPercent(report.MissingAssets, report.TotalAssets), BarCSS: "an-cache-bar-bad"},
+	}
 }

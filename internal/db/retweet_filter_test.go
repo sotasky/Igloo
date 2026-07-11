@@ -1,38 +1,8 @@
 package db
 
 import (
-	"strings"
 	"testing"
 )
-
-func TestRetweetFilterClause_ContainsBothBranches(t *testing.T) {
-	got := retweetFilterClause("fi")
-
-	// The fragment must apply both branches: pure-RT and quote-tweet.
-	wants := []string{
-		"COALESCE(fi.is_retweet,0) = 1",
-		"lower(fi.source_handle) != lower(COALESCE(fi.author_handle,''))",
-		"rs.content_hash = COALESCE(fi.content_hash,'')",
-		"COALESCE(cs2.include_reposts, 1) != 0",
-		"COALESCE(fi.quote_tweet_id,'') != ''",
-		"lower(fi.author_handle) != lower(COALESCE(fi.quote_author_handle,''))",
-	}
-	for _, w := range wants {
-		if !strings.Contains(got, w) {
-			t.Errorf("clause missing fragment: %q\nfull clause:\n%s", w, got)
-		}
-	}
-}
-
-func TestRetweetFilterClause_AliasIsRespected(t *testing.T) {
-	got := retweetFilterClause("foo")
-	if !strings.Contains(got, "COALESCE(foo.is_retweet,0)") {
-		t.Errorf("expected alias 'foo' in clause, got:\n%s", got)
-	}
-	if strings.Contains(got, "COALESCE(fi.") {
-		t.Errorf("clause leaked default alias 'fi':\n%s", got)
-	}
-}
 
 // fixtureChannel inserts a channels row plus a channel_settings row carrying
 // the given include_reposts value (0 or 1). handle is the bare lowercase
@@ -47,8 +17,8 @@ func fixtureChannel(t *testing.T, d *DB, handle string, includeReposts int) {
 		t.Fatalf("insert channel %s: %v", handle, err)
 	}
 	if _, err := d.conn.Exec(`
-		INSERT INTO channel_follows (user_id, channel_id, followed_at)
-		VALUES ('', ?, 0)
+		INSERT INTO channel_follows (channel_id, followed_at)
+		VALUES (?, 0)
 	`, channelID); err != nil {
 		t.Fatalf("insert channel_follows %s: %v", handle, err)
 	}
@@ -74,18 +44,23 @@ func fixtureFeedItem(
 	if isRetweet {
 		rt = 1
 	}
+	channelID := func(handle string) any {
+		if handle == "" {
+			return nil
+		}
+		return "twitter_" + handle
+	}
 	_, err := d.conn.Exec(`
 		INSERT INTO feed_items (
-			tweet_id, source_handle, author_handle, is_retweet,
+			tweet_id, source_channel_id, channel_id, is_retweet,
 			content_hash, canonical_tweet_id,
-			quote_tweet_id, quote_author_handle,
-			published_at, fetched_at, sync_seq
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, CAST(strftime('%s','now') AS INTEGER) * 1000, CAST(strftime('%s','now') AS INTEGER) * 1000, ?)
+			quote_tweet_id, quote_channel_id,
+			published_at, fetched_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, CAST(strftime('%s','now') AS INTEGER) * 1000, CAST(strftime('%s','now') AS INTEGER) * 1000)
 	`,
-		tweetID, sourceHandle, authorHandle, rt,
+		tweetID, channelID(sourceHandle), channelID(authorHandle), rt,
 		nilOrStr(contentHash), tweetID,
-		nilOrStr(quoteTweetID), nilOrStr(quoteAuthorHandle),
-		d.NextSyncSeq(),
+		nilOrStr(quoteTweetID), channelID(quoteAuthorHandle),
 	)
 	if err != nil {
 		t.Fatalf("insert feed_item %s: %v", tweetID, err)
@@ -96,9 +71,9 @@ func fixtureFeedItem(
 func fixtureRetweetSource(t *testing.T, d *DB, contentHash, retweeterHandle, tweetID string) {
 	t.Helper()
 	_, err := d.conn.Exec(`
-		INSERT INTO retweet_sources (content_hash, retweeter_handle, tweet_id, published_at)
+		INSERT INTO retweet_sources (content_hash, retweeter_channel_id, tweet_id, published_at)
 		VALUES (?, ?, ?, CAST(strftime('%s','now') AS INTEGER) * 1000)
-	`, contentHash, retweeterHandle, tweetID)
+	`, contentHash, "twitter_"+retweeterHandle, tweetID)
 	if err != nil {
 		t.Fatalf("insert retweet_source %s: %v", tweetID, err)
 	}
@@ -115,7 +90,7 @@ func nilOrStr(s string) any {
 // in result order.
 func queryVisibleTweetIDs(t *testing.T, d *DB) []string {
 	t.Helper()
-	items, err := d.ListFeedItemsPage(100, nil, "")
+	items, err := d.ListFeedItemsPage(100, nil, false)
 	if err != nil {
 		t.Fatalf("ListFeedItemsPage: %v", err)
 	}
@@ -137,7 +112,7 @@ func contains(ids []string, want string) bool {
 
 func TestRetweetFilter_PureRT_SoleRetweeter_Hidden(t *testing.T) {
 	d := openWritableTestDB(t)
-	fixtureChannel(t, d, "muted_a", 0)        // muted
+	fixtureChannel(t, d, "muted_a", 0) // muted
 	fixtureFeedItem(t, d, "rt1", "muted_a", "original_b", true, "hashX", "", "")
 	fixtureRetweetSource(t, d, "hashX", "muted_a", "rt1")
 
@@ -211,46 +186,6 @@ func TestRetweetFilter_UnmutedAuthor_Visible(t *testing.T) {
 	}
 }
 
-func TestRetweetFilter_DeltaSync_HidesMutedRT(t *testing.T) {
-	d := openWritableTestDB(t)
-	fixtureChannel(t, d, "muted_a", 0)
-	fixtureChannel(t, d, "open_b", 1)
-
-	// Pure RT by muted channel, no other retweeter → must NOT arrive on Android.
-	fixtureFeedItem(t, d, "rt_muted", "muted_a", "original_c", true, "hashM", "", "")
-	fixtureRetweetSource(t, d, "hashM", "muted_a", "rt_muted")
-
-	// Quote tweet by muted channel of other author → must NOT arrive on Android.
-	fixtureFeedItem(t, d, "qt_muted", "muted_a", "muted_a", false, "", "qs1", "other_z")
-
-	// Self-quote by muted channel → MUST arrive (self-pass exemption).
-	fixtureFeedItem(t, d, "qt_self", "muted_a", "muted_a", false, "", "qs2", "muted_a")
-
-	// Plain tweet by unmuted channel → MUST arrive.
-	fixtureFeedItem(t, d, "plain_ok", "open_b", "open_b", false, "", "", "")
-
-	items, err := d.ListFeedItemsSince(0, 500)
-	if err != nil {
-		t.Fatalf("ListFeedItemsSince: %v", err)
-	}
-	ids := make([]string, len(items))
-	for i, it := range items {
-		ids[i] = it.TweetID
-	}
-	if contains(ids, "rt_muted") {
-		t.Errorf("delta sync leaked muted RT 'rt_muted'; got %v", ids)
-	}
-	if contains(ids, "qt_muted") {
-		t.Errorf("delta sync leaked muted QT 'qt_muted'; got %v", ids)
-	}
-	if !contains(ids, "qt_self") {
-		t.Errorf("delta sync missed self-QT 'qt_self'; got %v", ids)
-	}
-	if !contains(ids, "plain_ok") {
-		t.Errorf("delta sync missed plain tweet 'plain_ok'; got %v", ids)
-	}
-}
-
 func TestRetweetFilter_RankedPath_DedupAware(t *testing.T) {
 	d := openWritableTestDB(t)
 	fixtureChannel(t, d, "muted_a", 0)
@@ -259,7 +194,7 @@ func TestRetweetFilter_RankedPath_DedupAware(t *testing.T) {
 	fixtureRetweetSource(t, d, "hashR", "muted_a", "rt_ranked")
 	fixtureRetweetSource(t, d, "hashR", "open_b", "rt_ranked_b")
 
-	items, err := d.ListRankedFeedItems("", 100, 0)
+	items, err := d.ListRankedFeedItems(100, 0)
 	if err != nil {
 		t.Fatalf("ListRankedFeedItems: %v", err)
 	}

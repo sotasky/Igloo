@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/screwys/igloo/internal/db"
 	"github.com/screwys/igloo/internal/fxtwitter"
 	"github.com/screwys/igloo/internal/model"
 )
@@ -167,7 +168,7 @@ func TestResolveReplyChainKnownParentIDFetchesMissingParent(t *testing.T) {
 	}
 }
 
-func TestResolveReplyChainQueuesMediaForGhostParent(t *testing.T) {
+func TestResolveReplyChainDeclaresMediaForGhostParent(t *testing.T) {
 	d := newTestWorkerDB(t)
 	now := time.Now().UTC()
 	_, _ = d.UpsertFeedItems([]model.FeedItem{
@@ -191,17 +192,17 @@ func TestResolveReplyChainQueuesMediaForGhostParent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var status, kind string
-	var slideCount int
+	var state, kind, sourceURL string
 	if err := d.QueryRow(`
-		SELECT COALESCE(status,''), COALESCE(media_kind,''), COALESCE(slide_count,0)
-		FROM feed_media_jobs
-		WHERE tweet_id = '1000000000000000012'
-	`).Scan(&status, &kind, &slideCount); err != nil {
-		t.Fatalf("missing feed media job: %v", err)
+		SELECT COALESCE(state,''), COALESCE(content_type,''), COALESCE(source_url,'')
+		FROM assets
+		WHERE owner_kind = 'tweet' AND owner_id = '1000000000000000012'
+		  AND asset_kind = 'post_media' AND media_index = 0
+	`).Scan(&state, &kind, &sourceURL); err != nil {
+		t.Fatalf("missing feed media asset: %v", err)
 	}
-	if status != "queued" || kind != "video" || slideCount != 1 {
-		t.Fatalf("job = status %q kind %q slide_count %d, want queued video 1", status, kind, slideCount)
+	if state != db.AssetStateQueued || kind != "video/mp4" || sourceURL != "https://video.example/parent.mp4" {
+		t.Fatalf("asset = state %q kind %q source %q, want queued video/mp4 source", state, kind, sourceURL)
 	}
 }
 

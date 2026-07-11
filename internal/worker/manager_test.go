@@ -191,29 +191,3 @@ func TestClassifyMediaKind(t *testing.T) {
 		}
 	}
 }
-
-// TestParseFeedMediaFilename tests filename parsing for feed_media files.
-func TestParseFeedMediaFilename(t *testing.T) {
-	tests := []struct {
-		stem      string
-		ext       string
-		wantID    string
-		wantIndex int
-		wantType  string
-	}{
-		{"1234567890", ".jpg", "1234567890", 0, "photo"},
-		{"1234567890_0", ".jpg", "1234567890", 0, "photo"},
-		{"1234567890_2", ".png", "1234567890", 2, "photo"},
-		{"1234567890", ".mp4", "1234567890", 0, "video"},
-		{"some_tweet_id_3", ".jpg", "some_tweet_id", 3, "photo"},
-		{"no_numeric_suffix_abc", ".jpg", "no_numeric_suffix_abc", 0, "photo"},
-	}
-
-	for _, tt := range tests {
-		id, idx, mtype := parseFeedMediaFilename(tt.stem, tt.ext)
-		if id != tt.wantID || idx != tt.wantIndex || mtype != tt.wantType {
-			t.Errorf("parseFeedMediaFilename(%q, %q) = (%q, %d, %q), want (%q, %d, %q)",
-				tt.stem, tt.ext, id, idx, mtype, tt.wantID, tt.wantIndex, tt.wantType)
-		}
-	}
-}

@@ -3,9 +3,7 @@ package download
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -321,19 +319,38 @@ func millisFromAny(value any) int64 {
 	}
 }
 
-// Download fetches media from a URL using gallery-dl.
+// Download returns only the media paths from DownloadCompleted.
+func (g *GalleryDLWrapper) Download(ctx context.Context, rawURL, destDir, id, cookiesFile string, cookiesBrowser ...string) ([]string, error) {
+	completed, err := g.DownloadCompleted(ctx, rawURL, destDir, id, cookiesFile, cookiesBrowser...)
+	return completed.MediaPaths, err
+}
+
+// DownloadCompleted fetches media from a URL using gallery-dl and returns the
+// exact media and sidecar paths moved into the destination.
 // Videos are renamed to {id}.{ext}; image slides are renamed to
-// {id}_{1-based-index}.{ext}. Thumbnails next to videos are copied as
-// {id}.{ext} so existing thumbnail discovery can use them.
+// {id}_{1-based-index}.{ext}. Thumbnails next to videos are moved as
+// {id}.{ext} and returned explicitly.
 // If cookiesFile is non-empty, it is passed via --cookies. Otherwise, an
 // optional cookiesBrowser is passed via --cookies-from-browser.
-func (g *GalleryDLWrapper) Download(ctx context.Context, rawURL, destDir, id, cookiesFile string, cookiesBrowser ...string) ([]string, error) {
-	tmpDir, err := os.MkdirTemp("", "gallerydl-*")
+func (g *GalleryDLWrapper) DownloadCompleted(ctx context.Context, rawURL, destDir, id, cookiesFile string, cookiesBrowser ...string) (CompletedDownload, error) {
+	if err := os.MkdirAll(destDir, 0o755); err != nil {
+		return CompletedDownload{}, fmt.Errorf("gallery-dl mkdir: %w", err)
+	}
+	tmpDir, err := os.MkdirTemp(destDir, ".gallerydl-*")
 	if err != nil {
-		return nil, fmt.Errorf("gallery-dl tmpdir: %w", err)
+		return CompletedDownload{}, fmt.Errorf("gallery-dl tmpdir: %w", err)
 	}
 	defer func() {
 		_ = os.RemoveAll(tmpDir)
+	}()
+	var published []string
+	succeeded := false
+	defer func() {
+		if !succeeded {
+			for _, path := range published {
+				_ = os.Remove(path)
+			}
+		}
 	}()
 	browser := ""
 	if len(cookiesBrowser) > 0 {
@@ -358,19 +375,19 @@ func (g *GalleryDLWrapper) Download(ctx context.Context, rawURL, destDir, id, co
 	// check we'd fall through to yt-dlp, which reports a misleading "IP
 	// blocked" error and never prunes the job.
 	if strings.Contains(string(output), "Requested post not available") {
-		return nil, contextErr(&HTTPStatusError{StatusCode: 404, URL: rawURL})
+		return CompletedDownload{}, contextErr(&HTTPStatusError{StatusCode: 404, URL: rawURL})
 	}
 	if err != nil {
-		return nil, contextErr(fmt.Errorf("gallery-dl: %w: %s", err, RedactText(string(output))))
+		return CompletedDownload{}, contextErr(fmt.Errorf("gallery-dl: %w: %s", err, RedactText(string(output))))
 	}
 
 	// Collect downloaded files, sort for deterministic ordering
 	entries, err := os.ReadDir(tmpDir)
 	if err != nil {
-		return nil, contextErr(fmt.Errorf("gallery-dl read dir: %w", err))
+		return CompletedDownload{}, contextErr(fmt.Errorf("gallery-dl read dir: %w", err))
 	}
 	if len(entries) == 0 {
-		return nil, contextErr(fmt.Errorf("gallery-dl: no files downloaded"))
+		return CompletedDownload{}, contextErr(fmt.Errorf("gallery-dl: no files downloaded"))
 	}
 
 	sort.Slice(entries, func(i, j int) bool {
@@ -378,19 +395,21 @@ func (g *GalleryDLWrapper) Download(ctx context.Context, rawURL, destDir, id, co
 	})
 
 	if err := enforceGalleryDLOutputLimits(entries, defaultGalleryDLOutputLimits); err != nil {
-		return nil, contextErr(err)
+		return CompletedDownload{}, contextErr(err)
 	}
 
-	if err := os.MkdirAll(destDir, 0o755); err != nil {
-		return nil, contextErr(fmt.Errorf("gallery-dl mkdir: %w", err))
-	}
-
-	// Copy gallery-dl metadata → {id}.info.json so extractPublishedAt can read it.
+	// Move gallery-dl metadata → {id}.info.json so extractPublishedAt can read it.
 	// gallery-dl creates per-file .json sidecars (not a single info.json), so
 	// look for info.json first, then fall back to the first .json file found.
 	safeID := sanitizeDownloadID(id)
+	completed := CompletedDownload{}
 	if srcInfoJSON := galleryDLInfoJSONPath(tmpDir, entries); srcInfoJSON != "" {
-		_ = copyFileStreaming(srcInfoJSON, filepath.Join(destDir, safeID+".info.json"))
+		destPath := filepath.Join(destDir, safeID+".info.json")
+		if err := os.Rename(srcInfoJSON, destPath); err != nil {
+			return CompletedDownload{}, contextErr(fmt.Errorf("move gallery-dl metadata: %w", err))
+		}
+		published = append(published, destPath)
+		completed.InfoJSONPath = destPath
 	}
 
 	// Separate media. Videos win over images for reel-style posts; image-only
@@ -424,21 +443,28 @@ func (g *GalleryDLWrapper) Download(ctx context.Context, rawURL, destDir, id, co
 			}
 			destPath := filepath.Join(destDir, destName)
 			srcPath := filepath.Join(tmpDir, e.Name())
-			if err := copyFileStreaming(srcPath, destPath); err != nil {
-				continue
+			if err := os.Rename(srcPath, destPath); err != nil {
+				return CompletedDownload{}, contextErr(fmt.Errorf("move gallery-dl video: %w", err))
 			}
+			published = append(published, destPath)
 			paths = append(paths, destPath)
 		}
 		if len(imageEntries) > 0 {
 			e := imageEntries[0]
 			ext := strings.ToLower(filepath.Ext(e.Name()))
 			destPath := filepath.Join(destDir, safeID+ext)
-			_ = copyFileStreaming(filepath.Join(tmpDir, e.Name()), destPath)
+			if err := os.Rename(filepath.Join(tmpDir, e.Name()), destPath); err != nil {
+				return CompletedDownload{}, contextErr(fmt.Errorf("move gallery-dl thumbnail: %w", err))
+			}
+			published = append(published, destPath)
+			completed.ThumbnailPath = destPath
 		}
 		if len(paths) == 0 {
-			return nil, contextErr(fmt.Errorf("gallery-dl: no files after rename"))
+			return CompletedDownload{}, contextErr(fmt.Errorf("gallery-dl: no files after rename"))
 		}
-		return paths, nil
+		completed.MediaPaths = paths
+		succeeded = true
+		return completed, nil
 	}
 
 	// Images: {id}_{1-based}.{ext}
@@ -447,9 +473,10 @@ func (g *GalleryDLWrapper) Download(ctx context.Context, rawURL, destDir, id, co
 		destName := fmt.Sprintf("%s_%d%s", safeID, idx+1, ext)
 		destPath := filepath.Join(destDir, destName)
 		srcPath := filepath.Join(tmpDir, e.Name())
-		if err := copyFileStreaming(srcPath, destPath); err != nil {
-			continue
+		if err := os.Rename(srcPath, destPath); err != nil {
+			return CompletedDownload{}, contextErr(fmt.Errorf("move gallery-dl image: %w", err))
 		}
+		published = append(published, destPath)
 		paths = append(paths, destPath)
 	}
 
@@ -459,17 +486,20 @@ func (g *GalleryDLWrapper) Download(ctx context.Context, rawURL, destDir, id, co
 		destName := safeID + ext
 		destPath := filepath.Join(destDir, destName)
 		srcPath := filepath.Join(tmpDir, e.Name())
-		if err := copyFileStreaming(srcPath, destPath); err != nil {
-			continue
+		if err := os.Rename(srcPath, destPath); err != nil {
+			return CompletedDownload{}, contextErr(fmt.Errorf("move gallery-dl audio: %w", err))
 		}
+		published = append(published, destPath)
 		// Audio path included so caller knows it exists, but listed after images
 		paths = append(paths, destPath)
 	}
 
 	if len(paths) == 0 {
-		return nil, contextErr(fmt.Errorf("gallery-dl: no files after rename"))
+		return CompletedDownload{}, contextErr(fmt.Errorf("gallery-dl: no files after rename"))
 	}
-	return paths, nil
+	completed.MediaPaths = paths
+	succeeded = true
+	return completed, nil
 }
 
 func sanitizeDownloadID(id string) string {
@@ -536,27 +566,4 @@ func (limits galleryDLOutputLimits) fileLimit(name string) int64 {
 	default:
 		return limits.otherFileBytes
 	}
-}
-
-func copyFileStreaming(srcPath, destPath string) error {
-	src, err := os.Open(srcPath)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		_ = src.Close()
-	}()
-
-	dest, err := os.OpenFile(destPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
-	if err != nil {
-		return err
-	}
-
-	return copyStreamAndClose(src, dest)
-}
-
-func copyStreamAndClose(src io.Reader, dest io.WriteCloser) error {
-	_, copyErr := io.Copy(dest, src)
-	closeErr := dest.Close()
-	return errors.Join(copyErr, closeErr)
 }

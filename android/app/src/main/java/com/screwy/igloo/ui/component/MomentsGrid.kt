@@ -56,11 +56,10 @@ import org.koin.compose.koinInject
  * VM maps it into this item with a resolved [MediaUri].
  */
 data class MomentThumbnailItem(
-    val videoId: String,
-    val channelId: String,
-    val ownerKind: OwnerKind,
-    val thumbnailPath: String?,
-    val mediaKind: String? = null,
+	val videoId: String,
+	val channelId: String,
+	val ownerKind: OwnerKind,
+	val mediaKind: String? = null,
     val slideCount: Int = 0,
     val durationMs: Long,
     /** Source-of-truth publish time for the bottom-right [TimestampBadge]; 0 = unknown. */
@@ -195,17 +194,13 @@ private fun MomentCell(
     onSwipeLeft: () -> Unit,
 ) {
     val resolvers: MediaResolvers = koinInject()
-    val baseUrlProvider: ServerBaseUrlProvider = koinInject()
     val colors = MaterialTheme.iglooColors
     val density = LocalDensity.current
     val swipeThresholdPx = with(density) { (-80).dp.toPx() }
 
-    val fallbackThumbnailUri = remember(item.videoId, item.thumbnailPath, item.mediaKind, item.slideCount) {
-        item.initialThumbnailUri(baseUrlProvider.baseUrl())
-    }
-    val thumbnailUri by resolvers.thumbnailForPostFlow(item.videoId, item.ownerKind)
-        .collectAsState(initial = fallbackThumbnailUri)
-    val displayThumbnailUri = displayMediaCellThumbnail(thumbnailUri, fallbackThumbnailUri)
+	val thumbnailUri by resolvers.thumbnailForPostFlow(item.videoId, item.ownerKind)
+		.collectAsState(initial = MediaUri.Missing)
+	val displayThumbnailUri = thumbnailUri
 
     val backgroundColor = if (displayThumbnailUri is MediaUri.Missing) {
         colors.surfaceVariant
@@ -282,15 +277,4 @@ private fun MomentCell(
         MediaTypeBadge(mediaTypeFor(item.mediaKind, item.slideCount))
         TimestampBadge(item.publishedAt)
     }
-}
-
-private fun MomentThumbnailItem.initialThumbnailUri(baseUrl: String): MediaUri {
-    return resolveInitialMomentThumbnailUri(
-        videoId = videoId,
-        thumbnailPath = thumbnailPath,
-        mediaKind = mediaKind,
-        slideCount = slideCount,
-        ownerKind = ownerKind,
-        baseUrl = baseUrl,
-    )
 }

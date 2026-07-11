@@ -1,7 +1,6 @@
 package com.screwy.igloo.log
 
 import com.screwy.igloo.data.PreferencesRepo
-import com.screwy.igloo.sync.SchedulerLogger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -25,13 +24,13 @@ class Logger(
     private val sink: LogSink,
     private val scope: CoroutineScope,
     private val nowMsProvider: () -> Long = { System.currentTimeMillis() },
-) : SchedulerLogger {
+) {
 
     fun info(event: String) {
         info(event, emptyMap())
     }
 
-    override fun info(event: String, fields: Map<String, Any?>) {
+    fun info(event: String, fields: Map<String, Any?>) {
         val entry = LogEntry(
             level = LogLevel.Info,
             event = event,

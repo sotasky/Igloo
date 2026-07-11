@@ -275,12 +275,12 @@ func TestTranslationJobsClaimAndComplete(t *testing.T) {
 	}
 }
 
-func TestSetTranslationBumpsFeedSyncSeq(t *testing.T) {
+func TestSetTranslationAdvancesAndroidFeedOwner(t *testing.T) {
 	d := openWritableTestDB(t)
 	now := time.Now()
 	if _, err := d.UpsertFeedItems([]model.FeedItem{{
-		TweetID:      "translation_sync",
-		AuthorHandle: "sample_author_sync",
+		TweetID:      "sample_tweet",
+		AuthorHandle: "sample_author",
 		BodyText:     "안녕하세요",
 		Lang:         "ko",
 		PublishedAt:  &now,
@@ -288,18 +288,24 @@ func TestSetTranslationBumpsFeedSyncSeq(t *testing.T) {
 		t.Fatalf("UpsertFeedItems: %v", err)
 	}
 	var before int64
-	if err := d.QueryRow(`SELECT sync_seq FROM feed_items WHERE tweet_id = ?`, "translation_sync").Scan(&before); err != nil {
-		t.Fatalf("read initial sync_seq: %v", err)
+	if err := d.QueryRow(`
+		SELECT revision FROM android_sync_heads
+		WHERE owner_kind = 'feed' AND owner_id = 'sample_tweet'
+	`).Scan(&before); err != nil {
+		t.Fatalf("read initial feed revision: %v", err)
 	}
-	if err := d.SetTranslation("translation_sync", "body", "ko", "en", "hello"); err != nil {
+	if err := d.SetTranslation("sample_tweet", "body", "ko", "en", "hello"); err != nil {
 		t.Fatalf("SetTranslation: %v", err)
 	}
 	var after int64
-	if err := d.QueryRow(`SELECT sync_seq FROM feed_items WHERE tweet_id = ?`, "translation_sync").Scan(&after); err != nil {
-		t.Fatalf("read updated sync_seq: %v", err)
+	if err := d.QueryRow(`
+		SELECT revision FROM android_sync_heads
+		WHERE owner_kind = 'feed' AND owner_id = 'sample_tweet'
+	`).Scan(&after); err != nil {
+		t.Fatalf("read updated feed revision: %v", err)
 	}
 	if after <= before {
-		t.Fatalf("sync_seq after translation = %d, want > %d", after, before)
+		t.Fatalf("feed revision after translation = %d, want > %d", after, before)
 	}
 }
 

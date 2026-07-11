@@ -6,7 +6,7 @@ import com.screwy.igloo.net.IglooHostProvider
 import com.screwy.igloo.net.ServerBaseUrlProvider
 import com.screwy.igloo.net.ServerDiscovery
 import com.screwy.igloo.net.auth.AuthTokenProvider
-import com.screwy.igloo.sync.Scheduler
+import com.screwy.igloo.sync.SyncCoordinator
 import org.koin.core.module.dsl.viewModel
 import org.koin.core.qualifier.named
 import org.koin.dsl.bind
@@ -34,16 +34,12 @@ val iglooAuthModule = module {
     single {
         AuthRepo(
             storage = get(),
-            databaseHolder = get(),
             uiEffects = get(),
             applicationScope = get(named("applicationScope")),
             authApiProvider = { get() },
-            // Scheduler depends on the per-user DB via InboundReconciler; resolving it
-            // eagerly at AuthRepo ctor time would crash pre-login. Wrap as a lambda so
-            // resolution happens on logout, by which point the DB is open.
             stopReconcilersOnLogout = {
                 AppRuntime.onLogout()
-                get<Scheduler>().stopAll()
+                get<SyncCoordinator>().stopAll()
             },
             prefsUpdater = { url -> get<PreferencesRepo>().setServerUrl(url) },
             onPostLoginBootstrap = { AppRuntime.bootstrapPostLogin() },

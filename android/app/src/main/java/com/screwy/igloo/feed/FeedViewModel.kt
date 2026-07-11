@@ -8,12 +8,11 @@ import com.screwy.igloo.data.entity.FeedHeadCandidate
 import com.screwy.igloo.data.entity.FeedRow
 import com.screwy.igloo.data.entity.FeedRowActionState
 import com.screwy.igloo.data.entity.ThreadedFeedRow
+import com.screwy.igloo.net.Reachability
 import com.screwy.igloo.net.ServerBaseUrlProvider
 import com.screwy.igloo.outbox.OutboxKind
 import com.screwy.igloo.outbox.OutboxWriter
-import com.screwy.igloo.perf.PerfProbe
-import com.screwy.igloo.sync.SchedulerActions
-import com.screwy.igloo.sync.SyncStream
+import com.screwy.igloo.sync.SyncCoordinator
 import com.screwy.igloo.ui.UiEffect
 import com.screwy.igloo.ui.UiEffects
 import com.screwy.igloo.ui.UiState
@@ -37,16 +36,17 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
 /**
- * Main Feed state holder. The native RecyclerView surface gets a bounded immutable
- * session snapshot; seen writes and action changes patch state locally instead of
- * invalidating a pager or mutating a Room deck while the user is scrolling.
+ * Main Feed state holder. The native RecyclerView surface gets a bounded immutable session
+ * snapshot; seen writes and action changes patch state locally instead of invalidating a pager or
+ * mutating a Room deck while the user is scrolling.
  */
 class FeedViewModel(
     private val db: IglooDatabase,
     private val outboxWriter: OutboxWriter,
-    private val scheduler: SchedulerActions,
+    private val scheduler: SyncCoordinator,
     private val uiEffects: UiEffects,
     private val baseUrlProvider: ServerBaseUrlProvider,
+    private val reachability: Reachability,
 ) : ViewModel() {
 
     private var snapshotHeadId: String? = null
@@ -62,11 +62,13 @@ class FeedViewModel(
     private val _newPostPosters = MutableStateFlow<List<NewPostPoster>>(emptyList())
     val newPostPosters: StateFlow<List<NewPostPoster>> = _newPostPosters.asStateFlow()
 
-    private val mediaModelStore = FeedMediaModelStore(
-        db = db,
-        baseUrlProvider = baseUrlProvider,
-        scope = viewModelScope,
-    )
+    private val mediaModelStore =
+        FeedMediaModelStore(
+            db = db,
+            baseUrlProvider = baseUrlProvider,
+            reachability = reachability,
+            scope = viewModelScope,
+        )
     val mediaModels: StateFlow<Map<String, FeedMediaGridModel>> = mediaModelStore.mediaModels
 
     private val _isRefreshing = MutableStateFlow(false)
@@ -75,19 +77,20 @@ class FeedViewModel(
     private val _pendingBookmark = MutableStateFlow<BookmarkTarget?>(null)
     val pendingBookmark: StateFlow<BookmarkTarget?> = _pendingBookmark.asStateFlow()
 
-    val mutedHandles: StateFlow<Set<String>> = db.mutedAccountDao().allFlow()
-        .map { rows -> rows.mapTo(linkedSetOf()) { it.handle.lowercase() } }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), emptySet())
+    val mutedChannelIds: StateFlow<Set<String>> =
+        db.mutedChannelDao()
+            .allFlow()
+            .map { rows -> rows.mapTo(linkedSetOf()) { it.channelId } }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), emptySet())
 
     val bookmarkCategories: StateFlow<List<BookmarkCategoryDisplay>> =
-        db.bookmarkCategoryDao().allFlow()
+        db.bookmarkCategoryDao()
+            .allFlow()
             .map { entities -> entities.map { BookmarkCategoryDisplay(it.categoryId, it.name) } }
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), emptyList())
 
     init {
-        viewModelScope.launch {
-            loadSnapshot(resetCue = true)
-        }
+        viewModelScope.launch { loadSnapshot(resetCue = true) }
         viewModelScope.launch {
             db.feedReadDao()
                 .mainFeedHeadCandidatesFlow(NEW_POST_SCAN_LIMIT)
@@ -95,13 +98,15 @@ class FeedViewModel(
         }
         viewModelScope.launch {
             activeRows
-                .map { rows -> rows.flatMap { threaded -> threaded.chain + threaded.row }.map { it.item.tweetId } }
+                .map { rows ->
+                    rows
+                        .flatMap { threaded -> threaded.chain + threaded.row }
+                        .map { it.item.tweetId }
+                }
                 .distinctUntilChanged()
                 .collectLatest { tweetIds ->
                     if (tweetIds.isEmpty()) return@collectLatest
-                    db.feedReadDao()
-                        .actionStateFlow(tweetIds)
-                        .collect(::applyActionStates)
+                    db.feedReadDao().actionStateFlow(tweetIds).collect(::applyActionStates)
                 }
         }
     }
@@ -109,7 +114,7 @@ class FeedViewModel(
     fun refresh() {
         viewModelScope.launch {
             _isRefreshing.value = true
-            scheduler.triggerStream(SyncStream.Feed)
+            scheduler.triggerAll()
             delay(1_000L)
             loadSnapshot(resetCue = true)
             _isRefreshing.value = false
@@ -117,15 +122,11 @@ class FeedViewModel(
     }
 
     fun showNewPosts() {
-        viewModelScope.launch {
-            loadSnapshot(resetCue = true)
-        }
+        viewModelScope.launch { loadSnapshot(resetCue = true) }
     }
 
     fun toggleLike(tweetId: String, newValue: Boolean) {
-        PerfProbe.log(
-            event = "feed_action_toggle",
-        ) { mapOf("action" to "like", "new_value" to newValue) }
+
         val action = if (newValue) OutboxKind.Action.Set else OutboxKind.Action.Clear
         val likedAt = if (newValue) System.currentTimeMillis() else null
         patchRows({ it.item.tweetId == tweetId }) { row ->
@@ -137,17 +138,13 @@ class FeedViewModel(
     }
 
     fun toggleBookmark(row: FeedRow) {
-        PerfProbe.log(
-            event = "feed_action_toggle",
-        ) { mapOf("action" to "bookmark_sheet", "currently_bookmarked" to (row.isBookmarked == 1)) }
-        _pendingBookmark.value = if (row.isBookmarked == 1) {
-            bookmarkTargetForRow(
-                row = row,
-                currentBookmark = bookmarkStateFromRow(row),
-            )
-        } else {
-            bookmarkTargetForRow(row = row)
-        }
+
+        _pendingBookmark.value =
+            if (row.isBookmarked == 1) {
+                bookmarkTargetForRow(row = row, currentBookmark = bookmarkStateFromRow(row))
+            } else {
+                bookmarkTargetForRow(row = row)
+            }
     }
 
     fun dismissBookmarkSheet() {
@@ -156,9 +153,7 @@ class FeedViewModel(
 
     fun confirmBookmark(payload: BookmarkPayload) {
         val target = _pendingBookmark.value ?: return
-        PerfProbe.log(
-            event = "feed_action_toggle",
-        ) { mapOf("action" to "bookmark_set", "media_indices" to (payload.mediaIndices?.size ?: 0)) }
+
         _pendingBookmark.value = null
         patchBookmarkRows(target.itemId) { row ->
             row.copy(
@@ -171,7 +166,6 @@ class FeedViewModel(
             )
         }
         viewModelScope.launch {
-            val prev = outboxWriter.capturePreviousBookmark(target.itemId)
             outboxWriter.enqueue(
                 OutboxKind.Bookmark(
                     videoId = target.itemId,
@@ -180,7 +174,6 @@ class FeedViewModel(
                     customTitle = payload.customTitle,
                     accountHandles = payload.accountHandles?.joinToString(","),
                     mediaIndices = payload.mediaIndices?.joinToString(","),
-                    prevRow = prev,
                 )
             )
         }
@@ -188,7 +181,7 @@ class FeedViewModel(
 
     fun removePendingBookmark() {
         val target = _pendingBookmark.value ?: return
-        PerfProbe.log(event = "feed_action_toggle") { mapOf("action" to "bookmark_clear") }
+
         _pendingBookmark.value = null
         patchBookmarkRows(target.itemId) { row ->
             row.copy(
@@ -201,13 +194,8 @@ class FeedViewModel(
             )
         }
         viewModelScope.launch {
-            val prev = outboxWriter.capturePreviousBookmark(target.itemId)
             outboxWriter.enqueue(
-                OutboxKind.Bookmark(
-                    videoId = target.itemId,
-                    action = OutboxKind.Action.Clear,
-                    prevRow = prev,
-                )
+                OutboxKind.Bookmark(videoId = target.itemId, action = OutboxKind.Action.Clear)
             )
         }
     }
@@ -215,29 +203,30 @@ class FeedViewModel(
     fun createCategory(name: String) {
         viewModelScope.launch {
             val provisionalId = -System.currentTimeMillis()
-            outboxWriter.enqueue(OutboxKind.CreateCategory(name = name, provisionalId = provisionalId))
+            outboxWriter.enqueue(
+                OutboxKind.CreateCategory(name = name, provisionalId = provisionalId)
+            )
         }
     }
 
     fun toggleFollow(channelId: String, newValue: Boolean) {
-        PerfProbe.log(
-            event = "feed_action_toggle",
-        ) { mapOf("action" to "follow", "new_value" to newValue) }
+
         val action = if (newValue) OutboxKind.Action.Set else OutboxKind.Action.Clear
-        patchRows({ row ->
-            row.item.channelId == channelId || row.quoteChannelId == channelId
-        }) { row ->
+        patchRows({ row -> row.item.channelId == channelId || row.quoteChannelId == channelId }) {
+            row ->
             row.copy(
-                channelIsFollowed = if (row.item.channelId == channelId) {
-                    if (newValue) 1 else 0
-                } else {
-                    row.channelIsFollowed
-                },
-                quoteChannelIsFollowed = if (row.quoteChannelId == channelId) {
-                    if (newValue) 1 else 0
-                } else {
-                    row.quoteChannelIsFollowed
-                },
+                channelIsFollowed =
+                    if (row.item.channelId == channelId) {
+                        if (newValue) 1 else 0
+                    } else {
+                        row.channelIsFollowed
+                    },
+                quoteChannelIsFollowed =
+                    if (row.quoteChannelId == channelId) {
+                        if (newValue) 1 else 0
+                    } else {
+                        row.quoteChannelIsFollowed
+                    },
             )
         }
         viewModelScope.launch {
@@ -246,9 +235,7 @@ class FeedViewModel(
     }
 
     fun toggleStar(channelId: String, newValue: Boolean) {
-        PerfProbe.log(
-            event = "feed_action_toggle",
-        ) { mapOf("action" to "star", "new_value" to newValue) }
+
         val action = if (newValue) OutboxKind.Action.Set else OutboxKind.Action.Clear
         patchRows({ it.item.channelId == channelId }) { row ->
             row.copy(channelIsStarred = if (newValue) 1 else 0)
@@ -258,28 +245,27 @@ class FeedViewModel(
         }
     }
 
-    fun toggleMute(handle: String, newValue: Boolean) {
+    fun toggleMute(channelId: String, newValue: Boolean) {
         val action = if (newValue) OutboxKind.Action.Set else OutboxKind.Action.Clear
         if (newValue) {
-            val lowered = handle.lowercase()
-            val filteredRows = activeRows.value.filterNot { threaded ->
-                val row = threaded.row.item
-                row.authorHandle.lowercase() == lowered ||
-                    row.retweetedByHandle?.lowercase() == lowered
-            }
+            val filteredRows =
+                activeRows.value.filterNot { threaded ->
+                    val row = threaded.row.item
+                    row.channelId == channelId || row.reposterChannelId == channelId
+                }
             activeRows.value = filteredRows
             snapshotHeadId = filteredRows.firstOrNull()?.row?.item?.tweetId
             _newPostsAvailable.value = false
             _newPostPosters.value = emptyList()
         }
         viewModelScope.launch {
-            outboxWriter.enqueue(OutboxKind.Mute(handle = handle, action = action))
+            outboxWriter.enqueue(OutboxKind.Mute(channelId = channelId, action = action))
         }
     }
 
     fun markSeen(tweetIds: List<String>) {
         if (tweetIds.isEmpty()) return
-        PerfProbe.log(event = "feed_seen_enqueue") { mapOf("count" to tweetIds.size) }
+
         viewModelScope.launch {
             for (id in tweetIds) {
                 outboxWriter.enqueue(OutboxKind.Seen(tweetId = id))
@@ -287,35 +273,28 @@ class FeedViewModel(
         }
     }
 
-    fun warmMediaModels(rows: List<FeedRow>) {
-        PerfProbe.log(event = "feed_warm_media_models") { mapOf("rows" to rows.size) }
-        mediaModelStore.warmMediaModels(rows)
+    fun setMediaModelRows(rows: List<FeedRow>) {
+
+        mediaModelStore.setMediaModelRows(rows)
     }
 
     fun resolveMentionAndNavigate(handle: String) {
         viewModelScope.launch {
-            val route = ChannelRouteResolver.routeForHandle(
-                db = db,
-                rawHandle = handle,
-                fallbackPlatform = "twitter",
-            )
+            val route =
+                ChannelRouteResolver.routeForHandle(
+                    db = db,
+                    rawHandle = handle,
+                    fallbackPlatform = "twitter",
+                )
             uiEffects.emit(UiEffect.NavigateTo(route))
         }
     }
 
     private suspend fun loadSnapshot(resetCue: Boolean) {
-        val rows = PerfProbe.timedSuspend(
-            event = "feed_snapshot_query_first",
-            fields = { mapOf("limit" to FEED_LIMIT) },
-        ) {
-            db.feedReadDao().feedFlow(limit = FEED_LIMIT, offset = 0).first()
-        }
-        val threadedRows = PerfProbe.timedSuspend(
-            event = "feed_snapshot_attach_threads",
-            fields = { mapOf("rows" to rows.size) },
-        ) {
-            attachThreadChains(db.feedReadDao(), rows)
-        }
+        val rows = db.feedReadDao().feedFlow(limit = FEED_LIMIT, offset = 0).first()
+
+        val threadedRows = attachThreadChains(db.feedReadDao(), rows)
+
         if (resetCue) {
             _newPostsAvailable.value = false
             _newPostPosters.value = emptyList()
@@ -323,10 +302,11 @@ class FeedViewModel(
         activeRows.value = threadedRows
         snapshotHeadId = threadedRows.firstOrNull()?.row?.item?.tweetId
         if (threadedRows.isNotEmpty()) {
-            val warmRows = threadedRows
-                .take(INITIAL_MEDIA_WARM_ROWS)
-                .flatMap { threaded -> threaded.chain + threaded.row }
-            mediaModelStore.warmMediaModels(warmRows)
+            val mediaRows =
+                threadedRows.take(INITIAL_MEDIA_MODEL_ROWS).flatMap { threaded ->
+                    threaded.chain + threaded.row
+                }
+            mediaModelStore.setMediaModelRows(mediaRows)
         }
         _uiState.value = if (threadedRows.isEmpty()) UiState.Empty else UiState.Data(Unit)
     }
@@ -347,14 +327,16 @@ class FeedViewModel(
         }
 
         val currentHeadInIncoming = incoming.indexOfFirst { it.tweetId == currentHeadId }
-        val currentIds = currentRows
-            .flatMap { threaded -> threaded.chain + threaded.row }
-            .mapTo(hashSetOf()) { it.item.tweetId }
-        val candidates = if (currentHeadInIncoming > 0) {
-            incoming.take(currentHeadInIncoming)
-        } else {
-            incoming.filter { it.tweetId !in currentIds }
-        }
+        val currentIds =
+            currentRows
+                .flatMap { threaded -> threaded.chain + threaded.row }
+                .mapTo(hashSetOf()) { it.item.tweetId }
+        val candidates =
+            if (currentHeadInIncoming > 0) {
+                incoming.take(currentHeadInIncoming)
+            } else {
+                incoming.filter { it.tweetId !in currentIds }
+            }
 
         if (candidates.isEmpty()) {
             _newPostsAvailable.value = false
@@ -367,16 +349,18 @@ class FeedViewModel(
 
     private fun buildNewPostPosters(candidates: List<FeedHeadCandidate>): List<NewPostPoster> {
         val seenHandles = linkedSetOf<String>()
-        return candidates.mapNotNull { row ->
-            val handle = row.authorHandle.trim().trimStart('@')
-            if (handle.isEmpty()) return@mapNotNull null
-            val key = handle.lowercase()
-            if (!seenHandles.add(key)) return@mapNotNull null
-            NewPostPoster(
-                channelId = row.channelId?.trim()?.takeIf { it.isNotEmpty() } ?: "twitter_$key",
-                contentDescription = row.authorDisplayName?.takeIf { it.isNotBlank() } ?: handle,
-            )
-        }.take(3)
+        return candidates
+            .mapNotNull { row ->
+                val handle = row.authorHandle.trim().trimStart('@')
+                if (handle.isEmpty()) return@mapNotNull null
+                val key = handle.lowercase()
+                if (!seenHandles.add(key)) return@mapNotNull null
+                NewPostPoster(
+                    channelId = row.channelId?.trim()?.takeIf { it.isNotEmpty() } ?: "twitter_$key",
+                    contentDescription = row.authorDisplayName?.takeIf { it.isNotBlank() } ?: handle,
+                )
+            }
+            .take(3)
     }
 
     private fun bookmarkTargetForRow(
@@ -385,12 +369,12 @@ class FeedViewModel(
     ): BookmarkTarget =
         BookmarkTarget(
             itemId = row.item.tweetId,
-            authorHandle = row.item.authorHandle,
+            authorHandle = row.authorHandle.orEmpty(),
             mediaCount = feedMediaCount(row.item),
             currentBookmark = currentBookmark,
             defaultTitle = row.item.bodyText?.lineSequence()?.firstOrNull(),
-            sourceHandle = row.item.sourceHandle,
-            quoteAuthorHandle = row.item.quoteAuthorHandle,
+            sourceHandle = row.sourceHandle,
+            quoteAuthorHandle = row.quoteAuthorHandle,
             bodyText = row.item.bodyText,
             isRetweet = row.item.isRetweet,
         )
@@ -407,7 +391,7 @@ class FeedViewModel(
 
     private fun applyActionStates(states: List<FeedRowActionState>) {
         if (states.isEmpty()) return
-        PerfProbe.log(event = "feed_action_state_emit") { mapOf("rows" to states.size) }
+
         val byId = states.associateBy { it.tweetId }
         patchRows({ row -> row.item.tweetId in byId }) { row ->
             val state = byId.getValue(row.item.tweetId)
@@ -425,40 +409,38 @@ class FeedViewModel(
     }
 
     private fun patchBookmarkRows(tweetId: String, transform: (FeedRow) -> FeedRow) {
-        val targetHash = activeRows.value
-            .asSequence()
-            .flatMap { threaded -> (threaded.chain + threaded.row).asSequence() }
-            .firstOrNull { it.item.tweetId == tweetId }
-            ?.item
-            ?.contentHash
-            ?.trim()
-            ?.takeIf { it.isNotBlank() }
-        patchRows({ row ->
-            row.item.tweetId == tweetId ||
-                (targetHash != null && row.item.contentHash?.trim() == targetHash)
-        }, transform)
+        val targetHash =
+            activeRows.value
+                .asSequence()
+                .flatMap { threaded -> (threaded.chain + threaded.row).asSequence() }
+                .firstOrNull { it.item.tweetId == tweetId }
+                ?.item
+                ?.contentHash
+                ?.trim()
+                ?.takeIf { it.isNotBlank() }
+        patchRows(
+            { row ->
+                row.item.tweetId == tweetId ||
+                    (targetHash != null && row.item.contentHash?.trim() == targetHash)
+            },
+            transform,
+        )
     }
 
-    private fun patchRows(
-        predicate: (FeedRow) -> Boolean,
-        transform: (FeedRow) -> FeedRow,
-    ) {
-        activeRows.value = PerfProbe.timed(
-            event = "feed_patch_rows",
-            fields = { mapOf("threaded_rows" to activeRows.value.size) },
-        ) {
+    private fun patchRows(predicate: (FeedRow) -> Boolean, transform: (FeedRow) -> FeedRow) {
+        activeRows.value =
             activeRows.value.map { threaded ->
                 threaded.copy(
                     row = threaded.row.let { row -> if (predicate(row)) transform(row) else row },
-                    chain = threaded.chain.map { row -> if (predicate(row)) transform(row) else row },
+                    chain =
+                        threaded.chain.map { row -> if (predicate(row)) transform(row) else row },
                 )
             }
-        }
     }
 
     companion object {
         const val FEED_LIMIT: Int = 200
-        private const val INITIAL_MEDIA_WARM_ROWS: Int = 16
+        private const val INITIAL_MEDIA_MODEL_ROWS: Int = 16
         private const val NEW_POST_SCAN_LIMIT: Int = 80
     }
 }

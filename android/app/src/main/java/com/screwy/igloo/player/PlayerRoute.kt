@@ -3,9 +3,7 @@ package com.screwy.igloo.player
 import android.app.Activity
 import android.content.Context
 import android.content.pm.ActivityInfo
-import java.io.File
 import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
@@ -24,8 +22,8 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.produceState
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -34,32 +32,30 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.media3.common.Player
 import androidx.navigation.NavController
-import androidx.core.view.WindowCompat
-import androidx.core.view.WindowInsetsCompat
 import com.screwy.igloo.R
 import com.screwy.igloo.data.Dearrow
 import com.screwy.igloo.data.PreferencesRepo
+import com.screwy.igloo.data.dao.AndroidSyncDao
 import com.screwy.igloo.data.dao.BookmarkDao
 import com.screwy.igloo.data.dao.ChannelFollowDao
 import com.screwy.igloo.data.dao.ChannelStarDao
-import com.screwy.igloo.data.dao.MediaInventoryDao
 import com.screwy.igloo.data.dao.VideoDao
+import com.screwy.igloo.media.CacheActions
 import com.screwy.igloo.net.IglooHostProvider
 import com.screwy.igloo.net.auth.AuthTokenProvider
-import com.screwy.igloo.media.MediaUri
-import com.screwy.igloo.ui.component.sharePlainText
-import com.screwy.igloo.ui.nav.IglooNavigationSource
-import com.screwy.igloo.ui.nav.consumeFullscreenMediaTransitionFromPrevious
-import com.screwy.igloo.ui.nav.rememberIglooNavigator
 import com.screwy.igloo.outbox.OutboxKind
 import com.screwy.igloo.outbox.OutboxWriter
-import com.screwy.igloo.perf.PerfProbe
+import com.screwy.igloo.ui.component.sharePlainText
+import com.screwy.igloo.ui.nav.IglooNavigationSource
+import com.screwy.igloo.ui.nav.rememberIglooNavigator
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -71,30 +67,23 @@ import org.koin.core.parameter.parametersOf
  * YouTube long-form player route.
  *
  * Layout (single continuous scroll — no tabs):
- *   1. Video surface (16:9, black, with overlay + gestures + subtitles).
- *   2. Title + channel row + stats + description card (with Show more).
- *   3. Inline "Comments" header.
- *   4. Comment list (replies indented under parents when `parent_id` is set).
+ * 1. Video surface (16:9, black, with overlay + gestures + subtitles).
+ * 2. Title + channel row + stats + description card (with Show more).
+ * 3. Inline "Comments" header.
+ * 4. Comment list (replies indented under parents when `parent_id` is set).
  *
- * The player route is hosted directly so orientation changes cannot swap it
- * into the app shell or permanent sidebar.
+ * The player route is hosted directly so orientation changes cannot swap it into the app shell or
+ * permanent sidebar.
  *
- * ExoPlayer lifecycle lives here (route-owned) and is released via
- * `DisposableEffect` on dispose. The VM exposes state as Flows and the
- * progress-sampler via `onProgressSample`.
+ * ExoPlayer lifecycle lives here (route-owned) and is released via `DisposableEffect` on dispose.
+ * The VM exposes state as Flows and the progress-sampler via `onProgressSample`.
  */
 @Composable
-fun PlayerRoute(
-    videoId: String,
-    navController: NavController,
-    modifier: Modifier = Modifier,
-) {
+fun PlayerRoute(videoId: String, navController: NavController, modifier: Modifier = Modifier) {
     val brightnessLabel = stringResource(R.string.player_brightness)
     val volumeLabel = stringResource(R.string.player_volume)
 
-    val vm: PlayerViewModel = koinViewModel(
-        parameters = { parametersOf(videoId) },
-    )
+    val vm: PlayerViewModel = koinViewModel(parameters = { parametersOf(videoId) })
     val video by vm.video.collectAsStateWithLifecycle()
     val channel by vm.channel.collectAsStateWithLifecycle()
     val comments by vm.comments.collectAsStateWithLifecycle()
@@ -122,15 +111,14 @@ fun PlayerRoute(
     val bookmarkDao: BookmarkDao = koinInject()
     val channelFollowDao: ChannelFollowDao = koinInject()
     val channelStarDao: ChannelStarDao = koinInject()
-    val mediaInventoryDao: MediaInventoryDao = koinInject()
+    val androidSyncDao: AndroidSyncDao = koinInject()
+    val cacheActions: CacheActions = koinInject()
     val videoDao: VideoDao = koinInject()
     val outboxWriter: OutboxWriter = koinInject()
-    val player = remember(authTokens.bearerTokenSync()) {
-        buildIglooPlayer(ctx, authTokens, iglooHostProvider).also {
-            PerfProbe.incrementCounter("igloo_long_form_player_build_count")
-            PerfProbe.log(event = "long_form_player_build")
+    val player =
+        remember(authTokens.bearerTokenSync()) {
+            buildIglooPlayer(ctx, authTokens, iglooHostProvider).also {}
         }
-    }
     val playbackCoordinator = remember { PlaybackCoordinator() }
     val playbackPlayer = remember(player) { ExoPlayerPlaybackPlayer(player) }
     val activity = ctx.findActivity()
@@ -141,49 +129,70 @@ fun PlayerRoute(
     var levelFeedback by remember(videoId) { mutableStateOf<PlayerLevelFeedback?>(null) }
     var levelFeedbackNonce by remember(videoId) { mutableStateOf(0L) }
 
-    val sbSponsor by prefs.flowString(PreferencesRepo.Keys.SB_SPONSOR, PreferencesRepo.Defaults.SB_SPONSOR)
-        .collectAsStateWithLifecycle(initialValue = PreferencesRepo.Defaults.SB_SPONSOR)
-    val sbSelfPromo by prefs.flowString(PreferencesRepo.Keys.SB_SELF_PROMO, PreferencesRepo.Defaults.SB_SELF_PROMO)
-        .collectAsStateWithLifecycle(initialValue = PreferencesRepo.Defaults.SB_SELF_PROMO)
-    val sbInteraction by prefs.flowString(PreferencesRepo.Keys.SB_INTERACTION, PreferencesRepo.Defaults.SB_INTERACTION)
-        .collectAsStateWithLifecycle(initialValue = PreferencesRepo.Defaults.SB_INTERACTION)
-    val sbIntro by prefs.flowString(PreferencesRepo.Keys.SB_INTRO, PreferencesRepo.Defaults.SB_INTRO)
-        .collectAsStateWithLifecycle(initialValue = PreferencesRepo.Defaults.SB_INTRO)
-    val sbOutro by prefs.flowString(PreferencesRepo.Keys.SB_OUTRO, PreferencesRepo.Defaults.SB_OUTRO)
-        .collectAsStateWithLifecycle(initialValue = PreferencesRepo.Defaults.SB_OUTRO)
-    val sbPreview by prefs.flowString(PreferencesRepo.Keys.SB_PREVIEW, PreferencesRepo.Defaults.SB_PREVIEW)
-        .collectAsStateWithLifecycle(initialValue = PreferencesRepo.Defaults.SB_PREVIEW)
-    val sbFiller by prefs.flowString(PreferencesRepo.Keys.SB_FILLER, PreferencesRepo.Defaults.SB_FILLER)
-        .collectAsStateWithLifecycle(initialValue = PreferencesRepo.Defaults.SB_FILLER)
-    val sbMusic by prefs.flowString(PreferencesRepo.Keys.SB_MUSIC_OFFTOPIC, PreferencesRepo.Defaults.SB_MUSIC_OFFTOPIC)
-        .collectAsStateWithLifecycle(initialValue = PreferencesRepo.Defaults.SB_MUSIC_OFFTOPIC)
-    val useEmbedFriendlyShareLinks by prefs.shareEmbedFriendlyLinks()
-        .collectAsStateWithLifecycle(initialValue = PreferencesRepo.Defaults.SHARE_EMBED_FRIENDLY_LINKS)
+    val sbSponsor by
+        prefs
+            .flowString(PreferencesRepo.Keys.SB_SPONSOR, PreferencesRepo.Defaults.SB_SPONSOR)
+            .collectAsStateWithLifecycle(initialValue = PreferencesRepo.Defaults.SB_SPONSOR)
+    val sbSelfPromo by
+        prefs
+            .flowString(PreferencesRepo.Keys.SB_SELF_PROMO, PreferencesRepo.Defaults.SB_SELF_PROMO)
+            .collectAsStateWithLifecycle(initialValue = PreferencesRepo.Defaults.SB_SELF_PROMO)
+    val sbInteraction by
+        prefs
+            .flowString(
+                PreferencesRepo.Keys.SB_INTERACTION,
+                PreferencesRepo.Defaults.SB_INTERACTION,
+            )
+            .collectAsStateWithLifecycle(initialValue = PreferencesRepo.Defaults.SB_INTERACTION)
+    val sbIntro by
+        prefs
+            .flowString(PreferencesRepo.Keys.SB_INTRO, PreferencesRepo.Defaults.SB_INTRO)
+            .collectAsStateWithLifecycle(initialValue = PreferencesRepo.Defaults.SB_INTRO)
+    val sbOutro by
+        prefs
+            .flowString(PreferencesRepo.Keys.SB_OUTRO, PreferencesRepo.Defaults.SB_OUTRO)
+            .collectAsStateWithLifecycle(initialValue = PreferencesRepo.Defaults.SB_OUTRO)
+    val sbPreview by
+        prefs
+            .flowString(PreferencesRepo.Keys.SB_PREVIEW, PreferencesRepo.Defaults.SB_PREVIEW)
+            .collectAsStateWithLifecycle(initialValue = PreferencesRepo.Defaults.SB_PREVIEW)
+    val sbFiller by
+        prefs
+            .flowString(PreferencesRepo.Keys.SB_FILLER, PreferencesRepo.Defaults.SB_FILLER)
+            .collectAsStateWithLifecycle(initialValue = PreferencesRepo.Defaults.SB_FILLER)
+    val sbMusic by
+        prefs
+            .flowString(
+                PreferencesRepo.Keys.SB_MUSIC_OFFTOPIC,
+                PreferencesRepo.Defaults.SB_MUSIC_OFFTOPIC,
+            )
+            .collectAsStateWithLifecycle(initialValue = PreferencesRepo.Defaults.SB_MUSIC_OFFTOPIC)
+    val useEmbedFriendlyShareLinks by
+        prefs
+            .shareEmbedFriendlyLinks()
+            .collectAsStateWithLifecycle(
+                initialValue = PreferencesRepo.Defaults.SHARE_EMBED_FRIENDLY_LINKS
+            )
 
-    val bookmarkRow by bookmarkDao.getByIdFlow(videoId).collectAsStateWithLifecycle(initialValue = null)
-    val followedChannels by channelFollowDao.allFlow().collectAsStateWithLifecycle(initialValue = emptyList())
-    val starredChannels by channelStarDao.allFlow().collectAsStateWithLifecycle(initialValue = emptyList())
-    val mediaRows by mediaInventoryDao.forOwnerFlow(videoId).collectAsStateWithLifecycle(initialValue = emptyList())
-    val transitionPosterUri = remember(videoId) {
-        navController.consumeFullscreenMediaTransitionFromPrevious()
-            ?.takeIf { it.mediaId == videoId }
-            ?.posterUri
-            ?.takeUnless { it is MediaUri.Missing }
-    }
-
-    val previousVideoId by produceState<String?>(initialValue = null, key1 = videoId) {
-        value = videoDao.getPreviousVideoId(videoId)
-    }
-    val nextVideoId by produceState<String?>(initialValue = null, key1 = videoId) {
-        value = videoDao.getNextVideoId(videoId)
-    }
-    DisposableEffect(Unit) {
-        onDispose {
-            PerfProbe.incrementCounter("igloo_long_form_player_release_count")
-            PerfProbe.log(event = "long_form_player_release")
-            player.release()
+    val bookmarkRow by
+        bookmarkDao.getByIdFlow(videoId).collectAsStateWithLifecycle(initialValue = null)
+    val followedChannels by
+        channelFollowDao.allFlow().collectAsStateWithLifecycle(initialValue = emptyList())
+    val starredChannels by
+        channelStarDao.allFlow().collectAsStateWithLifecycle(initialValue = emptyList())
+    val mediaRows by
+        androidSyncDao
+            .assetsForOwnerFlow("youtube_video", videoId)
+            .collectAsStateWithLifecycle(initialValue = emptyList())
+    val previousVideoId by
+        produceState<String?>(initialValue = null, key1 = videoId) {
+            value = videoDao.getPreviousVideoId(videoId)
         }
-    }
+    val nextVideoId by
+        produceState<String?>(initialValue = null, key1 = videoId) {
+            value = videoDao.getNextVideoId(videoId)
+        }
+    DisposableEffect(Unit) { onDispose { player.release() } }
 
     DisposableEffect(lifecycleOwner, player) {
         val observer = LifecycleEventObserver { _, event ->
@@ -206,10 +215,8 @@ fun PlayerRoute(
 
     DisposableEffect(activity, isFullscreen, largeScreen) {
         if (activity != null) {
-            val controller = WindowCompat.getInsetsController(
-                activity.window,
-                activity.window.decorView,
-            )
+            val controller =
+                WindowCompat.getInsetsController(activity.window, activity.window.decorView)
             activity.requestedOrientation = playerRequestedOrientation(isFullscreen, largeScreen)
             if (isFullscreen) {
                 controller.hide(WindowInsetsCompat.Type.systemBars())
@@ -226,9 +233,7 @@ fun PlayerRoute(
         }
     }
     BackHandler(enabled = isFullscreen) { exitFullscreen() }
-    LaunchedEffect(videoId) {
-        vm.ensureHydrated()
-    }
+    LaunchedEffect(videoId) { vm.ensureHydrated() }
 
     // Bind media item when the stream URI resolves. Re-run if Sync verifies a local
     // file after playback started. Stop first so a mid-session swap doesn't leak
@@ -236,10 +241,11 @@ fun PlayerRoute(
     LaunchedEffect(streamUri, videoId) {
         playbackCoordinator.bind(
             player = playbackPlayer,
-            source = PlaybackSource(
-                mediaUri = streamUri,
-                resumeMs = ((watchHistory?.playbackPosition ?: 0.0) * 1000).toLong(),
-            ),
+            source =
+                PlaybackSource(
+                    mediaUri = streamUri,
+                    resumeMs = ((watchHistory?.playbackPosition ?: 0.0) * 1000).toLong(),
+                ),
         )
     }
 
@@ -247,42 +253,26 @@ fun PlayerRoute(
     // Listener wiring + periodic loop live together so either signal fires a
     // sample without duplicating call sites.
     LaunchedEffect(player) {
-        fun pollFields() = mapOf("surface" to "long_form", "cadence_ms" to 5_000)
-        val pollKey = PerfProbe.collectorStart("playback_poll", ::pollFields)
-        val listener = object : Player.Listener {
-            override fun onPlaybackStateChanged(playbackState: Int) {
-                PerfProbe.log(
-                    event = "long_form_playback_state",
+        val listener =
+            object : Player.Listener {
+                override fun onIsPlayingChanged(playing: Boolean) {
+                    // `isPlaying == false` covers both user-pause and buffer-pause —
+                    // either way, the current position is a valid sample to persist.
+                    if (!playing) {
+                        vm.onProgressSample(player.currentPosition, player.duration)
+                    }
+                }
+
+                override fun onPositionDiscontinuity(
+                    oldPosition: Player.PositionInfo,
+                    newPosition: Player.PositionInfo,
+                    reason: Int,
                 ) {
-                    mapOf(
-                        "state" to playbackState.perfPlaybackStateName(),
-                        "is_playing" to player.isPlaying,
-                        "media_items" to player.mediaItemCount,
-                    )
+                    if (reason == Player.DISCONTINUITY_REASON_SEEK) {
+                        vm.onProgressSample(newPosition.positionMs, player.duration)
+                    }
                 }
             }
-
-            override fun onIsPlayingChanged(playing: Boolean) {
-                PerfProbe.log(
-                    event = "long_form_playback_is_playing",
-                ) { mapOf("playing" to playing, "state" to player.playbackState.perfPlaybackStateName()) }
-                // `isPlaying == false` covers both user-pause and buffer-pause —
-                // either way, the current position is a valid sample to persist.
-                if (!playing) {
-                    vm.onProgressSample(player.currentPosition, player.duration)
-                }
-            }
-
-            override fun onPositionDiscontinuity(
-                oldPosition: Player.PositionInfo,
-                newPosition: Player.PositionInfo,
-                reason: Int,
-            ) {
-                if (reason == Player.DISCONTINUITY_REASON_SEEK) {
-                    vm.onProgressSample(newPosition.positionMs, player.duration)
-                }
-            }
-        }
         player.addListener(listener)
         try {
             while (isActive) {
@@ -293,7 +283,6 @@ fun PlayerRoute(
             }
         } finally {
             player.removeListener(listener)
-            PerfProbe.collectorEnd("playback_poll", pollKey, ::pollFields)
         }
     }
 
@@ -306,50 +295,44 @@ fun PlayerRoute(
             subtitleDefaultApplied = true
         }
     }
-    val metadataCounts = remember(video?.metadataJson) {
-        parseVideoMetadataCounts(video?.metadataJson)
-    }
-    val sponsorBlockModes = remember(
-        sbSponsor,
-        sbSelfPromo,
-        sbInteraction,
-        sbIntro,
-        sbOutro,
-        sbPreview,
-        sbFiller,
-        sbMusic,
-    ) {
-        sponsorBlockModeMap(
-            sponsor = sbSponsor,
-            selfPromo = sbSelfPromo,
-            interaction = sbInteraction,
-            intro = sbIntro,
-            outro = sbOutro,
-            preview = sbPreview,
-            filler = sbFiller,
-            music = sbMusic,
-        )
-    }
-    val sponsorBlockPlayback = rememberSponsorBlockPlaybackState(
-        videoId = videoId,
-        player = player,
-        segments = segments,
-        modes = sponsorBlockModes,
-    )
-    LaunchedEffect(playerControlsVisible, showSubtitles, segments.size, previewSpritePath, previewTrackJsonPath) {
-        PerfProbe.log(
-            event = "long_form_playback_ui_state",
+    val metadataCounts =
+        remember(video?.metadataJson) { parseVideoMetadataCounts(video?.metadataJson) }
+    val sponsorBlockModes =
+        remember(
+            sbSponsor,
+            sbSelfPromo,
+            sbInteraction,
+            sbIntro,
+            sbOutro,
+            sbPreview,
+            sbFiller,
+            sbMusic,
         ) {
-            mapOf(
-                "controls_visible" to playerControlsVisible,
-                "subtitles_visible" to showSubtitles,
-                "subtitle_path" to (subtitlePath != null),
-                "sponsor_segments" to segments.size,
-                "preview_sprite" to (previewSpritePath != null),
-                "preview_track" to (previewTrackJsonPath != null),
+            sponsorBlockModeMap(
+                sponsor = sbSponsor,
+                selfPromo = sbSelfPromo,
+                interaction = sbInteraction,
+                intro = sbIntro,
+                outro = sbOutro,
+                preview = sbPreview,
+                filler = sbFiller,
+                music = sbMusic,
             )
         }
-    }
+    val sponsorBlockPlayback =
+        rememberSponsorBlockPlaybackState(
+            videoId = videoId,
+            player = player,
+            segments = segments,
+            modes = sponsorBlockModes,
+        )
+    LaunchedEffect(
+        playerControlsVisible,
+        showSubtitles,
+        segments.size,
+        previewSpritePath,
+        previewTrackJsonPath,
+    ) {}
     fun showLevelFeedback(label: String, level: Float) {
         levelFeedbackNonce += 1
         levelFeedback = PlayerLevelFeedback(label, level, levelFeedbackNonce)
@@ -367,34 +350,24 @@ fun PlayerRoute(
     val isFollowed = channelId != null && followedChannels.any { it.channelId == channelId }
     val isStarred = channelId != null && starredChannels.any { it.channelId == channelId }
     val hasLocalMedia = mediaRows.any { !it.localPath.isNullOrBlank() }
-    val displayPosterUri = transitionPosterUri ?: thumbnailUri
-    val playerTitle = Dearrow.resolveTitle(
-        dearrowMode,
-        video?.title,
-        video?.dearrowTitle,
-        video?.dearrowTitleCasual,
-        video?.displayTitle,
-        video?.displayTitleCasual,
-    )
+    val displayPosterUri = thumbnailUri
+    val playerTitle =
+        Dearrow.resolveTitle(
+            dearrowMode,
+            video?.title,
+            video?.dearrowTitle,
+            video?.dearrowTitleCasual,
+        )
     val canonicalShareUrl = video?.canonicalUrl?.takeIf { it.isNotBlank() }
-    val onPreviousVideo = previousVideoId?.let { prevId ->
-        { navigator.openVideo(prevId, IglooNavigationSource.Player) }
-    }
-    val onNextVideo = nextVideoId?.let { nextId ->
-        { navigator.openVideo(nextId, IglooNavigationSource.Player) }
-    }
+    val onPreviousVideo =
+        previousVideoId?.let { prevId ->
+            { navigator.openVideo(prevId, IglooNavigationSource.Player) }
+        }
+    val onNextVideo =
+        nextVideoId?.let { nextId -> { navigator.openVideo(nextId, IglooNavigationSource.Player) } }
     fun deleteLocalMedia() {
         scope.launch {
-            mediaRows
-                .mapNotNull { it.localPath }
-                .distinct()
-                .forEach { path ->
-                    runCatching {
-                        val file = File(path)
-                        if (file.isDirectory) file.deleteRecursively() else file.delete()
-                    }
-                }
-            mediaInventoryDao.deleteForOwner(videoId)
+            runCatching { cacheActions.clearOwner("youtube_video", videoId) }.onFailure { error -> }
         }
     }
     if (isFullscreen) {
@@ -426,17 +399,9 @@ fun PlayerRoute(
             modifier = modifier.fillMaxSize(),
         )
     } else {
-        LazyColumn(
-            state = listState,
-            modifier = modifier.fillMaxSize(),
-        ) {
+        LazyColumn(state = listState, modifier = modifier.fillMaxSize()) {
             item(key = "player_status_spacer") {
-                Spacer(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .statusBarsPadding()
-                        .height(8.dp),
-                )
+                Spacer(modifier = Modifier.fillMaxWidth().statusBarsPadding().height(8.dp))
             }
 
             item {
@@ -465,9 +430,7 @@ fun PlayerRoute(
                     levelFeedback = levelFeedback,
                     onBrightnessChange = { level -> showLevelFeedback(brightnessLabel, level) },
                     onVolumeChange = { level -> showLevelFeedback(volumeLabel, level) },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .aspectRatio(16f / 9f),
+                    modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f),
                 )
             }
 
@@ -485,17 +448,21 @@ fun PlayerRoute(
                         navigator.openChannel(cid, IglooNavigationSource.Player)
                     },
                     shareEnabled = canonicalShareUrl != null,
-                    onShare = { canonicalShareUrl?.let { sharePlainText(ctx, it, useEmbedFriendlyShareLinks) } },
+                    onShare = {
+                        canonicalShareUrl?.let {
+                            sharePlainText(ctx, it, useEmbedFriendlyShareLinks)
+                        }
+                    },
                     onBookmark = {
                         scope.launch {
-                            val prev = outboxWriter.capturePreviousBookmark(videoId)
                             outboxWriter.enqueue(
                                 OutboxKind.Bookmark(
                                     videoId = videoId,
-                                    action = if (isBookmarked) OutboxKind.Action.Clear else OutboxKind.Action.Set,
+                                    action =
+                                        if (isBookmarked) OutboxKind.Action.Clear
+                                        else OutboxKind.Action.Set,
                                     categoryId = if (isBookmarked) null else 0L,
-                                    prevRow = prev,
-                                ),
+                                )
                             )
                         }
                     },
@@ -506,8 +473,10 @@ fun PlayerRoute(
                                 outboxWriter.enqueue(
                                     OutboxKind.Star(
                                         channelId = cid,
-                                        action = if (isStarred) OutboxKind.Action.Clear else OutboxKind.Action.Set,
-                                    ),
+                                        action =
+                                            if (isStarred) OutboxKind.Action.Clear
+                                            else OutboxKind.Action.Set,
+                                    )
                                 )
                             }
                         }
@@ -524,23 +493,22 @@ fun PlayerRoute(
             }
 
             item {
-                CommentsHeader(
-                    isRefreshing = isRefreshingComments,
-                    onRefresh = vm::refreshComments,
-                )
+                CommentsHeader(isRefreshing = isRefreshingComments, onRefresh = vm::refreshComments)
             }
 
             if (comments.isEmpty()) {
-                item {
-                    CommentsEmptyState(isRefreshing = isRefreshingComments)
-                }
+                item { CommentsEmptyState(isRefreshing = isRefreshingComments) }
             } else {
-                itemsIndexed(items = comments, key = { _, comment -> comment.commentId }) { _, comment ->
+                val presentedComments = presentVideoComments(comments, channelId)
+                itemsIndexed(
+                    items = presentedComments,
+                    key = { _, row -> row.comment.commentId },
+                ) { _, row ->
                     CommentRow(
-                        comment = comment,
-                        threadDepth = commentRenderDepth(comment),
-                        replyToAuthor = commentReplyAuthor(comment),
-                        isCreator = commentIsCreator(comment),
+                        comment = row.comment,
+                        threadDepth = row.depth,
+                        replyToAuthor = row.replyToAuthor,
+                        isCreator = row.isCreator,
                         onMentionClick = vm::resolveMentionAndNavigate,
                         onUrlClick = uriHandler::openUri,
                         onTimestampClick = { targetMs ->
@@ -563,9 +531,12 @@ fun PlayerRoute(
                     onClick = {
                         showDeleteLocalDialog = false
                         deleteLocalMedia()
-                    },
+                    }
                 ) {
-                    Text(stringResource(R.string.action_delete), color = MaterialTheme.colorScheme.error)
+                    Text(
+                        stringResource(R.string.action_delete),
+                        color = MaterialTheme.colorScheme.error,
+                    )
                 }
             },
             dismissButton = {
@@ -577,7 +548,8 @@ fun PlayerRoute(
     }
 
     if (showUnfollowDialog && channelId != null) {
-        val channelName = channel?.name ?: stringResource(R.string.confirm_unfollow_channel_default_name)
+        val channelName =
+            channel?.name ?: stringResource(R.string.confirm_unfollow_channel_default_name)
         AlertDialog(
             onDismissRequest = { showUnfollowDialog = false },
             title = { Text(stringResource(R.string.confirm_unfollow_channel_title)) },
@@ -591,10 +563,10 @@ fun PlayerRoute(
                                 OutboxKind.Follow(
                                     channelId = channelId,
                                     action = OutboxKind.Action.Clear,
-                                ),
+                                )
                             )
                         }
-                    },
+                    }
                 ) {
                     Text(stringResource(R.string.action_unfollow))
                 }
@@ -616,16 +588,18 @@ internal fun shouldApplySubtitleDefault(
 
 internal fun subtitleVisibleByDefault(subtitleIsAuto: Boolean): Boolean = !subtitleIsAuto
 
-private tailrec fun Context.findActivity(): Activity? = when (this) {
-    is Activity -> this
-    is android.content.ContextWrapper -> baseContext.findActivity()
-    else -> null
-}
+private tailrec fun Context.findActivity(): Activity? =
+    when (this) {
+        is Activity -> this
+        is android.content.ContextWrapper -> baseContext.findActivity()
+        else -> null
+    }
 
-private fun Int.perfPlaybackStateName(): String = when (this) {
-    Player.STATE_IDLE -> "idle"
-    Player.STATE_BUFFERING -> "buffering"
-    Player.STATE_READY -> "ready"
-    Player.STATE_ENDED -> "ended"
-    else -> "unknown"
-}
+private fun Int.perfPlaybackStateName(): String =
+    when (this) {
+        Player.STATE_IDLE -> "idle"
+        Player.STATE_BUFFERING -> "buffering"
+        Player.STATE_READY -> "ready"
+        Player.STATE_ENDED -> "ended"
+        else -> "unknown"
+    }

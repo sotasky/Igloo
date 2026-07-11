@@ -2,7 +2,6 @@ package com.screwy.igloo.ui.component
 
 import androidx.media3.common.Player
 import com.screwy.igloo.media.MediaUri
-import com.screwy.igloo.media.OwnerKind
 
 private const val MomentWideVideoThreshold = 0.85f
 
@@ -20,32 +19,6 @@ internal fun momentMediaMode(mediaKind: String?, slideCount: Int): MomentMediaMo
         else -> MomentMediaMode.Video
     }
 }
-
-internal fun momentSlideCount(mediaKind: String?, slideCount: Int): Int =
-    when (momentMediaMode(mediaKind, slideCount)) {
-        MomentMediaMode.Video -> 0
-        MomentMediaMode.Image -> 1
-        MomentMediaMode.Slideshow -> slideCount.coerceAtLeast(1)
-    }
-
-internal fun resolveInitialMomentThumbnailUri(
-    videoId: String,
-    thumbnailPath: String?,
-    mediaKind: String?,
-    slideCount: Int,
-    ownerKind: OwnerKind,
-    baseUrl: String,
-    fallbackThumbnailUri: MediaUri = MediaUri.Missing,
-): MediaUri =
-    MediaCellModel(
-        mediaId = videoId,
-        ownerKind = ownerKind,
-        thumbnailPath = thumbnailPath,
-        mediaKind = mediaKind,
-        slideCount = slideCount,
-        fallbackThumbnailUri = fallbackThumbnailUri,
-        allowServerThumbnailFallback = ownerKind != OwnerKind.Tweet,
-    ).initialThumbnailUri(baseUrl)
 
 internal fun shouldPlayMomentPage(
     isCurrentPage: Boolean,

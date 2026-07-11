@@ -26,14 +26,12 @@ func ResolveDearrowDisplayTitles(original string, dearrow, dearrowCasual *string
 	return displayTitle, displayTitleCasual
 }
 
-// ResolveDearrowThumbURL picks the thumbnail URL for /api/media/thumbnail/<id>.
-// When mode is off OR the video has no dearrow thumb, returns the bare URL.
-// When mode is default/casual AND a dearrow thumb is available, appends ?da=1
-// so the handler (Task 11) serves the DeArrow variant. Query-param approach
-// cache-busts cleanly on mode toggle.
-func ResolveDearrowThumbURL(mode, videoID string, dearrowThumbPath *string) string {
+// ResolveDearrowThumbURL selects the canonical DeArrow variant when the mode
+// is enabled. The media handler decides availability from assets and falls
+// back to the canonical original thumbnail.
+func ResolveDearrowThumbURL(mode, videoID string) string {
 	base := "/api/media/thumbnail/" + videoID
-	if mode == "off" || dearrowThumbPath == nil || *dearrowThumbPath == "" {
+	if mode == "off" {
 		return base
 	}
 	return base + "?da=1"

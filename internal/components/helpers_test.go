@@ -66,23 +66,19 @@ func TestPrefsData_VideoThumbURL(t *testing.T) {
 		name         string
 		mode         string
 		thumbnailURL string
-		dearrowThumb *string
 		want         string
 	}{
-		{"off mode returns ThumbnailURL directly", "off", "https://cdn.example.com/thumb.jpg", ptr("path/dearrow.jpg"), "https://cdn.example.com/thumb.jpg"},
-		{"off mode no ThumbnailURL returns api path", "off", "", ptr("path/dearrow.jpg"), "/api/media/thumbnail/vid1"},
-		{"default with dearrow thumb appends ?da=1", "default", "https://cdn.example.com/thumb.jpg", ptr("path/dearrow.jpg"), "https://cdn.example.com/thumb.jpg?da=1"},
-		{"default without dearrow thumb returns ThumbnailURL", "default", "https://cdn.example.com/thumb.jpg", nil, "https://cdn.example.com/thumb.jpg"},
-		{"casual with dearrow thumb appends ?da=1", "casual", "https://cdn.example.com/thumb.jpg", ptr("path/dearrow.jpg"), "https://cdn.example.com/thumb.jpg?da=1"},
-		{"empty dearrow path treated as no thumb", "default", "https://cdn.example.com/thumb.jpg", ptr(""), "https://cdn.example.com/thumb.jpg"},
+		{"off mode returns ThumbnailURL directly", "off", "https://cdn.example.com/thumb.jpg", "https://cdn.example.com/thumb.jpg"},
+		{"off mode no ThumbnailURL returns api path", "off", "", "/api/media/thumbnail/vid1"},
+		{"default mode requests canonical DeArrow asset", "default", "https://cdn.example.com/thumb.jpg", "https://cdn.example.com/thumb.jpg?da=1"},
+		{"casual mode requests canonical DeArrow asset", "casual", "https://cdn.example.com/thumb.jpg", "https://cdn.example.com/thumb.jpg?da=1"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			p := PrefsData{Settings: map[string]any{"dearrow_mode": c.mode}}
 			v := model.Video{
-				VideoID:          "vid1",
-				ThumbnailURL:     c.thumbnailURL,
-				DearrowThumbPath: c.dearrowThumb,
+				VideoID:      "vid1",
+				ThumbnailURL: c.thumbnailURL,
 			}
 			got := p.VideoThumbURL(v)
 			if got != c.want {

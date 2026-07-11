@@ -12,6 +12,7 @@ import io.ktor.client.statement.bodyAsText
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
 import io.ktor.utils.io.ByteReadChannel
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -27,13 +28,12 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
-import java.util.concurrent.atomic.AtomicInteger
 
 /**
- * EnvelopeParser MUST extract `server_time_ms` into PreferencesRepo's offset pref
- * without mutating stream cursors. Inbound loops own `next_marker`; mutation
- * ACK `sync_version` values live in a different version space and must not overwrite
- * stream replay state. Body passes through unchanged.
+ * EnvelopeParser MUST extract `server_time_ms` into PreferencesRepo's offset pref without mutating
+ * stream cursors. Inbound loops own `next_marker`; mutation ACK `sync_version` values live in a
+ * different version space and must not overwrite stream replay state. Body passes through
+ * unchanged.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], manifest = Config.NONE)
@@ -43,18 +43,23 @@ class EnvelopeParserTest {
     private lateinit var scope: CoroutineScope
     private lateinit var prefs: PreferencesRepo
 
-    @Before fun setUp() {
+    @Before
+    fun setUp() {
         db = RoomTestSupport.freshDb()
         scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         prefs = PreferencesRepo(db.preferenceDao(), scope, nowMsProvider = { 10_000L })
     }
 
-    @After fun tearDown() {
+    @After
+    fun tearDown() {
         scope.cancel()
         db.close()
     }
 
-    private fun buildClient(responseBody: String, status: HttpStatusCode = HttpStatusCode.OK): HttpClient {
+    private fun buildClient(
+        responseBody: String,
+        status: HttpStatusCode = HttpStatusCode.OK,
+    ): HttpClient {
         val engine = MockEngine { _ ->
             respond(
                 content = ByteReadChannel(responseBody),
@@ -72,7 +77,8 @@ class EnvelopeParserTest {
         withTimeout(timeoutMs) { while (!predicate()) delay(20) }
     }
 
-    @Test fun serverTimeMs_writesOffset() = runBlocking {
+    @Test
+    fun serverTimeMs_writesOffset() = runBlocking {
         val body = """{"ok":true,"server_time_ms":12345}"""
         val client = buildClient(body)
         val response = client.get("/api/health")
@@ -87,24 +93,27 @@ class EnvelopeParserTest {
         assertEquals(2345L, prefs.serverTimeOffsetMs().first())
     }
 
-    @Test fun serverTimeHeader_writesOffsetWithoutBodyEnvelopeField() = runBlocking {
+    @Test
+    fun serverTimeHeader_writesOffsetWithoutBodyEnvelopeField() = runBlocking {
         val body = """{"ok":true,"items":[{"id":"sample"}]}"""
         val engine = MockEngine { _ ->
             respond(
                 content = ByteReadChannel(body),
                 status = HttpStatusCode.OK,
-                headers = headersOf(
-                    "Content-Type" to listOf("application/json"),
-                    "X-Igloo-Server-Time-Ms" to listOf("15000"),
-                ),
+                headers =
+                    headersOf(
+                        "Content-Type" to listOf("application/json"),
+                        "X-Igloo-Server-Time-Ms" to listOf("15000"),
+                    ),
             )
         }
-        val client = HttpClient(engine) {
-            EnvelopeParser.install(this, { prefs }, nowMsProvider = { 10_000L })
-            expectSuccess = false
-        }
+        val client =
+            HttpClient(engine) {
+                EnvelopeParser.install(this, { prefs }, nowMsProvider = { 10_000L })
+                expectSuccess = false
+            }
 
-        val response = client.get("/api/android/sync/generation/sample/items")
+        val response = client.get("/api/android/sync/content/sample/items")
         val bodyText = response.bodyAsText()
         client.close()
 
@@ -113,29 +122,8 @@ class EnvelopeParserTest {
         assertEquals(5_000L, prefs.serverTimeOffsetMs().first())
     }
 
-    @Test fun syncVersionAndStream_doesNotTouchCursor() = runBlocking {
-        val body = """{"ok":true,"server_time_ms":10000,"sync_version":789,"sync_stream":"feed"}"""
-        val client = buildClient(body)
-        client.get("/api/feed/delta")
-        client.close()
-
-        val cursor = db.cursorDao().get("feed")
-        assertEquals(null, cursor)
-    }
-
-    @Test fun syncStreamOmitted_noCursorUpsert() = runBlocking {
-        val body = """{"ok":true,"server_time_ms":10000,"sync_version":789}"""
-        val client = buildClient(body)
-        client.get("/api/health")
-        client.close()
-
-        // Sanity: sync_version alone without stream doesn't write anything.
-        delay(200)
-        val allStreams = db.cursorDao().allFlow().first()
-        assertEquals(emptyList<Any>(), allStreams.map { it.stream })
-    }
-
-    @Test fun nonJsonContentType_skipped() = runBlocking {
+    @Test
+    fun nonJsonContentType_skipped() = runBlocking {
         val onlineMarks = AtomicInteger(0)
         val engine = MockEngine { _ ->
             respond(
@@ -144,16 +132,17 @@ class EnvelopeParserTest {
                 headers = headersOf("Content-Type", "image/jpeg"),
             )
         }
-        val client = HttpClient(engine) {
-            EnvelopeParser.install(
-                config = this,
-                prefsProvider = { prefs },
-                nowMsProvider = { 0L },
-                hostResolver = { "example.com" },
-                onReachable = { onlineMarks.incrementAndGet() },
-            )
-            expectSuccess = false
-        }
+        val client =
+            HttpClient(engine) {
+                EnvelopeParser.install(
+                    config = this,
+                    prefsProvider = { prefs },
+                    nowMsProvider = { 0L },
+                    hostResolver = { "example.com" },
+                    onReachable = { onlineMarks.incrementAndGet() },
+                )
+                expectSuccess = false
+            }
         client.get("https://example.com/api/media/thumbnail/abc")
         client.close()
         delay(200)
@@ -162,7 +151,8 @@ class EnvelopeParserTest {
         assertEquals(1, onlineMarks.get())
     }
 
-    @Test fun nonSuccessStatus_skipped() = runBlocking {
+    @Test
+    fun nonSuccessStatus_skipped() = runBlocking {
         val body = """{"ok":false,"error_code":"invalid","server_time_ms":12345}"""
         val client = buildClient(body, status = HttpStatusCode.BadRequest)
         client.get("/anything")

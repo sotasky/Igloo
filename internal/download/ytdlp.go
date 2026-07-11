@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -332,9 +333,14 @@ type YtDlpWrapper struct {
 	OperationSink OperationSink
 }
 
-// Download downloads the given URL using yt-dlp into opts.OutputDir.
-// Returns the list of file paths that were written.
+// Download returns only the media paths from DownloadCompleted.
 func (y *YtDlpWrapper) Download(ctx context.Context, url string, opts Opts) ([]string, error) {
+	completed, err := y.DownloadCompleted(ctx, url, opts)
+	return completed.MediaPaths, err
+}
+
+// DownloadCompleted returns every exact output owned by this yt-dlp run.
+func (y *YtDlpWrapper) DownloadCompleted(ctx context.Context, url string, opts Opts) (CompletedDownload, error) {
 	start := time.Now()
 	// Output template: {outputDir}/{id}.%(ext)s
 	// If the caller provided an ID, use it; otherwise let yt-dlp pick.
@@ -348,7 +354,8 @@ func (y *YtDlpWrapper) Download(ctx context.Context, url string, opts Opts) ([]s
 		NoPlaylist().
 		PrintJSON().
 		WriteInfoJSON().
-		WriteThumbnail()
+		WriteThumbnail().
+		ConvertThumbnails("jpg")
 
 	if opts.Format != "" {
 		cmd = cmd.Format(opts.Format)
@@ -367,14 +374,41 @@ func (y *YtDlpWrapper) Download(ctx context.Context, url string, opts Opts) ([]s
 	files, bytes := summarizePaths(paths)
 	y.recordYtDlpOperationWithCounts(ctx, "media.ytdlp", url, start, err, opts, 0, files, bytes)
 	if err != nil {
-		return nil, WithOperationContext(err, "yt-dlp", CookieLabel(opts.Cookies, opts.CookiesFromBrowser))
+		return completedYtDlpOutputs(opts, paths), WithOperationContext(err, "yt-dlp", CookieLabel(opts.Cookies, opts.CookiesFromBrowser))
 	}
 
+	completed := completedYtDlpOutputs(opts, paths)
 	if opts.Subtitles && len(paths) > 0 {
-		y.fetchSubtitles(ctx, url, opts)
+		subtitlePaths, subtitleErr := y.DownloadSubtitles(ctx, url, opts)
+		if subtitleErr != nil {
+			log.Printf("[ytdlp] subtitle fetch %s: %v", opts.ID, subtitleErr)
+		} else {
+			completed.SubtitlePaths = subtitlePaths
+		}
 	}
 
-	return paths, nil
+	return completed, nil
+}
+
+func completedYtDlpOutputs(opts Opts, paths []string) CompletedDownload {
+	completed := CompletedDownload{MediaPaths: uniqueRegularPaths(paths)}
+	base := completedOutputBase(opts, completed.MediaPaths)
+	if base == "" {
+		return completed
+	}
+	completed.InfoJSONPath = regularPath(base + ".info.json")
+	completed.ThumbnailPath = regularPath(base + ".jpg")
+	return completed
+}
+
+func completedOutputBase(opts Opts, paths []string) string {
+	if opts.ID != "" {
+		return filepath.Join(opts.OutputDir, sanitizeDownloadID(opts.ID))
+	}
+	if len(paths) == 0 {
+		return ""
+	}
+	return strings.TrimSuffix(paths[0], filepath.Ext(paths[0]))
 }
 
 // runVideoDownload executes the main yt-dlp download and extracts output paths,
@@ -417,14 +451,24 @@ func runVideoDownload(ctx context.Context, cmd *ytdlp.Command, url string) ([]st
 	return paths, nil
 }
 
-// fetchSubtitles runs a skip-download yt-dlp pass to write subtitle files
-// next to the video. Errors are logged and swallowed so a subtitle 429 never
-// rolls back an already-completed video download.
-func (y *YtDlpWrapper) fetchSubtitles(ctx context.Context, url string, opts Opts) {
-	template := fmt.Sprintf("%s/%%(id)s.%%(ext)s", opts.OutputDir)
-	if opts.ID != "" {
-		template = fmt.Sprintf("%s/%s.%%(ext)s", opts.OutputDir, sanitizeDownloadID(opts.ID))
+// DownloadSubtitles runs a skip-download pass and returns the exact VTT files
+// produced by that invocation. Callers can publish these without inspecting
+// the destination directory or deriving siblings from a video path.
+func (y *YtDlpWrapper) DownloadSubtitles(ctx context.Context, url string, opts Opts) ([]string, error) {
+	subtitleDir := strings.TrimSpace(opts.SubtitleDir)
+	if subtitleDir == "" || opts.ID == "" {
+		return nil, fmt.Errorf("subtitle download requires an explicit state directory and output id")
 	}
+	if err := os.MkdirAll(subtitleDir, 0o755); err != nil {
+		return nil, err
+	}
+	outputPath := filepath.Join(subtitleDir, sanitizeDownloadID(opts.ID)+".en.vtt")
+	tmpDir, err := os.MkdirTemp(subtitleDir, ".subtitle-")
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = os.RemoveAll(tmpDir) }()
+	template := filepath.Join(tmpDir, "subtitle.%(ext)s")
 	cmd := ytdlp.New().
 		Output(template).
 		NoPlaylist().
@@ -437,8 +481,16 @@ func (y *YtDlpWrapper) fetchSubtitles(ctx context.Context, url string, opts Opts
 	cmd = applyCookieAuth(cmd, opts)
 
 	if _, err := cmd.Run(ctx, url); err != nil {
-		log.Printf("[ytdlp] subtitle fetch %s: %v", opts.ID, err)
+		return nil, err
 	}
+	tmpPath := regularPath(filepath.Join(tmpDir, "subtitle.en.vtt"))
+	if tmpPath == "" {
+		return nil, fmt.Errorf("yt-dlp produced no English VTT for %s", opts.ID)
+	}
+	if err := os.Rename(tmpPath, outputPath); err != nil {
+		return nil, err
+	}
+	return []string{outputPath}, nil
 }
 
 // extractFilenamesFromRaw parses filenames from raw yt-dlp JSON output logs.

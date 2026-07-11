@@ -17,13 +17,12 @@ import com.screwy.igloo.data.entity.StoryChannelItem
 import com.screwy.igloo.data.entity.ThreadedFeedRow
 import com.screwy.igloo.data.entity.VideoGridItem
 import com.screwy.igloo.data.entity.durationMs
-import com.screwy.igloo.media.ownerKindFromChannelId
+import com.screwy.igloo.media.ownerKindFromAssetOwnerKind
 import com.screwy.igloo.net.Reachability
 import com.screwy.igloo.net.ServerBaseUrlProvider
 import com.screwy.igloo.outbox.OutboxKind
 import com.screwy.igloo.outbox.OutboxWriter
-import com.screwy.igloo.sync.SchedulerActions
-import com.screwy.igloo.sync.SyncStream
+import com.screwy.igloo.sync.SyncCoordinator
 import com.screwy.igloo.ui.UiEffect
 import com.screwy.igloo.ui.UiEffects
 import com.screwy.igloo.ui.UiState
@@ -61,9 +60,6 @@ import kotlinx.coroutines.launch
  * (Simpler than stopping / starting flows per platform, and Room will idle any
  * flow with no collectors under `WhileSubscribed`.)
  *
- * Loading-state note: we consider "no channel row yet" Loading, and if Room still
- * reports null after the first emission, fire `scheduler.triggerStream(Channels)`
- * once to encourage an incremental sync.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class ChannelViewModel(
@@ -71,7 +67,7 @@ class ChannelViewModel(
     private val db: IglooDatabase,
     private val outboxWriter: OutboxWriter,
     private val prefs: PreferencesRepo,
-    private val scheduler: SchedulerActions,
+    private val scheduler: SyncCoordinator,
     private val uiEffects: UiEffects,
     private val reachability: Reachability,
     baseUrlProvider: ServerBaseUrlProvider,
@@ -133,7 +129,7 @@ class ChannelViewModel(
         )
 
     /**
-     * Twitter channel body — posts filtered to this channel, in sync_seq order.
+     * Twitter channel body — posts filtered to this channel.
      * Older locally cached rows can predate the server-enriched `channel_id`, so
      * pass the account handle as a secondary key.
      */
@@ -158,6 +154,7 @@ class ChannelViewModel(
     private val mediaModelStore = FeedMediaModelStore(
         db = db,
         baseUrlProvider = baseUrlProvider,
+        reachability = reachability,
         scope = viewModelScope,
     )
     val mediaModels: StateFlow<Map<String, FeedMediaGridModel>> = mediaModelStore.mediaModels
@@ -175,8 +172,7 @@ class ChannelViewModel(
                 MomentThumbnailItem(
                     videoId = row.video.videoId,
                     channelId = row.video.channelId,
-                    ownerKind = ownerKindFromChannelId(row.video.channelId),
-                    thumbnailPath = row.video.thumbnailPath,
+					ownerKind = ownerKindFromAssetOwnerKind(row.video.ownerKind),
                     mediaKind = row.video.mediaKind,
                     slideCount = row.video.slideCount,
                     durationMs = row.video.durationMs(),
@@ -209,8 +205,8 @@ class ChannelViewModel(
             }
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), emptyList())
 
-    val mutedHandles: StateFlow<Set<String>> = db.mutedAccountDao().allFlow()
-        .map { rows -> rows.mapTo(linkedSetOf()) { it.handle.lowercase() } }
+    val mutedChannelIds: StateFlow<Set<String>> = db.mutedChannelDao().allFlow()
+        .map { rows -> rows.mapTo(linkedSetOf()) { it.channelId } }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), emptySet())
 
     private val _pendingBookmark = MutableStateFlow<BookmarkTarget?>(null)
@@ -230,13 +226,9 @@ class ChannelViewModel(
         )
 
     init {
-        // Spec lines 913-914: unknown channel id → fire a Channels sync once so the
-        // server can backfill. Only trigger when the row really is missing; firing
-        // unconditionally on every VM construction would burn a sync request for
-        // every channel nav, even when we already have the entity cached.
         viewModelScope.launch {
             if (db.channelDao().getById(channelId) == null) {
-                scheduler.triggerStream(SyncStream.Channels)
+                scheduler.triggerAll()
             }
         }
     }
@@ -253,12 +245,7 @@ class ChannelViewModel(
     }
 
     fun refresh() {
-        val stream = when (channel.value.channel.platform.lowercase()) {
-            "youtube" -> SyncStream.Youtube
-            "tiktok", "instagram" -> SyncStream.Shorts
-            else -> SyncStream.Feed
-        }
-        scheduler.triggerStream(stream)
+        scheduler.triggerAll()
     }
 
     fun toggleLike(tweetId: String, newValue: Boolean) {
@@ -289,7 +276,6 @@ class ChannelViewModel(
         val target = _pendingBookmark.value ?: return
         _pendingBookmark.value = null
         viewModelScope.launch {
-            val prev = outboxWriter.capturePreviousBookmark(target.itemId)
             outboxWriter.enqueue(
                 OutboxKind.Bookmark(
                     videoId = target.itemId,
@@ -298,7 +284,6 @@ class ChannelViewModel(
                     customTitle = payload.customTitle,
                     accountHandles = payload.accountHandles?.joinToString(","),
                     mediaIndices = payload.mediaIndices?.joinToString(","),
-                    prevRow = prev,
                 )
             )
         }
@@ -308,12 +293,10 @@ class ChannelViewModel(
         val target = _pendingBookmark.value ?: return
         _pendingBookmark.value = null
         viewModelScope.launch {
-            val prev = outboxWriter.capturePreviousBookmark(target.itemId)
             outboxWriter.enqueue(
                 OutboxKind.Bookmark(
                     videoId = target.itemId,
                     action = OutboxKind.Action.Clear,
-                    prevRow = prev,
                 )
             )
         }
@@ -325,12 +308,12 @@ class ChannelViewModel(
     ): BookmarkTarget =
         BookmarkTarget(
             itemId = row.item.tweetId,
-            authorHandle = row.item.authorHandle,
+            authorHandle = row.authorHandle.orEmpty(),
             mediaCount = feedMediaCount(row.item),
             currentBookmark = currentBookmark,
             defaultTitle = row.item.bodyText?.lineSequence()?.firstOrNull(),
-            sourceHandle = row.item.sourceHandle,
-            quoteAuthorHandle = row.item.quoteAuthorHandle,
+            sourceHandle = row.sourceHandle,
+            quoteAuthorHandle = row.quoteAuthorHandle,
             bodyText = row.item.bodyText,
             isRetweet = row.item.isRetweet,
         )
@@ -366,10 +349,10 @@ class ChannelViewModel(
         }
     }
 
-    fun toggleRowMute(handle: String, newValue: Boolean) {
+    fun toggleRowMute(channelId: String, newValue: Boolean) {
         val action = if (newValue) OutboxKind.Action.Set else OutboxKind.Action.Clear
         viewModelScope.launch {
-            outboxWriter.enqueue(OutboxKind.Mute(handle = handle, action = action))
+            outboxWriter.enqueue(OutboxKind.Mute(channelId = channelId, action = action))
         }
     }
 
@@ -384,8 +367,8 @@ class ChannelViewModel(
         }
     }
 
-    fun warmMediaModels(rows: List<FeedRow>) {
-        mediaModelStore.warmMediaModels(rows)
+    fun setMediaModelRows(rows: List<FeedRow>) {
+        mediaModelStore.setMediaModelRows(rows)
     }
 
     private fun storyCutoffMillis(hours: Int): Long =

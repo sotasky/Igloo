@@ -1,9 +1,7 @@
 package db
 
 import (
-	"strings"
 	"testing"
-	"time"
 
 	"github.com/screwys/igloo/internal/model"
 )
@@ -29,49 +27,6 @@ func TestGetSubscribedChannels(t *testing.T) {
 	}
 }
 
-// TestGetSubscribedChannelsDedupesMultiUserFollows pins the contract that
-// GetSubscribedChannels returns one row per channel even when the table
-// holds legacy non-canonical rows. Single-user mode writes user_id=”
-// everywhere; this test seeds an extra row under a real username (the
-// pre-canonicalize state) and asserts the channel still appears once.
-func TestGetSubscribedChannelsDedupesMultiUserFollows(t *testing.T) {
-	d := openWritableTestDB(t)
-
-	if err := d.AddChannel(model.Channel{
-		ChannelID: "tiktok_dupseed", SourceID: "dupseed", Name: "DupSeed",
-		URL: "https://www.tiktok.com/@dupseed", Platform: "tiktok",
-	}); err != nil {
-		t.Fatalf("AddChannel: %v", err)
-	}
-
-	// FollowChannel creates the user_id='' row. Second insert mimics what
-	// the Android mutation path does (user_id=<username>) for the same
-	// channel — both rows are valid under the (user_id, channel_id) PK.
-	if err := d.FollowChannel("tiktok_dupseed"); err != nil {
-		t.Fatalf("FollowChannel: %v", err)
-	}
-	if _, err := d.conn.Exec(
-		`INSERT INTO channel_follows (user_id, channel_id, followed_at) VALUES (?, ?, ?)`,
-		"admin", "tiktok_dupseed", 1,
-	); err != nil {
-		t.Fatalf("seed second follow row: %v", err)
-	}
-
-	channels, err := d.GetSubscribedChannels()
-	if err != nil {
-		t.Fatalf("GetSubscribedChannels: %v", err)
-	}
-	var hits int
-	for _, ch := range channels {
-		if ch.ChannelID == "tiktok_dupseed" {
-			hits++
-		}
-	}
-	if hits != 1 {
-		t.Fatalf("tiktok_dupseed appeared %d times, want exactly 1", hits)
-	}
-}
-
 func TestGetSubscribedChannelsIncludesFollowWithoutChannelRow(t *testing.T) {
 	d := openWritableTestDB(t)
 	if err := d.ExecRaw(`
@@ -81,8 +36,8 @@ func TestGetSubscribedChannelsIncludesFollowWithoutChannelRow(t *testing.T) {
 		t.Fatalf("insert profile: %v", err)
 	}
 	if err := d.ExecRaw(`
-		INSERT INTO channel_follows (user_id, channel_id, followed_at)
-		VALUES ('', 'twitter_follow_only', 1)
+		INSERT INTO channel_follows (channel_id, followed_at)
+		VALUES ('twitter_follow_only', 1)
 	`); err != nil {
 		t.Fatalf("insert follow: %v", err)
 	}
@@ -204,33 +159,6 @@ func TestResolveSubscribeURL(t *testing.T) {
 	}
 }
 
-func TestDeleteTwitterChannelKeepsProfileAndBanner(t *testing.T) {
-	// Profile + banner survive channel delete so the channel page still
-	// renders the hero for non-subscribed handles, and re-following within
-	// the cache TTL doesn't force a refetch.
-	d := openWritableTestDB(t)
-	_ = d.AddChannel(model.Channel{
-		ChannelID: "twitter_zeta", Name: "Zeta", Platform: "twitter", URL: "https://x.com/zeta",
-	})
-	_ = d.UpsertChannelProfile(model.ChannelProfile{
-		ChannelID: "twitter_zeta", Platform: "twitter", Handle: "zeta", DisplayName: "Zeta",
-	})
-	_ = d.InsertMediaFile(model.MediaFile{
-		OwnerType: "banner", OwnerID: "twitter_zeta",
-		FilePath: "thumbnails/banners/twitter_zeta.jpg", MediaType: "banner",
-	})
-
-	if err := d.DeleteChannel("twitter_zeta"); err != nil {
-		t.Fatalf("delete: %v", err)
-	}
-	if p, _ := d.GetChannelProfile("twitter_zeta"); p == nil {
-		t.Fatalf("profile row should be retained as cache after channel delete")
-	}
-	if mfPath, _ := d.GetMediaFilePath("banner", "twitter_zeta", 0); mfPath == "" {
-		t.Fatalf("banner media_file should be retained after channel delete")
-	}
-}
-
 func TestPurgeUnfollowedVideoChannelRetainsMetadataWhenNoBookmarkSurvives(t *testing.T) {
 	d := openWritableTestDB(t)
 	if err := d.AddChannel(model.Channel{
@@ -247,40 +175,38 @@ func TestPurgeUnfollowedVideoChannelRetainsMetadataWhenNoBookmarkSurvives(t *tes
 		t.Fatalf("UpsertChannelProfile: %v", err)
 	}
 	if _, err := d.conn.Exec(`
-		INSERT INTO videos (video_id, channel_id, title, file_path, thumbnail_path, published_at, sync_seq)
-		VALUES ('drop_short', 'tiktok_drop', 'Drop short', 'videos/drop.mp4', 'thumbs/drop.jpg', 10, 1)
+		INSERT INTO videos (video_id, channel_id, owner_kind, title, published_at)
+		VALUES ('test_short', 'tiktok_drop', 'tiktok_video', 'Drop short', 10)
 	`); err != nil {
 		t.Fatalf("seed video: %v", err)
 	}
-	if err := d.InsertMediaFile(model.MediaFile{
-		OwnerType: "feed_media", OwnerID: "drop_short", MediaIndex: 0,
-		FilePath: "slides/drop_0.jpg", MediaType: "photo",
-	}); err != nil {
-		t.Fatalf("InsertMediaFile slide: %v", err)
-	}
-	if err := d.InsertMediaFile(model.MediaFile{
-		OwnerType: "avatar", OwnerID: "tiktok_drop", MediaIndex: 0,
-		FilePath: "avatars/drop.jpg", MediaType: "photo",
-	}); err != nil {
-		t.Fatalf("InsertMediaFile avatar: %v", err)
+	for _, asset := range []Asset{
+		{AssetID: BuildAssetID("tiktok", "tiktok_video", "test_short", "video_stream", 0), AssetKind: "video_stream", OwnerKind: "tiktok_video", OwnerID: "test_short", FilePath: "videos/drop.mp4", State: AssetStateReady},
+		{AssetID: BuildAssetID("tiktok", "tiktok_video", "test_short", "post_thumbnail", 0), AssetKind: "post_thumbnail", OwnerKind: "tiktok_video", OwnerID: "test_short", FilePath: "thumbs/drop.jpg", State: AssetStateReady},
+		{AssetID: BuildAssetID("tiktok", "tiktok_video", "test_short", "post_media", 0), AssetKind: "post_media", OwnerKind: "tiktok_video", OwnerID: "test_short", FilePath: "slides/drop_0.jpg", State: AssetStateReady},
+		{AssetID: BuildAssetID("tiktok", "channel", "tiktok_drop", "avatar", 0), AssetKind: "avatar", OwnerKind: "channel", OwnerID: "tiktok_drop", FilePath: "avatars/drop.jpg", State: AssetStateReady},
+	} {
+		storeReadyAssetForTest(t, d, asset, 1)
 	}
 
-	deleted, err := d.PurgeUnfollowedChannelContent("tiktok_drop", "alice")
+	deleted, err := d.PurgeUnfollowedChannelContent("tiktok_drop")
 	if err != nil {
 		t.Fatalf("PurgeUnfollowedChannelContent: %v", err)
 	}
 	deletedPaths := map[string]bool{}
-	for _, v := range deleted {
-		deletedPaths[v.FilePath] = true
-		deletedPaths[v.ThumbnailPath] = true
+	for _, key := range deleted {
+		deletedPaths[key] = true
 	}
-	for _, path := range []string{"videos/drop.mp4", "thumbs/drop.jpg", "slides/drop_0.jpg", "avatars/drop.jpg"} {
+	for _, path := range []string{"videos/drop.mp4", "thumbs/drop.jpg", "slides/drop_0.jpg"} {
 		if !deletedPaths[path] {
 			t.Fatalf("deleted paths missing %q: %+v", path, deletedPaths)
 		}
 	}
+	if deletedPaths["avatars/drop.jpg"] {
+		t.Fatalf("profile asset was retired while its profile row remains: %+v", deletedPaths)
+	}
 	var count int
-	if err := d.QueryRow(`SELECT COUNT(*) FROM videos WHERE video_id='drop_short'`).Scan(&count); err != nil {
+	if err := d.QueryRow(`SELECT COUNT(*) FROM videos WHERE video_id='test_short'`).Scan(&count); err != nil {
 		t.Fatalf("count video: %v", err)
 	}
 	if count != 0 {
@@ -295,100 +221,12 @@ func TestPurgeUnfollowedVideoChannelRetainsMetadataWhenNoBookmarkSurvives(t *tes
 	if p, _ := d.GetChannelProfile("tiktok_drop"); p == nil {
 		t.Fatalf("profile row should survive unfollow purge")
 	}
-}
-
-func TestPruneStaleOrphanChannelMetadataDropsOnlyOldUnreferencedRows(t *testing.T) {
-	d := openWritableTestDB(t)
-	now := time.Now().UTC().Truncate(time.Millisecond)
-	old := now.Add(-31 * 24 * time.Hour)
-	fresh := now.Add(-12 * time.Hour)
-
-	for _, ch := range []model.Channel{
-		{ChannelID: "tiktok_sample_old_orphan", SourceID: "sample_old_orphan", Name: "Old Orphan", Platform: "tiktok"},
-		{ChannelID: "tiktok_sample_new_orphan", SourceID: "sample_new_orphan", Name: "New Orphan", Platform: "tiktok"},
-		{ChannelID: "tiktok_sample_followed_old", SourceID: "sample_followed_old", Name: "Followed Old", Platform: "tiktok"},
-		{ChannelID: "tiktok_sample_video_old", SourceID: "sample_video_old", Name: "Video Old", Platform: "tiktok"},
-	} {
-		if err := d.AddChannel(ch); err != nil {
-			t.Fatalf("AddChannel %s: %v", ch.ChannelID, err)
-		}
-	}
-	if err := d.FollowChannel("tiktok_sample_followed_old"); err != nil {
-		t.Fatalf("FollowChannel: %v", err)
-	}
-	if err := d.FollowChannel("tiktok_sample_profile_followed_old"); err != nil {
-		t.Fatalf("FollowChannel profile-only: %v", err)
-	}
-	if err := d.InsertVideoWithSourceKind("sample_protected_video", "tiktok_sample_video_old", "Protected", "", 0, "", "", 0, old.UnixMilli(), "", "video", 0, false, ""); err != nil {
-		t.Fatalf("InsertVideoWithSourceKind: %v", err)
-	}
-	if err := d.ExecRaw(`
-		INSERT INTO feed_items (tweet_id, author_handle, source_handle, published_at, fetched_at)
-		VALUES ('sample_profile_ref_tweet', 'sample_profile_ref', 'sample_profile_ref', 1, 1)
-	`); err != nil {
-		t.Fatalf("insert referenced feed item: %v", err)
-	}
-	for channelID, fetchedAt := range map[string]time.Time{
-		"tiktok_sample_old_orphan":           old,
-		"tiktok_sample_new_orphan":           fresh,
-		"tiktok_sample_followed_old":         old,
-		"tiktok_sample_video_old":            old,
-		"tiktok_sample_profile_only_old":     old,
-		"tiktok_sample_profile_followed_old": old,
-		"twitter_sample_profile_ref":         old,
-	} {
-		platform := "tiktok"
-		if strings.HasPrefix(channelID, "twitter_") {
-			platform = "twitter"
-		}
-		if err := d.UpsertChannelProfile(model.ChannelProfile{
-			ChannelID:   channelID,
-			Platform:    platform,
-			Handle:      strings.TrimPrefix(strings.TrimPrefix(channelID, "tiktok_"), "twitter_"),
-			DisplayName: channelID,
-			AvatarURL:   "https://example.invalid/avatar.jpg",
-			FetchedAt:   &fetchedAt,
-		}); err != nil {
-			t.Fatalf("UpsertChannelProfile %s: %v", channelID, err)
-		}
-	}
-	if err := d.InsertMediaFile(model.MediaFile{
-		OwnerType: "avatar",
-		OwnerID:   "tiktok_sample_old_orphan",
-		FilePath:  "avatars/tiktok_sample_old_orphan.jpg",
-		MediaType: "photo",
-	}); err != nil {
-		t.Fatalf("InsertMediaFile: %v", err)
-	}
-	if err := d.InsertMediaFile(model.MediaFile{
-		OwnerType: "avatar",
-		OwnerID:   "tiktok_sample_profile_only_old",
-		FilePath:  "avatars/tiktok_sample_profile_only_old.jpg",
-		MediaType: "photo",
-	}); err != nil {
-		t.Fatalf("InsertMediaFile profile-only: %v", err)
-	}
-
-	pruned, err := d.PruneStaleOrphanChannelMetadata(now.Add(-30*24*time.Hour).UnixMilli(), 100)
-	if err != nil {
-		t.Fatalf("PruneStaleOrphanChannelMetadata: %v", err)
-	}
-	if pruned.Channels != 1 || pruned.ChannelProfiles != 2 || pruned.MediaFiles != 2 {
-		t.Fatalf("pruned = %+v, want one old channel plus two old profiles/media files", pruned)
-	}
-	for _, channelID := range []string{"tiktok_sample_new_orphan", "tiktok_sample_followed_old", "tiktok_sample_video_old", "tiktok_sample_profile_followed_old", "twitter_sample_profile_ref"} {
-		if p, _ := d.GetChannelProfile(channelID); p == nil {
-			t.Fatalf("%s profile should survive stale orphan prune", channelID)
-		}
-	}
-	for _, channelID := range []string{"tiktok_sample_old_orphan", "tiktok_sample_profile_only_old"} {
-		if p, _ := d.GetChannelProfile(channelID); p != nil {
-			t.Fatalf("%s profile survived stale orphan prune", channelID)
-		}
+	if avatar, err := d.GetAssetByOwnerIdentity("avatar", "channel", "tiktok_drop", 0); err != nil || avatar == nil {
+		t.Fatalf("profile avatar should survive unfollow purge: %+v / %v", avatar, err)
 	}
 }
 
-func TestPurgeUnfollowedChannelContentKeepsFollowClearedWhenPurgeFails(t *testing.T) {
+func TestPurgeUnfollowedChannelContentRollsBackFollowWhenPurgeFails(t *testing.T) {
 	d := openWritableTestDB(t)
 	if err := d.ExecRaw(`
 		INSERT INTO channels (channel_id, name, platform)
@@ -397,14 +235,14 @@ func TestPurgeUnfollowedChannelContentKeepsFollowClearedWhenPurgeFails(t *testin
 		t.Fatalf("insert channel: %v", err)
 	}
 	if err := d.ExecRaw(`
-		INSERT INTO channel_follows (user_id, channel_id, followed_at)
-		VALUES ('', 'twitter_drop_fail', 1)
+		INSERT INTO channel_follows (channel_id, followed_at)
+		VALUES ('twitter_drop_fail', 1)
 	`); err != nil {
 		t.Fatalf("insert follow: %v", err)
 	}
 	if err := d.ExecRaw(`
-		INSERT INTO feed_items (tweet_id, author_handle, source_handle, published_at, fetched_at)
-		VALUES ('tw_drop_fail', 'drop_fail', 'drop_fail', 1, 1)
+		INSERT INTO feed_items (tweet_id, source_channel_id, channel_id, published_at, fetched_at)
+		VALUES ('tw_drop_fail', 'twitter_drop_fail', 'twitter_drop_fail', 1, 1)
 	`); err != nil {
 		t.Fatalf("insert feed item: %v", err)
 	}
@@ -419,15 +257,15 @@ func TestPurgeUnfollowedChannelContentKeepsFollowClearedWhenPurgeFails(t *testin
 		t.Fatalf("create trigger: %v", err)
 	}
 
-	if _, err := d.PurgeUnfollowedChannelContent("twitter_drop_fail", "alice"); err == nil {
+	if _, err := d.PurgeUnfollowedChannelContent("twitter_drop_fail"); err == nil {
 		t.Fatal("expected purge failure")
 	}
 	var count int
 	if err := d.QueryRow(`SELECT COUNT(*) FROM channel_follows WHERE channel_id='twitter_drop_fail'`).Scan(&count); err != nil {
 		t.Fatalf("count follow: %v", err)
 	}
-	if count != 0 {
-		t.Fatalf("follow row should stay cleared after purge failure, count=%d", count)
+	if count != 1 {
+		t.Fatalf("follow and purge must roll back together, count=%d", count)
 	}
 }
 
@@ -442,15 +280,15 @@ func TestChannelSettingsOverrideChain(t *testing.T) {
 	d := openWritableTestDB(t)
 
 	if err := d.AddChannel(model.Channel{
-		ChannelID: "twitter_chain", SourceID: "chain", Name: "Chain",
-		URL: "https://x.com/chain", Platform: "twitter",
+		ChannelID: "twitter_sample_channel", SourceID: "sample_channel", Name: "Sample Channel",
+		URL: "https://x.com/sample_channel", Platform: "twitter",
 	}); err != nil {
 		t.Fatalf("AddChannel: %v", err)
 	}
 
 	// Layer 1 — hardcoded default. No global, no channel override.
 	// GetChannelSettings falls back to "1" (true) for include_reposts.
-	s, err := d.GetChannelSettings("twitter_chain")
+	s, err := d.GetChannelSettings("twitter_sample_channel")
 	if err != nil || s == nil {
 		t.Fatalf("GetChannelSettings initial: %v / %+v", err, s)
 	}
@@ -459,32 +297,50 @@ func TestChannelSettingsOverrideChain(t *testing.T) {
 	}
 
 	// Layer 2 — global overrides default. Channel still has no override.
-	if err := d.SetSetting("", "include_reposts_default", "0"); err != nil {
+	if err := d.SetSetting("include_reposts_default", "0"); err != nil {
 		t.Fatalf("SetSetting include_reposts_default=0: %v", err)
 	}
-	s, _ = d.GetChannelSettings("twitter_chain")
+	s, _ = d.GetChannelSettings("twitter_sample_channel")
 	if s.IncludeReposts {
 		t.Fatalf("after global=false, include_reposts = true, want false (global should win)")
 	}
 
 	// Layer 3 — per-channel override wins over global.
-	if err := d.UpdateChannelSettings("twitter_chain", map[string]any{
+	if err := d.UpdateChannelSettings("twitter_sample_channel", map[string]any{
 		"include_reposts": 1,
 	}); err != nil {
 		t.Fatalf("UpdateChannelSettings include_reposts=1: %v", err)
 	}
-	s, _ = d.GetChannelSettings("twitter_chain")
+	s, _ = d.GetChannelSettings("twitter_sample_channel")
 	if !s.IncludeReposts {
 		t.Fatalf("channel=true + global=false → include_reposts = false, want true (channel should win)")
 	}
+	var overrideUpdatedAt int64
+	if err := d.QueryRow(`SELECT updated_at FROM channel_settings WHERE channel_id = 'twitter_sample_channel'`).Scan(&overrideUpdatedAt); err != nil {
+		t.Fatal(err)
+	}
 
 	// Clearing per-channel overrides falls back to the global row again.
-	if err := d.ClearChannelSettings("twitter_chain"); err != nil {
+	if err := d.ClearChannelSettings("twitter_sample_channel"); err != nil {
 		t.Fatalf("ClearChannelSettings: %v", err)
 	}
-	s, _ = d.GetChannelSettings("twitter_chain")
+	s, _ = d.GetChannelSettings("twitter_sample_channel")
 	if s.IncludeReposts {
 		t.Fatalf("after clear + global=false, include_reposts = true, want false (should fall back to global)")
+	}
+	var allNull int
+	var clearedAt int64
+	if err := d.QueryRow(`
+		SELECT max_videos IS NULL AND download_subtitles IS NULL
+		   AND media_only IS NULL AND media_download_limit IS NULL
+		   AND include_reposts IS NULL,
+		       updated_at
+		FROM channel_settings WHERE channel_id = 'twitter_sample_channel'
+	`).Scan(&allNull, &clearedAt); err != nil {
+		t.Fatal(err)
+	}
+	if allNull != 1 || clearedAt <= overrideUpdatedAt {
+		t.Fatalf("clear tombstone = null:%d at:%d, prior:%d", allNull, clearedAt, overrideUpdatedAt)
 	}
 }
 
@@ -506,7 +362,7 @@ func TestChannelSettingsMaxVideosZeroIsInheritSentinel(t *testing.T) {
 	// Pin the global so we have a known non-default answer. twitter/youtube
 	// channels resolve against youtube_max_videos; TikTok and Instagram branch
 	// to their own globals — see GetChannelSettings.
-	if err := d.SetSetting("", "youtube_max_videos", "42"); err != nil {
+	if err := d.SetSetting("youtube_max_videos", "42"); err != nil {
 		t.Fatalf("SetSetting youtube_max_videos=42: %v", err)
 	}
 
@@ -546,10 +402,10 @@ func TestChannelSettingsInstagramUsesInstagramGlobals(t *testing.T) {
 		t.Fatalf("AddChannel: %v", err)
 	}
 
-	if err := d.SetSetting("", "youtube_max_videos", "5"); err != nil {
+	if err := d.SetSetting("youtube_max_videos", "5"); err != nil {
 		t.Fatalf("SetSetting youtube_max_videos=5: %v", err)
 	}
-	if err := d.SetSetting("", "instagram_max_videos", "20"); err != nil {
+	if err := d.SetSetting("instagram_max_videos", "20"); err != nil {
 		t.Fatalf("SetSetting instagram_max_videos=20: %v", err)
 	}
 

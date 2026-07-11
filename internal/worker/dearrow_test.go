@@ -9,10 +9,10 @@ import (
 	"github.com/screwys/igloo/internal/dearrow"
 )
 
-// TestDearrowOnce_ProcessesMissingYouTubeVideos seeds 3 YouTube videos that
+// TestYoutubeEnrichOnceProcessesMissingYouTubeVideos seeds 3 YouTube videos that
 // have never been checked, runs one scan, and verifies all three had their
 // branding written.
-func TestDearrowOnce_ProcessesMissingYouTubeVideos(t *testing.T) {
+func TestYoutubeEnrichOnceProcessesMissingYouTubeVideos(t *testing.T) {
 	// Override sleep so the 3-video pass doesn't take 1.5s.
 	old := dearrowPerFetchSleep
 	dearrowPerFetchSleep = time.Millisecond
@@ -27,7 +27,7 @@ func TestDearrowOnce_ProcessesMissingYouTubeVideos(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 
-	n := m.dearrowOnce(ctx)
+	n := m.youtubeEnrichOnce(ctx)
 	if n != 3 {
 		t.Fatalf("processed = %d, want 3", n)
 	}
@@ -42,11 +42,11 @@ func TestDearrowOnce_ProcessesMissingYouTubeVideos(t *testing.T) {
 	}
 }
 
-// TestDearrowOnce_NoOpWhenNothingNeedsCheck seeds no videos, runs once, and
+// TestYoutubeEnrichOnceNoOpWhenNothingNeedsCheck seeds no videos, runs once, and
 // verifies no client calls are made.
-func TestDearrowOnce_NoOpWhenNothingNeedsCheck(t *testing.T) {
+func TestYoutubeEnrichOnceNoOpWhenNothingNeedsCheck(t *testing.T) {
 	m, client := newTestManagerWithDearrow(t, dearrow.Result{}, nil)
-	n := m.dearrowOnce(t.Context())
+	n := m.youtubeEnrichOnce(t.Context())
 	if n != 0 {
 		t.Errorf("processed = %d, want 0", n)
 	}
@@ -55,21 +55,21 @@ func TestDearrowOnce_NoOpWhenNothingNeedsCheck(t *testing.T) {
 	}
 }
 
-// TestDearrowOnce_NilFetcherNoOp ensures a Manager without a fetcher doesn't
+// TestYoutubeEnrichOnceNilFetcherNoOp ensures a Manager without a fetcher doesn't
 // panic and returns 0 immediately.
-func TestDearrowOnce_NilFetcherNoOp(t *testing.T) {
+func TestYoutubeEnrichOnceNilFetcherNoOp(t *testing.T) {
 	d := newTestWorkerDB(t)
 	m := &Manager{db: d, cfg: testCfg(t.TempDir())}
 	// dearrowFetcher left nil.
-	if n := m.dearrowOnce(t.Context()); n != 0 {
+	if n := m.youtubeEnrichOnce(t.Context()); n != 0 {
 		t.Errorf("processed = %d, want 0", n)
 	}
 }
 
-// TestDearrowOnce_ContextCancellationStopsMidLoop seeds several videos and
+// TestYoutubeEnrichOnceContextCancellationStopsMidLoop seeds several videos and
 // cancels the context immediately. Verifies the loop exits without processing
 // all videos.
-func TestDearrowOnce_ContextCancellationStopsMidLoop(t *testing.T) {
+func TestYoutubeEnrichOnceContextCancellationStopsMidLoop(t *testing.T) {
 	realTitle := "X"
 	m, _ := newTestManagerWithDearrow(t, dearrow.Result{Title: &realTitle}, nil)
 	for i := 1; i <= 10; i++ {
@@ -77,7 +77,7 @@ func TestDearrowOnce_ContextCancellationStopsMidLoop(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel() // cancelled before call
-	n := m.dearrowOnce(ctx)
+	n := m.youtubeEnrichOnce(ctx)
 	if n >= 10 {
 		t.Errorf("processed = %d, want < 10 (cancel should stop early)", n)
 	}

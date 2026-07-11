@@ -11,6 +11,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -21,13 +23,14 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
-import com.screwy.igloo.perf.PerfProbe
 import com.screwy.igloo.ui.component.formatDuration
+import java.io.File
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
-import java.io.File
 
 @Composable
 fun SeekPreview(
@@ -40,50 +43,43 @@ fun SeekPreview(
     height: Dp = 54.dp,
 ) {
     if (!visible) return
-    val bitmap = remember(previewSpritePath) {
-        PerfProbe.timed(
-            event = "seek_preview_sprite_decode",
-            fields = { mapOf("has_path" to (previewSpritePath != null)) },
-        ) {
-            previewSpritePath
-                ?.let(::File)
-                ?.takeIf { it.exists() }
-                ?.let { BitmapFactory.decodeFile(it.absolutePath) }
-                ?.asImageBitmap()
+    val bitmap by
+        produceState<androidx.compose.ui.graphics.ImageBitmap?>(null, previewSpritePath) {
+            value = null
+            value =
+                withContext(Dispatchers.IO) {
+                    previewSpritePath?.let(BitmapFactory::decodeFile)?.asImageBitmap()
+                }
         }
-    }
-    val trackCues = remember(previewTrackJsonPath) {
-        PerfProbe.timed(
-            event = "seek_preview_track_parse",
-            fields = { mapOf("has_path" to (previewTrackJsonPath != null)) },
-        ) {
-            previewTrackJsonPath
-                ?.let(::File)
-                ?.takeIf { it.exists() }
-                ?.readText()
-                ?.let(::parsePreviewTrackJson)
-                .orEmpty()
+    val trackCues by
+        produceState(emptyList<PreviewCue>(), previewTrackJsonPath) {
+            value = emptyList()
+            value =
+                withContext(Dispatchers.IO) {
+                    previewTrackJsonPath
+                        ?.let { path -> runCatching { File(path).readText() }.getOrNull() }
+                        ?.let(::parsePreviewTrackJson)
+                        .orEmpty()
+                }
         }
-    }
-    val cue = remember(targetMs, trackCues) {
-        findPreviewCue(trackCues, targetMs)
-    }
+    val cue = remember(targetMs, trackCues) { findPreviewCue(trackCues, targetMs) }
     Box(
-        modifier = modifier
-            .clip(RoundedCornerShape(6.dp))
-            .background(Color.Black.copy(alpha = 0.82f))
-            .padding(4.dp),
+        modifier =
+            modifier
+                .clip(RoundedCornerShape(6.dp))
+                .background(Color.Black.copy(alpha = 0.82f))
+                .padding(4.dp),
         contentAlignment = Alignment.Center,
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            if (bitmap != null && cue != null) {
+            val previewBitmap = bitmap
+            if (previewBitmap != null && cue != null) {
                 Canvas(
-                    modifier = Modifier
-                        .size(width = width, height = height)
-                        .clip(RoundedCornerShape(4.dp)),
+                    modifier =
+                        Modifier.size(width = width, height = height).clip(RoundedCornerShape(4.dp))
                 ) {
                     drawImage(
-                        image = bitmap,
+                        image = previewBitmap,
                         srcOffset = IntOffset(cue.x, cue.y),
                         srcSize = IntSize(cue.width, cue.height),
                         dstOffset = IntOffset.Zero,
@@ -114,9 +110,9 @@ internal fun findPreviewCue(cues: List<PreviewCue>, targetMs: Long): PreviewCue?
         ?: cues.lastOrNull()?.takeIf { targetMs >= it.startMs }
 
 internal fun parsePreviewTrackJson(text: String): List<PreviewCue> {
-    val track = runCatching { previewTrackJson.decodeFromString<PreviewTrackJson>(text) }
-        .getOrNull()
-        ?: return emptyList()
+    val track =
+        runCatching { previewTrackJson.decodeFromString<PreviewTrackJson>(text) }.getOrNull()
+            ?: return emptyList()
     if (track.version != 1 || track.tileWidth <= 0 || track.tileHeight <= 0 || track.columns <= 0) {
         return emptyList()
     }

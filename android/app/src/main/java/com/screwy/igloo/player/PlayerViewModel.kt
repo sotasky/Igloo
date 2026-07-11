@@ -6,7 +6,6 @@ import com.screwy.igloo.channel.ChannelRouteResolver
 import com.screwy.igloo.data.IglooDatabase
 import com.screwy.igloo.data.PreferencesRepo
 import com.screwy.igloo.data.entity.ChannelEntity
-import com.screwy.igloo.data.entity.ChannelProfileEntity
 import com.screwy.igloo.data.entity.SponsorBlockSegmentEntity
 import com.screwy.igloo.data.entity.VideoCommentEntity
 import com.screwy.igloo.data.entity.VideoEntity
@@ -16,8 +15,7 @@ import com.screwy.igloo.media.MediaUri
 import com.screwy.igloo.media.OwnerKind
 import com.screwy.igloo.outbox.OutboxKind
 import com.screwy.igloo.outbox.OutboxWriter
-import com.screwy.igloo.sync.SchedulerActions
-import com.screwy.igloo.sync.SyncStream
+import com.screwy.igloo.sync.SyncCoordinator
 import com.screwy.igloo.ui.UiEffect
 import com.screwy.igloo.ui.UiEffects
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -26,12 +24,12 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import java.io.File
 
 /**
  * Long-form YouTube player state holder.
@@ -57,7 +55,7 @@ class PlayerViewModel(
     private val db: IglooDatabase,
     private val outboxWriter: OutboxWriter,
     private val prefs: PreferencesRepo,
-    private val scheduler: SchedulerActions,
+    private val scheduler: SyncCoordinator,
     private val uiEffects: UiEffects,
     private val resolvers: MediaResolvers,
 ) : ViewModel() {
@@ -100,18 +98,7 @@ class PlayerViewModel(
             initialValue = null,
         )
 
-    val channelProfile: StateFlow<ChannelProfileEntity?> = video
-        .flatMapLatest { v ->
-            if (v == null) flow<ChannelProfileEntity?> { emit(null) }
-            else db.channelProfileDao().getByIdFlow(v.channelId)
-        }
-        .stateIn(
-            scope = viewModelScope,
-            started = SharingStarted.WhileSubscribed(5_000L),
-            initialValue = null,
-        )
-
-    /** Comments bundled inline with the video sync (02-sync.md §5). */
+    /** Comments bundled with the mirrored video. */
     val comments: StateFlow<List<VideoCommentEntity>> = db.videoCommentDao()
         .forVideoFlow(videoId)
         .stateIn(
@@ -136,12 +123,9 @@ class PlayerViewModel(
 
     val previewTrackJsonPath: StateFlow<String?> = localAssetPathFlow("preview_track_json")
 
-    val subtitleIsAuto: StateFlow<Boolean?> = combine(
-        db.androidSyncDao().latestVerifiedAssetsForOwnerFlow(videoId, listOf("subtitle")),
-        db.mediaInventoryDao().forOwnerAndKindFlow(videoId, "subtitle"),
-    ) { syncRows, fallbackRow ->
-        syncRows.firstOrNull()?.subtitleIsAuto ?: fallbackRow?.subtitleIsAuto
-    }
+    val subtitleIsAuto: StateFlow<Boolean?> = db.androidSyncDao()
+		.assetsForOwnerFlow("youtube_video", videoId)
+        .map { rows -> rows.firstOrNull { it.assetKind == "subtitle" }?.subtitleIsAuto }
         .stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5_000L),
@@ -151,7 +135,7 @@ class PlayerViewModel(
     /**
      * Playable URI. Re-resolved when Sync or the retained inventory fallback changes.
      */
-    val streamUri: StateFlow<MediaUri> = resolvers.videoStreamFlow(videoId)
+    val streamUri: StateFlow<MediaUri> = resolvers.videoStreamFlow(videoId, OwnerKind.YouTubeVideo)
         .stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5_000L),
@@ -192,7 +176,6 @@ class PlayerViewModel(
                     videoId = videoId,
                     position = positionMs / 1000.0,
                     duration = safeDuration / 1000.0,
-                    source = "android",
                 )
             )
         }
@@ -202,19 +185,24 @@ class PlayerViewModel(
         if (seededHydration) return
         seededHydration = true
         if (video.value == null || comments.value.isEmpty()) {
-            scheduler.triggerStream(SyncStream.Youtube)
+            scheduler.triggerAll()
         }
-        if (channel.value == null ||
-            (channel.value?.avatarUrl.isNullOrBlank() && channelProfile.value?.avatarUrl.isNullOrBlank())
-        ) {
-            scheduler.triggerStream(SyncStream.Channels)
+        val channelId = video.value?.channelId ?: channel.value?.channelId
+        viewModelScope.launch {
+            val avatarReady = channelId != null && db.androidSyncDao()
+                .assetsForOwnerFlow("channel", channelId)
+                .first()
+                .any { it.assetKind == "avatar" }
+            if (channel.value == null || !avatarReady) {
+                scheduler.triggerAll()
+            }
         }
     }
 
     fun refreshComments() {
         viewModelScope.launch {
             _isRefreshingComments.value = true
-            scheduler.triggerStream(SyncStream.Youtube)
+            scheduler.triggerAll()
             delay(1_000L)
             _isRefreshingComments.value = false
         }
@@ -232,15 +220,14 @@ class PlayerViewModel(
     }
 
     private fun localAssetPathFlow(assetKind: String): StateFlow<String?> =
-        combine(
-            db.androidSyncDao().latestVerifiedLocalPathFlow(videoId, assetKind),
-            db.mediaInventoryDao().forOwnerAndKindFlow(videoId, assetKind),
-        ) { syncPath, fallbackRow ->
-            syncPath?.takeIf { File(it).exists() }
-                ?: fallbackRow?.localPath?.takeIf {
-                    fallbackRow.state == "cached" && File(it).exists()
-                }
-        }.stateIn(
+		db.androidSyncDao().assetsForOwnerFlow("youtube_video", videoId)
+			.map { rows ->
+				rows.firstOrNull { it.assetKind == assetKind }
+					?.takeIf { !it.localPath.isNullOrBlank() }
+					?.localPath
+					?.takeIf { it.isNotBlank() }
+            }
+            .stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5_000L),
             initialValue = null,

@@ -20,6 +20,9 @@ interface PreferenceDao {
     @Query("SELECT value FROM preferences WHERE `key` = :key")
     suspend fun getValue(key: String): String?
 
+    @Query("SELECT * FROM preferences WHERE `key` = :key")
+    suspend fun get(key: String): PreferenceEntity?
+
     @Upsert
     suspend fun upsert(row: PreferenceEntity)
 

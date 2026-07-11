@@ -2,8 +2,10 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
+	"mime"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,319 +13,205 @@ import (
 
 	"github.com/screwys/igloo/internal/db"
 	"github.com/screwys/igloo/internal/download"
-	"github.com/screwys/igloo/internal/model"
 )
 
 const (
 	feedMediaBatchSize     = 25
 	feedMediaLeaseDuration = 5 * time.Minute
-	// maxRetries404 is the retry cap for jobs where every media URL returns 404.
-	// After quality fallback is exhausted, a 404 means the content is deleted
-	// from the CDN and won't come back.
-	maxRetries404 = 10
+	maxRetries404          = 10
 )
 
-// runFeedMediaWorker processes feed media download jobs.
-// It wakes on a 30s ticker or when kicked via feedMediaKick.
 func (m *Manager) runFeedMediaWorker(ctx context.Context) {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
-
 	log.Printf("[feedmedia] worker started")
-
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if m.IsStopRequested() {
-				continue
+			if !m.IsStopRequested() {
+				m.processFeedMediaBatch(ctx)
 			}
-			m.processFeedMediaBatch(ctx)
 		case <-m.feedMediaKick:
-			if m.IsStopRequested() {
-				continue
+			if !m.IsStopRequested() {
+				m.processFeedMediaBatch(ctx)
 			}
-			m.processFeedMediaBatch(ctx)
 		}
 	}
 }
 
-// processFeedMediaBatch claims up to feedMediaBatchSize queued jobs and
-// processes each one sequentially.
 func (m *Manager) processFeedMediaBatch(ctx context.Context) {
+	if m == nil || m.db == nil || m.cfg == nil || m.downloader == nil || ctx.Err() != nil {
+		return
+	}
 	owner := feedMediaLeaseOwner()
 	for {
-		jobs, err := m.db.ClaimFeedMediaBatchWithLease(db.LeaseOptions{
-			Owner:   owner,
-			LeaseMs: feedMediaLeaseDuration.Milliseconds(),
-			Limit:   feedMediaBatchSize,
+		assets, err := m.db.ClaimContentAssetDownloadBatch(db.LeaseOptions{
+			Owner: owner, LeaseMs: feedMediaLeaseDuration.Milliseconds(), Limit: feedMediaBatchSize,
 		})
 		if err != nil {
-			log.Printf("[feedmedia] ClaimFeedMediaBatchWithLease: %v", err)
+			log.Printf("[feedmedia] ClaimContentAssetDownloadBatch: %v", err)
 			return
 		}
-		if len(jobs) == 0 {
+		if len(assets) == 0 {
 			return
 		}
-
-		log.Printf("[feedmedia] processing %d jobs", len(jobs))
-
-		for _, job := range jobs {
-			select {
-			case <-ctx.Done():
-				return
-			default:
-			}
-			platform := "twitter"
-			handle := job.SourceHandle
-			if strings.HasPrefix(handle, "tiktok_") {
-				platform = "tiktok"
-				handle = strings.TrimPrefix(handle, "tiktok_")
-			} else {
-				handle = strings.TrimPrefix(handle, "twitter_")
-			}
-			if m.cfg != nil && !m.cfg.PlatformEnabled(platform) {
-				reason := fmt.Sprintf("platform disabled: %s", platform)
-				log.Printf("[feedmedia] skip %s: %s", job.TweetID, reason)
-				if err := m.db.FailFeedMediaJob(job.TweetID, job.LeaseOwner, download.ErrorKindPermanentHTTP, reason, time.Now().UnixMilli()); err != nil {
-					log.Printf("[feedmedia] FailFeedMediaJob %s: %v", job.TweetID, err)
-				}
+		for _, asset := range assets {
+			if ctx.Err() != nil {
+				m.releaseContentAsset(asset)
 				continue
 			}
-			jobDir := filepath.Join(m.cfg.DataDir, "media", platform, handle)
-			if err := os.MkdirAll(jobDir, 0o755); err != nil {
-				log.Printf("[feedmedia] mkdir %s: %v", jobDir, err)
-				m.failJob(job, fmt.Sprintf("mkdir: %v", err))
-				continue
-			}
-			m.processOneMediaJob(ctx, job, jobDir)
+			m.processContentAsset(ctx, asset)
 		}
-		if len(jobs) < feedMediaBatchSize {
+		if len(assets) < feedMediaBatchSize {
 			return
 		}
 	}
 }
 
-// processOneMediaJob downloads all media for a single job.
-func (m *Manager) processOneMediaJob(ctx context.Context, job db.FeedMediaJobRow, feedMediaDir string) {
-	start := time.Now()
-	if stopRenew := m.startFeedMediaLeaseRenewal(ctx, job); stopRenew != nil {
+func (m *Manager) processContentAsset(ctx context.Context, asset db.Asset) {
+	stopRenew := m.startContentAssetLeaseRenewal(ctx, asset)
+	if stopRenew != nil {
 		defer stopRenew()
 	}
-	m.EmitFeed("feed_media", fmt.Sprintf("Processing media for %s", job.TweetID), "info")
-
-	// Look up the parent feed item for canonical URL and media refs.
-	items, err := m.db.GetFeedItemsForTweetIDs([]string{job.TweetID})
+	if asset.OwnerKind == "tweet" && m.cfg != nil && !m.cfg.PlatformEnabled("twitter") {
+		m.failContentAsset(asset, fmt.Errorf("platform disabled: twitter"))
+		return
+	}
+	oldPath := asset.FilePath
+	finalPath, contentType, err := m.downloadContentAsset(ctx, asset)
 	if err != nil {
-		log.Printf("[feedmedia] GetFeedItemsForTweetIDs %s: %v", job.TweetID, err)
-		m.failJob(job, fmt.Sprintf("db lookup: %v", err))
+		m.failContentAsset(asset, err)
 		return
 	}
-
-	feedItem, ok := items[job.TweetID]
-	if !ok {
-		// Feed item was deleted — this is an orphaned job. Prune immediately.
-		log.Printf("[feedmedia] feed item not found, pruning job: %s", job.TweetID)
-		if err := m.db.PruneFeedMediaJob(job.TweetID, job.LeaseOwner, download.ErrorKindNotFound, "feed item not found", job.RetryCount, time.Now().UnixMilli()); err != nil {
-			log.Printf("[feedmedia] PruneFeedMediaJob %s: %v", job.TweetID, err)
-		}
+	key, err := m.cfg.Storage.Key(finalPath)
+	if err != nil {
+		_ = os.Remove(finalPath)
+		m.failContentAsset(asset, err)
 		return
 	}
-
-	feedItem.ParseMedia()
-
-	if len(feedItem.Media) == 0 && len(feedItem.QuoteMedia) == 0 {
-		// Nothing to download — mark completed.
-		if err := m.db.CompleteFeedMediaJob(job.TweetID, job.LeaseOwner, time.Now().UnixMilli()); err != nil {
-			log.Printf("[feedmedia] CompleteFeedMediaJob %s: %v", job.TweetID, err)
+	asset.FilePath = key
+	asset.ContentType = contentType
+	if err := m.db.CompleteAssetDownload(asset, asset.LeaseOwner, time.Now().UnixMilli()); err != nil {
+		_ = os.Remove(finalPath)
+		if !errors.Is(err, db.ErrQueueLeaseNotHeld) {
+			log.Printf("[feedmedia] CompleteAssetDownload %s: %v", asset.AssetID, err)
 		}
 		return
 	}
-
-	// Skip items where media_json contains local proxy URLs (/api/slide/) instead
-	// of CDN URLs — original URLs were lost, nothing to download.
-	if allLocalProxyURLs(feedItem.Media) && allLocalProxyURLs(feedItem.QuoteMedia) {
-		log.Printf("[feedmedia] skipping %s: only local proxy URLs", job.TweetID)
-		if err := m.db.PruneFeedMediaJob(job.TweetID, job.LeaseOwner, download.ErrorKindPermanentHTTP, "local proxy URLs only", 0, time.Now().UnixMilli()); err != nil {
-			log.Printf("[feedmedia] PruneFeedMediaJob %s: %v", job.TweetID, err)
-		}
-		return
-	}
-
-	var mediaFiles []model.MediaFile
-	var lastErr error
-	allErrorsNotFound := true // tracks whether every failed URL returned 404/410.
-
-	for idx, ref := range feedItem.Media {
-		select {
-		case <-ctx.Done():
-			return
-		default:
-		}
-
-		opts := download.Opts{
-			OutputDir: feedMediaDir,
-			ID:        fmt.Sprintf("%s_%d", job.TweetID, idx),
-		}
-		if download.IsTikTokURL(ref.URL) {
-			opts.Cookies, opts.CookiesFromBrowser = m.cookiesFor("tiktok")
-		}
-		paths, dlErr := m.downloader.Download(ctx, ref.URL, ref.Type, opts)
-
-		if dlErr != nil {
-			log.Printf("[feedmedia] download %s[%d]: %v", job.TweetID, idx, dlErr)
-			lastErr = dlErr
-			if download.ClassifyFailure(dlErr, nil, job.RetryCount+1).Kind != download.ErrorKindNotFound {
-				allErrorsNotFound = false
-			}
-			continue
-		}
-
-		for i, p := range paths {
-			relPath := toRelPath(m.cfg.DataDir, p)
-			mediaIdx := idx
-			if len(paths) > 1 {
-				mediaIdx = i
-			}
-			mediaFiles = append(mediaFiles, model.MediaFile{
-				OwnerType:  "feed_media",
-				OwnerID:    job.TweetID,
-				MediaIndex: mediaIdx,
-				FilePath:   relPath,
-				MediaType:  ref.Type,
-				SourceURL:  ref.URL,
-			})
+	if oldPath != "" && oldPath != key {
+		if _, err := m.db.RemoveAssetFileIfUnreferenced(oldPath); err != nil {
+			log.Printf("[feedmedia] remove replaced file %s: %v", oldPath, err)
 		}
 	}
-
-	// Download quote media if present.
-	if len(feedItem.QuoteMedia) > 0 && feedItem.QuoteTweetID != "" {
-		quoteHandle := feedItem.QuoteAuthorHandle
-		if quoteHandle == "" {
-			quoteHandle = strings.TrimPrefix(job.SourceHandle, "twitter_")
-		}
-		quoteMediaDir := filepath.Join(m.cfg.DataDir, "media", "twitter", quoteHandle)
-		if mkErr := os.MkdirAll(quoteMediaDir, 0o755); mkErr != nil {
-			log.Printf("[feedmedia] mkdir quote %s: %v", quoteMediaDir, mkErr)
-			lastErr = mkErr
-			allErrorsNotFound = false
-		} else {
-			for idx, ref := range feedItem.QuoteMedia {
-				select {
-				case <-ctx.Done():
-					return
-				default:
-				}
-
-				opts := download.Opts{
-					OutputDir: quoteMediaDir,
-					ID:        fmt.Sprintf("%s_%d", feedItem.QuoteTweetID, idx),
-				}
-				if download.IsTikTokURL(ref.URL) {
-					opts.Cookies, opts.CookiesFromBrowser = m.cookiesFor("tiktok")
-				}
-				paths, dlErr := m.downloader.Download(ctx, ref.URL, ref.Type, opts)
-
-				if dlErr != nil {
-					log.Printf("[feedmedia] download quote %s[%d]: %v", feedItem.QuoteTweetID, idx, dlErr)
-					lastErr = dlErr
-					if download.ClassifyFailure(dlErr, nil, job.RetryCount+1).Kind != download.ErrorKindNotFound {
-						allErrorsNotFound = false
-					}
-					continue
-				}
-
-				for i, p := range paths {
-					relPath := toRelPath(m.cfg.DataDir, p)
-					mediaIdx := idx
-					if len(paths) > 1 {
-						mediaIdx = i
-					}
-					mediaFiles = append(mediaFiles, model.MediaFile{
-						OwnerType:  "quote_media",
-						OwnerID:    feedItem.QuoteTweetID,
-						MediaIndex: mediaIdx,
-						FilePath:   relPath,
-						MediaType:  ref.Type,
-						SourceURL:  ref.URL,
-					})
-				}
-			}
-		}
-	}
-
-	// Insert media file records.
-	if len(mediaFiles) > 0 {
-		if err := m.db.InsertMediaFileBatch(mediaFiles); err != nil {
-			log.Printf("[feedmedia] InsertMediaFileBatch %s: %v", job.TweetID, err)
-		}
-	}
-
-	elapsed := time.Since(start).Round(time.Millisecond)
-
-	if lastErr != nil {
-		newRetry := job.RetryCount + 1
-		classification := download.ClassifyFailure(lastErr, nil, newRetry)
-
-		// If every failed URL returned 404 (after quality fallback) and we've
-		// exceeded maxRetries404, the media is permanently deleted from the CDN.
-		if allErrorsNotFound && newRetry > maxRetries404 {
-			log.Printf("[feedmedia] job %s pruned after %d retries (all 404): %v", job.TweetID, newRetry, lastErr)
-			m.EmitFeed("feed_media", fmt.Sprintf("Media pruned for %s (deleted from CDN)", job.TweetID), "warn")
-			if err := m.db.PruneFeedMediaJob(job.TweetID, job.LeaseOwner, download.ErrorKindNotFound, lastErr.Error(), newRetry, time.Now().UnixMilli()); err != nil {
-				log.Printf("[feedmedia] PruneFeedMediaJob %s: %v", job.TweetID, err)
-			}
-			return
-		}
-
-		if classification.Permanent {
-			log.Printf("[feedmedia] job %s failed permanently after retry %d: %v", job.TweetID, newRetry, lastErr)
-			m.EmitFeed("feed_media", fmt.Sprintf("Media failed permanently for %s: %v", job.TweetID, lastErr), "error")
-			if err := m.db.FailFeedMediaJob(job.TweetID, job.LeaseOwner, classification.Kind, lastErr.Error(), time.Now().UnixMilli()); err != nil {
-				log.Printf("[feedmedia] FailFeedMediaJob %s: %v", job.TweetID, err)
-			}
-			return
-		}
-
-		log.Printf("[feedmedia] job %s queued for retry %d: %v", job.TweetID, newRetry, lastErr)
-		m.EmitFeed("feed_media", fmt.Sprintf("Media failed for %s: %v", job.TweetID, lastErr), "error")
-		if err := m.db.RetryFeedMediaJob(job.TweetID, job.LeaseOwner, classification.Kind, lastErr.Error(), classification.RetryDelay, time.Now().UnixMilli()); err != nil {
-			log.Printf("[feedmedia] RetryFeedMediaJob %s: %v", job.TweetID, err)
-		}
-		return
-	}
-
-	log.Printf("[feedmedia] completed job %s (%d files, %s)", job.TweetID, len(mediaFiles), elapsed)
-	m.EmitFeed("feed_media", fmt.Sprintf("Downloaded media for %s (%s)", job.TweetID, job.MediaKind), "done")
-	if err := m.db.CompleteFeedMediaJob(job.TweetID, job.LeaseOwner, time.Now().UnixMilli()); err != nil {
-		log.Printf("[feedmedia] CompleteFeedMediaJob %s: %v", job.TweetID, err)
-	}
-	_ = m.db.RecordSyncChange("media_ready", job.TweetID,
-		fmt.Sprintf(`{"tweet_id":"%s","kind":"%s"}`, job.TweetID, job.MediaKind))
+	m.EmitFeed("feed_media", fmt.Sprintf("Downloaded %s for %s", asset.AssetKind, asset.OwnerID), "done")
 }
 
-// failJob keeps a job queued with an incremented retry count so the backoff
-// filter in ClaimFeedMediaBatch will delay the next attempt. Failures are
-// always considered transient.
-func (m *Manager) failJob(job db.FeedMediaJobRow, reason string) {
-	newRetry := job.RetryCount + 1
-	log.Printf("[feedmedia] failJob %s queued for retry %d: %s", job.TweetID, newRetry, reason)
-	if err := m.db.RetryFeedMediaJob(job.TweetID, job.LeaseOwner, download.ErrorKindTemporary, reason, download.ClassifyFailure(fmt.Errorf("%s", reason), nil, newRetry).RetryDelay, time.Now().UnixMilli()); err != nil {
-		log.Printf("[feedmedia] failJob RetryFeedMediaJob %s: %v", job.TweetID, err)
+func (m *Manager) downloadContentAsset(ctx context.Context, asset db.Asset) (string, string, error) {
+	ownerKey, err := safeProfileMediaKey(asset.OwnerID)
+	if err != nil {
+		return "", "", err
+	}
+	unique := fmt.Sprintf("%s_%s_%d_%d", ownerKey, asset.AssetKind, asset.MediaIndex, time.Now().UnixNano())
+	switch asset.AssetKind {
+	case "avatar", "post_thumbnail":
+		dirName := "generated"
+		if asset.AssetKind == "avatar" {
+			dirName = "avatars"
+		}
+		dir, err := m.cfg.Storage.WritePath(filepath.Join("thumbnails", dirName))
+		if err != nil {
+			return "", "", err
+		}
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return "", "", err
+		}
+		sourceURL := asset.SourceURL
+		if asset.AssetKind == "avatar" && asset.OwnerKind == "tweet" {
+			sourceURL = upgradeTwimgURL(sourceURL)
+		}
+		tmpPath, err := m.downloader.HTTP.DownloadFile(ctx, sourceURL, dir, unique+".download")
+		if err != nil && sourceURL != asset.SourceURL {
+			tmpPath, err = m.downloader.HTTP.DownloadFile(ctx, asset.SourceURL, dir, unique+".download")
+		}
+		if err != nil {
+			return "", "", err
+		}
+		path, err := normalizeDownloadedImage(tmpPath, dir, unique)
+		if err != nil {
+			return "", "", err
+		}
+		contentType, err := sniffImageContentType(path)
+		return path, contentType, err
+	case "post_audio", "post_media":
+		dir, err := m.cfg.Storage.WritePath(filepath.Join("media", "twitter", ownerKey))
+		if err != nil {
+			return "", "", err
+		}
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return "", "", err
+		}
+		mediaType := "photo"
+		if asset.AssetKind == "post_audio" || strings.HasPrefix(asset.ContentType, "audio/") {
+			mediaType = "audio"
+		} else if strings.HasPrefix(asset.ContentType, "video/") {
+			mediaType = "video"
+		}
+		opts := download.Opts{OutputDir: dir, ID: unique}
+		paths, err := m.downloader.Download(ctx, asset.SourceURL, mediaType, opts)
+		if err != nil {
+			return "", "", err
+		}
+		if len(paths) != 1 {
+			for _, path := range paths {
+				_ = os.Remove(path)
+			}
+			return "", "", fmt.Errorf("source produced %d files for one canonical asset", len(paths))
+		}
+		contentType := strings.TrimSpace(asset.ContentType)
+		if detected := mime.TypeByExtension(strings.ToLower(filepath.Ext(paths[0]))); detected != "" {
+			contentType = detected
+		}
+		return paths[0], contentType, nil
+	default:
+		return "", "", fmt.Errorf("unsupported content asset kind: %s", asset.AssetKind)
 	}
 }
 
-func feedMediaLeaseOwner() string {
-	host, err := os.Hostname()
-	if err != nil || host == "" {
-		host = "unknown"
+func (m *Manager) failContentAsset(asset db.Asset, cause error) {
+	if errors.Is(cause, context.Canceled) && !errors.Is(cause, context.DeadlineExceeded) {
+		m.releaseContentAsset(asset)
+		return
 	}
-	return fmt.Sprintf("feedmedia:%s:%d", host, os.Getpid())
+	attempt := asset.Attempts + 1
+	classification := download.ClassifyFailure(cause, nil, attempt)
+	nowMs := time.Now().UnixMilli()
+	if (classification.Kind == download.ErrorKindNotFound && attempt > maxRetries404) || classification.Permanent {
+		if err := m.db.MarkContentAssetPermanentMissing(
+			asset.AssetID, asset.AssetKind, asset.LeaseOwner, classification.Kind, cause.Error(), nowMs,
+		); err != nil {
+			log.Printf("[feedmedia] mark permanent %s: %v", asset.AssetID, err)
+		}
+		return
+	}
+	if err := m.db.RetryAssetDownload(
+		asset.AssetID, asset.AssetKind, asset.LeaseOwner,
+		classification.Kind, cause.Error(), classification.RetryDelay, nowMs,
+	); err != nil {
+		log.Printf("[feedmedia] retry %s: %v", asset.AssetID, err)
+	}
 }
 
-func (m *Manager) startFeedMediaLeaseRenewal(ctx context.Context, job db.FeedMediaJobRow) func() {
-	if m == nil || m.db == nil || job.TweetID == "" || job.LeaseOwner == "" {
+func (m *Manager) releaseContentAsset(asset db.Asset) {
+	if err := m.db.ReleaseAssetDownload(asset.AssetID, asset.AssetKind, asset.LeaseOwner, time.Now().UnixMilli()); err != nil &&
+		!errors.Is(err, db.ErrQueueLeaseNotHeld) {
+		log.Printf("[feedmedia] release %s: %v", asset.AssetID, err)
+	}
+}
+
+func (m *Manager) startContentAssetLeaseRenewal(ctx context.Context, asset db.Asset) func() {
+	if asset.AssetID == "" || asset.AssetKind == "" || asset.LeaseOwner == "" {
 		return nil
 	}
 	renewCtx, cancel := context.WithCancel(ctx)
@@ -337,8 +225,11 @@ func (m *Manager) startFeedMediaLeaseRenewal(ctx context.Context, job db.FeedMed
 			case <-renewCtx.Done():
 				return
 			case <-ticker.C:
-				if err := m.db.RenewFeedMediaJobLease(job.TweetID, job.LeaseOwner, time.Now().UnixMilli(), feedMediaLeaseDuration); err != nil {
-					log.Printf("[feedmedia] RenewFeedMediaJobLease %s: %v", job.TweetID, err)
+				if err := m.db.RenewAssetDownloadLease(
+					asset.AssetID, asset.AssetKind, asset.LeaseOwner,
+					time.Now().UnixMilli(), feedMediaLeaseDuration,
+				); err != nil {
+					log.Printf("[feedmedia] renew %s: %v", asset.AssetID, err)
 				}
 			}
 		}
@@ -349,23 +240,10 @@ func (m *Manager) startFeedMediaLeaseRenewal(ctx context.Context, job db.FeedMed
 	}
 }
 
-// allLocalProxyURLs returns true if every ref has a relative /api/ URL
-// (lost CDN URLs replaced by local proxy during Android sync).
-func allLocalProxyURLs(refs []model.MediaRef) bool {
-	for _, r := range refs {
-		if !strings.HasPrefix(r.URL, "/api/") {
-			return false
-		}
+func feedMediaLeaseOwner() string {
+	host, err := os.Hostname()
+	if err != nil || host == "" {
+		host = "unknown"
 	}
-	return true
-}
-
-// toRelPath converts an absolute path to a path relative to baseDir.
-// Falls back to the original path if it is not under baseDir.
-func toRelPath(baseDir, absPath string) string {
-	if !strings.HasPrefix(absPath, baseDir) {
-		return absPath
-	}
-	rel := absPath[len(baseDir):]
-	return strings.TrimPrefix(rel, string(filepath.Separator))
+	return fmt.Sprintf("feedmedia:%s:%d", host, os.Getpid())
 }

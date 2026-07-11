@@ -1,236 +1,176 @@
 package web
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
-	"os"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/screwys/igloo/internal/db"
-	"github.com/screwys/igloo/internal/feed"
 	"github.com/screwys/igloo/internal/model"
-	"github.com/screwys/igloo/internal/settings"
-	"github.com/screwys/igloo/internal/subtitlemeta"
 )
 
 const (
-	androidSyncItemPageCap             = 500
-	androidSyncAssetPageCap            = 2000
-	androidSyncAssetServeLimit         = 4
-	androidSyncAssetRetryAfterSecs     = 30
-	androidSyncServeHashVerifyMaxBytes = 32 << 20
-	androidSyncFreshGenerationTTL      = 6 * time.Hour
-	androidSyncFreshGenerationSkew     = 5 * time.Minute
-	androidSyncStaleGenerationTTL      = 24 * time.Hour
-	androidSyncFeedRankMaxRows         = 5000
+	androidSyncAssetServeLimit     = 4
+	androidSyncAssetRetryAfterSecs = 30
+	androidSyncFeedRankMaxRows     = 5000
+	youtubeCommentsCap             = 50
 )
 
+type androidSyncFeedPayload struct {
+	Item androidSyncFeedItem `json:"item"`
+}
+
+type androidSyncFeedItem struct {
+	TweetID           string `json:"tweet_id"`
+	SourceChannelID   string `json:"source_channel_id"`
+	ChannelID         string `json:"channel_id"`
+	BodyText          string `json:"body_text"`
+	Lang              string `json:"lang"`
+	IsRetweet         bool   `json:"is_retweet"`
+	ReposterChannelID string `json:"reposter_channel_id"`
+	QuoteTweetID      string `json:"quote_tweet_id"`
+	QuoteChannelID    string `json:"quote_channel_id"`
+	QuoteBodyText     string `json:"quote_body_text"`
+	QuoteLang         string `json:"quote_lang"`
+	QuoteMediaJSON    string `json:"quote_media_json"`
+	QuotePublishedAt  int64  `json:"quote_published_at"`
+	QuoteCanonicalURL string `json:"quote_canonical_url"`
+	MediaJSON         string `json:"media_json"`
+	Views             int64  `json:"views"`
+	Likes             int64  `json:"likes"`
+	Retweets          int64  `json:"retweets"`
+	CanonicalURL      string `json:"canonical_url"`
+	CanonicalTweetID  string `json:"canonical_tweet_id"`
+	ReplyChannelID    string `json:"reply_channel_id"`
+	ReplyToStatus     string `json:"reply_to_status"`
+	IsReply           bool   `json:"is_reply"`
+	IsGhost           bool   `json:"is_ghost"`
+	ContentHash       string `json:"content_hash"`
+	BodyTranslation   string `json:"body_translation"`
+	BodySourceLang    string `json:"body_source_lang"`
+	QuoteTranslation  string `json:"quote_translation"`
+	QuoteSourceLang   string `json:"quote_source_lang"`
+	PublishedAt       int64  `json:"published_at"`
+}
+
+type androidSyncVideoPayload struct {
+	Item                 androidSyncVideoItem           `json:"item"`
+	Comments             []androidSyncComment           `json:"comments"`
+	SponsorBlockSegments []db.SponsorBlockSegment       `json:"sponsorblock_segments"`
+	SponsorBlockChecked  *androidSyncSponsorBlockCheck  `json:"sponsorblock_checked"`
+	RepostSources        []androidSyncVideoRepostSource `json:"repost_sources"`
+}
+
+type androidSyncVideoRepostSource struct {
+	ReposterChannelID string `json:"reposter_channel_id"`
+	RepostedAtMs      int64  `json:"reposted_at_ms"`
+	FirstSeenAtMs     int64  `json:"first_seen_at_ms"`
+	UpdatedAtMs       int64  `json:"updated_at_ms"`
+}
+
+type androidSyncComment struct {
+	CommentID   string `json:"id"`
+	ParentID    string `json:"parent"`
+	AuthorName  string `json:"author"`
+	AuthorID    string `json:"author_id"`
+	Text        string `json:"text"`
+	LikeCount   int    `json:"like_count"`
+	PublishedAt int64  `json:"published_at"`
+}
+
+type androidSyncVideoItem struct {
+	VideoID            string  `json:"video_id"`
+	ChannelID          string  `json:"channel_id"`
+	OwnerKind          string  `json:"owner_kind"`
+	Title              string  `json:"title"`
+	Description        string  `json:"description"`
+	Duration           int     `json:"duration"`
+	PublishedAt        int64   `json:"published_at"`
+	MediaKind          string  `json:"media_kind"`
+	SlideCount         int     `json:"slide_count"`
+	SourceKind         string  `json:"source_kind"`
+	MetadataJSON       string  `json:"metadata_json"`
+	CanonicalURL       string  `json:"canonical_url"`
+	DearrowTitle       *string `json:"dearrow_title"`
+	DearrowTitleCasual *string `json:"dearrow_title_casual"`
+}
+
+type androidSyncSponsorBlockCheck struct {
+	CheckedAtMs     int64  `json:"checked_at_ms"`
+	VideoAgeAtCheck string `json:"video_age_at_check"`
+}
+
+type androidSyncChannelPayload struct {
+	Channel *androidSyncChannel        `json:"channel"`
+	Profile *androidSyncChannelProfile `json:"profile"`
+}
+
+type androidSyncChannel struct {
+	ChannelID string `json:"channel_id"`
+	SourceID  string `json:"source_id"`
+	Name      string `json:"name"`
+	URL       string `json:"url"`
+	Platform  string `json:"platform"`
+}
+
+type androidSyncChannelProfile struct {
+	ChannelID    string `json:"channel_id"`
+	Platform     string `json:"platform"`
+	Handle       string `json:"handle"`
+	DisplayName  string `json:"display_name"`
+	Bio          string `json:"bio"`
+	Website      string `json:"website"`
+	Followers    int    `json:"followers"`
+	Following    int    `json:"following"`
+	Verified     bool   `json:"verified"`
+	VerifiedType string `json:"verified_type"`
+	Protected    bool   `json:"protected"`
+}
+
+type androidSyncRetweetSource struct {
+	ContentHash        string `json:"content_hash"`
+	RetweeterChannelID string `json:"retweeter_channel_id"`
+	TweetID            string `json:"tweet_id"`
+	PublishedAt        int64  `json:"published_at"`
+}
+
+type androidSyncHealthRequest struct {
+	Cursor       string                     `json:"cursor"`
+	ReportedAtMs int64                      `json:"reported_at_ms"`
+	Retention    androidSyncHealthRetention `json:"retention"`
+	Counts       androidSyncHealthCounts    `json:"counts"`
+	Bytes        androidSyncHealthBytes     `json:"bytes"`
+}
+
+type androidSyncHealthRetention struct {
+	FeedDays    int `json:"feed_days"`
+	YoutubeDays int `json:"youtube_days"`
+	MomentsDays int `json:"moments_days"`
+	StoryHours  int `json:"story_hours"`
+}
+
+type androidSyncHealthCounts struct {
+	Total    int `json:"total"`
+	Verified int `json:"verified"`
+	Pending  int `json:"pending"`
+	Missing  int `json:"missing"`
+}
+
+type androidSyncHealthBytes struct {
+	Verified int64 `json:"verified"`
+}
+
 func (s *Server) registerAndroidSyncAPIRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("GET /api/android/sync/generation/latest", s.handleAndroidSyncLatestGeneration)
-	mux.HandleFunc("GET /api/android/sync/generation/{generationID}/items", s.handleAndroidSyncGenerationItems)
-	mux.HandleFunc("GET /api/android/sync/generation/{generationID}/assets", s.handleAndroidSyncGenerationAssets)
-	mux.HandleFunc("GET /api/android/sync/generation/{generationID}/assets/{assetID}", s.handleAndroidSyncGenerationAsset)
-	mux.HandleFunc("GET /api/android/sync/assets/{assetID}", s.handleAndroidSyncAsset)
+	mux.HandleFunc("GET /api/android/sync/bootstrap", s.handleAndroidSyncBootstrap)
+	mux.HandleFunc("GET /api/android/sync/changes", s.handleAndroidSyncChanges)
+	mux.HandleFunc("GET /api/android/sync/assets/{assetID}/file", s.handleAndroidSyncAssetFile)
 	mux.HandleFunc("POST /api/android/sync/health", s.handleAndroidSyncHealth)
-}
-
-func (s *Server) handleAndroidSyncLatestGeneration(w http.ResponseWriter, r *http.Request) {
-	user := userFromContext(r.Context())
-	if user == nil {
-		writeJSONError(w, http.StatusUnauthorized, "unauthenticated", "authentication required")
-		return
-	}
-	start := time.Now()
-	retention, err := androidSyncRetentionSettingsFromRequest(r, cacheHealthSettings(loadCacheHealthFromDisk(s.cfg.DataDir)))
-	if err != nil {
-		writeJSONError(w, http.StatusBadRequest, "bad_retention", err.Error())
-		return
-	}
-	gen, refreshing, err := s.androidSyncGenerationForRequest(user.Username, retention)
-	if err != nil {
-		slog.Error("android_sync_generation_failed", "err", err, "duration_ms", time.Since(start).Milliseconds())
-		writeJSONError(w, http.StatusInternalServerError, "generation_failed", err.Error())
-		return
-	}
-	s.pruneAndroidSyncState("latest_generation", gen.GenerationID)
-	slog.Info(
-		"android_sync_generation_latest",
-		"generation_id", gen.GenerationID,
-		"items", gen.ItemCount,
-		"assets", gen.AssetCount,
-		"ready_assets", gen.ReadyAssetCount,
-		"server_missing_assets", gen.ServerMissingAssetCount,
-		"moments_days", retention.MomentsDays,
-		"refreshing", refreshing,
-		"duration_ms", time.Since(start).Milliseconds(),
-	)
-	dearrowMode, _ := s.db.GetSetting("dearrow_mode", "off")
-	writeJSON(w, http.StatusOK, map[string]any{
-		"generation":   gen,
-		"refreshing":   refreshing,
-		"dearrow_mode": settings.NormalizeDearrowMode(dearrowMode),
-	})
-}
-
-func (s *Server) handleAndroidSyncGenerationItems(w http.ResponseWriter, r *http.Request) {
-	genID := r.PathValue("generationID")
-	if genID == "" {
-		writeJSONError(w, http.StatusBadRequest, "missing_generation", "generation id required")
-		return
-	}
-	after := parseAndroidSyncAfter(r.URL.Query().Get("after"))
-	items, err := s.db.ListAndroidSyncItems(genID, after, androidSyncItemPageCap)
-	if err != nil {
-		slog.Error("android_sync_items_read_failed", "generation_id", genID, "after", after, "err", err)
-		writeJSONError(w, http.StatusInternalServerError, "db_error", "generation item read failed")
-		return
-	}
-	if items == nil {
-		items = []model.AndroidSyncItem{}
-	}
-	next, end := androidSyncPageCursor(items, androidSyncItemPageCap, func(item model.AndroidSyncItem) int64 { return item.Seq })
-	slog.Info(
-		"android_sync_items_page",
-		"generation_id", genID,
-		"after", after,
-		"count", len(items),
-		"next", next,
-		"end", end,
-	)
-	writeJSON(w, http.StatusOK, map[string]any{
-		"generation_id": genID,
-		"items":         items,
-		"next":          next,
-		"end_of_stream": end,
-	})
-}
-
-func (s *Server) handleAndroidSyncGenerationAssets(w http.ResponseWriter, r *http.Request) {
-	genID := r.PathValue("generationID")
-	if genID == "" {
-		writeJSONError(w, http.StatusBadRequest, "missing_generation", "generation id required")
-		return
-	}
-	after := parseAndroidSyncAfter(r.URL.Query().Get("after"))
-	assets, err := s.db.ListAndroidSyncAssets(genID, after, androidSyncAssetPageCap)
-	if err != nil {
-		slog.Error("android_sync_assets_read_failed", "generation_id", genID, "after", after, "err", err)
-		writeJSONError(w, http.StatusInternalServerError, "db_error", "generation asset read failed")
-		return
-	}
-	if assets == nil {
-		assets = []model.AndroidSyncAsset{}
-	}
-	for i := range assets {
-		if assets[i].State == "ready" {
-			assets[i].ServerURL = "/api/android/sync/generation/" + url.PathEscape(genID) + "/assets/" + url.PathEscape(assets[i].AssetID)
-		}
-	}
-	next, end := androidSyncPageCursor(assets, androidSyncAssetPageCap, func(asset model.AndroidSyncAsset) int64 { return asset.Seq })
-	slog.Info(
-		"android_sync_assets_page",
-		"generation_id", genID,
-		"after", after,
-		"count", len(assets),
-		"next", next,
-		"end", end,
-	)
-	writeJSON(w, http.StatusOK, map[string]any{
-		"generation_id": genID,
-		"assets":        assets,
-		"next":          next,
-		"end_of_stream": end,
-	})
-}
-
-func (s *Server) handleAndroidSyncGenerationAsset(w http.ResponseWriter, r *http.Request) {
-	genID := r.PathValue("generationID")
-	assetID := r.PathValue("assetID")
-	if genID == "" || assetID == "" {
-		http.NotFound(w, r)
-		return
-	}
-	asset, err := s.db.GetAndroidSyncGenerationAsset(genID, assetID)
-	if err != nil {
-		slog.Error("android_sync_generation_asset_lookup_failed", "generation_id", genID, "asset_id", assetID, "err", err)
-		http.Error(w, "asset lookup failed", http.StatusInternalServerError)
-		return
-	}
-	s.serveAndroidSyncAsset(w, r, asset)
-}
-
-func (s *Server) handleAndroidSyncAsset(w http.ResponseWriter, r *http.Request) {
-	assetID := r.PathValue("assetID")
-	if assetID == "" {
-		http.NotFound(w, r)
-		return
-	}
-	asset, err := s.db.GetAndroidSyncAsset(assetID)
-	if err != nil {
-		slog.Error("android_sync_asset_lookup_failed", "asset_id", assetID, "err", err)
-		http.Error(w, "asset lookup failed", http.StatusInternalServerError)
-		return
-	}
-	s.serveAndroidSyncAsset(w, r, asset)
-}
-
-func (s *Server) serveAndroidSyncAsset(w http.ResponseWriter, r *http.Request, asset *model.AndroidSyncAsset) {
-	if asset == nil || asset.State != "ready" {
-		http.NotFound(w, r)
-		return
-	}
-	path := s.androidSyncAssetPath(*asset)
-	if path == "" {
-		http.NotFound(w, r)
-		return
-	}
-	if !androidSyncServedAssetStillMatches(*asset, path) {
-		http.Error(w, "android sync asset changed; request latest generation", http.StatusConflict)
-		return
-	}
-	if s.serveAndroidSyncAssetViaAccel(w, r, *asset, path) {
-		return
-	}
-	if !s.tryAcquireAndroidSyncAssetServeSlot() {
-		w.Header().Set("Retry-After", strconv.Itoa(androidSyncAssetRetryAfterSecs))
-		http.Error(w, "android sync asset concurrency limit reached", http.StatusTooManyRequests)
-		return
-	}
-	defer s.releaseAndroidSyncAssetServeSlot()
-	if asset.ContentType != "" {
-		w.Header().Set("Content-Type", asset.ContentType)
-	}
-	w.Header().Set("Cache-Control", "private, no-transform")
-	http.ServeFile(w, r, path)
-}
-
-func androidSyncServedAssetStillMatches(asset model.AndroidSyncAsset, path string) bool {
-	info, err := os.Stat(path)
-	if err != nil || !info.Mode().IsRegular() {
-		return false
-	}
-	if asset.SizeBytes > 0 && info.Size() != asset.SizeBytes {
-		return false
-	}
-	if asset.SHA256 == "" || info.Size() > androidSyncServeHashVerifyMaxBytes {
-		return true
-	}
-	_, sum, err := hashFile(path)
-	return err == nil && strings.EqualFold(sum, asset.SHA256)
-}
-
-func (s *Server) serveAndroidSyncAssetViaAccel(w http.ResponseWriter, r *http.Request, asset model.AndroidSyncAsset, path string) bool {
-	return s.serveDataFileViaXAccel(w, r, path, asset.ContentType, "private, no-transform")
 }
 
 func (s *Server) tryAcquireAndroidSyncAssetServeSlot() bool {
@@ -253,7 +193,11 @@ func (s *Server) releaseAndroidSyncAssetServeSlot() {
 }
 
 func (s *Server) handleAndroidSyncHealth(w http.ResponseWriter, r *http.Request) {
-	var body map[string]any
+	if userFromContext(r.Context()) == nil {
+		writeJSONError(w, http.StatusUnauthorized, "unauthenticated", "authentication required")
+		return
+	}
+	var body androidSyncHealthRequest
 	if err := decodeJSON(w, r, &body); err != nil {
 		if requestBodyTooLarge(err) {
 			writeJSONError(w, http.StatusRequestEntityTooLarge, "body_too_large", requestBodyTooLargeMessage)
@@ -262,75 +206,70 @@ func (s *Server) handleAndroidSyncHealth(w http.ResponseWriter, r *http.Request)
 		writeJSONError(w, http.StatusBadRequest, "bad_json", "invalid health payload")
 		return
 	}
-	generationID, _ := body["generation_id"].(string)
-	if generationID == "" {
-		writeJSONError(w, http.StatusBadRequest, "missing_generation", "generation_id required")
+	body.Cursor = strings.TrimSpace(body.Cursor)
+	cursor, cursorErr := decodeAndroidSyncCursor(body.Cursor)
+	if cursorErr != nil || cursor.Mode != "changes" || cursor.Version != androidSyncModelVersion || cursor.Revision < 0 {
+		writeAndroidSyncResetRequired(w)
 		return
 	}
-	reportedAt := anyInt64(body["reported_at_ms"])
+	if body.Counts.Total < 0 || body.Counts.Verified < 0 || body.Counts.Pending < 0 ||
+		body.Counts.Missing < 0 || body.Bytes.Verified < 0 || body.Retention.FeedDays < 0 ||
+		body.Retention.YoutubeDays < 0 || body.Retention.MomentsDays < 0 || body.Retention.StoryHours < 0 {
+		writeJSONError(w, http.StatusBadRequest, "invalid_body", "health values must be non-negative")
+		return
+	}
+	if !db.IsValidRetentionDays(body.Retention.FeedDays) ||
+		!db.IsValidRetentionDays(body.Retention.YoutubeDays) ||
+		!db.IsValidRetentionDays(body.Retention.MomentsDays) {
+		writeJSONError(w, http.StatusBadRequest, "invalid_body", "invalid retention days")
+		return
+	}
+	if body.Retention.StoryHours > 0 {
+		body.Retention.StoryHours = db.NormalizeStoriesWindowHours(body.Retention.StoryHours)
+	}
+	retention := db.AndroidRetentionSettings{
+		FeedDays: body.Retention.FeedDays, YoutubeDays: body.Retention.YoutubeDays,
+		MomentsDays: body.Retention.MomentsDays, StoryHours: body.Retention.StoryHours,
+	}
+	clock, err := s.db.GetAndroidSyncClock()
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "db_error", "health validation failed")
+		return
+	}
+	if cursor.Epoch != clock.Epoch || cursor.Revision > clock.Revision || cursor.Retention != androidSyncRetentionHash(retention) {
+		writeAndroidSyncResetRequired(w)
+		return
+	}
+	reportedAt := body.ReportedAtMs
 	if reportedAt <= 0 {
 		reportedAt = time.Now().UnixMilli()
 	}
-	counts, _ := body["counts"].(map[string]any)
-	bytes, _ := body["bytes"].(map[string]any)
-	retention, _ := body["retention"].(map[string]any)
-	raw, _ := json.Marshal(body)
+	raw, err := json.Marshal(body)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "health_failed", "health report encoding failed")
+		return
+	}
 	if err := s.db.RecordAndroidSyncHealth(
-		generationID,
+		body.Cursor,
 		reportedAt,
 		raw,
-		anyInt(counts["verified"]),
-		anyInt(counts["pending"]),
-		anyInt(counts["failed"]),
-		anyInt(counts["missing"]),
-		anyInt(counts["total"]),
-		anyInt64(bytes["verified"]),
+		body.Counts.Verified,
+		body.Counts.Pending,
+		body.Counts.Missing,
+		body.Counts.Total,
+		body.Bytes.Verified,
 	); err != nil {
 		writeJSONError(w, http.StatusInternalServerError, "db_error", "health write failed")
 		return
 	}
-	p := filepath.Join(s.cfg.DataDir, "logs", "android", "android_sync_health.json")
-	_ = os.MkdirAll(filepath.Dir(p), 0o755)
-	_ = os.WriteFile(p, raw, 0o644)
-	if len(retention) > 0 {
-		s.updateAndroidCacheHealthRetention(retention, reportedAt)
-	}
-	s.pruneAndroidSyncState("health_report", generationID)
 	writeJSON(w, http.StatusOK, map[string]any{"success": true})
 }
 
-func (s *Server) pruneAndroidSyncState(trigger string, protectedGenerationID string) {
-	policy := db.DefaultAndroidSyncPrunePolicy()
-	policy.ProtectGenerationID = protectedGenerationID
-	result, err := s.db.DrainAndroidSyncState(time.Now().UnixMilli(), policy, db.DefaultAndroidSyncPruneDrainPasses)
-	if err != nil {
-		slog.Warn("android_sync_server_state_prune_failed", "trigger", trigger, "err", err)
-		return
+func (s *Server) androidSyncRetentionFallback() db.AndroidRetentionSettings {
+	if report, err := s.db.GetLatestAndroidSyncHealthReport(); err == nil && report != nil && report.HasRetention {
+		return report.Retention
 	}
-	if result.GenerationsDeleted == 0 &&
-		result.ItemsDeleted == 0 &&
-		result.AssetsDeleted == 0 &&
-		result.HealthReportsDeleted == 0 &&
-		result.Debt.EligibleGenerations == 0 &&
-		result.Debt.EligibleItems == 0 &&
-		result.Debt.EligibleAssets == 0 &&
-		result.Debt.EligibleHealthReports == 0 {
-		return
-	}
-	slog.Info(
-		"android_sync_server_state_pruned",
-		"trigger", trigger,
-		"passes", result.Passes,
-		"generations", result.GenerationsDeleted,
-		"items", result.ItemsDeleted,
-		"assets", result.AssetsDeleted,
-		"health_reports", result.HealthReportsDeleted,
-		"remaining_generations", result.Debt.EligibleGenerations,
-		"remaining_items", result.Debt.EligibleItems,
-		"remaining_assets", result.Debt.EligibleAssets,
-		"remaining_health_reports", result.Debt.EligibleHealthReports,
-		"protected_generation_id", protectedGenerationID,
-	)
+	return db.AndroidRetentionSettings{FeedDays: 7, YoutubeDays: 7, MomentsDays: 7, StoryHours: 48}
 }
 
 func androidSyncRetentionSettingsFromRequest(r *http.Request, fallback db.AndroidRetentionSettings) (db.AndroidRetentionSettings, error) {
@@ -351,7 +290,10 @@ func androidSyncRetentionSettingsFromRequest(r *http.Request, fallback db.Androi
 		if parseErr != nil || n < 0 {
 			return settings, fmt.Errorf("story_hours must be a non-negative integer")
 		}
-		settings.StoryHours = db.NormalizeStoriesWindowHours(n)
+		settings.StoryHours = n
+		if n > 0 {
+			settings.StoryHours = db.NormalizeStoriesWindowHours(n)
+		}
 	}
 	return settings, nil
 }
@@ -382,565 +324,116 @@ func optionalNonNegativeQueryInt(raw string, fallback int, name string) (int, er
 	return n, nil
 }
 
-func parseAndroidSyncAfter(raw string) int64 {
-	if raw == "" {
-		return 0
+func androidSyncFeedItemFromModel(item model.FeedItem) androidSyncFeedItem {
+	out := androidSyncFeedItem{
+		TweetID:           item.TweetID,
+		SourceChannelID:   item.SourceChannelID,
+		ChannelID:         item.ChannelID,
+		BodyText:          item.BodyText,
+		Lang:              item.Lang,
+		IsRetweet:         item.IsRetweet,
+		ReposterChannelID: item.ReposterChannelID,
+		QuoteTweetID:      item.QuoteTweetID,
+		QuoteChannelID:    item.QuoteChannelID,
+		QuoteBodyText:     item.QuoteBodyText,
+		QuoteLang:         item.QuoteLang,
+		QuoteMediaJSON:    item.QuoteMediaJSON,
+		QuoteCanonicalURL: androidSyncQuoteCanonicalURL(item),
+		MediaJSON:         item.MediaJSON,
+		Views:             item.Views,
+		Likes:             item.Likes,
+		Retweets:          item.Retweets,
+		CanonicalURL:      androidSyncFeedCanonicalURL(item),
+		CanonicalTweetID:  item.CanonicalTweetID,
+		ReplyChannelID:    item.ReplyChannelID,
+		ReplyToStatus:     item.ReplyToStatus,
+		IsReply:           item.IsReply,
+		IsGhost:           item.IsGhost,
+		ContentHash:       item.ContentHash,
+		BodyTranslation:   item.BodyTranslation,
+		BodySourceLang:    item.BodySourceLang,
+		QuoteTranslation:  item.QuoteTranslation,
+		QuoteSourceLang:   item.QuoteSourceLang,
 	}
-	n, _ := strconv.ParseInt(raw, 10, 64)
-	if n < 0 {
-		return 0
+	if item.QuotePublishedAt != nil {
+		out.QuotePublishedAt = item.QuotePublishedAt.UnixMilli()
 	}
-	return n
+	if item.PublishedAt != nil {
+		out.PublishedAt = item.PublishedAt.UnixMilli()
+	}
+	return out
 }
 
-func androidSyncPageCursor[T any](rows []T, pageCap int, seq func(T) int64) (string, bool) {
-	if len(rows) == 0 {
-		return "", true
+func androidSyncVideoItemFromProjection(projection db.AndroidSyncVideoProjection) androidSyncVideoItem {
+	video := projection.Video
+	out := androidSyncVideoItem{
+		VideoID:            video.VideoID,
+		ChannelID:          video.ChannelID,
+		OwnerKind:          video.OwnerKind,
+		Title:              video.Title,
+		Description:        video.Description,
+		Duration:           video.Duration,
+		MediaKind:          video.MediaKind,
+		SlideCount:         video.MediaSlideCount,
+		SourceKind:         video.SourceKind,
+		MetadataJSON:       video.MetadataJSON,
+		CanonicalURL:       androidSyncCanonicalVideoURL(video),
+		DearrowTitle:       video.DearrowTitle,
+		DearrowTitleCasual: video.DearrowTitleCasual,
 	}
-	last := seq(rows[len(rows)-1])
-	return strconv.FormatInt(last, 10), len(rows) < pageCap
+	if video.PublishedAt != nil {
+		out.PublishedAt = video.PublishedAt.UnixMilli()
+	}
+	return out
 }
 
-func (s *Server) ensureAndroidSyncGeneration(username string, retention db.AndroidRetentionSettings) (*model.AndroidSyncGeneration, error) {
-	nowMs := time.Now().UnixMilli()
-	sourceVersion, err := s.db.AndroidSyncSourceVersion(username, retention)
-	if err != nil {
-		return nil, err
+func androidSyncCommentFromModel(comment model.Comment) androidSyncComment {
+	out := androidSyncComment{
+		CommentID:   comment.CommentID,
+		ParentID:    comment.ParentID,
+		AuthorName:  comment.AuthorName,
+		AuthorID:    comment.AuthorID,
+		Text:        comment.Text,
+		LikeCount:   comment.LikeCount,
+		PublishedAt: comment.PublishedAtMs,
 	}
-	if latest, err := s.db.GetLatestAndroidSyncGeneration(); err != nil {
-		return nil, err
-	} else if latest != nil && latest.SourceVersion == sourceVersion && androidSyncGenerationFreshForRetention(latest, retention, nowMs) {
-		return latest, nil
-	}
-
-	if existing, err := s.db.GetAndroidSyncGenerationBySource(sourceVersion); err != nil {
-		return nil, err
-	} else if existing != nil && androidSyncGenerationRetentionMatches(existing.Retention, retention) {
-		return existing, nil
-	}
-
-	s.androidSyncGenerationMu.Lock()
-	defer s.androidSyncGenerationMu.Unlock()
-
-	nowMs = time.Now().UnixMilli()
-	sourceVersion, err = s.db.AndroidSyncSourceVersion(username, retention)
-	if err != nil {
-		return nil, err
-	}
-	if latest, err := s.db.GetLatestAndroidSyncGeneration(); err != nil {
-		return nil, err
-	} else if latest != nil && latest.SourceVersion == sourceVersion && androidSyncGenerationFreshForRetention(latest, retention, nowMs) {
-		return latest, nil
-	}
-
-	if existing, err := s.db.GetAndroidSyncGenerationBySource(sourceVersion); err != nil {
-		return nil, err
-	} else if existing != nil && androidSyncGenerationRetentionMatches(existing.Retention, retention) {
-		return existing, nil
-	}
-
-	phaseStart := time.Now()
-	sets, err := s.db.ListAndroidSyncDesiredSets(username, retention, nowMs)
-	if err != nil {
-		return nil, err
-	}
-	slog.Info(
-		"android_sync_generation_phase",
-		"phase", "desired_sets",
-		"tweets", len(sets.Tweets),
-		"videos", len(sets.Videos),
-		"channels", len(sets.Channels),
-		"duration_ms", time.Since(phaseStart).Milliseconds(),
-	)
-	phaseStart = time.Now()
-	items, contentCounts, err := s.buildAndroidSyncItems(username, sets)
-	if err != nil {
-		return nil, err
-	}
-	slog.Info(
-		"android_sync_generation_phase",
-		"phase", "items",
-		"items", len(items),
-		"duration_ms", time.Since(phaseStart).Milliseconds(),
-	)
-	phaseStart = time.Now()
-	assets, assetCounts, err := s.buildAndroidSyncAssets(username, sets)
-	if err != nil {
-		return nil, err
-	}
-	slog.Info(
-		"android_sync_generation_phase",
-		"phase", "assets",
-		"assets", len(assets),
-		"duration_ms", time.Since(phaseStart).Milliseconds(),
-	)
-
-	readyAssets := 0
-	serverMissingAssets := 0
-	var totalBytes int64
-	for i := range assets {
-		assets[i].Seq = int64(i + 1)
-		if assets[i].State == "server_missing" {
-			serverMissingAssets++
-			continue
-		}
-		readyAssets++
-		totalBytes += assets[i].SizeBytes
-	}
-	for i := range items {
-		items[i].Seq = int64(i + 1)
-	}
-
-	generationID := "android-sync-" + sourceVersion[:16]
-	gen := model.AndroidSyncGeneration{
-		GenerationID:            generationID,
-		CreatedAtMs:             nowMs,
-		Status:                  "ready",
-		SourceVersion:           sourceVersion,
-		Retention:               androidSyncGenerationRetentionPayload(retention),
-		ItemCount:               len(items),
-		AssetCount:              len(assets),
-		ReadyAssetCount:         readyAssets,
-		ServerMissingAssetCount: serverMissingAssets,
-		TotalBytes:              totalBytes,
-		ContentCounts:           contentCounts,
-		AssetCounts:             assetCounts,
-	}
-	phaseStart = time.Now()
-	if err := s.db.StoreAndroidSyncGeneration(gen, items, assets); err != nil {
-		return nil, err
-	}
-	slog.Info(
-		"android_sync_generation_phase",
-		"phase", "store",
-		"items", len(items),
-		"assets", len(assets),
-		"duration_ms", time.Since(phaseStart).Milliseconds(),
-	)
-	return &gen, nil
+	return out
 }
 
-func (s *Server) androidSyncGenerationForRequest(username string, retention db.AndroidRetentionSettings) (*model.AndroidSyncGeneration, bool, error) {
-	nowMs := time.Now().UnixMilli()
-	sourceVersion, err := s.db.AndroidSyncSourceVersion(username, retention)
-	if err != nil {
-		return nil, false, err
-	}
-	if latest, err := s.db.GetLatestAndroidSyncGeneration(); err != nil {
-		return nil, false, err
-	} else if latest != nil && latest.SourceVersion == sourceVersion && androidSyncGenerationFreshForRetention(latest, retention, nowMs) {
-		return latest, false, nil
-	}
-	if existing, err := s.db.GetAndroidSyncGenerationBySource(sourceVersion); err != nil {
-		return nil, false, err
-	} else if existing != nil && androidSyncGenerationRetentionMatches(existing.Retention, retention) {
-		return existing, false, nil
-	}
-	if latest, err := s.db.GetLatestAndroidSyncGeneration(); err != nil {
-		return nil, false, err
-	} else if latest != nil && androidSyncCanServeStaleGeneration() && androidSyncGenerationStaleForRequestWindow(latest, retention, nowMs) {
-		if androidSyncGenerationFreshForRequestWindow(latest, retention, nowMs) {
-			s.queueAndroidSyncGenerationRefresh(username, retention, sourceVersion)
-			return latest, true, nil
-		}
-		debt, err := s.db.AndroidSyncPruneDebt(nowMs, db.DefaultAndroidSyncPrunePolicy())
-		if err != nil {
-			return nil, false, err
-		}
-		if debt.EligibleGenerations == 0 && debt.EligibleItems == 0 && debt.EligibleAssets == 0 {
-			s.queueAndroidSyncGenerationRefresh(username, retention, sourceVersion)
-			return latest, true, nil
+func androidSyncChannelPayloadFromProjection(projection db.AndroidSyncChannelProjection) androidSyncChannelPayload {
+	payload := androidSyncChannelPayload{}
+	if channel := projection.Channel; channel != nil {
+		payload.Channel = &androidSyncChannel{
+			ChannelID: channel.ChannelID,
+			SourceID:  channel.SourceID,
+			Name:      channel.Name,
+			URL:       channel.URL,
+			Platform:  channel.Platform,
 		}
 	}
-	gen, err := s.ensureAndroidSyncGeneration(username, retention)
-	return gen, false, err
+	if profile := projection.Profile; profile != nil {
+		payload.Profile = &androidSyncChannelProfile{
+			ChannelID:    profile.ChannelID,
+			Platform:     profile.Platform,
+			Handle:       profile.Handle,
+			DisplayName:  profile.DisplayName,
+			Bio:          profile.Bio,
+			Website:      profile.Website,
+			Followers:    profile.Followers,
+			Following:    profile.Following,
+			Verified:     profile.Verified,
+			VerifiedType: profile.VerifiedType,
+			Protected:    profile.Protected,
+		}
+	}
+	return payload
 }
 
-func (s *Server) queueAndroidSyncGenerationRefresh(username string, retention db.AndroidRetentionSettings, sourceVersion string) {
-	s.androidSyncGenerationRefreshMu.Lock()
-	if s.androidSyncGenerationRefreshing {
-		s.androidSyncGenerationRefreshMu.Unlock()
-		return
+func androidSyncCanonicalVideoURL(video model.Video) string {
+	platform := androidSyncPlatformForOwnerKind(video.OwnerKind)
+	if platform == "" {
+		return ""
 	}
-	s.androidSyncGenerationRefreshing = true
-	s.androidSyncGenerationRefreshMu.Unlock()
-
-	go func() {
-		start := time.Now()
-		defer func() {
-			s.androidSyncGenerationRefreshMu.Lock()
-			s.androidSyncGenerationRefreshing = false
-			s.androidSyncGenerationRefreshMu.Unlock()
-		}()
-		gen, err := s.ensureAndroidSyncGeneration(username, retention)
-		if err != nil {
-			slog.Error(
-				"android_sync_generation_refresh_failed",
-				"source_version", shortAndroidSyncSourceVersion(sourceVersion),
-				"err", err,
-				"duration_ms", time.Since(start).Milliseconds(),
-			)
-			return
-		}
-		slog.Info(
-			"android_sync_generation_refresh_done",
-			"generation_id", gen.GenerationID,
-			"source_version", shortAndroidSyncSourceVersion(sourceVersion),
-			"items", gen.ItemCount,
-			"assets", gen.AssetCount,
-			"duration_ms", time.Since(start).Milliseconds(),
-		)
-	}()
-}
-
-func shortAndroidSyncSourceVersion(sourceVersion string) string {
-	if len(sourceVersion) <= 16 {
-		return sourceVersion
-	}
-	return sourceVersion[:16]
-}
-
-func androidSyncCanServeStaleGeneration() bool {
-	return len(productHealthUsernames()) <= 1
-}
-
-func androidSyncGenerationRetentionPayload(retention db.AndroidRetentionSettings) map[string]int {
-	return map[string]int{
-		"feed_days":            retention.FeedDays,
-		"youtube_days":         retention.YoutubeDays,
-		"moments_days":         retention.MomentsDays,
-		"story_hours":          retention.StoryHours,
-		"materializer_version": db.AndroidSyncMaterializerVersion,
-	}
-}
-
-func androidSyncGenerationFreshForRetention(gen *model.AndroidSyncGeneration, retention db.AndroidRetentionSettings, nowMs int64) bool {
-	if gen == nil || gen.Status != "ready" {
-		return false
-	}
-	if !androidSyncGenerationRetentionMatches(gen.Retention, retention) {
-		return false
-	}
-	return androidSyncGenerationFreshByAge(gen, nowMs)
-}
-
-func androidSyncGenerationFreshForRequestWindow(gen *model.AndroidSyncGeneration, retention db.AndroidRetentionSettings, nowMs int64) bool {
-	if !androidSyncGenerationReadyForRequestWindow(gen, retention) {
-		return false
-	}
-	return androidSyncGenerationFreshByAge(gen, nowMs)
-}
-
-func androidSyncGenerationReadyForRequestWindow(gen *model.AndroidSyncGeneration, retention db.AndroidRetentionSettings) bool {
-	if gen == nil || gen.Status != "ready" {
-		return false
-	}
-	return androidSyncGenerationRequestWindowMatches(gen.Retention, retention)
-}
-
-func androidSyncGenerationStaleForRequestWindow(gen *model.AndroidSyncGeneration, retention db.AndroidRetentionSettings, nowMs int64) bool {
-	if !androidSyncGenerationReadyForRequestWindow(gen, retention) {
-		return false
-	}
-	age := time.Duration(nowMs-gen.CreatedAtMs) * time.Millisecond
-	if age < -androidSyncFreshGenerationSkew {
-		return false
-	}
-	return age <= androidSyncStaleGenerationTTL
-}
-
-func androidSyncGenerationFreshByAge(gen *model.AndroidSyncGeneration, nowMs int64) bool {
-	age := time.Duration(nowMs-gen.CreatedAtMs) * time.Millisecond
-	if age < -androidSyncFreshGenerationSkew {
-		return false
-	}
-	return age <= androidSyncFreshGenerationTTL
-}
-
-func androidSyncGenerationRetentionMatches(raw map[string]int, retention db.AndroidRetentionSettings) bool {
-	return androidSyncGenerationRequestWindowMatches(raw, retention) &&
-		raw["materializer_version"] == db.AndroidSyncMaterializerVersion
-}
-
-func androidSyncGenerationRequestWindowMatches(raw map[string]int, retention db.AndroidRetentionSettings) bool {
-	if raw == nil {
-		return false
-	}
-	return raw["feed_days"] == retention.FeedDays &&
-		raw["youtube_days"] == retention.YoutubeDays &&
-		raw["moments_days"] == retention.MomentsDays &&
-		raw["story_hours"] == retention.StoryHours
-}
-
-func (s *Server) buildAndroidSyncItems(username string, sets db.AndroidSyncDesiredSets) ([]model.AndroidSyncItem, map[string]int, error) {
-	var out []model.AndroidSyncItem
-	counts := map[string]int{}
-
-	bookmarkMetadata, err := s.androidSyncBookmarkMetadataItem(username)
-	if err != nil {
-		return nil, counts, err
-	}
-	out = append(out, bookmarkMetadata)
-	counts["bookmark_metadata"]++
-
-	for _, channelID := range sets.SortedChannels() {
-		ch, err := s.db.GetChannel(channelID)
-		if err != nil {
-			return nil, counts, err
-		}
-		profile, _ := s.db.GetChannelProfile(channelID)
-		if profile != nil && profile.Tombstone {
-			profile = nil
-		}
-		if ch == nil {
-			if profile != nil {
-				item, err := marshalAndroidSyncItem("channel_profiles", channelID, deltaBundle{
-					PrimaryKind: "channel_profiles",
-					Primary:     channelProfileToAttachment(profile, canonicalChannelProfileURL(channelID, profile, "")),
-				})
-				if err != nil {
-					return nil, counts, err
-				}
-				out = append(out, item)
-				counts["channel_profiles"]++
-			}
-			continue
-		}
-		attachments := map[string]any{}
-		if profile != nil {
-			attachments["channel_profile"] = channelProfileToAttachment(profile, canonicalChannelProfileURL(channelID, profile, ch.URL))
-		}
-		if settings, _ := s.db.GetChannelSettings(channelID); settings != nil {
-			attachments["channel_settings"] = settings
-		}
-		primary := channelToBundlePrimary(*ch)
-		attachUserStateFromPrimary("channels", primary, attachments)
-		item, err := marshalAndroidSyncItem("channels", channelID, deltaBundle{
-			PrimaryKind: "channels",
-			Primary:     primary,
-			Attachments: attachments,
-		})
-		if err != nil {
-			return nil, counts, err
-		}
-		out = append(out, item)
-		counts["channels"]++
-	}
-
-	tweetIDs := sets.SortedTweets()
-	tweetsByID := map[string]model.FeedItem{}
-	for _, chunk := range chunkStrings(tweetIDs, 300) {
-		items, err := s.db.GetFeedItemsForTweetIDs(chunk)
-		if err != nil {
-			return nil, counts, err
-		}
-		var page []model.FeedItem
-		for _, id := range chunk {
-			if item, ok := items[id]; ok {
-				page = append(page, item)
-			}
-		}
-		page = feed.EnrichFeedItemsPreserveRows(s.db, page, username)
-		for _, item := range page {
-			tweetsByID[item.TweetID] = item
-		}
-	}
-	bookmarks, _ := s.db.GetBookmarksForVideoIDsRich(tweetIDs)
-	mutedHandles, _ := s.db.GetMutedAccounts()
-	mutedHandleSet := normalizeHandleSet(mutedHandles)
-	subscribeURLs := map[string]string{}
-	enrichedTweets := make([]model.FeedItem, 0, len(tweetIDs))
-	for _, id := range tweetIDs {
-		item, ok := tweetsByID[id]
-		if !ok {
-			continue
-		}
-		enrichedTweets = append(enrichedTweets, item)
-		if item.ChannelID != "" {
-			if _, ok := subscribeURLs[item.ChannelID]; !ok {
-				subscribeURLs[item.ChannelID] = s.db.ResolveSubscribeURL(item.ChannelID)
-			}
-		}
-	}
-	retweetSourceRowsByHash, _ := s.db.GetRetweetSourceRows(collectRetweetSourceHashes(enrichedTweets))
-	for _, id := range tweetIDs {
-		item, ok := tweetsByID[id]
-		if !ok {
-			continue
-		}
-		attachments := map[string]any{}
-		attachments["feed_thread_context"] = feed.ThreadContextRows(s.db, item)
-		attachRetweetSourceRows(item, retweetSourceRowsByHash, attachments)
-		primary := feedItemToBundlePrimary(item, bookmarks, subscribeURLs, mutedHandleSet)
-		attachUserStateFromPrimary("feed_items", primary, attachments)
-		row, err := marshalAndroidSyncItem("feed_items", id, deltaBundle{
-			PrimaryKind: "feed_items",
-			Primary:     primary,
-			Attachments: attachments,
-		})
-		if err != nil {
-			return nil, counts, err
-		}
-		out = append(out, row)
-		counts["feed_items"]++
-	}
-	if rankItem, ok, err := s.androidSyncFeedRankItem(username, sets.Tweets); err != nil {
-		return nil, counts, err
-	} else if ok {
-		out = append(out, rankItem)
-		counts["feed_rank"]++
-	}
-
-	videoIDs := sets.SortedVideos()
-	videoBookmarks, _ := s.db.GetBookmarksForVideoIDsRich(videoIDs)
-	videoReposts, _ := s.db.GetVideoRepostSourcesForVideoIDs(videoIDs)
-	for _, videoID := range videoIDs {
-		video, err := s.db.GetVideo(videoID)
-		if err != nil {
-			return nil, counts, err
-		}
-		if video == nil {
-			continue
-		}
-		primary := videoToBundlePrimary(*video)
-		if canonicalURL := s.androidSyncCanonicalVideoURL(*video); canonicalURL != "" {
-			primary["canonical_url"] = canonicalURL
-		}
-		if bi, ok := videoBookmarks[video.VideoID]; ok {
-			applyBookmarkBundleFields(primary, bi)
-		}
-		attachments := map[string]any{}
-		if strings.HasPrefix(video.ChannelID, "youtube_") {
-			comments, _ := s.db.GetComments(video.VideoID, youtubeCommentsCap)
-			for i := range comments {
-				comments[i].SetPublishedAtMs()
-			}
-			if len(comments) > 0 {
-				attachments["video_comments"] = model.PresentComments(comments, model.CommentCreatorAuthorID(video.ChannelID))
-			}
-			if segments, _ := s.db.GetSponsorBlockSegments(video.VideoID); len(segments) > 0 {
-				attachments["sponsorblock_segments"] = segments
-			}
-			if checked, _ := s.db.GetSponsorBlockChecked(video.VideoID); checked != nil {
-				attachments["sponsorblock_checked"] = map[string]any{
-					"video_id":           checked.VideoID,
-					"checked_at_ms":      checked.CheckedAtMs,
-					"video_age_at_check": checked.VideoAgeAtCheck,
-				}
-			}
-		}
-		if isShortsChannelID(video.ChannelID) {
-			reposts := videoReposts[video.VideoID]
-			if reposts == nil {
-				reposts = []model.VideoRepostSource{}
-			}
-			attachments["video_repost_sources"] = reposts
-		}
-		attachUserStateFromPrimary("videos", primary, attachments)
-		row, err := marshalAndroidSyncItem("videos", videoID, deltaBundle{
-			PrimaryKind: "videos",
-			Primary:     primary,
-			Attachments: attachments,
-		})
-		if err != nil {
-			return nil, counts, err
-		}
-		out = append(out, row)
-		counts["videos"]++
-	}
-
-	return out, counts, nil
-}
-
-func (s *Server) androidSyncBookmarkMetadataItem(username string) (model.AndroidSyncItem, error) {
-	categories, err := s.db.GetBookmarkCategories(username)
-	if err != nil {
-		return model.AndroidSyncItem{}, err
-	}
-	labels, err := s.db.GetBookmarkLabels(username, "")
-	if err != nil {
-		return model.AndroidSyncItem{}, err
-	}
-
-	categoryRows := make([]map[string]any, 0, len(categories))
-	for _, category := range categories {
-		categoryRows = append(categoryRows, map[string]any{
-			"category_id":  category.ID,
-			"name":         category.Name,
-			"archive_path": category.ArchivePath,
-			"created_at":   category.CreatedAtMs,
-		})
-	}
-	labelRows := make([]map[string]any, 0, len(labels))
-	for _, label := range labels {
-		label = strings.TrimSpace(label)
-		if label == "" {
-			continue
-		}
-		labelRows = append(labelRows, map[string]any{"label": label})
-	}
-
-	return marshalAndroidSyncItem("bookmark_metadata", "snapshot", deltaBundle{
-		PrimaryKind: "bookmark_metadata",
-		Primary: map[string]any{
-			"version":     1,
-			"snapshot_at": time.Now().UnixMilli(),
-			"categories":  categoryRows,
-			"labels":      labelRows,
-		},
-	})
-}
-
-func (s *Server) androidSyncFeedRankItem(username string, desiredTweets map[string]struct{}) (model.AndroidSyncItem, bool, error) {
-	snapshotAt, err := s.db.SnapshotComputedAt(username)
-	if err != nil {
-		return model.AndroidSyncItem{}, false, err
-	}
-	if snapshotAt <= 0 {
-		return model.AndroidSyncItem{}, false, nil
-	}
-
-	rows := make([]map[string]any, 0)
-	after := 0
-	for {
-		page, err := s.db.ListSnapshotPage(username, after, 200)
-		if err != nil {
-			return model.AndroidSyncItem{}, false, err
-		}
-		for _, row := range page {
-			after = max(after, row.RankPosition)
-			if _, ok := desiredTweets[row.Item.TweetID]; !ok {
-				continue
-			}
-			if len(rows) >= androidSyncFeedRankMaxRows {
-				break
-			}
-			rows = append(rows, map[string]any{
-				"tweet_id":      row.Item.TweetID,
-				"rank_position": row.RankPosition,
-			})
-		}
-		if len(rows) >= androidSyncFeedRankMaxRows || len(page) < 200 {
-			break
-		}
-	}
-
-	item, err := marshalAndroidSyncItem("feed_rank", "snapshot", deltaBundle{
-		PrimaryKind: "feed_rank",
-		Primary: map[string]any{
-			"snapshot_at": snapshotAt,
-			"row_count":   len(rows),
-			"rows":        rows,
-		},
-	})
-	if err != nil {
-		return model.AndroidSyncItem{}, false, err
-	}
-	return item, true, nil
-}
-
-func (s *Server) androidSyncCanonicalVideoURL(video model.Video) string {
-	platform := androidSyncPlatformFromChannelID(video.ChannelID)
 	rawID := androidSyncRawPlatformID(video.VideoID, platform)
 	if rawID == "" {
 		return ""
@@ -949,7 +442,7 @@ func (s *Server) androidSyncCanonicalVideoURL(video model.Video) string {
 	case "youtube":
 		return "https://www.youtube.com/watch?v=" + url.QueryEscape(rawID)
 	case "tiktok":
-		handle := s.androidSyncChannelHandle(video.ChannelID)
+		handle := strings.TrimPrefix(strings.TrimSpace(video.ChannelID), "tiktok_")
 		if handle == "" {
 			return ""
 		}
@@ -964,14 +457,36 @@ func (s *Server) androidSyncCanonicalVideoURL(video model.Video) string {
 			return "https://www.instagram.com/reel/" + url.PathEscape(rawID) + "/"
 		}
 	case "twitter", "x":
-		handle := s.androidSyncChannelHandle(video.ChannelID)
-		if handle == "" {
-			return ""
-		}
-		return "https://x.com/" + url.PathEscape(handle) + "/status/" + url.PathEscape(rawID)
+		return androidSyncXStatusURL(rawID)
 	default:
 		return ""
 	}
+}
+
+func androidSyncFeedCanonicalURL(item model.FeedItem) string {
+	if raw := strings.TrimSpace(item.CanonicalURL); strings.HasPrefix(raw, "https://") || strings.HasPrefix(raw, "http://") {
+		return raw
+	}
+	id := item.CanonicalTweetID
+	if strings.TrimSpace(id) == "" {
+		id = item.TweetID
+	}
+	return androidSyncXStatusURL(id)
+}
+
+func androidSyncQuoteCanonicalURL(item model.FeedItem) string {
+	if raw := strings.TrimSpace(item.QuoteCanonicalURL); strings.HasPrefix(raw, "https://") || strings.HasPrefix(raw, "http://") {
+		return raw
+	}
+	return androidSyncXStatusURL(item.QuoteTweetID)
+}
+
+func androidSyncXStatusURL(id string) string {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return ""
+	}
+	return "https://x.com/i/status/" + url.PathEscape(id)
 }
 
 func androidSyncRawPlatformID(id, platform string) string {
@@ -1009,226 +524,49 @@ func androidSyncAllDigits(id string) bool {
 	return true
 }
 
-func (s *Server) androidSyncChannelHandle(channelID string) string {
-	if profile, err := s.db.GetChannelProfile(channelID); err == nil && profile != nil {
-		if handle := strings.TrimPrefix(strings.TrimSpace(profile.Handle), "@"); handle != "" {
-			return handle
-		}
-	}
-	if ch, err := s.db.GetChannel(channelID); err == nil && ch != nil {
-		if handle := strings.TrimPrefix(strings.TrimSpace(ch.SourceID), "@"); handle != "" {
-			return handle
-		}
-	}
-	return ""
-}
-
-func marshalAndroidSyncItem(kind, id string, payload any) (model.AndroidSyncItem, error) {
-	raw, err := json.Marshal(payload)
-	if err != nil {
-		return model.AndroidSyncItem{}, err
-	}
-	return model.AndroidSyncItem{ItemKind: kind, ItemID: id, PayloadJSON: raw}, nil
-}
-
-func chunkStrings(values []string, size int) [][]string {
-	if size <= 0 || len(values) == 0 {
-		return nil
-	}
-	var chunks [][]string
-	for start := 0; start < len(values); start += size {
-		end := start + size
-		if end > len(values) {
-			end = len(values)
-		}
-		chunks = append(chunks, values[start:end])
-	}
-	return chunks
-}
-
-func (s *Server) buildAndroidSyncAssets(username string, sets db.AndroidSyncDesiredSets) ([]model.AndroidSyncAsset, map[string]int, error) {
-	byKey := map[string]model.AndroidSyncAsset{}
+func (s *Server) buildAndroidSyncAssets(database *db.DB, sets db.AndroidSyncDesiredSets) ([]model.AndroidSyncAsset, map[string]int, error) {
 	counts := map[string]int{}
 	phaseStart := time.Now()
-	tweetIDs := sets.SortedTweets()
-	videoIDs := sets.SortedVideos()
-	mediaVideoIDs := sets.SortedMediaVideos()
-	channelIDs := sets.SortedChannels()
-
-	inventoryRows, err := s.db.ListAndroidSyncAssetInventoryRows(sets)
+	inventoryRows, err := database.ListAndroidSyncAssetInventoryRows(sets)
 	if err != nil {
 		return nil, counts, err
 	}
-	s.addAndroidSyncInventoryAssets(byKey, inventoryRows, sets)
+	commentRows, err := database.ListAndroidSyncCommentAuthorAssets(sets.SortedVideos(), youtubeCommentsCap)
+	if err != nil {
+		return nil, counts, err
+	}
+	out := make([]model.AndroidSyncAsset, 0, len(inventoryRows)+len(commentRows))
+	assetIndex := make(map[string]int, len(inventoryRows)+len(commentRows))
+	appendAsset := func(row db.Asset, effectiveRecencyMs int64) {
+		asset := s.androidSyncAssetFromInventory(row)
+		if effectiveRecencyMs <= 0 {
+			effectiveRecencyMs = row.UpdatedAtMs
+		}
+		asset.EffectiveRecencyMs = effectiveRecencyMs
+		if index, ok := assetIndex[asset.AssetID]; ok {
+			if effectiveRecencyMs > out[index].EffectiveRecencyMs {
+				out[index].EffectiveRecencyMs = effectiveRecencyMs
+			}
+			return
+		}
+		assetIndex[asset.AssetID] = len(out)
+		out = append(out, asset)
+		counts[asset.AssetKind]++
+	}
+	for _, row := range inventoryRows {
+		if !androidSyncInventoryAssetDesired(row, sets) {
+			continue
+		}
+		appendAsset(row, 0)
+	}
+	for _, selected := range commentRows {
+		appendAsset(selected.Asset, selected.RecencyMs)
+	}
 	slog.Info(
 		"android_sync_asset_phase",
-		"phase", "asset_inventory_rows",
+		"phase", "asset_inventory",
 		"rows", len(inventoryRows),
-		"assets", len(byKey),
-		"duration_ms", time.Since(phaseStart).Milliseconds(),
-	)
-
-	phaseStart = time.Now()
-	feedRows, err := s.db.ListAndroidSyncMediaAssetRows("feed_media", tweetIDs)
-	if err != nil {
-		return nil, counts, err
-	}
-	s.addAndroidSyncMediaAssets(byKey, feedRows)
-	slog.Info(
-		"android_sync_asset_phase",
-		"phase", "feed_media_rows",
-		"rows", len(feedRows),
-		"assets", len(byKey),
-		"duration_ms", time.Since(phaseStart).Milliseconds(),
-	)
-
-	phaseStart = time.Now()
-	quoteRows, err := s.db.ListAndroidSyncQuoteMediaAssetRows(tweetIDs)
-	if err != nil {
-		return nil, counts, err
-	}
-	s.addAndroidSyncMediaAssets(byKey, quoteRows)
-	slog.Info(
-		"android_sync_asset_phase",
-		"phase", "quote_media_rows",
-		"rows", len(quoteRows),
-		"assets", len(byKey),
-		"duration_ms", time.Since(phaseStart).Milliseconds(),
-	)
-
-	phaseStart = time.Now()
-	for _, videoID := range mediaVideoIDs {
-		video, err := s.db.GetVideo(videoID)
-		if err != nil {
-			return nil, counts, err
-		}
-		if video == nil {
-			continue
-		}
-		for _, asset := range s.androidSyncVideoPlaybackAssets(*video) {
-			addAndroidSyncAsset(byKey, asset)
-		}
-	}
-	slog.Info(
-		"android_sync_asset_phase",
-		"phase", "video_playback_assets",
-		"videos", len(mediaVideoIDs),
-		"assets", len(byKey),
-		"duration_ms", time.Since(phaseStart).Milliseconds(),
-	)
-
-	phaseStart = time.Now()
-	for _, videoID := range videoIDs {
-		video, err := s.db.GetVideo(videoID)
-		if err != nil {
-			return nil, counts, err
-		}
-		if video == nil {
-			continue
-		}
-		for _, asset := range s.androidSyncVideoMetadataAssets(*video) {
-			addAndroidSyncAsset(byKey, asset)
-		}
-	}
-	slog.Info(
-		"android_sync_asset_phase",
-		"phase", "video_metadata_assets",
-		"videos", len(videoIDs),
-		"assets", len(byKey),
-		"duration_ms", time.Since(phaseStart).Milliseconds(),
-	)
-
-	phaseStart = time.Now()
-	commentAvatarRows, err := s.db.ListAndroidSyncYouTubeCommentAvatarRows(videoIDs, youtubeCommentsCap)
-	if err != nil {
-		return nil, counts, err
-	}
-	s.addAndroidSyncYouTubeCommentAvatarAssets(byKey, commentAvatarRows)
-	slog.Info(
-		"android_sync_asset_phase",
-		"phase", "youtube_comment_avatar_assets",
-		"rows", len(commentAvatarRows),
-		"assets", len(byKey),
-		"duration_ms", time.Since(phaseStart).Milliseconds(),
-	)
-
-	phaseStart = time.Now()
-	thumbnailVideoIDs, err := s.db.ListAndroidSyncAlwaysThumbnailVideoIDs()
-	if err != nil {
-		return nil, counts, err
-	}
-	for _, videoID := range thumbnailVideoIDs {
-		video, err := s.db.GetVideo(videoID)
-		if err != nil {
-			return nil, counts, err
-		}
-		if video == nil {
-			continue
-		}
-		addAndroidSyncAsset(byKey, s.androidSyncVideoThumbnailAsset(*video, "thumbnail"))
-	}
-	slog.Info(
-		"android_sync_asset_phase",
-		"phase", "always_video_thumbnails",
-		"videos", len(thumbnailVideoIDs),
-		"assets", len(byKey),
-		"duration_ms", time.Since(phaseStart).Milliseconds(),
-	)
-
-	phaseStart = time.Now()
-	for _, channelID := range channelIDs {
-		for _, asset := range s.androidSyncChannelFallbackAssets(channelID, "retention") {
-			addAndroidSyncAsset(byKey, asset)
-		}
-	}
-	slog.Info(
-		"android_sync_asset_phase",
-		"phase", "channel_fallbacks",
-		"channels", len(channelIDs),
-		"assets", len(byKey),
-		"duration_ms", time.Since(phaseStart).Milliseconds(),
-	)
-
-	phaseStart = time.Now()
-	out := make([]model.AndroidSyncAsset, 0, len(byKey))
-	finalizedCount := 0
-	readyAssets := 0
-	serverMissingAssets := 0
-	hashedFiles := 0
-	var hashedBytes int64
-	var hashDuration time.Duration
-	for _, asset := range byKey {
-		finalized, fileHash := s.finalizeAndroidSyncAsset(asset)
-		out = append(out, finalized)
-		counts[finalized.AssetKind]++
-		if finalized.State == "server_missing" {
-			serverMissingAssets++
-		} else {
-			readyAssets++
-		}
-		if fileHash.Attempted {
-			hashedFiles++
-			hashedBytes += fileHash.Bytes
-			hashDuration += fileHash.Duration
-		}
-		finalizedCount++
-		if finalizedCount%1000 == 0 {
-			slog.Info(
-				"android_sync_asset_finalize_progress",
-				"done", finalizedCount,
-				"total", len(byKey),
-			)
-		}
-	}
-	slog.Info(
-		"android_sync_asset_phase",
-		"phase", "asset_finalize",
-		"assets", len(byKey),
-		"ready_assets", readyAssets,
-		"server_missing_assets", serverMissingAssets,
-		"hashed_files", hashedFiles,
-		"hashed_bytes", hashedBytes,
-		"hash_duration_ms", hashDuration.Milliseconds(),
+		"assets", len(out),
 		"duration_ms", time.Since(phaseStart).Milliseconds(),
 	)
 	sort.Slice(out, func(i, j int) bool {
@@ -1244,15 +582,6 @@ func (s *Server) buildAndroidSyncAssets(username string, sets db.AndroidSyncDesi
 	return out, counts, nil
 }
 
-func (s *Server) addAndroidSyncInventoryAssets(byKey map[string]model.AndroidSyncAsset, rows []db.Asset, sets db.AndroidSyncDesiredSets) {
-	for _, row := range rows {
-		if !androidSyncInventoryAssetDesired(row, sets) {
-			continue
-		}
-		addAndroidSyncAsset(byKey, s.androidSyncAssetFromInventory(row))
-	}
-}
-
 func androidSyncInventoryAssetDesired(row db.Asset, sets db.AndroidSyncDesiredSets) bool {
 	switch row.AssetKind {
 	case "avatar", "banner":
@@ -1265,8 +594,7 @@ func androidSyncInventoryAssetDesired(row db.Asset, sets db.AndroidSyncDesiredSe
 		if _, ok := sets.MediaVideos[row.OwnerID]; ok {
 			return true
 		}
-		_, ok := sets.Tweets[row.OwnerID]
-		return ok
+		return sets.HasTweetAssetOwner(row.OwnerID)
 	case "subtitle", "preview_track_json", "preview_sprite", "post_thumbnail", "dearrow_thumbnail":
 		if _, ok := sets.Videos[row.OwnerID]; ok {
 			return true
@@ -1274,10 +602,9 @@ func androidSyncInventoryAssetDesired(row db.Asset, sets db.AndroidSyncDesiredSe
 		if _, ok := sets.MediaVideos[row.OwnerID]; ok {
 			return true
 		}
-		_, ok := sets.Tweets[row.OwnerID]
-		return ok
+		return sets.HasTweetAssetOwner(row.OwnerID)
 	default:
-		if _, ok := sets.Tweets[row.OwnerID]; ok {
+		if sets.HasTweetAssetOwner(row.OwnerID) {
 			return true
 		}
 		_, ok := sets.Videos[row.OwnerID]
@@ -1286,41 +613,34 @@ func androidSyncInventoryAssetDesired(row db.Asset, sets db.AndroidSyncDesiredSe
 }
 
 func (s *Server) androidSyncAssetFromInventory(row db.Asset) model.AndroidSyncAsset {
-	state := "ready"
-	if row.State == db.AssetStateServerMissing {
-		state = "server_missing"
-	}
-	contentType := row.ContentType
-	if contentType == "" && row.FilePath != "" {
-		contentType = androidSyncContentType(resolveDataPath(s.cfg.DataDir, row.FilePath))
-	}
-	if contentType == "application/octet-stream" {
-		contentType = ""
-	}
-	reason := strings.TrimSpace(row.RequiredReason)
-	if reason == "" || reason == "backfill" {
-		reason = "retention"
+	ready := row.State == db.AssetStateReady
+	state := "server_missing"
+	contentType := ""
+	sizeBytes := int64(0)
+	sha256 := ""
+	if ready {
+		state = "ready"
+		contentType = row.ContentType
+		if contentType == "application/octet-stream" {
+			contentType = ""
+		}
+		sizeBytes = row.SizeBytes
+		sha256 = row.SHA256
 	}
 	asset := model.AndroidSyncAsset{
-		AssetID:        row.AssetID,
-		AssetKind:      row.AssetKind,
-		MediaIndex:     row.MediaIndex,
-		OwnerID:        row.OwnerID,
-		OwnerKind:      row.OwnerKind,
-		Bucket:         androidSyncInventoryBucket(row),
-		ServerURL:      db.AssetServerURL(row),
-		ContentType:    contentType,
-		SizeBytes:      row.SizeBytes,
-		SHA256:         row.SHA256,
-		State:          state,
-		RequiredReason: reason,
-	}
-	if row.AssetKind == "subtitle" {
-		if video, err := s.db.GetVideo(row.OwnerID); err == nil && video != nil {
-			isAuto, audioLang := s.androidSyncSubtitleMetadata(*video)
-			asset.IsAuto = &isAuto
-			asset.AudioLanguage = audioLang
-		}
+		AssetID:            row.AssetID,
+		AssetKind:          row.AssetKind,
+		MediaIndex:         row.MediaIndex,
+		OwnerID:            row.OwnerID,
+		OwnerKind:          row.OwnerKind,
+		Bucket:             androidSyncInventoryBucket(row),
+		ContentType:        contentType,
+		SizeBytes:          sizeBytes,
+		SHA256:             sha256,
+		Revision:           row.Revision,
+		State:              state,
+		IsAuto:             row.IsAuto,
+		EffectiveRecencyMs: 0,
 	}
 	return asset
 }
@@ -1332,793 +652,48 @@ func androidSyncInventoryBucket(row db.Asset) string {
 	case "banner":
 		return "banners"
 	}
-	if row.OwnerKind == "tweet" {
-		return "twitter_media"
-	}
-	platform := androidSyncInventoryPlatform(row)
-	return androidSyncVideoBucket(platform)
-}
-
-func androidSyncInventoryPlatform(row db.Asset) string {
-	if idx := strings.Index(row.AssetID, "_"); idx > 0 {
-		return row.AssetID[:idx]
-	}
-	return androidSyncPlatformFromChannelID(row.OwnerID)
-}
-
-func (s *Server) addAndroidSyncMediaAssets(byKey map[string]model.AndroidSyncAsset, rows []db.AndroidSyncMediaAssetRow) {
-	for _, row := range rows {
-		for _, asset := range s.androidSyncAssetsFromMediaRow(row) {
-			addAndroidSyncAsset(byKey, asset)
-		}
-	}
-}
-
-func (s *Server) addAndroidSyncYouTubeCommentAvatarAssets(byKey map[string]model.AndroidSyncAsset, rows []db.AndroidSyncCommentAvatarRow) {
-	for _, row := range rows {
-		channelID := strings.TrimSpace(row.ChannelID)
-		if channelID == "" || s.resolveAvatarPath(channelID) == "" {
-			continue
-		}
-		addAndroidSyncAsset(byKey, model.AndroidSyncAsset{
-			AssetID:            db.BuildManifestAssetID("youtube", "channel", channelID, "avatar", 0),
-			AssetKind:          "avatar",
-			OwnerID:            channelID,
-			OwnerKind:          "channel",
-			Bucket:             "avatars",
-			ServerURL:          "/api/media/avatar/" + channelID,
-			ContentType:        "image/jpeg",
-			State:              "ready",
-			RequiredReason:     "youtube_comment",
-			EffectiveRecencyMs: row.RecencyMs,
-		})
-	}
-}
-
-func addAndroidSyncAsset(byKey map[string]model.AndroidSyncAsset, asset model.AndroidSyncAsset) {
-	if asset.AssetID == "" || asset.AssetKind == "" {
-		return
-	}
-	key := asset.AssetID + "\x00" + asset.AssetKind
-	if existing, exists := byKey[key]; exists {
-		if existing.State == "server_missing" && asset.State != "server_missing" {
-			byKey[key] = asset
-		}
-		return
-	}
-	byKey[key] = asset
-}
-
-func (s *Server) androidSyncAssetsFromMediaRow(row db.AndroidSyncMediaAssetRow) []model.AndroidSyncAsset {
-	if androidSyncSkipsMediaRow(row) {
-		return nil
-	}
-	serverURL := fmt.Sprintf("/api/media/slide/%s/%d", row.OwnerID, row.MediaIndex)
-	if androidSyncMediaRowUsesStream(row) {
-		serverURL = "/api/media/stream/" + row.OwnerID
-	}
-	contentType := androidSyncContentType(resolveDataPath(s.cfg.DataDir, row.FilePath))
-	if contentType == "application/octet-stream" {
-		if androidSyncMediaRowUsesStream(row) {
-			contentType = "video/mp4"
-		} else {
-			contentType = "image/jpeg"
-		}
-	}
-	out := []model.AndroidSyncAsset{{
-		AssetID:            db.BuildManifestAssetID("twitter", "tweet", row.OwnerID, "post_media", row.MediaIndex),
-		AssetKind:          "post_media",
-		MediaIndex:         row.MediaIndex,
-		OwnerID:            row.OwnerID,
-		OwnerKind:          "tweet",
-		Bucket:             "twitter_media",
-		ServerURL:          serverURL,
-		ContentType:        contentType,
-		SizeBytes:          row.FileSize,
-		State:              "ready",
-		RequiredReason:     "retention",
-		EffectiveRecencyMs: row.RecencyMs,
-	}}
-	if row.MediaIndex == 0 && androidSyncMediaRowNeedsThumbnail(row) {
-		out = append(out, model.AndroidSyncAsset{
-			AssetID:            db.BuildManifestAssetID("twitter", "tweet", row.OwnerID, "post_thumbnail", 0),
-			AssetKind:          "post_thumbnail",
-			MediaIndex:         0,
-			OwnerID:            row.OwnerID,
-			OwnerKind:          "tweet",
-			Bucket:             "twitter_media",
-			ServerURL:          "/api/media/thumbnail/" + row.OwnerID,
-			ContentType:        "image/jpeg",
-			State:              "ready",
-			RequiredReason:     "retention",
-			EffectiveRecencyMs: row.RecencyMs,
-		})
-	}
-	return out
-}
-
-func androidSyncSkipsMediaRow(row db.AndroidSyncMediaAssetRow) bool {
-	if strings.EqualFold(strings.TrimSpace(row.MediaType), "audio") {
-		return true
-	}
-	switch strings.ToLower(filepath.Ext(row.FilePath)) {
-	case ".mp3", ".m4a", ".aac", ".ogg":
-		return true
-	default:
-		return false
-	}
-}
-
-func androidSyncMediaRowUsesStream(row db.AndroidSyncMediaAssetRow) bool {
-	ext := strings.ToLower(filepath.Ext(row.FilePath))
-	if androidSyncMediaPathIsImage(row.FilePath) {
-		return false
-	}
-	switch ext {
-	case ".mp4", ".webm", ".mkv", ".mov", ".m4v":
-		return true
-	default:
-		return strings.EqualFold(row.MediaType, "video") || strings.EqualFold(row.MediaType, "gif")
-	}
-}
-
-func androidSyncMediaRowNeedsThumbnail(row db.AndroidSyncMediaAssetRow) bool {
-	if androidSyncSkipsMediaRow(row) {
-		return false
-	}
-	return androidSyncMediaRowUsesStream(row) || strings.EqualFold(row.MediaType, "video") || strings.EqualFold(row.MediaType, "gif")
-}
-
-func androidSyncMediaPathIsImage(path string) bool {
-	switch strings.ToLower(filepath.Ext(path)) {
-	case ".jpg", ".jpeg", ".png", ".webp", ".gif", ".image":
-		return true
-	default:
-		return false
-	}
-}
-
-func androidSyncManifestEntryDesired(entry model.ManifestEntry, sets db.AndroidSyncDesiredSets) bool {
-	switch entry.AssetKind {
-	case "avatar", "banner":
-		_, ok := sets.Channels[entry.OwnerID]
-		return ok
-	case "video_stream", "post_media", "post_audio":
-		_, ok := sets.MediaVideos[entry.OwnerID]
-		if ok {
-			return true
-		}
-		_, ok = sets.Tweets[entry.OwnerID]
-		return ok
-	case "subtitle", "preview_track_json", "preview_sprite":
-		_, ok := sets.Videos[entry.OwnerID]
-		if ok {
-			return true
-		}
-		_, ok = sets.Tweets[entry.OwnerID]
-		return ok
-	default:
-		_, ok := sets.Tweets[entry.OwnerID]
-		if ok {
-			return true
-		}
-		_, ok = sets.Videos[entry.OwnerID]
-		return ok
-	}
-}
-
-func (s *Server) androidSyncAssetFromManifest(entry model.ManifestEntry) model.AndroidSyncAsset {
-	return model.AndroidSyncAsset{
-		AssetID:            entry.AssetID,
-		AssetKind:          entry.AssetKind,
-		MediaIndex:         entry.MediaIndex,
-		OwnerID:            entry.OwnerID,
-		OwnerKind:          entry.OwnerKind,
-		Bucket:             entry.Bucket,
-		ServerURL:          entry.ServerURL,
-		ContentType:        entry.ContentType,
-		SizeBytes:          entry.SizeHint,
-		State:              "ready",
-		RequiredReason:     entry.Scope,
-		IsAuto:             entry.IsAuto,
-		AudioLanguage:      entry.AudioLanguage,
-		EffectiveRecencyMs: entry.EffectiveRecencyMs,
-	}
-}
-
-func (s *Server) androidSyncVideoMetadataAssets(video model.Video) []model.AndroidSyncAsset {
-	platform := androidSyncPlatformFromChannelID(video.ChannelID)
-	ownerKind := androidSyncVideoOwnerKind(platform)
-	bucket := androidSyncVideoBucket(platform)
-	recency := int64(0)
-	if video.PublishedAt != nil {
-		recency = video.PublishedAt.UnixMilli()
-	}
-	out := []model.AndroidSyncAsset{
-		s.androidSyncVideoThumbnailAsset(video, "metadata"),
-	}
-	if asset, ok := s.androidSyncVideoDearrowThumbnailAsset(video, "metadata"); ok {
-		out = append(out, asset)
-	}
-	if strings.HasPrefix(video.ChannelID, "youtube_") {
-		if s.androidSyncSubtitlePath(video.VideoID) != "" {
-			isAuto, audioLang := s.androidSyncSubtitleMetadata(video)
-			out = append(out, model.AndroidSyncAsset{
-				AssetID:            db.BuildManifestAssetID(platform, ownerKind, video.VideoID, "subtitle", 0),
-				AssetKind:          "subtitle",
-				OwnerID:            video.VideoID,
-				OwnerKind:          ownerKind,
-				Bucket:             bucket,
-				ServerURL:          "/api/media/subtitle/" + video.VideoID,
-				ContentType:        "text/vtt",
-				State:              "ready",
-				RequiredReason:     "metadata",
-				IsAuto:             &isAuto,
-				AudioLanguage:      audioLang,
-				EffectiveRecencyMs: recency,
-			})
-		}
-	}
-	return out
-}
-
-func (s *Server) androidSyncVideoPlaybackAssets(video model.Video) []model.AndroidSyncAsset {
-	platform := androidSyncPlatformFromChannelID(video.ChannelID)
-	ownerKind := androidSyncVideoOwnerKind(platform)
-	bucket := androidSyncVideoBucket(platform)
-	recency := int64(0)
-	if video.PublishedAt != nil {
-		recency = video.PublishedAt.UnixMilli()
-	}
-	out := []model.AndroidSyncAsset{
-		s.androidSyncVideoThumbnailAsset(video, "retention"),
-	}
-	if asset, ok := s.androidSyncVideoDearrowThumbnailAsset(video, "retention"); ok {
-		out = append(out, asset)
-	}
-	if androidSyncVideoIsStillMedia(video) {
-		slideCount := video.MediaSlideCount
-		if slideCount <= 0 {
-			slideCount = 1
-		}
-		for i := 0; i < slideCount; i++ {
-			path := s.androidSyncSlidePath(video.VideoID, i)
-			contentType := androidSyncContentType(path)
-			if contentType == "application/octet-stream" {
-				contentType = "image/jpeg"
-			}
-			out = append(out, model.AndroidSyncAsset{
-				AssetID:            db.BuildManifestAssetID(platform, ownerKind, video.VideoID, "post_media", i),
-				AssetKind:          "post_media",
-				MediaIndex:         i,
-				OwnerID:            video.VideoID,
-				OwnerKind:          ownerKind,
-				Bucket:             bucket,
-				ServerURL:          fmt.Sprintf("/api/media/slide/%s/%d", video.VideoID, i),
-				ContentType:        contentType,
-				State:              "ready",
-				RequiredReason:     "retention",
-				EffectiveRecencyMs: recency,
-			})
-		}
-		if s.androidSyncAudioPath(video.VideoID) != "" {
-			out = append(out, model.AndroidSyncAsset{
-				AssetID:            db.BuildManifestAssetID(platform, ownerKind, video.VideoID, "post_audio", 0),
-				AssetKind:          "post_audio",
-				OwnerID:            video.VideoID,
-				OwnerKind:          ownerKind,
-				Bucket:             bucket,
-				ServerURL:          "/api/media/audio/" + video.VideoID,
-				ContentType:        "audio/mpeg",
-				State:              "ready",
-				RequiredReason:     "retention",
-				EffectiveRecencyMs: recency,
-			})
-		}
-		return out
-	}
-	out = append(out,
-		model.AndroidSyncAsset{
-			AssetID:            db.BuildManifestAssetID(platform, ownerKind, video.VideoID, "video_stream", 0),
-			AssetKind:          "video_stream",
-			OwnerID:            video.VideoID,
-			OwnerKind:          ownerKind,
-			Bucket:             bucket,
-			ServerURL:          "/api/media/stream/" + video.VideoID,
-			ContentType:        "video/mp4",
-			State:              "ready",
-			RequiredReason:     "retention",
-			EffectiveRecencyMs: recency,
-		},
-	)
-	if s.androidSyncSubtitlePath(video.VideoID) != "" {
-		isAuto, audioLang := s.androidSyncSubtitleMetadata(video)
-		out = append(out, model.AndroidSyncAsset{
-			AssetID:            db.BuildManifestAssetID(platform, ownerKind, video.VideoID, "subtitle", 0),
-			AssetKind:          "subtitle",
-			OwnerID:            video.VideoID,
-			OwnerKind:          ownerKind,
-			Bucket:             bucket,
-			ServerURL:          "/api/media/subtitle/" + video.VideoID,
-			ContentType:        "text/vtt",
-			State:              "ready",
-			RequiredReason:     "retention",
-			IsAuto:             &isAuto,
-			AudioLanguage:      audioLang,
-			EffectiveRecencyMs: recency,
-		})
-	}
-	return out
-}
-
-func (s *Server) androidSyncVideoThumbnailAsset(video model.Video, reason string) model.AndroidSyncAsset {
-	platform := androidSyncPlatformFromChannelID(video.ChannelID)
-	recency := int64(0)
-	if video.PublishedAt != nil {
-		recency = video.PublishedAt.UnixMilli()
-	}
-	return model.AndroidSyncAsset{
-		AssetID:            db.BuildManifestAssetID(platform, androidSyncVideoOwnerKind(platform), video.VideoID, "post_thumbnail", 0),
-		AssetKind:          "post_thumbnail",
-		OwnerID:            video.VideoID,
-		OwnerKind:          androidSyncVideoOwnerKind(platform),
-		Bucket:             androidSyncVideoBucket(platform),
-		ServerURL:          "/api/media/thumbnail/" + video.VideoID,
-		ContentType:        "image/jpeg",
-		State:              "ready",
-		RequiredReason:     reason,
-		EffectiveRecencyMs: recency,
-	}
-}
-
-func (s *Server) androidSyncVideoDearrowThumbnailAsset(video model.Video, reason string) (model.AndroidSyncAsset, bool) {
-	if s.androidSyncVideoDearrowThumbnailPath(video.VideoID) == "" {
-		return model.AndroidSyncAsset{}, false
-	}
-	platform := androidSyncPlatformFromChannelID(video.ChannelID)
-	recency := int64(0)
-	if video.PublishedAt != nil {
-		recency = video.PublishedAt.UnixMilli()
-	}
-	return model.AndroidSyncAsset{
-		AssetID:            db.BuildManifestAssetID(platform, androidSyncVideoOwnerKind(platform), video.VideoID, "dearrow_thumbnail", 0),
-		AssetKind:          "dearrow_thumbnail",
-		OwnerID:            video.VideoID,
-		OwnerKind:          androidSyncVideoOwnerKind(platform),
-		Bucket:             androidSyncVideoBucket(platform),
-		ServerURL:          "/api/media/thumbnail/" + video.VideoID + "?da=1",
-		ContentType:        "image/jpeg",
-		State:              "ready",
-		RequiredReason:     reason,
-		EffectiveRecencyMs: recency,
-	}, true
-}
-
-func androidSyncVideoIsStillMedia(video model.Video) bool {
-	kind := strings.ToLower(strings.TrimSpace(video.MediaKind))
-	return kind == "image" || kind == "slideshow"
-}
-
-func (s *Server) androidSyncChannelFallbackAssets(channelID string, reason string) []model.AndroidSyncAsset {
-	if strings.TrimSpace(reason) == "" {
-		reason = "retention"
-	}
-	platform := androidSyncPlatformFromChannelID(channelID)
-	out := []model.AndroidSyncAsset{{
-		AssetID:        db.BuildManifestAssetID(platform, "channel", channelID, "avatar", 0),
-		AssetKind:      "avatar",
-		OwnerID:        channelID,
-		OwnerKind:      "channel",
-		Bucket:         "avatars",
-		ServerURL:      "/api/media/avatar/" + channelID,
-		ContentType:    "image/jpeg",
-		State:          "ready",
-		RequiredReason: reason,
-	}}
-	profile, _ := s.db.GetChannelProfile(channelID)
-	hasProfileBanner := profile != nil && strings.TrimSpace(profile.BannerURL) != ""
-	if hasProfileBanner || s.resolveBannerPath(channelID) != "" {
-		out = append(out, model.AndroidSyncAsset{
-			AssetID:        db.BuildManifestAssetID(platform, "channel", channelID, "banner", 0),
-			AssetKind:      "banner",
-			OwnerID:        channelID,
-			OwnerKind:      "channel",
-			Bucket:         "banners",
-			ServerURL:      "/api/media/banner/" + channelID,
-			ContentType:    "image/jpeg",
-			State:          "ready",
-			RequiredReason: reason,
-		})
-	}
-	return out
-}
-
-type androidSyncFileHashMetrics struct {
-	Attempted bool
-	Bytes     int64
-	Duration  time.Duration
-}
-
-func (s *Server) finalizeAndroidSyncAsset(asset model.AndroidSyncAsset) (model.AndroidSyncAsset, androidSyncFileHashMetrics) {
-	path := s.androidSyncAssetPath(asset)
-	if path == "" {
-		asset.State = "server_missing"
-		asset.SizeBytes = 0
-		asset.SHA256 = ""
-		return asset, androidSyncFileHashMetrics{}
-	}
-	if asset.ContentType == "" {
-		asset.ContentType = androidSyncContentType(path)
-	}
-	hashStart := time.Now()
-	size, sum, err := hashFile(path)
-	hashMetrics := androidSyncFileHashMetrics{
-		Attempted: true,
-		Bytes:     size,
-		Duration:  time.Since(hashStart),
-	}
-	if err != nil {
-		asset.State = "server_missing"
-		asset.SizeBytes = 0
-		asset.SHA256 = ""
-		return asset, hashMetrics
-	}
-	asset.State = "ready"
-	asset.SizeBytes = size
-	asset.SHA256 = sum
-	return asset, hashMetrics
-}
-
-func hashFile(path string) (int64, string, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return 0, "", err
-	}
-	defer func() {
-		_ = f.Close()
-	}()
-	h := sha256.New()
-	n, err := io.Copy(h, f)
-	if err != nil {
-		return 0, "", err
-	}
-	return n, hex.EncodeToString(h.Sum(nil)), nil
-}
-
-func (s *Server) androidSyncAssetPath(asset model.AndroidSyncAsset) string {
-	if path, ok := s.androidSyncInventoryAssetPath(asset); ok {
-		return path
-	}
-	if androidSyncAssetKindRequiresInventory(asset.AssetKind) {
-		return ""
-	}
-	switch asset.AssetKind {
-	case "avatar":
-		return s.resolveAvatarPath(asset.OwnerID)
-	case "banner":
-		return s.resolveBannerPath(asset.OwnerID)
-	case "post_thumbnail":
-		if path := s.androidSyncVideoThumbnailPath(asset.OwnerID); path != "" {
-			return path
-		}
-		return s.resolveThumb(asset.OwnerID)
-	case "dearrow_thumbnail":
-		return s.androidSyncVideoDearrowThumbnailPath(asset.OwnerID)
-	case "video_stream":
-		return s.androidSyncStreamPath(asset.OwnerID)
-	case "subtitle":
-		return s.androidSyncSubtitlePath(asset.OwnerID)
-	case "post_audio":
-		return s.androidSyncAudioPath(asset.OwnerID)
-	case "preview_track_json":
-		return s.androidSyncPreviewPath(asset.OwnerID, "track.json")
-	case "preview_sprite":
-		return s.androidSyncPreviewPath(asset.OwnerID, "sprite.jpg")
-	case "post_media":
-		if strings.Contains(asset.ServerURL, "/api/media/stream/") {
-			return s.androidSyncStreamPath(asset.OwnerID)
-		}
-		index := androidSyncSlideIndex(asset.ServerURL)
-		if path := s.androidSyncSlidePath(asset.OwnerID, index); path != "" {
-			return path
-		}
-		return s.findFeedMediaFile(asset.OwnerID, index)
-	default:
-		return ""
-	}
-}
-
-func androidSyncAssetKindRequiresInventory(kind string) bool {
-	switch kind {
-	case "preview_track_json", "preview_sprite":
-		return true
-	default:
-		return false
-	}
-}
-
-func (s *Server) androidSyncInventoryAssetPath(asset model.AndroidSyncAsset) (string, bool) {
-	row, err := s.db.GetAsset(asset.AssetID, asset.AssetKind)
-	if err != nil || row == nil {
-		return "", false
-	}
-	if row.State != db.AssetStateReady {
-		return "", false
-	}
-	if strings.TrimSpace(row.FilePath) == "" {
-		return "", false
-	}
-	path := resolveDataPath(s.cfg.DataDir, row.FilePath)
-	if _, err := os.Stat(path); err != nil {
-		return "", false
-	}
-	return path, true
-}
-
-func (s *Server) androidSyncPreviewPath(videoID, name string) string {
-	path := resolveDataPath(s.cfg.DataDir, filepath.Join("thumbnails", "previews", videoID, name))
-	if _, err := os.Stat(path); err == nil {
-		return path
-	}
-	return ""
-}
-
-func (s *Server) androidSyncVideoThumbnailPath(videoID string) string {
-	video, _ := s.db.GetVideo(videoID)
-	if video == nil || strings.TrimSpace(video.ThumbnailPath) == "" {
-		return ""
-	}
-	path := resolveDataPath(s.cfg.DataDir, video.ThumbnailPath)
-	if _, err := os.Stat(path); err == nil {
-		return path
-	}
-	return ""
-}
-
-func (s *Server) androidSyncVideoDearrowThumbnailPath(videoID string) string {
-	video, _ := s.db.GetVideo(videoID)
-	if video == nil || video.DearrowThumbPath == nil || strings.TrimSpace(*video.DearrowThumbPath) == "" {
-		return ""
-	}
-	path := resolveDataPath(s.cfg.DataDir, strings.TrimSpace(*video.DearrowThumbPath))
-	if _, err := os.Stat(path); err == nil {
-		return path
-	}
-	return ""
-}
-
-func (s *Server) androidSyncStreamPath(ownerID string) string {
-	video, _ := s.db.GetVideo(ownerID)
-	if video != nil && video.FilePath != "" {
-		path := resolveDataPath(s.cfg.DataDir, video.FilePath)
-		if _, err := os.Stat(path); err == nil && androidSyncPathLooksVideo(path) {
-			return path
-		}
-	}
-	return s.findFeedMediaVideoFile(ownerID)
-}
-
-func androidSyncPathLooksVideo(path string) bool {
-	switch strings.ToLower(filepath.Ext(path)) {
-	case ".mp4", ".webm", ".mkv", ".mov", ".m4v":
-		return true
-	default:
-		return false
-	}
-}
-
-func (s *Server) androidSyncSlidePath(videoID string, index int) string {
-	video, _ := s.db.GetVideo(videoID)
-	if video != nil {
-		if path := androidSyncSlidePathFromVideo(s.cfg.DataDir, *video, index); path != "" {
-			return path
-		}
-	}
-	if path := s.findFeedMediaFile(videoID, index); path != "" {
-		if fi, err := os.Stat(path); err == nil && fi.Size() >= 100 {
-			return path
-		}
-	}
-	return ""
-}
-
-func androidSyncSlidePathFromVideo(dataDir string, video model.Video, index int) string {
-	if index < 0 {
-		return ""
-	}
-	if meta := video.ParseMetadata(); meta != nil && index < len(meta.Slides) {
-		if slide := meta.SlideAsMap(index); slide != nil {
-			if pathVal, ok := slide["path"].(string); ok && pathVal != "" {
-				absSlide := resolveDataPath(dataDir, pathVal)
-				if _, err := os.Stat(absSlide); err == nil {
-					return absSlide
-				}
-			}
-			if urlVal, ok := slide["url"].(string); ok && urlVal != "" && video.FilePath != "" {
-				absVideo := resolveDataPath(dataDir, video.FilePath)
-				candidate := filepath.Join(filepath.Dir(absVideo), urlVal)
-				if _, err := os.Stat(candidate); err == nil {
-					return candidate
-				}
-			}
-		}
-	}
-	if video.FilePath == "" {
-		return ""
-	}
-	dir := filepath.Dir(resolveDataPath(dataDir, video.FilePath))
-	fileIndex := index + 1
-	for _, ext := range []string{".jpg", ".jpeg", ".png", ".webp"} {
-		candidate := filepath.Join(dir, fmt.Sprintf("%s_%d%s", video.VideoID, fileIndex, ext))
-		if _, err := os.Stat(candidate); err == nil {
-			return candidate
-		}
-	}
-	if index == 0 && androidSyncMediaPathIsImage(video.FilePath) {
-		path := resolveDataPath(dataDir, video.FilePath)
-		if _, err := os.Stat(path); err == nil {
-			return path
-		}
-	}
-	return ""
-}
-
-func (s *Server) androidSyncAudioPath(videoID string) string {
-	video, _ := s.db.GetVideo(videoID)
-	audioExts := []string{".mp3", ".m4a", ".ogg", ".aac"}
-	if video != nil && video.FilePath != "" {
-		dir := filepath.Dir(resolveDataPath(s.cfg.DataDir, video.FilePath))
-		stem := strings.TrimSuffix(filepath.Base(video.FilePath), filepath.Ext(video.FilePath))
-		for _, ext := range audioExts {
-			for _, candidateStem := range []string{videoID, videoID + "_0", stem, stem + "_0"} {
-				candidate := filepath.Join(dir, candidateStem+ext)
-				if _, err := os.Stat(candidate); err == nil {
-					return candidate
-				}
-			}
-		}
-	}
-	return s.findFeedMediaAudioFile(videoID)
-}
-
-func (s *Server) androidSyncSubtitlePath(videoID string) string {
-	video, _ := s.db.GetVideo(videoID)
-	if video == nil || video.FilePath == "" {
-		return ""
-	}
-	return s.androidSyncSubtitlePathForVideo(*video)
-}
-
-func (s *Server) androidSyncSubtitlePathForVideo(video model.Video) string {
-	if video.FilePath == "" {
-		return ""
-	}
-	absFilePath := resolveDataPath(s.cfg.DataDir, video.FilePath)
-	videoBase := strings.TrimSuffix(absFilePath, filepath.Ext(absFilePath))
-	dir := filepath.Dir(absFilePath)
-	stem := filepath.Base(videoBase)
-	infoPath := filepath.Join(dir, stem+".info.json")
-	manualLangs := subtitlemeta.ManualLangs(infoPath)
-	var fallback string
-	for _, suffix := range []string{".en.vtt", ".vtt"} {
-		path := videoBase + suffix
-		if _, err := os.Stat(path); err == nil {
-			lang := subtitlemeta.TrackLang(stem, filepath.Base(path))
-			if manualLangs[lang] {
-				return path
-			}
-			if fallback == "" {
-				fallback = path
-			}
-		}
-	}
-	entries, _ := os.ReadDir(dir)
-	for _, entry := range entries {
-		if strings.HasPrefix(entry.Name(), stem) && strings.HasSuffix(entry.Name(), ".vtt") {
-			path := filepath.Join(dir, entry.Name())
-			if _, err := os.Stat(path); err == nil {
-				lang := subtitlemeta.TrackLang(stem, entry.Name())
-				if manualLangs[lang] {
-					return path
-				}
-				if fallback == "" {
-					fallback = path
-				}
-			}
-		}
-	}
-	return fallback
-}
-
-func (s *Server) androidSyncSubtitleMetadata(video model.Video) (bool, string) {
-	subtitlePath := s.androidSyncSubtitlePathForVideo(video)
-	if subtitlePath == "" || video.FilePath == "" {
-		return true, ""
-	}
-	absFilePath := resolveDataPath(s.cfg.DataDir, video.FilePath)
-	stem := strings.TrimSuffix(filepath.Base(absFilePath), filepath.Ext(absFilePath))
-	lang := subtitlemeta.TrackLang(stem, filepath.Base(subtitlePath))
-	infoPath := filepath.Join(filepath.Dir(absFilePath), stem+".info.json")
-	return subtitlemeta.IsAuto(infoPath, lang), subtitlemeta.Language(infoPath)
-}
-
-func androidSyncSlideIndex(serverURL string) int {
-	parts := strings.Split(strings.Trim(serverURL, "/"), "/")
-	if len(parts) == 0 {
-		return 0
-	}
-	n, err := strconv.Atoi(parts[len(parts)-1])
-	if err != nil || n < 0 {
-		return 0
-	}
-	return n
+	return androidSyncVideoBucket(androidSyncPlatformForOwnerKind(row.OwnerKind))
 }
 
 func androidSyncAssetPriority(asset model.AndroidSyncAsset) int {
-	if asset.State == "server_missing" {
-		return 99
-	}
-	isBulkProfile := strings.EqualFold(strings.TrimSpace(asset.RequiredReason), "profile")
 	switch asset.AssetKind {
-	case "post_thumbnail":
-		return 0
-	case "banner":
-		if isBulkProfile {
-			return 8
-		}
-		return 1
 	case "avatar":
-		if isBulkProfile {
-			return 9
-		}
-		return 2
-	case "post_media":
-		return 3
-	case "post_audio":
-		return 4
-	case "video_stream":
-		return 5
-	case "subtitle":
-		return 6
+		return 0
+	case "post_thumbnail":
+		return 1
 	case "dearrow_thumbnail":
+		return 2
+	case "banner":
+		return 3
+	case "post_media":
+		return 4
+	case "post_audio":
+		return 5
+	case "video_stream":
+		return 6
+	case "subtitle":
 		return 7
 	case "preview_track_json":
-		return 10
+		return 8
 	case "preview_sprite":
-		return 11
+		return 9
 	default:
-		return 12
+		return 10
 	}
 }
 
-func androidSyncPlatformFromChannelID(id string) string {
-	switch {
-	case strings.HasPrefix(id, "twitter_"):
+func androidSyncPlatformForOwnerKind(ownerKind string) string {
+	switch ownerKind {
+	case "tweet":
 		return "twitter"
-	case strings.HasPrefix(id, "youtube_"):
+	case "youtube_video":
 		return "youtube"
-	case strings.HasPrefix(id, "tiktok_"):
+	case "tiktok_video":
 		return "tiktok"
-	case strings.HasPrefix(id, "instagram_"):
+	case "instagram_reel":
 		return "instagram"
 	default:
-		if idx := strings.Index(id, "_"); idx > 0 {
-			return id[:idx]
-		}
-		return "youtube"
-	}
-}
-
-func androidSyncVideoOwnerKind(platform string) string {
-	switch platform {
-	case "twitter":
-		return "tweet"
-	case "tiktok":
-		return "tiktok_video"
-	case "instagram":
-		return "instagram_reel"
-	default:
-		return "youtube_video"
+		return ""
 	}
 }
 
@@ -2128,28 +703,9 @@ func androidSyncVideoBucket(platform string) string {
 		return "youtube_videos"
 	case "twitter":
 		return "twitter_media"
-	default:
+	case "tiktok", "instagram":
 		return "shorts_videos"
-	}
-}
-
-func androidSyncContentType(path string) string {
-	switch strings.ToLower(filepath.Ext(path)) {
-	case ".jpg", ".jpeg", ".png", ".webp", ".gif", ".image":
-		return detectImageContentType(path)
-	case ".mp4":
-		return "video/mp4"
-	case ".webm":
-		return "video/webm"
-	case ".mkv":
-		return "video/x-matroska"
-	case ".mov":
-		return "video/quicktime"
-	case ".m4v":
-		return "video/x-m4v"
-	case ".vtt":
-		return "text/vtt"
 	default:
-		return "application/octet-stream"
+		return ""
 	}
 }

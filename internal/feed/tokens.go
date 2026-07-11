@@ -3,12 +3,11 @@ package feed
 import (
 	"regexp"
 	"strings"
+
+	"github.com/screwys/igloo/internal/model"
 )
 
-var (
-	hashtagRe = regexp.MustCompile(`#[A-Za-z0-9_]+`)
-	mentionRe = regexp.MustCompile(`@[A-Za-z0-9_]+`)
-)
+var hashtagRe = regexp.MustCompile(`#[A-Za-z0-9_]+`)
 
 // ExtractInterestTokens extracts hashtags and @mentions from tweet text.
 // Returns lowercase, deduplicated tokens.
@@ -26,8 +25,8 @@ func ExtractInterestTokens(text string) []string {
 			tokens = append(tokens, tok)
 		}
 	}
-	for _, match := range mentionRe.FindAllString(text, -1) {
-		tok := strings.ToLower(match)
+	for _, match := range model.LinkableTwitterMentions(text) {
+		tok := "@" + match.Handle
 		if !seen[tok] {
 			seen[tok] = true
 			tokens = append(tokens, tok)

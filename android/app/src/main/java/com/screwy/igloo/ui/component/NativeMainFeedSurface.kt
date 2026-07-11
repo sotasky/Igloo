@@ -64,7 +64,6 @@ import com.screwy.igloo.feed.FeedMediaGridModel
 import com.screwy.igloo.feed.SocialPostModel
 import com.screwy.igloo.media.MediaResolvers
 import com.screwy.igloo.net.IglooHostProvider
-import com.screwy.igloo.net.ServerBaseUrlProvider
 import com.screwy.igloo.net.auth.AuthTokenProvider
 import com.screwy.igloo.ui.UiState
 import com.screwy.igloo.ui.nav.ApplyOverlayChrome
@@ -115,7 +114,7 @@ internal fun NativeFeedSurface(
     newPostPosters: List<NewPostPoster> = emptyList(),
     pendingBookmark: BookmarkTarget?,
     bookmarkCategories: List<BookmarkCategoryDisplay>,
-    mutedHandles: Set<String>,
+    mutedChannelIds: Set<String>,
     mediaModels: Map<String, FeedMediaGridModel> = emptyMap(),
     onRefresh: () -> Unit,
     onNewPostsClick: () -> Unit = onRefresh,
@@ -125,7 +124,7 @@ internal fun NativeFeedSurface(
     onBookmarkToggle: (FeedRow) -> Unit,
     onFollowToggle: (channelId: String, newValue: Boolean) -> Unit,
     onStarToggle: (channelId: String, newValue: Boolean) -> Unit,
-    onMuteToggle: (handle: String, newValue: Boolean) -> Unit,
+    onMuteToggle: (channelId: String, newValue: Boolean) -> Unit,
     onMediaOpen: (FeedRow, mediaIndex: Int, visibleMediaModel: FeedMediaGridModel) -> Unit,
     onSeenReached: (tweetIds: List<String>) -> Unit,
     onConfirmBookmark: (BookmarkPayload) -> Unit,
@@ -139,7 +138,7 @@ internal fun NativeFeedSurface(
     onHeaderStarToggle: (newValue: Boolean) -> Unit = {},
     onHeaderRefresh: () -> Unit = onRefresh,
     onHeaderOpenInPlatform: () -> Unit = {},
-    onWarmMediaRows: (List<FeedRow>) -> Unit = {},
+    onMediaRowsChanged: (List<FeedRow>) -> Unit = {},
     onRowClick: (FeedRow) -> Unit = {},
     onQuoteOpen: (tweetId: String) -> Unit = {},
     onProfileOpen: (SocialPostModel) -> Unit = { post -> onChannelClick(post.author.channelId) },
@@ -148,7 +147,6 @@ internal fun NativeFeedSurface(
     val imageLoader: ImageLoader = koinInject()
     val authTokens: AuthTokenProvider = koinInject()
     val iglooHostProvider: IglooHostProvider = koinInject()
-    val baseUrlProvider: ServerBaseUrlProvider = koinInject()
     val mediaResolvers: MediaResolvers = koinInject()
     val prefs: PreferencesRepo = koinInject()
     val useEmbedFriendlyShareLinks by prefs.shareEmbedFriendlyLinks()
@@ -159,7 +157,7 @@ internal fun NativeFeedSurface(
     var pendingMuteAction by remember { mutableStateOf<FeedMuteMenuAction?>(null) }
     val currentCallbacks by rememberUpdatedState(
         NativeFeedCallbacks(
-            mutedHandles = mutedHandles,
+            mutedChannelIds = mutedChannelIds,
             onRefresh = onRefresh,
             onProfileOpen = onProfileOpen,
             onMentionClick = onMentionClick,
@@ -170,7 +168,7 @@ internal fun NativeFeedSurface(
             onMuteToggle = onMuteToggle,
             onMediaOpen = onMediaOpen,
             onSeenReached = onSeenReached,
-            onWarmMediaRows = onWarmMediaRows,
+            onMediaRowsChanged = onMediaRowsChanged,
             onRowClick = onRowClick,
             onQuoteOpen = onQuoteOpen,
             onRequestUnfollowConfirmation = { pendingUnfollowChannelId = it },
@@ -194,7 +192,6 @@ internal fun NativeFeedSurface(
             iglooHostProvider = iglooHostProvider,
             mediaResolvers = mediaResolvers,
             colors = colors,
-            baseUrl = baseUrlProvider.baseUrl(),
             callbacks = currentCallbacks,
             seenBatcher = seenBatcher,
             onScrollToTopVisibility = { showScrollToTop = it },
@@ -222,10 +219,10 @@ internal fun NativeFeedSurface(
     }
 
     LaunchedEffect(rows) {
-        val warmRows = rows
+        val mediaRows = rows
             .take(16)
             .flatMap { threaded -> threaded.chain + threaded.row }
-        if (warmRows.isNotEmpty()) onWarmMediaRows(warmRows)
+        onMediaRowsChanged(mediaRows)
     }
 
     DisposableEffect(lifecycleOwner, controller, seenBatcher) {
@@ -270,7 +267,6 @@ internal fun NativeFeedSurface(
                             channelHeader = channelHeader,
                             mediaModels = mediaModels,
                             colors = colors,
-                            baseUrl = baseUrlProvider.baseUrl(),
                             callbacks = currentCallbacks,
                             isRefreshing = isRefreshing,
                         )
@@ -367,7 +363,7 @@ internal fun NativeFeedSurface(
                         TextButton(
                             onClick = {
                                 pendingMuteAction = null
-                                onMuteToggle(action.handle, true)
+                                onMuteToggle(action.channelId, true)
                             },
                         ) {
                             Text(stringResource(R.string.action_mute))
@@ -510,7 +506,7 @@ private fun NewPostsAvatarStack(
 }
 
 internal data class NativeFeedCallbacks(
-    val mutedHandles: Set<String>,
+    val mutedChannelIds: Set<String>,
     val onRefresh: () -> Unit,
     val onProfileOpen: (SocialPostModel) -> Unit,
     val onMentionClick: (handle: String) -> Unit,
@@ -518,10 +514,10 @@ internal data class NativeFeedCallbacks(
     val onBookmarkToggle: (FeedRow) -> Unit,
     val onFollowToggle: (channelId: String, newValue: Boolean) -> Unit,
     val onStarToggle: (channelId: String, newValue: Boolean) -> Unit,
-    val onMuteToggle: (handle: String, newValue: Boolean) -> Unit,
+    val onMuteToggle: (channelId: String, newValue: Boolean) -> Unit,
     val onMediaOpen: (FeedRow, mediaIndex: Int, visibleMediaModel: FeedMediaGridModel) -> Unit,
     val onSeenReached: (tweetIds: List<String>) -> Unit,
-    val onWarmMediaRows: (List<FeedRow>) -> Unit,
+    val onMediaRowsChanged: (List<FeedRow>) -> Unit,
     val onRowClick: (FeedRow) -> Unit,
     val onQuoteOpen: (tweetId: String) -> Unit,
     val onRequestUnfollowConfirmation: (channelId: String) -> Unit,

@@ -102,7 +102,6 @@ func TestBaseRendersStructure(t *testing.T) {
 		{"shortcut config", `window._cfShortcutConfig`},
 		{"web_theme.js", `js/web_theme.js?v=test123`},
 		{"site_base.js", `js/site_base.js?v=test123`},
-		{"sync_poller.js", `js/sync_poller.js?v=test123`},
 		{"video_cards.js", `js/video_cards.js?v=test123`},
 	}
 

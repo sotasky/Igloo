@@ -65,17 +65,12 @@ import androidx.media3.ui.PlayerView
 import coil3.compose.AsyncImage
 import com.screwy.igloo.R
 import com.screwy.igloo.media.MediaUri
-import com.screwy.igloo.perf.PerfProbe
 import com.screwy.igloo.ui.theme.IglooColors
 import com.screwy.igloo.ui.theme.iglooColors
 import kotlinx.coroutines.delay
 
 @Composable
-internal fun MomentSlideDots(
-    currentPage: Int,
-    pageCount: Int,
-    modifier: Modifier = Modifier,
-) {
+internal fun MomentSlideDots(currentPage: Int, pageCount: Int, modifier: Modifier = Modifier) {
     Row(
         modifier = modifier,
         horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -83,40 +78,31 @@ internal fun MomentSlideDots(
     ) {
         repeat(pageCount) { page ->
             Box(
-                modifier = Modifier
-                    .size(if (page == currentPage) 8.dp else 6.dp)
-                    .clip(CircleShape)
-                    .background(
-                        if (page == currentPage) Color.White
-                        else Color.White.copy(alpha = 0.45f),
-                    ),
+                modifier =
+                    Modifier.size(if (page == currentPage) 8.dp else 6.dp)
+                        .clip(CircleShape)
+                        .background(
+                            if (page == currentPage) Color.White
+                            else Color.White.copy(alpha = 0.45f)
+                        )
             )
         }
     }
 }
 
 /**
- * Progress bar pinned to the bottom of a moments page. 4dp visible track,
- * 48dp touch target so users can easily hit it without occluding the
- * video. Single tap jumps to that position; horizontal drag scrubs. Poll cadence
- * is 150ms — fast enough to feel live, cheap enough to ignore on the main thread.
+ * Progress bar pinned to the bottom of a moments page. 4dp visible track, 48dp touch target so
+ * users can easily hit it without occluding the video. Single tap jumps to that position;
+ * horizontal drag scrubs. Poll cadence is 150ms — fast enough to feel live, cheap enough to ignore
+ * on the main thread.
  */
 @Composable
-internal fun MomentsVideoProgressBar(
-    player: ExoPlayer,
-    modifier: Modifier = Modifier,
-) {
+internal fun MomentsVideoProgressBar(player: ExoPlayer, modifier: Modifier = Modifier) {
     val colors = MaterialTheme.iglooColors
     var progress by remember(player) { mutableStateOf(0f) }
     var isDragging by remember(player) { mutableStateOf(false) }
     var dragProgress by remember(player) { mutableStateOf(0f) }
     var barWidthPx by remember(player) { mutableIntStateOf(1) }
-
-    DisposableEffect(player) {
-        fun fields() = mapOf("surface" to "moments", "cadence_ms" to 150)
-        val key = PerfProbe.collectorStart("playback_poll", ::fields)
-        onDispose { PerfProbe.collectorEnd("playback_poll", key, ::fields) }
-    }
 
     LaunchedEffect(player) {
         while (true) {
@@ -132,78 +118,73 @@ internal fun MomentsVideoProgressBar(
 
     val shown = if (isDragging) dragProgress else progress
     Box(
-        modifier = modifier
-            .fillMaxWidth()
-            .height(48.dp)
-            .onSizeChanged { barWidthPx = it.width.coerceAtLeast(1) }
-            .pointerInput(player) {
-                detectTapGestures { offset ->
-                    val frac = (offset.x / barWidthPx).coerceIn(0f, 1f)
-                    val dur = player.duration
-                    if (dur > 0L) {
-                        player.seekTo((frac * dur).toLong())
-                        progress = frac
+        modifier =
+            modifier
+                .fillMaxWidth()
+                .height(48.dp)
+                .onSizeChanged { barWidthPx = it.width.coerceAtLeast(1) }
+                .pointerInput(player) {
+                    detectTapGestures { offset ->
+                        val frac = (offset.x / barWidthPx).coerceIn(0f, 1f)
+                        val dur = player.duration
+                        if (dur > 0L) {
+                            player.seekTo((frac * dur).toLong())
+                            progress = frac
+                        }
                     }
                 }
-            }
-            .pointerInput(player) {
-                detectHorizontalDragGestures(
-                    onDragStart = { offset ->
-                        isDragging = true
-                        dragProgress = (offset.x / barWidthPx).coerceIn(0f, 1f)
-                    },
-                    onHorizontalDrag = { _, delta ->
-                        dragProgress = (dragProgress + delta / barWidthPx).coerceIn(0f, 1f)
-                    },
-                    onDragEnd = {
-                        val dur = player.duration
-                        if (dur > 0L) player.seekTo((dragProgress * dur).toLong())
-                        progress = dragProgress
-                        isDragging = false
-                    },
-                    onDragCancel = { isDragging = false },
-                )
-            },
+                .pointerInput(player) {
+                    detectHorizontalDragGestures(
+                        onDragStart = { offset ->
+                            isDragging = true
+                            dragProgress = (offset.x / barWidthPx).coerceIn(0f, 1f)
+                        },
+                        onHorizontalDrag = { _, delta ->
+                            dragProgress = (dragProgress + delta / barWidthPx).coerceIn(0f, 1f)
+                        },
+                        onDragEnd = {
+                            val dur = player.duration
+                            if (dur > 0L) player.seekTo((dragProgress * dur).toLong())
+                            progress = dragProgress
+                            isDragging = false
+                        },
+                        onDragCancel = { isDragging = false },
+                    )
+                },
         contentAlignment = Alignment.BottomStart,
     ) {
         // Background track
         Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(4.dp)
-                .clip(RoundedCornerShape(percent = 50))
-                .background(Color.White.copy(alpha = 0.24f)),
+            modifier =
+                Modifier.fillMaxWidth()
+                    .height(4.dp)
+                    .clip(RoundedCornerShape(percent = 50))
+                    .background(Color.White.copy(alpha = 0.24f))
         )
         // Filled portion in the user's accent color
         Box(
-            modifier = Modifier
-                .fillMaxWidth(shown)
-                .height(4.dp)
-                .clip(RoundedCornerShape(percent = 50))
-                .background(colors.primary),
+            modifier =
+                Modifier.fillMaxWidth(shown)
+                    .height(4.dp)
+                    .clip(RoundedCornerShape(percent = 50))
+                    .background(colors.primary)
         )
     }
 }
 
 /** Black drop shadow reused by overlay text + icons so they stay legible on any frame. */
-internal val DropShadow = Shadow(
-    color = Color.Black.copy(alpha = 0.65f),
-    offset = Offset(0f, 1f),
-    blurRadius = 4f,
-)
+internal val DropShadow =
+    Shadow(color = Color.Black.copy(alpha = 0.65f), offset = Offset(0f, 1f), blurRadius = 4f)
 
-private val CaptionShadow = Shadow(
-    color = Color.Black.copy(alpha = 0.45f),
-    offset = Offset(0f, 1f),
-    blurRadius = 2f,
-)
+private val CaptionShadow =
+    Shadow(color = Color.Black.copy(alpha = 0.45f), offset = Offset(0f, 1f), blurRadius = 2f)
 
 /**
- * One flat action icon for the right-edge column. No background pill / halo —
- * just icon plus shadow. Tint rules:
- *  - pressed       → [accent] (tactile flash while the finger is down)
- *  - [isActive]    → [accent] (persistent "this mode is on" indicator)
- *  - otherwise     → white
+ * One flat action icon for the right-edge column. No background pill / halo — just icon plus
+ * shadow. Tint rules:
+ * - pressed → [accent] (tactile flash while the finger is down)
+ * - [isActive] → [accent] (persistent "this mode is on" indicator)
+ * - otherwise → white
  */
 @Composable
 internal fun ShadowIcon(
@@ -216,36 +197,33 @@ internal fun ShadowIcon(
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val isPressed by interactionSource.collectIsPressedAsState()
-    val tint = when {
-        !enabled -> Color.White.copy(alpha = 0.38f)
-        isActive || isPressed -> accent
-        else -> Color.White
-    }
-    val clickModifier = if (enabled) {
-        Modifier.pointerInput(Unit) {
-            detectTapGestures(
-                onPress = { offset ->
-                    val press = PressInteraction.Press(offset)
-                    interactionSource.emit(press)
-                    val released = tryAwaitRelease()
-                    interactionSource.emit(
-                        if (released) PressInteraction.Release(press)
-                        else PressInteraction.Cancel(press),
-                    )
-                },
-                onTap = { onClick() },
-            )
+    val tint =
+        when {
+            !enabled -> Color.White.copy(alpha = 0.38f)
+            isActive || isPressed -> accent
+            else -> Color.White
         }
-    } else {
-        Modifier
-    }
+    val clickModifier =
+        if (enabled) {
+            Modifier.pointerInput(Unit) {
+                detectTapGestures(
+                    onPress = { offset ->
+                        val press = PressInteraction.Press(offset)
+                        interactionSource.emit(press)
+                        val released = tryAwaitRelease()
+                        interactionSource.emit(
+                            if (released) PressInteraction.Release(press)
+                            else PressInteraction.Cancel(press)
+                        )
+                    },
+                    onTap = { onClick() },
+                )
+            }
+        } else {
+            Modifier
+        }
 
-    Box(
-        modifier = Modifier
-            .size(44.dp)
-            .then(clickModifier),
-        contentAlignment = Alignment.Center,
-    ) {
+    Box(modifier = Modifier.size(44.dp).then(clickModifier), contentAlignment = Alignment.Center) {
         Icon(
             imageVector = icon,
             contentDescription = contentDescription,
@@ -266,13 +244,11 @@ internal fun MomentRailAvatar(
     modifier: Modifier = Modifier,
 ) {
     val accent = colors.primary
-    val storyTarget = item.storyFirstVideoId.takeIf {
-        it.isNotBlank() && item.storyRingState != StoryRingState.None
-    }
-    Box(
-        modifier = modifier.size(50.dp),
-        contentAlignment = Alignment.Center,
-    ) {
+    val storyTarget =
+        item.storyFirstVideoId.takeIf {
+            it.isNotBlank() && item.storyRingState != StoryRingState.None
+        }
+    Box(modifier = modifier.size(50.dp), contentAlignment = Alignment.Center) {
         Avatar(
             channelId = item.channelId,
             size = 44.dp,
@@ -286,23 +262,20 @@ internal fun MomentRailAvatar(
             },
             showPendingBadge = false,
         )
-        val badgeModifier = Modifier
-            .align(Alignment.BottomCenter)
-            .size(18.dp)
-            .clip(CircleShape)
-            .background(if (item.isAuthorFollowed) Color.White else accent)
-            .border(2.dp, Color.Black.copy(alpha = 0.70f), CircleShape)
-            .clickable {
-                if (item.isAuthorFollowed) {
-                    onRequestUnfollowChannel(item)
-                } else {
-                    onFollowChannel(item.channelId)
+        val badgeModifier =
+            Modifier.align(Alignment.BottomCenter)
+                .size(18.dp)
+                .clip(CircleShape)
+                .background(if (item.isAuthorFollowed) Color.White else accent)
+                .border(2.dp, Color.Black.copy(alpha = 0.70f), CircleShape)
+                .clickable {
+                    if (item.isAuthorFollowed) {
+                        onRequestUnfollowChannel(item)
+                    } else {
+                        onFollowChannel(item.channelId)
+                    }
                 }
-            }
-        Box(
-            modifier = badgeModifier,
-            contentAlignment = Alignment.Center,
-        ) {
+        Box(modifier = badgeModifier, contentAlignment = Alignment.Center) {
             val followingLabel = stringResource(R.string.action_following)
             val followLabel = stringResource(R.string.action_follow)
             Icon(
@@ -326,40 +299,40 @@ internal fun CollapsedDescription(
 ) {
     val linkColor = MaterialTheme.iglooColors.primary
     val uriHandler = LocalUriHandler.current
-    val collapsedDescription = remember(item.description) {
-        collapseMomentCaptionWhitespace(item.description)
-    }
-    var descriptionCanExpand by remember(item.videoId, collapsedDescription) { mutableStateOf(false) }
+    val collapsedDescription =
+        remember(item.description) { collapseMomentCaptionWhitespace(item.description) }
+    var descriptionCanExpand by
+        remember(item.videoId, collapsedDescription) { mutableStateOf(false) }
     val expandedHorizontalPadding = if (expanded) 8.dp else 0.dp
     Column(
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(
-                start = momentCollapsedCaptionStartPaddingDp().dp,
-                end = 16.dp,
-            )
-            .background(
-                color = momentCaptionBackgroundColor(expanded),
-                shape = RoundedCornerShape(8.dp),
-            )
-            .clickable(enabled = expanded) { onExpandedChange(false) },
+        modifier =
+            modifier
+                .fillMaxWidth()
+                .padding(start = momentCollapsedCaptionStartPaddingDp().dp, end = 16.dp)
+                .background(
+                    color = momentCaptionBackgroundColor(expanded),
+                    shape = RoundedCornerShape(8.dp),
+                )
+                .clickable(enabled = expanded) { onExpandedChange(false) }
     ) {
         Column(
-            modifier = Modifier.padding(
-                start = expandedHorizontalPadding,
-                top = 8.dp,
-                end = expandedHorizontalPadding,
-                bottom = MomentCollapsedCaptionBottomPadding,
-            ),
+            modifier =
+                Modifier.padding(
+                    start = expandedHorizontalPadding,
+                    top = 8.dp,
+                    end = expandedHorizontalPadding,
+                    bottom = MomentCollapsedCaptionBottomPadding,
+                ),
             verticalArrangement = Arrangement.spacedBy(3.dp),
         ) {
             momentRepostLabel(item)?.let { label ->
                 Text(
                     text = label,
-                    style = MaterialTheme.typography.labelSmall.copy(
-                        fontWeight = FontWeight.SemiBold,
-                        shadow = CaptionShadow,
-                    ),
+                    style =
+                        MaterialTheme.typography.labelSmall.copy(
+                            fontWeight = FontWeight.SemiBold,
+                            shadow = CaptionShadow,
+                        ),
                     color = Color.White,
                 )
             }
@@ -373,10 +346,11 @@ internal fun CollapsedDescription(
             }
             Text(
                 text = momentAuthorLabel(item),
-                style = MaterialTheme.typography.titleMedium.copy(
-                    fontWeight = FontWeight.Bold,
-                    shadow = CaptionShadow,
-                ),
+                style =
+                    MaterialTheme.typography.titleMedium.copy(
+                        fontWeight = FontWeight.Bold,
+                        shadow = CaptionShadow,
+                    ),
                 color = Color.White,
                 modifier = Modifier.clickable { onChannelClick(item.channelId) },
             )
@@ -387,10 +361,11 @@ internal fun CollapsedDescription(
                     onUrlClick = uriHandler::openUri,
                     maxLines = momentCaptionDescriptionMaxLines(expanded),
                     overflow = TextOverflow.Ellipsis,
-                    style = MaterialTheme.typography.bodyMedium.copy(
-                        color = Color.White,
-                        shadow = CaptionShadow,
-                    ),
+                    style =
+                        MaterialTheme.typography.bodyMedium.copy(
+                            color = Color.White,
+                            shadow = CaptionShadow,
+                        ),
                     mentionColorOverride = linkColor,
                     urlColorOverride = linkColor,
                     onPlainTextClick = {
@@ -398,7 +373,7 @@ internal fun CollapsedDescription(
                             momentCaptionExpandedAfterPlainTextClick(
                                 expanded = expanded,
                                 descriptionCanExpand = descriptionCanExpand,
-                            ),
+                            )
                         )
                     },
                     onTextLayout = { layout ->
@@ -444,7 +419,8 @@ internal fun VideoSurface(
         fun currentSurfaceState(): MomentVideoSurfaceState {
             val size = player.videoSize
             val currentMediaId = player.currentMediaItem?.mediaId
-            val matchingFrameCount = if (renderedFrameMediaId == currentMediaId) renderedFrameCount else 0
+            val matchingFrameCount =
+                if (renderedFrameMediaId == currentMediaId) renderedFrameCount else 0
             return momentVideoSurfaceStateFor(
                 expectedMediaId = mediaKey,
                 currentMediaId = currentMediaId,
@@ -460,59 +436,43 @@ internal fun VideoSurface(
             val next = currentSurfaceState()
             surfaceState = next
             onStateChange(next)
-            PerfProbe.log(
-                event = "moments_surface_state",
-            ) {
-                mapOf(
-                    "page" to pageIndex,
-                    "video" to momentDebugHash(mediaKey),
-                    "current" to momentDebugHash(player.currentMediaItem?.mediaId),
-                    "state" to player.playbackState.momentPlayerStateDebugName(),
-                    "expected" to next.hasExpectedMedia,
-                    "first_frame" to next.renderedFirstFrame,
-                    "frames" to next.renderedFrameCount,
-                    "playing" to next.playerIsPlaying,
-                    "position_ms" to next.playerPositionMs,
-                    "size" to "${next.videoWidth}x${next.videoHeight}",
-                    "player" to Integer.toHexString(System.identityHashCode(player)),
-                )
-            }
         }
         publish()
-        val listener = object : Player.Listener {
-            override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
-                renderedFrameMediaId = mediaItem?.mediaId
-                renderedFrameCount = 0
-                publish()
-            }
-
-            override fun onVideoSizeChanged(videoSize: VideoSize) {
-                publish()
-            }
-
-            override fun onPlaybackStateChanged(playbackState: Int) {
-                if (shouldClearMomentRenderedFrame(playbackState)) {
+        val listener =
+            object : Player.Listener {
+                override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+                    renderedFrameMediaId = mediaItem?.mediaId
                     renderedFrameCount = 0
-                    renderedFrameMediaId = player.currentMediaItem?.mediaId
+                    publish()
                 }
-                publish()
-            }
 
-            override fun onIsPlayingChanged(isPlaying: Boolean) {
-                publish()
-            }
-
-            override fun onRenderedFirstFrame() {
-                val currentMediaId = player.currentMediaItem?.mediaId.orEmpty()
-                if (currentMediaId != mediaKey) return
-                if (renderedFrameMediaId != currentMediaId) {
-                    renderedFrameMediaId = currentMediaId
-                    renderedFrameCount = 0
+                override fun onVideoSizeChanged(videoSize: VideoSize) {
+                    publish()
                 }
-                renderedFrameCount = (renderedFrameCount + 1).coerceAtLeast(1)
-                publish()
+
+                override fun onPlaybackStateChanged(playbackState: Int) {
+                    if (shouldClearMomentRenderedFrame(playbackState)) {
+                        renderedFrameCount = 0
+                        renderedFrameMediaId = player.currentMediaItem?.mediaId
+                    }
+                    publish()
+                }
+
+                override fun onIsPlayingChanged(isPlaying: Boolean) {
+                    publish()
+                }
+
+                override fun onRenderedFirstFrame() {
+                    val currentMediaId = player.currentMediaItem?.mediaId.orEmpty()
+                    if (currentMediaId != mediaKey) return
+                    if (renderedFrameMediaId != currentMediaId) {
+                        renderedFrameMediaId = currentMediaId
+                        renderedFrameCount = 0
+                    }
+                    renderedFrameCount = (renderedFrameCount + 1).coerceAtLeast(1)
+                    publish()
+                }
             }
-        }
         player.addListener(listener)
         onDispose {
             player.removeListener(listener)
@@ -531,25 +491,16 @@ internal fun VideoSurface(
         },
         update = { view ->
             val attaching = view.player !== player
-            if (attaching) {
-                PerfProbe.log(
-                    event = "moments_surface_attach",
-                ) {
-                    mapOf(
-                        "page" to pageIndex,
-                        "video" to momentDebugHash(mediaKey),
-                        "player" to Integer.toHexString(System.identityHashCode(player)),
-                        "view" to Integer.toHexString(System.identityHashCode(view)),
-                    )
-                }
-            }
+            if (attaching) {}
+
             view.alpha = momentVideoSurfaceAlpha(surfaceState)
             if (view.player !== player) view.player = player
             view.setBackgroundColor(android.graphics.Color.BLACK)
-            view.resizeMode = momentsVideoResizeMode(
-                width = surfaceState.videoWidth,
-                height = surfaceState.videoHeight,
-            )
+            view.resizeMode =
+                momentsVideoResizeMode(
+                    width = surfaceState.videoWidth,
+                    height = surfaceState.videoHeight,
+                )
         },
         modifier = modifier.alpha(momentVideoSurfaceAlpha(surfaceState)),
     )
@@ -583,13 +534,12 @@ internal fun shouldClearMomentRenderedFrame(playbackState: Int): Boolean =
     playbackState == Player.STATE_IDLE
 
 /**
- * Fit-width thumbnail fallback rendered in place of the PlayerView when there's
- * no mountable stream. Two callers per §7 lines 1301-1306:
- *  - `streamUri is MediaUri.Missing` → `alphaOverride = null`, thumbnail's own
- *    `mediaAlpha()` decides fade (Remote+offline thumbnails fade; Local+Missing
- *    thumbnails stay full).
- *  - `isIglooRemoteOffline(streamUri)` → `alphaOverride = 0.55f`, because
- *    the fade decision is on the *stream* not the thumbnail.
+ * Fit-width thumbnail fallback rendered in place of the PlayerView when there's no mountable
+ * stream:
+ * - `streamUri is MediaUri.Missing` → `alphaOverride = null`, thumbnail's own `mediaAlpha()`
+ *   decides fade (Remote+offline thumbnails fade; Local+Missing thumbnails stay full).
+ * - `isIglooRemoteOffline(streamUri)` → `alphaOverride = 0.55f`, because the fade decision is on
+ *   the *stream* not the thumbnail.
  */
 @Composable
 internal fun BoxScope.ThumbnailFallback(
@@ -600,27 +550,26 @@ internal fun BoxScope.ThumbnailFallback(
     modifier: Modifier = Modifier,
 ) {
     when (thumbnailUri) {
-        is MediaUri.Local -> AsyncImage(
-            model = thumbnailUri.file,
-            contentDescription = null,
-            modifier = modifier
-                .fillMaxSize()
-                .alpha(alphaOverride ?: mediaAlpha(thumbnailUri)),
-            contentScale = contentScale,
-        )
-        is MediaUri.Remote -> AsyncImage(
-            model = rememberRemoteImageModel(thumbnailUri.url),
-            contentDescription = null,
-            modifier = modifier
-                .fillMaxSize()
-                .alpha(alphaOverride ?: mediaAlpha(thumbnailUri)),
-            contentScale = contentScale,
-        )
-        is MediaUri.Missing -> Icon(
-            imageVector = Icons.Default.BrokenImage,
-            contentDescription = stringResource(R.string.content_description_missing_media),
-            tint = brokenIconTint,
-            modifier = modifier.align(Alignment.Center),
-        )
+        is MediaUri.Local ->
+            AsyncImage(
+                model = thumbnailUri.file,
+                contentDescription = null,
+                modifier = modifier.fillMaxSize().alpha(alphaOverride ?: mediaAlpha(thumbnailUri)),
+                contentScale = contentScale,
+            )
+        is MediaUri.Remote ->
+            AsyncImage(
+                model = rememberRemoteImageModel(thumbnailUri.url),
+                contentDescription = null,
+                modifier = modifier.fillMaxSize().alpha(alphaOverride ?: mediaAlpha(thumbnailUri)),
+                contentScale = contentScale,
+            )
+        is MediaUri.Missing ->
+            Icon(
+                imageVector = Icons.Default.BrokenImage,
+                contentDescription = stringResource(R.string.content_description_missing_media),
+                tint = brokenIconTint,
+                modifier = modifier.align(Alignment.Center),
+            )
     }
 }

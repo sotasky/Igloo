@@ -3,8 +3,6 @@ package web
 import (
 	"net/http"
 	"net/url"
-	"os"
-	"path/filepath"
 	"strings"
 )
 
@@ -32,19 +30,16 @@ func requestFromReverseProxy(r *http.Request) bool {
 }
 
 func (s *Server) dataFileXAccelRedirect(path string) (string, bool) {
-	dataDir, err := filepath.Abs(s.cfg.DataDir)
+	key, err := s.cfg.Storage.Key(path)
 	if err != nil {
 		return "", false
 	}
-	absPath, err := filepath.Abs(path)
-	if err != nil {
-		return "", false
+	prefix := "/x-accel/igloo-state/"
+	if strings.HasPrefix(key, "media/") {
+		prefix = "/x-accel/igloo-media/"
+		key = strings.TrimPrefix(key, "media/")
 	}
-	rel, err := filepath.Rel(dataDir, absPath)
-	if err != nil || rel == "." || filepath.IsAbs(rel) || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) || rel == ".." {
-		return "", false
-	}
-	return "/x-accel/igloo-data/" + escapeXAccelPath(filepath.ToSlash(rel)), true
+	return prefix + escapeXAccelPath(key), true
 }
 
 func escapeXAccelPath(rel string) string {

@@ -17,7 +17,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavController
 import com.screwy.igloo.R
 import com.screwy.igloo.data.entity.ThreadedFeedRow
-import com.screwy.igloo.feed.buildFeedMediaOpenSnapshot
 import com.screwy.igloo.feed.buildProfileOpenSnapshot
 import com.screwy.igloo.net.ServerBaseUrlProvider
 import com.screwy.igloo.ui.UiState
@@ -38,7 +37,7 @@ fun ThreadRoute(
     val chain by vm.chain.collectAsStateWithLifecycle()
     val pendingBookmark by vm.pendingBookmark.collectAsStateWithLifecycle()
     val categories by vm.bookmarkCategories.collectAsStateWithLifecycle()
-    val mutedHandles by vm.mutedHandles.collectAsStateWithLifecycle()
+    val mutedChannelIds by vm.mutedChannelIds.collectAsStateWithLifecycle()
     val mediaModels by vm.mediaModels.collectAsStateWithLifecycle()
     val baseUrlProvider: ServerBaseUrlProvider = koinInject()
     val baseUrl = baseUrlProvider.baseUrl()
@@ -77,7 +76,7 @@ fun ThreadRoute(
                 isRefreshing = false,
                 pendingBookmark = pendingBookmark,
                 bookmarkCategories = categories,
-                mutedHandles = mutedHandles,
+                mutedChannelIds = mutedChannelIds,
                 mediaModels = mediaModels,
                 onRefresh = { vm.load(tweetId) },
                 onChannelClick = { channelId ->
@@ -93,7 +92,7 @@ fun ThreadRoute(
                         channelId = post.author.channelId,
                         source = IglooNavigationSource.Thread,
                         originItemId = post.row.item.tweetId,
-                        snapshot = buildProfileOpenSnapshot(post, baseUrl),
+						snapshot = buildProfileOpenSnapshot(post),
                     )
                 },
                 onMentionClick = vm::resolveMentionAndNavigate,
@@ -102,20 +101,12 @@ fun ThreadRoute(
                 onFollowToggle = vm::toggleFollow,
                 onStarToggle = vm::toggleStar,
                 onMuteToggle = vm::toggleMute,
-                onMediaOpen = { row, mediaIndex, visibleMediaModel ->
-                    val snapshot = buildFeedMediaOpenSnapshot(
-                        row = row,
-                        mediaIndex = mediaIndex,
-                        mediaModels = mediaModels,
-                        visibleMediaModel = visibleMediaModel,
-                    )
+                onMediaOpen = { row, mediaIndex, _ ->
                     navigator.openMedia(
                         ownerKind = "tweet",
                         ownerId = row.item.tweetId,
                         index = mediaIndex,
                         source = IglooNavigationSource.Thread,
-                        posterUri = snapshot.posterUri,
-                        snapshot = snapshot,
                     )
                 },
                 onSeenReached = {},
@@ -123,7 +114,7 @@ fun ThreadRoute(
                 onRemoveBookmark = vm::removePendingBookmark,
                 onDismissBookmarkSheet = vm::dismissBookmarkSheet,
                 onCreateCategory = vm::createCategory,
-                onWarmMediaRows = vm::warmMediaModels,
+                onMediaRowsChanged = vm::setMediaModelRows,
                 onQuoteOpen = { quoteTweetId ->
                     navigator.openThread(quoteTweetId, IglooNavigationSource.Thread)
                 },

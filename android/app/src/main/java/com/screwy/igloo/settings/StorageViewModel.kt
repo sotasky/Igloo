@@ -6,7 +6,7 @@ import com.screwy.igloo.data.PreferencesRepo
 import com.screwy.igloo.media.CacheActions
 import com.screwy.igloo.media.CacheStats
 import com.screwy.igloo.sync.PeriodicSyncScheduler
-import com.screwy.igloo.sync.SchedulerActions
+import com.screwy.igloo.sync.SyncCoordinator
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -26,7 +26,7 @@ import kotlinx.coroutines.launch
 class StorageViewModel(
     private val cacheOps: CacheActions,
     private val prefs: PreferencesRepo,
-    private val scheduler: SchedulerActions? = null,
+    private val scheduler: SyncCoordinator? = null,
     private val periodicSyncScheduler: PeriodicSyncScheduler? = null,
 ) : ViewModel() {
 

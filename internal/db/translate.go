@@ -303,7 +303,6 @@ func (db *DB) SetTranslation(tweetID, field, sourceLang, targetLang, text string
 		if err != nil {
 			return err
 		}
-		_, err = tx.Exec(`UPDATE feed_items SET sync_seq = ? WHERE tweet_id = ?`, db.NextSyncSeq(), tweetID)
-		return err
+		return nil
 	})
 }

@@ -40,72 +40,42 @@ func TestMergeVideoRefsSortsRepostsIntoSourceWindow(t *testing.T) {
 	}
 }
 
-func TestPrimeShortFormMentionProfilesSeedsRefTitles(t *testing.T) {
-	d := newTestWorkerDB(t)
-	m := &Manager{db: d, cfg: testCfg(t.TempDir()), avatarRequest: make(chan string, 1)}
-
-	m.primeShortFormMentionProfiles("instagram", []download.VideoRef{{
-		VideoID: "instagram_reel_sample",
-		Title:   "new reel with @sample.artist",
-	}})
-
-	got, err := d.GetChannelProfile("instagram_sample.artist")
-	if err != nil || got == nil {
-		t.Fatalf("GetChannelProfile: %v / %+v", err, got)
-	}
-	if got.Platform != "instagram" || got.Handle != "sample.artist" {
-		t.Fatalf("profile row mismatch: %+v", got)
-	}
-	select {
-	case queued := <-m.avatarRequest:
-		if queued != "instagram_sample.artist" {
-			t.Fatalf("queued profile = %q, want instagram_sample.artist", queued)
-		}
-	default:
-		t.Fatal("expected mention profile to be queued for refresh")
-	}
-}
-
 func TestEnsureIntroducedInstagramOwnerQueuesProfileRefresh(t *testing.T) {
 	d := newTestWorkerDB(t)
-	m := &Manager{db: d, cfg: testCfg(t.TempDir()), avatarRequest: make(chan string, 1)}
+	m := &Manager{db: d, cfg: testCfg(t.TempDir()), profileKick: make(chan struct{}, 1)}
 
 	m.ensureIntroducedOwner(download.VideoRef{
-		ChannelID:         "instagram_by.bansoi",
-		AuthorHandle:      "by.bansoi",
-		AuthorDisplayName: "soi",
+		ChannelID:         "instagram_test_owner",
+		AuthorHandle:      "test_owner",
+		AuthorDisplayName: "Sample Owner",
 		AuthorAvatarURL:   "https://cdn.example/media-avatar.jpg",
 	})
 
-	got, err := d.GetChannelProfile("instagram_by.bansoi")
+	got, err := d.GetChannelProfile("instagram_test_owner")
 	if err != nil || got == nil {
 		t.Fatalf("GetChannelProfile: %v / %+v", err, got)
 	}
 	if got.AvatarURL != "" || got.FetchedAt != nil {
 		t.Fatalf("media-derived avatar should not be stored before profile refresh: %+v", got)
 	}
-	select {
-	case queued := <-m.avatarRequest:
-		if queued != "instagram_by.bansoi" {
-			t.Fatalf("queued profile = %q, want instagram_by.bansoi", queued)
-		}
-	default:
-		t.Fatal("expected introduced instagram owner to be queued for background profile refresh")
+	job, err := d.GetProfileJob("instagram_test_owner")
+	if err != nil || job == nil || job.RequestedRevision <= job.CompletedRevision {
+		t.Fatalf("durable introduced-owner job = %+v, err=%v", job, err)
 	}
 }
 
 func TestInstagramUsesOwnGlobalSchedulerSettings(t *testing.T) {
 	d := newTestWorkerDB(t)
-	if err := d.SetSetting("", "tiktok_fetch_delay", "3"); err != nil {
+	if err := d.SetSetting("tiktok_fetch_delay", "3"); err != nil {
 		t.Fatalf("SetSetting tiktok_fetch_delay: %v", err)
 	}
-	if err := d.SetSetting("", "instagram_fetch_delay", "7"); err != nil {
+	if err := d.SetSetting("instagram_fetch_delay", "7"); err != nil {
 		t.Fatalf("SetSetting instagram_fetch_delay: %v", err)
 	}
-	if err := d.SetSetting("", "shorts_max_videos", "20"); err != nil {
+	if err := d.SetSetting("shorts_max_videos", "20"); err != nil {
 		t.Fatalf("SetSetting shorts_max_videos: %v", err)
 	}
-	if err := d.SetSetting("", "instagram_max_videos", "45"); err != nil {
+	if err := d.SetSetting("instagram_max_videos", "45"); err != nil {
 		t.Fatalf("SetSetting instagram_max_videos: %v", err)
 	}
 
@@ -151,7 +121,7 @@ func TestDiscoveryChannelsResumeByStaleness(t *testing.T) {
 
 func TestDiscoverySelectionForceBypassesDueWindow(t *testing.T) {
 	d := newTestWorkerDB(t)
-	if err := d.SetSetting("", "youtube_fetch_delay", "60"); err != nil {
+	if err := d.SetSetting("youtube_fetch_delay", "60"); err != nil {
 		t.Fatalf("SetSetting youtube_fetch_delay: %v", err)
 	}
 	m := &Manager{db: d, cfg: testCfg(t.TempDir())}
@@ -208,12 +178,12 @@ func TestMaterializeDiscoveryChannelsQueuesDueNonXOnly(t *testing.T) {
 		t.Fatalf("insert channels: %v", err)
 	}
 	if err := d.ExecRaw(`
-		INSERT INTO channel_follows (user_id, channel_id, followed_at)
+		INSERT INTO channel_follows (channel_id, followed_at)
 		VALUES
-			('', 'youtube_sample_channel_due_shared_queue', 1),
-			('', 'youtube_sample_channel_fresh_shared_queue', 1),
-			('', 'tiktok_sample_channel_disabled_shared_queue', 1),
-			('', 'twitter_sample_channel_skip_shared_queue', 1)
+			('youtube_sample_channel_due_shared_queue', 1),
+			('youtube_sample_channel_fresh_shared_queue', 1),
+			('tiktok_sample_channel_disabled_shared_queue', 1),
+			('twitter_sample_channel_skip_shared_queue', 1)
 	`); err != nil {
 		t.Fatalf("insert follows: %v", err)
 	}

@@ -15,9 +15,9 @@ type FeedSnapshotHealth struct {
 	FreshItemsSinceSnapshot      int
 }
 
-func (db *DB) GetFeedSnapshotHealth(username string) (FeedSnapshotHealth, error) {
+func (db *DB) GetFeedSnapshotHealth() (FeedSnapshotHealth, error) {
 	var out FeedSnapshotHealth
-	snapshotAt, err := db.SnapshotComputedAt(username)
+	snapshotAt, err := db.SnapshotComputedAt()
 	if err != nil {
 		return out, err
 	}
@@ -30,23 +30,20 @@ func (db *DB) GetFeedSnapshotHealth(username string) (FeedSnapshotHealth, error)
 		retweetFilterClause("fi"),
 	}
 	args := []any{snapshotAt}
-	muted, _ := db.GetMutedAccounts()
+	muted, _ := db.GetMutedChannelIDs()
 	if len(muted) > 0 {
 		ph := strings.Repeat("?,", len(muted))
 		ph = ph[:len(ph)-1]
-		where = append(where, "fi.author_handle NOT IN ("+ph+")")
-		for _, h := range muted {
-			args = append(args, h)
+		where = append(where, "fi.channel_id NOT IN ("+ph+")")
+		for _, channelID := range muted {
+			args = append(args, channelID)
 		}
-		where = append(where, "COALESCE(fi.source_handle,'') NOT IN ("+ph+")")
-		for _, h := range muted {
-			args = append(args, h)
+		where = append(where, "COALESCE(fi.source_channel_id,'') NOT IN ("+ph+")")
+		for _, channelID := range muted {
+			args = append(args, channelID)
 		}
 	}
-	if username != "" {
-		where = append(where, feedUnseenPredicate("fi"))
-		args = append(args, feedUnseenPredicateArgs(username)...)
-	}
+	where = append(where, feedUnseenPredicate("fi"))
 
 	query := fmt.Sprintf(`
 		SELECT COUNT(*),
