@@ -88,7 +88,12 @@ class ThreadAttachmentTest {
         db.feedItemDao()
             .upsert(
                 listOf(
-                    FeedItemEntity(tweetId = "root", channelId = "twitter_sample_alpha"),
+                    FeedItemEntity(
+                        tweetId = "root",
+                        channelId = "twitter_sample_alpha",
+                        isReply = true,
+                        replyToStatus = "missing_ancestor",
+                    ),
                     FeedItemEntity(
                         tweetId = "parent_a",
                         channelId = "twitter_sample_beta",
@@ -151,6 +156,37 @@ class ThreadAttachmentTest {
         assertEquals(1, threaded.size)
         assertEquals("t1", threaded[0].row.item.tweetId)
         assertTrue(threaded[0].chain.isEmpty())
+    }
+
+    @Test
+    fun attachThreadChains_matchesServerFiftyParentDepthLimit() = runBlocking {
+        db.channelDao()
+            .upsert(
+                ChannelEntity(
+                    channelId = "twitter_sample_alpha",
+                    name = "Alpha",
+                    platform = "twitter",
+                )
+            )
+        db.feedItemDao()
+            .upsert(
+                (0..50).map { depth ->
+                    FeedItemEntity(
+                        tweetId = "sample_thread_$depth",
+                        channelId = "twitter_sample_alpha",
+                        isReply = depth > 0,
+                        replyToStatus = if (depth > 0) "sample_thread_${depth - 1}" else "",
+                    )
+                }
+            )
+
+        val leaf = db.feedReadDao().getFeedRowsByTweetIds(listOf("sample_thread_50"))
+        val threaded = attachThreadChains(db.feedReadDao(), leaf)
+
+        assertEquals(1, threaded.size)
+        assertEquals(50, threaded[0].chain.size)
+        assertEquals("sample_thread_0", threaded[0].chain.first().item.tweetId)
+        assertEquals("sample_thread_49", threaded[0].chain.last().item.tweetId)
     }
 
     @Test

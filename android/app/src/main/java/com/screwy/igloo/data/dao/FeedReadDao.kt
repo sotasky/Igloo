@@ -148,19 +148,18 @@ interface FeedReadDao {
 
     @Query(
         """
-        WITH RECURSIVE reply_chain(leaf_tweet_id, ancestor_tweet_id, depth) AS (
-            SELECT tweet_id, reply_to_status, 0
+        WITH RECURSIVE reply_chain(leaf_tweet_id, tweet_id, reply_to_status, depth) AS (
+            SELECT tweet_id, tweet_id, reply_to_status, 0
             FROM feed_items
             WHERE tweet_id IN (:tweetIds)
               AND COALESCE(reply_to_status, '') != ''
 
             UNION ALL
 
-            SELECT rc.leaf_tweet_id, parent.reply_to_status, rc.depth + 1
+            SELECT rc.leaf_tweet_id, parent.tweet_id, parent.reply_to_status, rc.depth + 1
             FROM reply_chain rc
-            JOIN feed_items parent ON parent.tweet_id = rc.ancestor_tweet_id
-            WHERE COALESCE(parent.reply_to_status, '') != ''
-              AND rc.depth < 49
+            JOIN feed_items parent ON parent.tweet_id = rc.reply_to_status
+            WHERE rc.depth < 50
         ),
         depths AS (
             SELECT leaf_tweet_id, MAX(depth) AS max_depth
@@ -168,17 +167,18 @@ interface FeedReadDao {
             GROUP BY leaf_tweet_id
         ),
         roots AS (
-            SELECT rc.leaf_tweet_id, rc.ancestor_tweet_id AS root_tweet_id
+            SELECT rc.leaf_tweet_id, rc.tweet_id AS root_tweet_id
             FROM reply_chain rc
             JOIN depths d ON d.leaf_tweet_id = rc.leaf_tweet_id AND d.max_depth = rc.depth
         )
         SELECT rc.leaf_tweet_id,
                roots.root_tweet_id,
-               rc.ancestor_tweet_id,
+               rc.tweet_id AS ancestor_tweet_id,
                depths.max_depth - rc.depth AS ancestor_order
         FROM reply_chain rc
         JOIN depths ON depths.leaf_tweet_id = rc.leaf_tweet_id
         JOIN roots ON roots.leaf_tweet_id = rc.leaf_tweet_id
+        WHERE rc.depth > 0
         ORDER BY rc.leaf_tweet_id ASC, ancestor_order ASC
         """
     )
