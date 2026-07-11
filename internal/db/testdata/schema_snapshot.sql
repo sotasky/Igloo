@@ -61,6 +61,9 @@ CREATE INDEX idx_feed_items_channel ON feed_items(channel_id, published_at DESC)
 -- index: idx_feed_items_content_hash on feed_items
 CREATE INDEX idx_feed_items_content_hash ON feed_items(content_hash) WHERE content_hash IS NOT NULL AND content_hash != '';
 
+-- index: idx_feed_items_fetched on feed_items
+CREATE INDEX idx_feed_items_fetched ON feed_items(fetched_at DESC, tweet_id DESC);
+
 -- index: idx_feed_items_media_author on feed_items
 CREATE INDEX idx_feed_items_media_author ON feed_items(channel_id, published_at DESC) WHERE media_json IS NOT NULL AND media_json != '' AND media_json != '[]' AND is_retweet = 0;
 

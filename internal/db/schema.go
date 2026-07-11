@@ -48,6 +48,7 @@ func EnsureSchemaWithOptions(conn *sql.DB, opts EnsureSchemaOptions) error {
 		"CREATE INDEX IF NOT EXISTS idx_download_queue_ready ON download_queue(status, next_attempt_at_ms, lease_until_ms, priority, added_at)",
 		"CREATE INDEX IF NOT EXISTS idx_translation_jobs_ready ON translation_jobs(status, next_attempt_at, priority, updated_at)",
 		"CREATE INDEX IF NOT EXISTS idx_feed_items_author_fetched ON feed_items(channel_id, fetched_at DESC, published_at DESC, tweet_id DESC) WHERE channel_id IS NOT NULL AND channel_id != ''",
+		"CREATE INDEX IF NOT EXISTS idx_feed_items_fetched ON feed_items(fetched_at DESC, tweet_id DESC)",
 		"CREATE INDEX IF NOT EXISTS idx_feed_items_media_author ON feed_items(channel_id, published_at DESC) WHERE media_json IS NOT NULL AND media_json != '' AND media_json != '[]' AND is_retweet = 0",
 		"CREATE INDEX IF NOT EXISTS idx_feed_items_source_channel ON feed_items(source_channel_id)",
 		"CREATE INDEX IF NOT EXISTS idx_bookmarks_date ON bookmarks(bookmarked_at DESC)",
