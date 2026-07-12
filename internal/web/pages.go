@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -990,10 +991,8 @@ func (s *Server) handlePagePlayer(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handlePageFeed(w http.ResponseWriter, r *http.Request) {
 	isHTMX := r.Header.Get("HX-Request") != ""
 
-	// `offset` is a rank_position cursor within one snapshot. Full page loads
-	// can reset stale cursors to the top of the new unseen snapshot. HTMX
-	// append requests keep the old rank cursor because re-sending the top of a
-	// new snapshot would append cards that may already exist in the DOM.
+	// `offset` is a rank_position cursor within the immutable snapshot_at
+	// generation carried by the page.
 	offset := 0
 	if v := r.URL.Query().Get("offset"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
@@ -1010,10 +1009,21 @@ func (s *Server) handlePageFeed(w http.ResponseWriter, r *http.Request) {
 	snapAt, _ := s.db.SnapshotComputedAt()
 	if snapAt > 0 {
 		cursorSnapAt, _ := strconv.ParseInt(r.URL.Query().Get("snapshot_at"), 10, 64)
-		if offset > 0 && cursorSnapAt != snapAt && !isHTMX {
-			offset = 0
+		pageSnapAt := snapAt
+		if offset > 0 && cursorSnapAt > 0 {
+			pageSnapAt = cursorSnapAt
 		}
-		page, snapErr := s.db.ListSnapshotPage(offset, pageSize+1)
+		page, snapErr := s.db.ListSnapshotPage(pageSnapAt, offset, pageSize+1)
+		if errors.Is(snapErr, db.ErrFeedSnapshotExpired) && !isHTMX {
+			offset = 0
+			pageSnapAt = snapAt
+			page, snapErr = s.db.ListSnapshotPage(pageSnapAt, 0, pageSize+1)
+		}
+		if errors.Is(snapErr, db.ErrFeedSnapshotExpired) && isHTMX {
+			w.Header().Set("HX-Refresh", "true")
+			http.Error(w, "feed snapshot expired", http.StatusConflict)
+			return
+		}
 		if snapErr != nil {
 			slog.Error("ListSnapshotPage", "err", snapErr)
 		} else {
@@ -1027,7 +1037,7 @@ func (s *Server) handlePageFeed(w http.ResponseWriter, r *http.Request) {
 			}
 			items = feed.EnrichFeedItems(s.db, items)
 			if hasMore && len(page) > 0 {
-				nextPageURL = fmt.Sprintf("/feed?offset=%d&snapshot_at=%d", page[len(page)-1].RankPosition, snapAt)
+				nextPageURL = fmt.Sprintf("/feed?offset=%d&snapshot_at=%d", page[len(page)-1].RankPosition, pageSnapAt)
 			}
 		}
 	}

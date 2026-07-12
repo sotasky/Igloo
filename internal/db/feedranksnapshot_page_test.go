@@ -19,15 +19,19 @@ func TestListSnapshotPageUsesRankCursor(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	snapshotAt, err := d.SnapshotComputedAt()
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	page, err := d.ListSnapshotPage(0, 2)
+	page, err := d.ListSnapshotPage(snapshotAt, 0, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(page) != 2 || page[0].Item.TweetID != "first" || page[1].Item.TweetID != "second" {
 		t.Fatalf("first page = %+v", page)
 	}
-	page, err = d.ListSnapshotPage(page[1].RankPosition, 2)
+	page, err = d.ListSnapshotPage(snapshotAt, page[1].RankPosition, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,8 +67,12 @@ func TestListSnapshotPageExcludesSeenAndGhostRows(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	snapshotAt, err := d.SnapshotComputedAt()
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	page, err := d.ListSnapshotPage(0, 10)
+	page, err := d.ListSnapshotPage(snapshotAt, 0, 10)
 	if err != nil {
 		t.Fatal(err)
 	}

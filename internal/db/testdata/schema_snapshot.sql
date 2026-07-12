@@ -55,6 +55,9 @@ CREATE INDEX idx_feed_items_algo ON feed_items(algo_interest DESC, published_at 
 -- index: idx_feed_items_author_fetched on feed_items
 CREATE INDEX idx_feed_items_author_fetched ON feed_items(channel_id, fetched_at DESC, published_at DESC, tweet_id DESC) WHERE channel_id IS NOT NULL AND channel_id != '';
 
+-- index: idx_feed_items_canonical_tweet on feed_items
+CREATE INDEX idx_feed_items_canonical_tweet ON feed_items(canonical_tweet_id) WHERE canonical_tweet_id IS NOT NULL AND canonical_tweet_id != '';
+
 -- index: idx_feed_items_channel on feed_items
 CREATE INDEX idx_feed_items_channel ON feed_items(channel_id, published_at DESC);
 
@@ -204,6 +207,9 @@ CREATE TABLE feed_likes ( tweet_id TEXT PRIMARY KEY, liked_at INTEGER NOT NULL D
 
 -- table: feed_rank_snapshot on feed_rank_snapshot
 CREATE TABLE feed_rank_snapshot ( tweet_id TEXT PRIMARY KEY, rank_position INTEGER NOT NULL, base_score REAL NOT NULL, decay_factor REAL NOT NULL, freshness_bonus REAL NOT NULL, jitter REAL NOT NULL, diversity_demoted_by REAL NOT NULL DEFAULT 0, final_score REAL NOT NULL, computed_at INTEGER NOT NULL );
+
+-- table: feed_rank_snapshot_history on feed_rank_snapshot_history
+CREATE TABLE feed_rank_snapshot_history ( computed_at INTEGER NOT NULL, tweet_id TEXT NOT NULL, rank_position INTEGER NOT NULL, base_score REAL NOT NULL, decay_factor REAL NOT NULL, freshness_bonus REAL NOT NULL, jitter REAL NOT NULL, diversity_demoted_by REAL NOT NULL DEFAULT 0, final_score REAL NOT NULL, PRIMARY KEY (computed_at, tweet_id), UNIQUE (computed_at, rank_position) );
 
 -- table: feed_seen on feed_seen
 CREATE TABLE feed_seen ( tweet_id TEXT PRIMARY KEY, seen_at INTEGER NOT NULL DEFAULT 0 );

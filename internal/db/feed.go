@@ -900,10 +900,20 @@ func expandSeenConversationIDsTx(tx *sql.Tx, tweetIDs []string) ([]string, error
 	rows, err := tx.Query(`
 		WITH RECURSIVE
 		seed(tweet_id) AS (VALUES `+placeholders+`),
+		resolved_seed(tweet_id) AS (
+			SELECT tweet_id FROM seed
+			UNION
+			SELECT fi.canonical_tweet_id
+			FROM feed_items fi
+			JOIN seed ON seed.tweet_id = fi.tweet_id
+			WHERE COALESCE(fi.is_retweet, 0) = 1
+			  AND COALESCE(fi.quote_tweet_id, '') = ''
+			  AND COALESCE(fi.canonical_tweet_id, '') != ''
+		),
 		up(seed_id, tweet_id, reply_to_status, depth) AS (
 			SELECT fi.tweet_id, fi.tweet_id, COALESCE(fi.reply_to_status, ''), 0
 			FROM feed_items fi
-			JOIN seed ON seed.tweet_id = fi.tweet_id
+			JOIN resolved_seed ON resolved_seed.tweet_id = fi.tweet_id
 			UNION
 			SELECT up.seed_id, parent.tweet_id, COALESCE(parent.reply_to_status, ''), up.depth + 1
 			FROM up
@@ -934,6 +944,12 @@ func expandSeenConversationIDsTx(tx *sql.Tx, tweetIDs []string) ([]string, error
 		SELECT tweet_id FROM seed
 		UNION
 		SELECT tweet_id FROM down
+		UNION
+		SELECT repost.tweet_id
+		FROM feed_items repost
+		JOIN down ON down.tweet_id = repost.canonical_tweet_id
+		WHERE COALESCE(repost.is_retweet, 0) = 1
+		  AND COALESCE(repost.quote_tweet_id, '') = ''
 	`, args...)
 	if err != nil {
 		return nil, err
@@ -1096,7 +1112,11 @@ func (db *DB) UpsertFeedItems(items []model.FeedItem) (int, error) {
 				END,
 				content_hash = COALESCE(excluded.content_hash, feed_items.content_hash),
 				canonical_tweet_id = CASE
-					WHEN feed_items.canonical_tweet_id IS NULL THEN excluded.canonical_tweet_id
+					WHEN COALESCE(excluded.is_retweet, 0) = 1
+						AND COALESCE(excluded.quote_tweet_id, '') = ''
+						AND COALESCE(excluded.canonical_tweet_id, '') != ''
+						THEN excluded.canonical_tweet_id
+					WHEN COALESCE(feed_items.canonical_tweet_id, '') = '' THEN excluded.canonical_tweet_id
 					ELSE feed_items.canonical_tweet_id
 				END,
 				is_reply = CASE
@@ -1207,8 +1227,8 @@ func (db *DB) UpsertFeedItems(items []model.FeedItem) (int, error) {
 		}
 
 		// --- Set canonical_tweet_id for dedup ---
-		// For each content_hash in this batch, pick the canonical tweet
-		// (prefer non-retweet, then earliest published_at).
+		// For each content_hash in this batch, use the earliest original when
+		// one is stored. Otherwise a pure repost keeps its parsed target ID.
 		if len(hashSet) > 0 {
 			hashes := make([]string, 0, len(hashSet))
 			for h := range hashSet {
@@ -1222,13 +1242,14 @@ func (db *DB) UpsertFeedItems(items []model.FeedItem) (int, error) {
 			}
 			_, err := tx.Exec(`
 				UPDATE feed_items
-				SET canonical_tweet_id = (
+				SET canonical_tweet_id = COALESCE((
 					SELECT f2.tweet_id FROM feed_items f2
 					WHERE f2.content_hash = feed_items.content_hash
 					  AND f2.content_hash != ''
-					ORDER BY COALESCE(f2.is_retweet,0) ASC, f2.published_at ASC, f2.tweet_id ASC
+					  AND COALESCE(f2.is_retweet, 0) = 0
+					ORDER BY f2.published_at ASC, f2.tweet_id ASC
 					LIMIT 1
-				)
+				), NULLIF(feed_items.canonical_tweet_id, ''), feed_items.tweet_id)
 				WHERE content_hash IN (`+ph+`)
 				  AND content_hash != ''
 			`, hashArgs...)

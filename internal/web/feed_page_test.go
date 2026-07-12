@@ -10,7 +10,7 @@ import (
 	"github.com/screwys/igloo/internal/db"
 )
 
-func TestHandlePageFeedKeepsHTMXCursorWhenSnapshotChanges(t *testing.T) {
+func TestHandlePageFeedPinsHTMXCursorToItsSnapshot(t *testing.T) {
 	srv := newTestServer(t)
 	user := "alice"
 	now := time.Now().UnixMilli()
@@ -30,8 +30,8 @@ func TestHandlePageFeedKeepsHTMXCursorWhenSnapshotChanges(t *testing.T) {
 	if err := srv.db.ReplaceFeedRankSnapshot(firstSnapshot); err != nil {
 		t.Fatal(err)
 	}
-	oldSnapAt := int64(1000)
-	if err := srv.db.ExecRaw(`UPDATE feed_rank_snapshot SET computed_at = ?`, oldSnapAt); err != nil {
+	oldSnapAt, err := srv.db.SnapshotComputedAt()
+	if err != nil {
 		t.Fatal(err)
 	}
 
@@ -54,26 +54,16 @@ func TestHandlePageFeedKeepsHTMXCursorWhenSnapshotChanges(t *testing.T) {
 	if err := srv.db.ReplaceFeedRankSnapshot(secondSnapshot); err != nil {
 		t.Fatal(err)
 	}
-	newSnapAt := int64(2000)
-	if err := srv.db.ExecRaw(`UPDATE feed_rank_snapshot SET computed_at = ?`, newSnapAt); err != nil {
-		t.Fatal(err)
-	}
-
-	req := httptest.NewRequest("GET", "/feed?offset=40&snapshot_at=1000", nil)
+	req := httptest.NewRequest("GET", fmt.Sprintf("/feed?offset=40&snapshot_at=%d", oldSnapAt), nil)
 	req.Header.Set("HX-Request", "true")
 	req = attachTestAuth(req, user)
 	rec := httptest.NewRecorder()
 	srv.handlePageFeed(rec, req)
 
 	body := rec.Body.String()
-	for _, duplicate := range []string{"body t03", "body t40"} {
-		if strings.Contains(body, duplicate) {
-			t.Fatalf("stale htmx cursor response re-sent already loaded %q:\n%s", duplicate, body)
-		}
-	}
-	for _, want := range []string{"body t43", "body t44", "body t45"} {
+	for _, want := range []string{"body t41", "body t42", "body t43", "body t44", "body t45"} {
 		if !strings.Contains(body, want) {
-			t.Fatalf("response missing %q after stale cursor continued:\n%s", want, body)
+			t.Fatalf("response missing %q from pinned snapshot:\n%s", want, body)
 		}
 	}
 }
@@ -97,8 +87,8 @@ func TestHandlePageFeedCarriesSnapshotAtInNextCursor(t *testing.T) {
 	if err := srv.db.ReplaceFeedRankSnapshot(rows); err != nil {
 		t.Fatal(err)
 	}
-	snapAt := int64(1234)
-	if err := srv.db.ExecRaw(`UPDATE feed_rank_snapshot SET computed_at = ?`, snapAt); err != nil {
+	snapAt, err := srv.db.SnapshotComputedAt()
+	if err != nil {
 		t.Fatal(err)
 	}
 
@@ -109,7 +99,7 @@ func TestHandlePageFeedCarriesSnapshotAtInNextCursor(t *testing.T) {
 	srv.handlePageFeed(rec, req)
 
 	body := rec.Body.String()
-	if !strings.Contains(body, "snapshot_at=1234") {
+	if !strings.Contains(body, fmt.Sprintf("snapshot_at=%d", snapAt)) {
 		t.Fatalf("next cursor did not carry snapshot_at:\n%s", body)
 	}
 }

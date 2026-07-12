@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"math"
 	"strings"
@@ -12,6 +13,7 @@ import (
 )
 
 const (
+	feedSnapshotHistoryRetention         = 6 * time.Hour
 	feedRankingStarBoost                 = 25.0
 	feedAbsenceBoostCapHoursSetting      = "feed_absence_boost_cap_hours"
 	feedAbsenceBoostMaxStarFactorSetting = "feed_absence_boost_max_star_factor"
@@ -25,6 +27,8 @@ const (
 	feedRepeatedRelatedContentPenalty    = 12.0
 	feedReplyPenalty                     = 4.0
 )
+
+var ErrFeedSnapshotExpired = errors.New("feed snapshot expired")
 
 func (db *DB) feedAbsenceBoostConfig() (capHours, seenMaxBoost, neverSeenBoost float64) {
 	capHours = db.FloatSetting(feedAbsenceBoostCapHoursSetting, defaultFeedAbsenceBoostCapHours)
@@ -240,6 +244,14 @@ func (db *DB) ReplaceFeedRankSnapshot(rows []SnapshotRow) error {
 		defer func() {
 			_ = stmt.Close()
 		}()
+		historyStmt, err := tx.Prepare(`INSERT INTO feed_rank_snapshot_history
+			(computed_at, tweet_id, rank_position, base_score, decay_factor,
+			 freshness_bonus, jitter, diversity_demoted_by, final_score)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+		if err != nil {
+			return fmt.Errorf("prepare snapshot history insert: %w", err)
+		}
+		defer func() { _ = historyStmt.Close() }()
 		for _, r := range rows {
 			if _, err := stmt.Exec(
 				r.TweetID, r.RankPosition,
@@ -248,6 +260,18 @@ func (db *DB) ReplaceFeedRankSnapshot(rows []SnapshotRow) error {
 			); err != nil {
 				return fmt.Errorf("insert row %s: %w", r.TweetID, err)
 			}
+			if _, err := historyStmt.Exec(
+				now, r.TweetID, r.RankPosition, r.BaseScore, r.DecayFactor,
+				r.FreshnessBonus, r.Jitter, r.DiversityDemotedBy, r.FinalScore,
+			); err != nil {
+				return fmt.Errorf("insert snapshot history row %s: %w", r.TweetID, err)
+			}
+		}
+		if _, err := tx.Exec(
+			"DELETE FROM feed_rank_snapshot_history WHERE computed_at < ?",
+			now-feedSnapshotHistoryRetention.Milliseconds(),
+		); err != nil {
+			return fmt.Errorf("prune snapshot history: %w", err)
 		}
 		return nil
 	})
@@ -515,7 +539,7 @@ type SnapshotPageItem struct {
 // rebuilds would otherwise surface at their stale rank position and break
 // pagination (a caller fetching limit+1 to detect hasMore can't distinguish
 // "no more items" from "some items were filtered").
-func (db *DB) ListSnapshotPage(afterPos int, limit int) ([]SnapshotPageItem, error) {
+func (db *DB) ListSnapshotPage(snapshotAt int64, afterPos int, limit int) ([]SnapshotPageItem, error) {
 	if limit <= 0 || limit > 200 {
 		limit = 40
 	}
@@ -526,16 +550,16 @@ func (db *DB) ListSnapshotPage(afterPos int, limit int) ([]SnapshotPageItem, err
 	rows, err := db.reader().Query(`
 		SELECT s.rank_position, s.final_score, s.base_score,
 		       s.decay_factor, s.freshness_bonus, s.jitter, s.diversity_demoted_by,
-		       s.computed_at,
 		       `+feedItemSelectSQL("fi")+`
-		FROM feed_rank_snapshot s
+		FROM feed_rank_snapshot_history s
 		JOIN feed_items_resolved fi ON fi.tweet_id = s.tweet_id
-		WHERE s.rank_position > ?
+		WHERE s.computed_at = ?
+		  AND s.rank_position > ?
 		  AND `+feedPrimaryItemPredicate("fi")+`
 		  AND `+feedUnseenPredicate("fi")+`
 		ORDER BY s.rank_position ASC
 		LIMIT ?
-	`, afterPos, limit)
+	`, snapshotAt, afterPos, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -550,7 +574,6 @@ func (db *DB) ListSnapshotPage(afterPos int, limit int) ([]SnapshotPageItem, err
 		if err := rows.Scan(
 			&p.RankPosition, &p.FinalScore, &p.BaseScore,
 			&p.DecayFactor, &p.FreshnessBonus, &p.Jitter, &p.DiversityDemotedBy,
-			&p.ComputedAt,
 			&p.Item.TweetID,
 			&p.Item.SourceHandle, &p.Item.AuthorHandle,
 			&p.Item.AuthorDisplayName, &p.Item.AuthorAvatarURL,
@@ -579,8 +602,24 @@ func (db *DB) ListSnapshotPage(afterPos int, limit int) ([]SnapshotPageItem, err
 			p.Item.FetchedAt = *t
 		}
 		p.Item.AlgoInterestScore = p.FinalScore
+		p.ComputedAt = snapshotAt
 		p.Item.ParseMedia()
 		out = append(out, p)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(out) == 0 {
+		var exists bool
+		if err := db.reader().QueryRow(
+			"SELECT EXISTS(SELECT 1 FROM feed_rank_snapshot_history WHERE computed_at = ?)",
+			snapshotAt,
+		).Scan(&exists); err != nil {
+			return nil, err
+		}
+		if !exists {
+			return nil, ErrFeedSnapshotExpired
+		}
+	}
+	return out, nil
 }

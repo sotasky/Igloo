@@ -59,6 +59,7 @@ func EnsureSchemaWithOptions(conn *sql.DB, opts EnsureSchemaOptions) error {
 		"CREATE INDEX IF NOT EXISTS idx_feed_items_unscored ON feed_items(algo_scored_at) WHERE algo_scored_at = 0",
 		"CREATE INDEX IF NOT EXISTS idx_feed_items_quote ON feed_items(quote_tweet_id) WHERE quote_tweet_id IS NOT NULL AND quote_tweet_id != ''",
 		"CREATE INDEX IF NOT EXISTS idx_feed_items_content_hash ON feed_items(content_hash) WHERE content_hash IS NOT NULL AND content_hash != ''",
+		"CREATE INDEX IF NOT EXISTS idx_feed_items_canonical_tweet ON feed_items(canonical_tweet_id) WHERE canonical_tweet_id IS NOT NULL AND canonical_tweet_id != ''",
 		"CREATE INDEX IF NOT EXISTS idx_channel_profiles_refresh ON channel_profiles(tombstone, fetched_at) WHERE tombstone = 0",
 		"CREATE INDEX IF NOT EXISTS idx_channel_profiles_platform ON channel_profiles(platform)",
 		"CREATE INDEX IF NOT EXISTS idx_channel_profiles_twitter_handle ON channel_profiles(LOWER(COALESCE(handle, ''))) WHERE platform = 'twitter' AND tombstone = 0",

@@ -37,5 +37,19 @@ func schemaDerivedCacheStatements() []string {
 			final_score     REAL    NOT NULL,
 			computed_at     INTEGER NOT NULL
 		)`,
+
+		`CREATE TABLE IF NOT EXISTS feed_rank_snapshot_history (
+			computed_at     INTEGER NOT NULL,
+			tweet_id        TEXT    NOT NULL,
+			rank_position   INTEGER NOT NULL,
+			base_score      REAL    NOT NULL,
+			decay_factor    REAL    NOT NULL,
+			freshness_bonus REAL    NOT NULL,
+			jitter          REAL    NOT NULL,
+			diversity_demoted_by REAL NOT NULL DEFAULT 0,
+			final_score     REAL    NOT NULL,
+			PRIMARY KEY (computed_at, tweet_id),
+			UNIQUE (computed_at, rank_position)
+		)`,
 	}
 }

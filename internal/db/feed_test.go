@@ -247,6 +247,63 @@ func TestMarkSeen(t *testing.T) {
 	}
 }
 
+func TestMarkSeenExpandsAcrossThreadAndPureRepost(t *testing.T) {
+	d := openWritableTestDB(t)
+	if err := d.ExecRaw(`INSERT INTO feed_items
+		(tweet_id, body_text, is_retweet, quote_tweet_id, is_reply,
+		 reply_to_status, canonical_tweet_id, published_at)
+		VALUES
+			('100', 'root body', 0, '', 0, '', '100', 1000),
+			('101', 'reply body', 0, '', 1, '100', '101', 1001),
+			('102', 'root body', 1, '', 0, '', '100', 1002),
+			('200', 'other body', 0, '', 0, '', '200', 1003)`); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := d.MarkSeen([]string{"101"}); err != nil {
+		t.Fatalf("MarkSeen: %v", err)
+	}
+	seen, err := d.GetSeenTweetIDs([]string{"100", "101", "102", "200"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"100", "101", "102"} {
+		if !seen[id] {
+			t.Fatalf("related row %s was not marked seen: %#v", id, seen)
+		}
+	}
+	if seen["200"] {
+		t.Fatalf("unrelated row was marked seen: %#v", seen)
+	}
+}
+
+func TestUpsertPureRepostKeepsTargetCanonicalTweetID(t *testing.T) {
+	d := openWritableTestDB(t)
+	now := time.Now().UTC()
+	item := model.FeedItem{
+		TweetID:          "102",
+		SourceHandle:     "sample_reposter",
+		AuthorHandle:     "sample_author",
+		BodyText:         "body",
+		IsRetweet:        true,
+		CanonicalURL:     "https://x.com/sample_author/status/100",
+		CanonicalTweetID: "100",
+		ContentHash:      "sample_hash",
+		PublishedAt:      &now,
+		FetchedAt:        now,
+	}
+	if _, err := d.UpsertFeedItems([]model.FeedItem{item}); err != nil {
+		t.Fatal(err)
+	}
+	var canonicalID string
+	if err := d.QueryRow(`SELECT canonical_tweet_id FROM feed_items WHERE tweet_id = '102'`).Scan(&canonicalID); err != nil {
+		t.Fatal(err)
+	}
+	if canonicalID != "100" {
+		t.Fatalf("canonical_tweet_id = %q, want target 100", canonicalID)
+	}
+}
+
 func TestMuteUnmute(t *testing.T) {
 	d := openWritableTestDB(t)
 
