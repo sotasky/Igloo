@@ -1059,8 +1059,8 @@ func (s *Server) handlePageFeed(w http.ResponseWriter, r *http.Request) {
 	p.Sidebar = s.mustBuildSidebar(r)
 
 	feedHeadAnchor := ""
-	if head, err := s.db.GetLatestFetchedFeedItem(); err == nil && head != nil {
-		feedHeadAnchor = head.TweetID
+	if headID, err := s.db.GetLatestFetchedFeedItemID(); err == nil {
+		feedHeadAnchor = headID
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")

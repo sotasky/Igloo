@@ -107,7 +107,6 @@ func enrichFeedItems(database *db.DB, items []model.FeedItem, deduplicate bool) 
 		}
 	}
 	profilesByHandle, _ := database.GetTwitterChannelProfilesByHandles(profileLookupHandles)
-	var missingAuthorNameHandles []string
 	for i := range items {
 		if profile, ok := profilesByHandle[model.NormalizeTwitterHandle(items[i].AuthorHandle)]; ok && profile.DisplayName != "" {
 			items[i].AuthorDisplayName = profile.DisplayName
@@ -117,33 +116,6 @@ func enrichFeedItems(database *db.DB, items []model.FeedItem, deduplicate bool) 
 		}
 		if profile, ok := profilesByHandle[model.NormalizeTwitterHandle(items[i].QuoteAuthorHandle)]; ok && profile.DisplayName != "" {
 			items[i].QuoteAuthorDisplayName = profile.DisplayName
-		}
-		if shouldRepairDisplayName(items[i].AuthorDisplayName, items[i].AuthorHandle) {
-			missingAuthorNameHandles = append(missingAuthorNameHandles, items[i].AuthorHandle)
-		}
-		if shouldRepairDisplayName(items[i].RetweetedByDisplayName, items[i].RetweetedByHandle) {
-			missingAuthorNameHandles = append(missingAuthorNameHandles, items[i].RetweetedByHandle)
-		}
-		if shouldRepairDisplayName(items[i].QuoteAuthorDisplayName, items[i].QuoteAuthorHandle) {
-			missingAuthorNameHandles = append(missingAuthorNameHandles, items[i].QuoteAuthorHandle)
-		}
-	}
-	displayNames, _ := database.GetDisplayNamesForHandles(missingAuthorNameHandles)
-	for i := range items {
-		if shouldRepairDisplayName(items[i].AuthorDisplayName, items[i].AuthorHandle) {
-			if name, ok := displayNames[items[i].AuthorHandle]; ok {
-				items[i].AuthorDisplayName = name
-			}
-		}
-		if shouldRepairDisplayName(items[i].QuoteAuthorDisplayName, items[i].QuoteAuthorHandle) {
-			if name, ok := displayNames[items[i].QuoteAuthorHandle]; ok {
-				items[i].QuoteAuthorDisplayName = name
-			}
-		}
-		if shouldRepairDisplayName(items[i].RetweetedByDisplayName, items[i].RetweetedByHandle) {
-			if name, ok := displayNames[items[i].RetweetedByHandle]; ok {
-				items[i].RetweetedByDisplayName = name
-			}
 		}
 	}
 
@@ -307,17 +279,6 @@ func indexedReadyMediaURLs(ownerID string, count int, urls map[string]map[int]st
 		}
 	}
 	return out
-}
-
-func shouldRepairDisplayName(displayName, handle string) bool {
-	if model.NormalizeTwitterHandle(handle) == "" {
-		return false
-	}
-	display := strings.TrimSpace(displayName)
-	if display == "" {
-		return true
-	}
-	return model.NormalizeTwitterHandle(display) == model.NormalizeTwitterHandle(handle)
 }
 
 func splitTranslateSkipSet(raw string) map[string]bool {

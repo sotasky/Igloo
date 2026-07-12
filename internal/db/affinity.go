@@ -212,7 +212,7 @@ func (db *DB) FindSiblingTweetIDsForLikes(tweetIDs []string) (map[string][]strin
 	}
 
 	sibRows, err := db.conn.Query(
-		"SELECT tweet_id, content_hash FROM feed_items WHERE content_hash IN ("+string(hashPH)+")",
+		"SELECT tweet_id, content_hash FROM feed_items WHERE content_hash IN ("+string(hashPH)+") AND content_hash IS NOT NULL AND content_hash <> ''",
 		hashArgs...,
 	)
 	if err != nil {

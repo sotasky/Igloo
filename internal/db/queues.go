@@ -101,10 +101,11 @@ func (db *DB) ListPendingXContentDownloads() (processing, pending []XContentDown
 		            THEN 'video' ELSE 'image' END,
 		       SUM(CASE WHEN a.asset_kind = 'post_media' THEN 1 ELSE 0 END),
 		       MAX(mo.attempts), MAX(mo.last_error)
-		FROM assets a
-		JOIN media_objects mo ON mo.object_id = a.desired_object_id
+		FROM media_objects mo
+		CROSS JOIN assets a INDEXED BY idx_assets_desired_object
 		LEFT JOIN feed_items_resolved fi ON fi.tweet_id = a.owner_id
-		WHERE a.owner_kind = 'tweet'
+		WHERE a.desired_object_id = mo.object_id
+		  AND a.owner_kind = 'tweet'
 		  AND a.asset_kind IN ('post_audio', 'post_media', 'post_thumbnail')
 		  AND mo.job_state IN ('queued', 'downloading')
 		GROUP BY a.owner_id, fi.source_handle
@@ -138,9 +139,10 @@ func (db *DB) CountPendingXContentDownloads() (queued int, processing int, err e
 		WITH owner_state AS (
 			SELECT a.owner_id,
 			       MAX(CASE WHEN mo.job_state = 'downloading' THEN 1 ELSE 0 END) AS processing
-			FROM assets a
-			JOIN media_objects mo ON mo.object_id = a.desired_object_id
-			WHERE a.owner_kind = 'tweet'
+			FROM media_objects mo
+			CROSS JOIN assets a INDEXED BY idx_assets_desired_object
+			WHERE a.desired_object_id = mo.object_id
+			  AND a.owner_kind = 'tweet'
 			  AND a.asset_kind IN ('post_audio', 'post_media', 'post_thumbnail')
 			  AND mo.job_state IN ('queued', 'downloading')
 			GROUP BY a.owner_id

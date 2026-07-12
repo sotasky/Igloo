@@ -132,7 +132,9 @@ func (db *DB) GetThreadTree(tweetID string) ([]model.FeedItem, error) {
 			SELECT child.tweet_id, child.reply_to_status, subtree.depth + 1, COALESCE(child.published_at, 0)
 			FROM feed_items child
 			JOIN subtree ON child.reply_to_status = subtree.tweet_id
-			WHERE subtree.depth < 50
+			WHERE child.reply_to_status IS NOT NULL
+			  AND child.reply_to_status != ''
+			  AND subtree.depth < 50
 		)
 		SELECT tweet_id, COALESCE(parent_id, ''), depth, published_at
 		FROM subtree

@@ -699,43 +699,6 @@ func (db *DB) GetVideosByIDs(videoIDs []string) (map[string]model.Video, error) 
 	return result, rows.Err()
 }
 
-// GetDisplayNamesForHandles returns profile-owned display names by handle.
-func (db *DB) GetDisplayNamesForHandles(handles []string) (map[string]string, error) {
-	if len(handles) == 0 {
-		return make(map[string]string), nil
-	}
-	ph := strings.Repeat("?,", len(handles))
-	ph = ph[:len(ph)-1]
-
-	var args []any
-	for _, h := range handles {
-		args = append(args, strings.ToLower(strings.TrimPrefix(strings.TrimSpace(h), "@")))
-	}
-	rows, err := db.reader().Query(`
-		SELECT handle, display_name
-		FROM channel_profiles
-		WHERE LOWER(COALESCE(handle, '')) IN (`+ph+`)
-		  AND COALESCE(display_name, '') != ''
-		  AND tombstone = 0
-	`, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer func() {
-		_ = rows.Close()
-	}()
-
-	result := make(map[string]string)
-	for rows.Next() {
-		var handle, name string
-		if err := rows.Scan(&handle, &name); err != nil {
-			return nil, err
-		}
-		result[handle] = name
-	}
-	return result, rows.Err()
-}
-
 // GetFeedItemsByAuthor returns feed items by author or source handle, newest first.
 func (db *DB) GetFeedItemsByAuthor(handle string, limit int) ([]model.FeedItem, error) {
 	return db.GetFeedItemsByAuthorPage(handle, limit, 0)
@@ -1441,6 +1404,23 @@ func (db *DB) GetLatestFetchedFeedItem() (*model.FeedItem, error) {
 		return nil, nil
 	}
 	return &items[0], nil
+}
+
+func (db *DB) GetLatestFetchedFeedItemID() (string, error) {
+	var tweetID string
+	err := db.reader().QueryRow(`
+		SELECT tweet_id
+		FROM feed_items
+		WHERE ` + feedPrimaryItemPredicate("feed_items") + `
+		  AND (canonical_tweet_id IS NULL OR canonical_tweet_id = '' OR canonical_tweet_id = tweet_id)
+		  AND ` + retweetFilterClause("feed_items") + `
+		ORDER BY fetched_at DESC, tweet_id DESC
+		LIMIT 1
+	`).Scan(&tweetID)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return tweetID, err
 }
 
 // GetNewPosterAvatars returns up to `limit` unique new posters for the "new

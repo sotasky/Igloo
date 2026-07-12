@@ -31,6 +31,9 @@ CREATE INDEX idx_channel_profiles_platform ON channel_profiles(platform);
 -- index: idx_channel_profiles_refresh on channel_profiles
 CREATE INDEX idx_channel_profiles_refresh ON channel_profiles(tombstone, fetched_at) WHERE tombstone = 0;
 
+-- index: idx_channel_profiles_twitter_handle on channel_profiles
+CREATE INDEX idx_channel_profiles_twitter_handle ON channel_profiles(LOWER(COALESCE(handle, ''))) WHERE platform = 'twitter' AND tombstone = 0;
+
 -- index: idx_channels_platform on channels
 CREATE INDEX idx_channels_platform ON channels(platform);
 
