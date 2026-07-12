@@ -109,8 +109,10 @@ func (m *Manager) DownloadTemp(ctx context.Context, rawURL string, saveChannel b
 	if err != nil {
 		return TempDownloadResult{Message: fmt.Sprintf("Storage path: %v", err)}
 	}
-	_ = os.MkdirAll(tempDir, 0755)
-	attemptID, err := newDownloadAttemptID(tempDir, videoID)
+	if err := m.downloader.RunMedia(ctx, download.MediaLaneBulk, func() error { return os.MkdirAll(tempDir, 0o755) }); err != nil {
+		return TempDownloadResult{Message: fmt.Sprintf("Create storage directory: %v", err)}
+	}
+	attemptID, err := newDownloadAttemptID(videoID)
 	if err != nil {
 		return TempDownloadResult{Message: fmt.Sprintf("Download attempt: %v", err)}
 	}
@@ -131,7 +133,7 @@ func (m *Manager) DownloadTemp(ctx context.Context, rawURL string, saveChannel b
 
 	completed, dlErr := m.downloader.DownloadCompleted(ctx, rawURL, "video", opts)
 	if dlErr != nil || len(completed.MediaPaths) == 0 {
-		(completedVideoFiles{}).removeFailedAttempt(completed)
+		m.removeFailedAttempt(ctx, completedVideoFiles{}, completed)
 		msg := "Download failed"
 		if dlErr != nil {
 			msg = dlErr.Error()
@@ -141,7 +143,7 @@ func (m *Manager) DownloadTemp(ctx context.Context, rawURL string, saveChannel b
 
 	files, err := m.prepareCompletedVideoFiles(ctx, platform, attemptID, completed)
 	if err != nil {
-		files.removeFailedAttempt(completed)
+		m.removeFailedAttempt(ctx, files, completed)
 		return TempDownloadResult{Message: fmt.Sprintf("Prepare completed outputs: %v", err)}
 	}
 
@@ -196,13 +198,13 @@ func (m *Manager) DownloadTemp(ctx context.Context, rawURL string, saveChannel b
 		Duration: duration, PublishedAtMs: publishedAt, MetadataJSON: metadataJSON,
 		MediaKind: mediaKind, SlideCount: slideCount, IsTemp: true, Assets: files.assets,
 	}); err != nil {
-		files.removeFailedAttempt(completed)
+		m.removeFailedAttempt(ctx, files, completed)
 		return TempDownloadResult{Message: fmt.Sprintf("DB insert: %v", err)}
 	}
-	if err := m.storeCompletedSubtitles(videoID, files, completed); err != nil {
+	if err := m.storeCompletedSubtitles(ctx, videoID, files, completed, false); err != nil {
 		log.Printf("[temp] subtitle publish failed for %s: %v", videoID, err)
 	}
-	files.removeTransientFiles()
+	m.removeTransientFiles(ctx, files)
 
 	m.enqueueCompletedVideoPreview(videoID, platform, files.primaryPath, float64(duration))
 
@@ -253,7 +255,9 @@ func (m *Manager) downloadPlaylist(ctx context.Context, rawURL, playlistID strin
 	if err != nil {
 		return TempDownloadResult{Message: fmt.Sprintf("Storage path: %v", err)}
 	}
-	_ = os.MkdirAll(targetDir, 0755)
+	if err := m.downloader.RunMedia(ctx, download.MediaLaneBulk, func() error { return os.MkdirAll(targetDir, 0o755) }); err != nil {
+		return TempDownloadResult{Message: fmt.Sprintf("Create storage directory: %v", err)}
+	}
 
 	playlistChannelID := "playlist_" + playlistID
 
@@ -279,7 +283,7 @@ func (m *Manager) downloadPlaylist(ctx context.Context, rawURL, playlistID strin
 		}
 
 		videoURL := fmt.Sprintf("https://www.youtube.com/watch?v=%s", videoID)
-		attemptID, attemptErr := newDownloadAttemptID(targetDir, videoID)
+		attemptID, attemptErr := newDownloadAttemptID(videoID)
 		if attemptErr != nil {
 			log.Printf("[temp] playlist item %s attempt allocation failed: %v", videoID, attemptErr)
 			failed++
@@ -291,9 +295,9 @@ func (m *Manager) downloadPlaylist(ctx context.Context, rawURL, playlistID strin
 			Cookies:            authOpts.Cookies,
 			CookiesFromBrowser: authOpts.CookiesFromBrowser,
 		}
-		completed, dlErr := m.downloader.YtDlp.DownloadCompleted(ctx, videoURL, opts)
+		completed, dlErr := m.downloader.DownloadCompleted(ctx, videoURL, "video", opts)
 		if dlErr != nil || len(completed.MediaPaths) == 0 {
-			(completedVideoFiles{}).removeFailedAttempt(completed)
+			m.removeFailedAttempt(ctx, completedVideoFiles{}, completed)
 			log.Printf("[temp] playlist item %s failed: %v", videoID, dlErr)
 			failed++
 			continue
@@ -301,7 +305,7 @@ func (m *Manager) downloadPlaylist(ctx context.Context, rawURL, playlistID strin
 
 		files, prepareErr := m.prepareCompletedVideoFiles(ctx, "youtube", attemptID, completed)
 		if prepareErr != nil {
-			files.removeFailedAttempt(completed)
+			m.removeFailedAttempt(ctx, files, completed)
 			log.Printf("[temp] playlist item %s output preparation failed: %v", videoID, prepareErr)
 			failed++
 			continue
@@ -322,12 +326,12 @@ func (m *Manager) downloadPlaylist(ctx context.Context, rawURL, playlistID strin
 			Duration: duration, PublishedAtMs: publishedAt, MetadataJSON: metaJSON,
 			Assets: files.assets,
 		}); err != nil {
-			files.removeFailedAttempt(completed)
+			m.removeFailedAttempt(ctx, files, completed)
 			log.Printf("[temp] playlist item %s DB insert failed: %v", videoID, err)
 			failed++
 			continue
 		}
-		files.removeTransientFiles()
+		m.removeTransientFiles(ctx, files)
 		m.enqueueCompletedVideoPreview(videoID, "youtube", files.primaryPath, float64(duration))
 		downloaded++
 	}

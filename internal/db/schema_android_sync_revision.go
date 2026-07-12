@@ -40,7 +40,7 @@ var androidSyncHeadTables = []androidSyncHeadTable{
 	{table: "retweet_sources", ownerKind: "retweet_sources", idColumn: "content_hash", updateColumns: "content_hash, retweeter_channel_id, tweet_id, published_at"},
 	{table: "feed_rank_snapshot", ownerKind: "feed_rank", idColumn: "tweet_id", updateColumns: "tweet_id, rank_position, base_score, decay_factor, freshness_bonus, jitter, diversity_demoted_by, final_score, computed_at"},
 	{table: "assets", ownerKind: "asset", idColumn: "asset_id", updateColumns: `asset_id, asset_kind, owner_kind, owner_id, media_index,
-		file_path, content_type, size_bytes, sha256, is_auto, audio_language, state, required_reason`},
+		object_id, desired_object_id, lifecycle_state, revision, is_auto, audio_language, required_reason`},
 	{table: "feed_likes", ownerKind: "feed_like", idColumn: "tweet_id", updateColumns: "tweet_id, liked_at"},
 	{table: "bookmarks", ownerKind: "bookmark", idColumn: "video_id", updateColumns: "video_id, category_id, custom_title, account_handles, media_indices, bookmarked_at"},
 	{table: "bookmark_categories", ownerKind: "bookmark_category", idColumn: "id", updateColumns: "id, name, archive_path, created_at"},
@@ -288,45 +288,8 @@ func quoteAndroidSyncSQLString(value string) string {
 
 func ensureAndroidSyncRevisionTriggers(conn *sql.DB) error {
 	statements := []string{
-		`CREATE TRIGGER IF NOT EXISTS android_sync_revision_assets_insert
-		 AFTER INSERT ON assets
-		 WHEN NEW.state != 'pruned'
-		 BEGIN
-		   UPDATE assets SET revision = MAX(revision, 1) WHERE id = NEW.id;
-		 END`,
-		`CREATE TRIGGER IF NOT EXISTS android_sync_revision_assets_update
-		 AFTER UPDATE OF asset_id, asset_kind, owner_kind, owner_id, media_index,
-		                 file_path, content_type, size_bytes, sha256, is_auto,
-		                 audio_language, state, required_reason
-		 ON assets
-		 WHEN OLD.asset_id IS NOT NEW.asset_id
-		   OR OLD.asset_kind IS NOT NEW.asset_kind
-		   OR OLD.owner_kind IS NOT NEW.owner_kind
-		   OR OLD.owner_id IS NOT NEW.owner_id
-		   OR OLD.media_index IS NOT NEW.media_index
-		   OR (CASE
-		         WHEN OLD.state = 'pruned' THEN 'pruned'
-		         WHEN OLD.state = 'ready' THEN 'ready'
-		         WHEN OLD.state IN ('server_missing', 'permanent_missing') THEN 'missing'
-		         ELSE 'pending'
-		       END) IS NOT (CASE
-		         WHEN NEW.state = 'pruned' THEN 'pruned'
-		         WHEN NEW.state = 'ready' THEN 'ready'
-		         WHEN NEW.state IN ('server_missing', 'permanent_missing') THEN 'missing'
-		         ELSE 'pending'
-		       END)
-		   OR ((OLD.state IN ('ready', 'server_missing', 'permanent_missing')
-		        OR NEW.state IN ('ready', 'server_missing', 'permanent_missing'))
-		       AND (OLD.file_path IS NOT NEW.file_path
-		         OR OLD.content_type IS NOT NEW.content_type
-		         OR OLD.size_bytes IS NOT NEW.size_bytes
-		         OR OLD.sha256 IS NOT NEW.sha256
-		         OR OLD.is_auto IS NOT NEW.is_auto
-		         OR OLD.audio_language IS NOT NEW.audio_language
-		         OR OLD.required_reason IS NOT NEW.required_reason))
-		 BEGIN
-		   UPDATE assets SET revision = revision + 1 WHERE id = NEW.id;
-		 END`,
+		`DROP TRIGGER IF EXISTS android_sync_revision_assets_insert`,
+		`DROP TRIGGER IF EXISTS android_sync_revision_assets_update`,
 	}
 	for _, statement := range statements {
 		if _, err := conn.Exec(statement); err != nil {

@@ -152,11 +152,6 @@ func (m *Manager) runIngestCycle(ctx context.Context) {
 	log.Printf("[x_ingest] ingest cycle start (delay %s, cycle ~%s): %d ready, %d not_due, %d cooling, %d total",
 		fetchDelay, cycleInterval.Round(time.Minute), len(fetchList), notDue, cooling, len(twitterChannels))
 
-	// Repair stale orphan reply chains before the paced fetch loop. A full
-	// cycle can take a long time, and these rows already have enough local
-	// metadata for the resolver to fetch the missing parents directly.
-	m.resolveReplyChainsSweep(ctx)
-
 	if len(fetchList) == 0 && len(feedSources) == 0 {
 		return
 	}
@@ -515,32 +510,4 @@ func (m *Manager) resolveReplyChains(ctx context.Context, items []model.FeedItem
 	if err := m.replyResolver.ResolveCycle(ctx, items); err != nil && !errors.Is(err, context.Canceled) {
 		log.Printf("[x_ingest] reply resolver: %v", err)
 	}
-}
-
-// replySweepMinInterval rate-limits the DB-wide reply sweep so we don't hammer
-// fxtwitter on every 5-min ingest cycle.
-const replySweepMinInterval = time.Hour
-
-// replySweepBatchLimit caps how many unresolved replies we touch per sweep.
-const replySweepBatchLimit = 200
-
-// resolveReplyChainsSweep retries fxtwitter for any reply rows still missing
-// reply_to_status. Rate-limited to once per replySweepMinInterval.
-func (m *Manager) resolveReplyChainsSweep(ctx context.Context) {
-	last := time.Unix(m.lastReplySweepAt.Load(), 0)
-	if time.Since(last) < replySweepMinInterval {
-		return
-	}
-	m.lastReplySweepAt.Store(time.Now().Unix())
-
-	candidates, err := m.db.FindUnresolvedReplies(replySweepBatchLimit)
-	if err != nil {
-		log.Printf("[x_ingest] reply sweep: FindUnresolvedReplies: %v", err)
-		return
-	}
-	if len(candidates) == 0 {
-		return
-	}
-	log.Printf("[x_ingest] reply sweep: retrying %d unresolved replies", len(candidates))
-	m.resolveReplyChains(ctx, candidates)
 }

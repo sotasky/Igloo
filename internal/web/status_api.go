@@ -812,10 +812,11 @@ func (s *Server) countReadyAvatars() int {
 	var count int
 	_ = s.db.QueryRow(`
 		SELECT COUNT(*)
-		FROM assets
-		WHERE asset_kind = 'avatar'
-		  AND owner_kind = 'channel'
-		  AND state = 'ready'
+		FROM assets a JOIN media_objects mo ON mo.object_id = a.object_id
+		WHERE a.asset_kind = 'avatar'
+		  AND a.owner_kind = 'channel'
+		  AND a.lifecycle_state = 'active'
+		  AND mo.published_revision > 0 AND mo.file_path != ''
 	`).Scan(&count)
 	return count
 }

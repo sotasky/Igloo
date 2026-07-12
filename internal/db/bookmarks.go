@@ -144,13 +144,14 @@ func (db *DB) GetBookmarks(opts GetBookmarksOpts) ([]model.Video, error) {
 		           SELECT GROUP_CONCAT(media_type, ',')
 		           FROM (
 		               SELECT CASE
-		                   WHEN a.asset_kind = 'video_stream' OR a.content_type LIKE 'video/%%' THEN 'video'
+			                   WHEN a.asset_kind = 'video_stream' OR mo.content_type LIKE 'video/%%' THEN 'video'
 		                   ELSE 'image'
 			               END AS media_type
 			               FROM assets a
+			               JOIN media_objects mo ON mo.object_id = a.object_id
 			               WHERE a.owner_id = v.video_id
 			                 AND a.owner_kind = %s
-		                 AND a.state = 'ready'
+		                 AND mo.published_revision > 0 AND mo.file_path != ''
 		                 AND a.asset_kind IN ('post_media', 'video_stream')
 		               ORDER BY a.media_index, a.id
 		           )
@@ -159,13 +160,14 @@ func (db *DB) GetBookmarks(opts GetBookmarksOpts) ([]model.Video, error) {
 		           SELECT GROUP_CONCAT(media_type, ',')
 		           FROM (
 		               SELECT CASE
-		                   WHEN a.asset_kind = 'video_stream' OR a.content_type LIKE 'video/%%' THEN 'video'
+			                   WHEN a.asset_kind = 'video_stream' OR mo.content_type LIKE 'video/%%' THEN 'video'
 		                   ELSE 'image'
 		               END AS media_type
-		               FROM assets a
+			               FROM assets a
+			               JOIN media_objects mo ON mo.object_id = a.object_id
 		               WHERE a.owner_kind = 'tweet'
 		                 AND a.owner_id = NULLIF(fi.quote_tweet_id, '')
-		                 AND a.state = 'ready'
+			                 AND mo.published_revision > 0 AND mo.file_path != ''
 		                 AND a.asset_kind IN ('post_media', 'video_stream')
 		               ORDER BY a.media_index, a.id
 		           )

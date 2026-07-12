@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"os"
 	"sort"
 	"strings"
 	"time"
@@ -279,15 +278,9 @@ func primaryVideoStreamSHA(assets []Asset) (string, bool) {
 }
 
 func readVideoAssetsTx(tx *sql.Tx, ownerKind, videoID string) ([]Asset, error) {
-	rows, err := tx.Query(`
-		SELECT id, asset_id, asset_kind, owner_kind, owner_id, media_index,
-		       source_url, file_path, content_type, size_bytes, sha256, file_mtime_ns, revision,
-		       is_auto, audio_language, state,
-		       required_reason, last_error_kind, last_error, attempts,
-		       next_attempt_at_ms, lease_owner, lease_until_ms, created_at_ms, updated_at_ms
-		FROM assets
-		WHERE owner_kind = ? AND owner_id = ?
-		ORDER BY id
+	rows, err := tx.Query(`SELECT `+assetProjectionSQL+assetJoinsSQL+`
+		WHERE a.owner_kind = ? AND a.owner_id = ?
+		ORDER BY a.id
 	`, ownerKind, videoID)
 	if err != nil {
 		return nil, err
@@ -369,32 +362,30 @@ func readyVideoMediaExistsSQL(videoAlias string) string {
 	return `EXISTS (
 		SELECT 1
 		FROM assets ready_video_media
+		JOIN media_objects ready_video_object ON ready_video_object.object_id = ready_video_media.object_id
 		WHERE ready_video_media.owner_kind = ` + videoAlias + `.owner_kind
 		  AND ready_video_media.owner_id = ` + videoAlias + `.video_id
 		  AND ready_video_media.asset_kind IN ('video_stream', 'post_media', 'post_audio')
-		  AND ready_video_media.state = 'ready'
-		  AND ready_video_media.file_path != ''
+		  AND ready_video_object.published_revision > 0
+		  AND ready_video_object.file_path != ''
 	)`
 }
 
 // GetReadyVideoPrimaryAsset returns the preferred playable asset using the
 // video's exact canonical owner identity.
 func (db *DB) GetReadyVideoPrimaryAsset(videoID string) (*Asset, error) {
-	row := db.conn.QueryRow(`
-		SELECT a.id, a.asset_id, a.asset_kind, a.owner_kind, a.owner_id, a.media_index,
-		       a.source_url, a.file_path, a.content_type, a.size_bytes, a.sha256, a.file_mtime_ns, a.revision,
-		       a.is_auto, a.audio_language, a.state,
-		       a.required_reason, a.last_error_kind, a.last_error, a.attempts,
-		       a.next_attempt_at_ms, a.lease_owner, a.lease_until_ms, a.created_at_ms, a.updated_at_ms
+	row := db.conn.QueryRow(`SELECT `+assetProjectionSQL+`
 		FROM videos v
 		JOIN assets a
 		  ON a.owner_kind = v.owner_kind
 		 AND a.owner_id = v.video_id
+		JOIN media_objects current ON current.object_id = a.object_id
+		JOIN media_objects desired ON desired.object_id = a.desired_object_id
 		WHERE v.video_id = ?
 		  AND a.asset_kind IN ('video_stream', 'post_media', 'post_audio')
 		  AND a.media_index = 0
-		  AND a.state = 'ready'
-		  AND a.file_path != ''
+		  AND current.published_revision > 0
+		  AND current.file_path != ''
 		ORDER BY CASE a.asset_kind
 		           WHEN 'video_stream' THEN 1
 		           WHEN 'post_media' THEN 2
@@ -515,10 +506,11 @@ func (db *DB) DeleteVideoAssetsTx(videoID string) ([]string, error) {
 			return fmt.Errorf("video not found: %s", videoID)
 		}
 		rows, err := tx.Query(`
-			SELECT DISTINCT file_path
-			FROM assets
-			WHERE owner_kind = ? AND owner_id = ?
-			  AND file_path != ''
+			SELECT DISTINCT current.file_path
+			FROM assets a
+			JOIN media_objects current ON current.object_id = a.object_id
+			WHERE a.owner_kind = ? AND a.owner_id = ?
+			  AND current.published_revision > 0 AND current.file_path != ''
 		`, ownerKind, videoID)
 		if err != nil {
 			return err
@@ -559,16 +551,7 @@ func (db *DB) removeRetiredCanonicalFiles(keys []string, keep map[string]struct{
 		if _, ok := keep[key]; ok {
 			continue
 		}
-		var refs int
-		if err := db.conn.QueryRow(`SELECT COUNT(*) FROM assets WHERE file_path = ?`, key).Scan(&refs); err != nil || refs > 0 {
-			continue
-		}
-		path, err := db.storage.WritePath(key)
-		if err != nil {
-			slog.Warn("resolve retired canonical video asset", "key", key, "err", err)
-			continue
-		}
-		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		if _, err := db.RemoveAssetFileIfUnreferenced(key); err != nil {
 			slog.Warn("remove retired canonical video asset", "key", key, "err", err)
 		}
 	}

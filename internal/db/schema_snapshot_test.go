@@ -71,6 +71,7 @@ func TestSchemaTableLifecyclesCoverFreshSchema(t *testing.T) {
 func TestSchemaTableLifecycleClassifications(t *testing.T) {
 	want := map[string]schemaTableLifecycle{
 		"assets":         schemaLifecycleMaintainedState,
+		"media_objects":  schemaLifecycleMaintainedState,
 		"bookmarks":      schemaLifecycleUserState,
 		"download_queue": schemaLifecycleQueue,
 		"feed_items":     schemaLifecycleArchive,

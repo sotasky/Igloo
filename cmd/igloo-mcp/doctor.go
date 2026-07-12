@@ -344,9 +344,12 @@ func writeDoctorAndroidSync(sb *strings.Builder, conn *sql.DB) {
 	var total, ready, missing int64
 	if err := conn.QueryRow(`
 		SELECT COUNT(*),
-		       COALESCE(SUM(state = 'ready'), 0),
-		       COALESCE(SUM(state IN ('server_missing', 'permanent_missing')), 0)
-		FROM assets WHERE state != 'pruned'
+		       COALESCE(SUM(current.published_revision > 0 AND current.file_path != ''), 0),
+		       COALESCE(SUM(current.published_revision = 0 AND desired.job_state IN ('server_missing', 'permanent_missing')), 0)
+		FROM assets a
+		JOIN media_objects current ON current.object_id = a.object_id
+		JOIN media_objects desired ON desired.object_id = a.desired_object_id
+		WHERE a.lifecycle_state != 'pruned'
 	`).Scan(&total, &ready, &missing); err == nil {
 		fmt.Fprintf(sb, "  canonical assets: total=%d ready=%d missing=%d\n", total, ready, missing)
 	}
@@ -373,7 +376,7 @@ func writeDoctorQueues(sb *strings.Builder, conn *sql.DB) {
 		}
 		fmt.Fprintf(sb, "  %-18s %s\n", table+":", strings.Join(parts, ", "))
 	}
-	parts := doctorStatusCounts(conn, "assets", "state", "")
+	parts := doctorAssetStatusCounts(conn, "")
 	if len(parts) == 0 {
 		parts = []string{"empty=0"}
 	}
@@ -400,11 +403,11 @@ func writeDoctorProfileReadiness(sb *strings.Builder, conn *sql.DB) {
 	`).Scan(&pendingJobs, &leasedJobs, &failedJobs)
 	fmt.Fprintf(sb, "  profile_jobs: pending=%d leased=%d failed=%d\n", pendingJobs, leasedJobs, failedJobs)
 
-	avatarStates := doctorStatusCounts(conn, "assets", "state", "owner_kind = 'channel' AND asset_kind = 'avatar'")
+	avatarStates := doctorAssetStatusCounts(conn, "a.owner_kind = 'channel' AND a.asset_kind = 'avatar'")
 	if len(avatarStates) == 0 {
 		avatarStates = []string{"empty=0"}
 	}
-	bannerStates := doctorStatusCounts(conn, "assets", "state", "owner_kind = 'channel' AND asset_kind = 'banner'")
+	bannerStates := doctorAssetStatusCounts(conn, "a.owner_kind = 'channel' AND a.asset_kind = 'banner'")
 	if len(bannerStates) == 0 {
 		bannerStates = []string{"empty=0"}
 	}
@@ -414,7 +417,7 @@ func writeDoctorProfileReadiness(sb *strings.Builder, conn *sql.DB) {
 
 func writeDoctorAssetInventory(sb *strings.Builder, conn *sql.DB) {
 	sb.WriteString("Asset inventory:\n")
-	parts := doctorStatusCounts(conn, "assets", "state", "")
+	parts := doctorAssetStatusCounts(conn, "")
 	if len(parts) == 0 {
 		parts = []string{"empty=0"}
 	}
@@ -426,7 +429,7 @@ func writeDoctorAssetInventory(sb *strings.Builder, conn *sql.DB) {
 		"dearrow_thumbnail", "subtitle", "avatar", "banner",
 		"preview_track_json", "preview_sprite",
 	} {
-		states := doctorStatusCounts(conn, "assets", "state", fmt.Sprintf("asset_kind = '%s'", kind))
+		states := doctorAssetStatusCounts(conn, fmt.Sprintf("a.asset_kind = '%s'", kind))
 		if len(states) == 0 {
 			states = []string{"empty=0"}
 		}
@@ -440,8 +443,8 @@ func doctorAssetLeaseCounts(conn *sql.DB, nowMs int64) (active int, expired int)
 		SELECT
 			COALESCE(SUM(CASE WHEN COALESCE(lease_until_ms, 0) > ? THEN 1 ELSE 0 END), 0),
 			COALESCE(SUM(CASE WHEN COALESCE(lease_until_ms, 0) > 0 AND lease_until_ms <= ? THEN 1 ELSE 0 END), 0)
-		FROM assets
-		WHERE state = 'downloading'
+		FROM media_objects
+		WHERE job_state = 'downloading'
 	`, nowMs, nowMs).Scan(&active, &expired)
 	return active, expired
 }
@@ -576,6 +579,36 @@ func doctorStatusCounts(conn *sql.DB, table, groupColumn, where string) []string
 			continue
 		}
 		parts = append(parts, fmt.Sprintf("%s=%d", key, count))
+	}
+	sort.Strings(parts)
+	return parts
+}
+
+func doctorAssetStatusCounts(conn *sql.DB, where string) []string {
+	query := `
+		SELECT CASE WHEN a.lifecycle_state = 'pruned' THEN 'pruned'
+		            WHEN current.published_revision > 0 AND current.file_path != '' THEN 'ready'
+		            ELSE desired.job_state END AS state,
+		       COUNT(*)
+		FROM assets a
+		JOIN media_objects current ON current.object_id = a.object_id
+		JOIN media_objects desired ON desired.object_id = a.desired_object_id`
+	if where != "" {
+		query += " WHERE " + where
+	}
+	query += " GROUP BY state"
+	rows, err := conn.Query(query)
+	if err != nil {
+		return nil
+	}
+	defer func() { _ = rows.Close() }()
+	var parts []string
+	for rows.Next() {
+		var state string
+		var count int
+		if rows.Scan(&state, &count) == nil {
+			parts = append(parts, fmt.Sprintf("%s=%d", state, count))
+		}
 	}
 	sort.Strings(parts)
 	return parts

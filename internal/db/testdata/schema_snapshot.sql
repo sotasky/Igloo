@@ -7,17 +7,14 @@ CREATE UNIQUE INDEX idx_android_sync_heads_revision ON android_sync_heads(revisi
 -- index: idx_android_sync_health_cursor on android_sync_health_reports
 CREATE INDEX idx_android_sync_health_cursor ON android_sync_health_reports(cursor, reported_at_ms DESC);
 
--- index: idx_assets_claim on assets
-CREATE INDEX idx_assets_claim ON assets(state, next_attempt_at_ms, updated_at_ms);
+-- index: idx_assets_desired_object on assets
+CREATE INDEX idx_assets_desired_object ON assets(desired_object_id);
 
--- index: idx_assets_kind_state on assets
-CREATE INDEX idx_assets_kind_state ON assets(asset_kind, state);
+-- index: idx_assets_object on assets
+CREATE INDEX idx_assets_object ON assets(object_id);
 
 -- index: idx_assets_owner on assets
 CREATE INDEX idx_assets_owner ON assets(owner_kind, owner_id, asset_kind, media_index);
-
--- index: idx_assets_ready_file_path on assets
-CREATE INDEX idx_assets_ready_file_path ON assets(file_path) WHERE state = 'ready';
 
 -- index: idx_auth_refresh_session on auth_refresh_tokens
 CREATE INDEX idx_auth_refresh_session ON auth_refresh_tokens(session_id);
@@ -103,6 +100,12 @@ CREATE INDEX idx_feed_rank_snapshot_score ON feed_rank_snapshot(final_score DESC
 -- index: idx_feed_sources_platform on feed_sources
 CREATE INDEX idx_feed_sources_platform ON feed_sources(platform, enabled);
 
+-- index: idx_media_objects_claim on media_objects
+CREATE INDEX idx_media_objects_claim ON media_objects(job_state, next_attempt_at_ms, lease_until_ms, storage_class, updated_at_ms);
+
+-- index: idx_media_objects_ready_file_path on media_objects
+CREATE INDEX idx_media_objects_ready_file_path ON media_objects(file_path) WHERE published_revision > 0;
+
 -- index: idx_moment_views_date on moment_views
 CREATE INDEX idx_moment_views_date ON moment_views(viewed_at DESC);
 
@@ -146,7 +149,7 @@ CREATE TABLE android_sync_heads ( owner_kind TEXT NOT NULL, owner_id TEXT NOT NU
 CREATE TABLE android_sync_health_reports ( id INTEGER PRIMARY KEY AUTOINCREMENT, cursor TEXT NOT NULL, reported_at_ms INTEGER NOT NULL, payload_json TEXT NOT NULL, verified_assets INTEGER NOT NULL DEFAULT 0, pending_assets INTEGER NOT NULL DEFAULT 0, missing_assets INTEGER NOT NULL DEFAULT 0, total_assets INTEGER NOT NULL DEFAULT 0, verified_bytes INTEGER NOT NULL DEFAULT 0 );
 
 -- table: assets on assets
-CREATE TABLE assets ( id INTEGER PRIMARY KEY AUTOINCREMENT, asset_id TEXT UNIQUE NOT NULL, asset_kind TEXT NOT NULL, owner_kind TEXT NOT NULL, owner_id TEXT NOT NULL, media_index INTEGER NOT NULL DEFAULT 0, source_url TEXT NOT NULL DEFAULT '', file_path TEXT NOT NULL DEFAULT '', content_type TEXT NOT NULL DEFAULT '', size_bytes INTEGER NOT NULL DEFAULT 0, sha256 TEXT NOT NULL DEFAULT '', file_mtime_ns INTEGER NOT NULL DEFAULT 0, revision INTEGER NOT NULL DEFAULT 0, is_auto INTEGER, audio_language TEXT NOT NULL DEFAULT '', state TEXT NOT NULL DEFAULT 'queued', required_reason TEXT NOT NULL DEFAULT '', last_error_kind TEXT NOT NULL DEFAULT '', last_error TEXT NOT NULL DEFAULT '', attempts INTEGER NOT NULL DEFAULT 0, next_attempt_at_ms INTEGER NOT NULL DEFAULT 0, lease_owner TEXT NOT NULL DEFAULT '', lease_until_ms INTEGER NOT NULL DEFAULT 0, created_at_ms INTEGER NOT NULL DEFAULT 0, updated_at_ms INTEGER NOT NULL DEFAULT 0, UNIQUE(asset_kind, owner_kind, owner_id, media_index) );
+CREATE TABLE assets ( id INTEGER PRIMARY KEY AUTOINCREMENT, asset_id TEXT UNIQUE NOT NULL, asset_kind TEXT NOT NULL, owner_kind TEXT NOT NULL, owner_id TEXT NOT NULL, media_index INTEGER NOT NULL DEFAULT 0, object_id TEXT NOT NULL, desired_object_id TEXT NOT NULL, lifecycle_state TEXT NOT NULL DEFAULT 'active' CHECK(lifecycle_state IN ('active', 'pruned')), revision INTEGER NOT NULL DEFAULT 1, is_auto INTEGER, audio_language TEXT NOT NULL DEFAULT '', required_reason TEXT NOT NULL DEFAULT '', created_at_ms INTEGER NOT NULL DEFAULT 0, updated_at_ms INTEGER NOT NULL DEFAULT 0, FOREIGN KEY (object_id) REFERENCES media_objects(object_id), FOREIGN KEY (desired_object_id) REFERENCES media_objects(object_id), UNIQUE(asset_kind, owner_kind, owner_id, media_index) );
 
 -- table: auth_refresh_tokens on auth_refresh_tokens
 CREATE TABLE auth_refresh_tokens ( token_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, issued_at_ms INTEGER NOT NULL, expires_at_ms INTEGER NOT NULL, consumed_at_ms INTEGER, FOREIGN KEY (session_id) REFERENCES auth_sessions(session_id) ON DELETE CASCADE );
@@ -213,6 +216,9 @@ CREATE TABLE feed_sources ( source_id TEXT PRIMARY KEY, platform TEXT NOT NULL, 
 
 -- table: ingest_state on ingest_state
 CREATE TABLE ingest_state ( handle TEXT PRIMARY KEY, fail_count INTEGER DEFAULT 0, next_retry_at REAL, last_success_at REAL, last_attempt_at REAL, last_error TEXT, last_http_status INTEGER, avg_latency_ms REAL, updated_at INTEGER NOT NULL DEFAULT 0 );
+
+-- table: media_objects on media_objects
+CREATE TABLE media_objects ( id INTEGER PRIMARY KEY AUTOINCREMENT, object_id TEXT UNIQUE NOT NULL, object_key TEXT UNIQUE NOT NULL, source_url TEXT NOT NULL DEFAULT '', published_source_url TEXT NOT NULL DEFAULT '', storage_class TEXT NOT NULL CHECK(storage_class IN ('state_ssd', 'bulk_hdd')), desired_revision INTEGER NOT NULL DEFAULT 1, published_revision INTEGER NOT NULL DEFAULT 0, file_path TEXT NOT NULL DEFAULT '', content_type TEXT NOT NULL DEFAULT '', size_bytes INTEGER NOT NULL DEFAULT 0, sha256 TEXT NOT NULL DEFAULT '', file_mtime_ns INTEGER NOT NULL DEFAULT 0, job_state TEXT NOT NULL DEFAULT 'queued', last_error_kind TEXT NOT NULL DEFAULT '', last_error TEXT NOT NULL DEFAULT '', attempts INTEGER NOT NULL DEFAULT 0, next_attempt_at_ms INTEGER NOT NULL DEFAULT 0, lease_owner TEXT NOT NULL DEFAULT '', lease_until_ms INTEGER NOT NULL DEFAULT 0, created_at_ms INTEGER NOT NULL DEFAULT 0, updated_at_ms INTEGER NOT NULL DEFAULT 0 );
 
 -- table: moment_views on moment_views
 CREATE TABLE moment_views ( video_id TEXT PRIMARY KEY, viewed_at INTEGER NOT NULL DEFAULT 0 );
@@ -302,7 +308,7 @@ CREATE TRIGGER android_sync_head_assets_delete AFTER DELETE ON assets WHEN TRIM(
 CREATE TRIGGER android_sync_head_assets_insert AFTER INSERT ON assets WHEN TRIM(CAST(NEW.asset_id AS TEXT)) != '' BEGIN UPDATE android_sync_clock SET revision = revision + 1 WHERE id = 1; INSERT INTO android_sync_heads (owner_kind, owner_id, revision) VALUES ('asset', CAST(NEW.asset_id AS TEXT), (SELECT revision FROM android_sync_clock WHERE id = 1)) ON CONFLICT(owner_kind, owner_id) DO UPDATE SET revision = excluded.revision; END;
 
 -- trigger: android_sync_head_assets_update on assets
-CREATE TRIGGER android_sync_head_assets_update AFTER UPDATE OF asset_id, asset_kind, owner_kind, owner_id, media_index, file_path, content_type, size_bytes, sha256, is_auto, audio_language, state, required_reason ON assets WHEN (OLD.asset_id IS NOT NEW.asset_id OR OLD.asset_kind IS NOT NEW.asset_kind OR OLD.owner_kind IS NOT NEW.owner_kind OR OLD.owner_id IS NOT NEW.owner_id OR OLD.media_index IS NOT NEW.media_index OR OLD.file_path IS NOT NEW.file_path OR OLD.content_type IS NOT NEW.content_type OR OLD.size_bytes IS NOT NEW.size_bytes OR OLD.sha256 IS NOT NEW.sha256 OR OLD.is_auto IS NOT NEW.is_auto OR OLD.audio_language IS NOT NEW.audio_language OR OLD.state IS NOT NEW.state OR OLD.required_reason IS NOT NEW.required_reason) AND TRIM(CAST(NEW.asset_id AS TEXT)) != '' BEGIN UPDATE android_sync_clock SET revision = revision + 1 WHERE id = 1 AND OLD.asset_id IS NOT NEW.asset_id; INSERT INTO android_sync_heads (owner_kind, owner_id, revision) SELECT 'asset', CAST(OLD.asset_id AS TEXT), revision FROM android_sync_clock WHERE id = 1 AND OLD.asset_id IS NOT NEW.asset_id AND TRIM(CAST(OLD.asset_id AS TEXT)) != '' ON CONFLICT(owner_kind, owner_id) DO UPDATE SET revision = excluded.revision; UPDATE android_sync_clock SET revision = revision + 1 WHERE id = 1; INSERT INTO android_sync_heads (owner_kind, owner_id, revision) VALUES ('asset', CAST(NEW.asset_id AS TEXT), (SELECT revision FROM android_sync_clock WHERE id = 1)) ON CONFLICT(owner_kind, owner_id) DO UPDATE SET revision = excluded.revision; END;
+CREATE TRIGGER android_sync_head_assets_update AFTER UPDATE OF asset_id, asset_kind, owner_kind, owner_id, media_index, object_id, desired_object_id, lifecycle_state, revision, is_auto, audio_language, required_reason ON assets WHEN (OLD.asset_id IS NOT NEW.asset_id OR OLD.asset_kind IS NOT NEW.asset_kind OR OLD.owner_kind IS NOT NEW.owner_kind OR OLD.owner_id IS NOT NEW.owner_id OR OLD.media_index IS NOT NEW.media_index OR OLD.object_id IS NOT NEW.object_id OR OLD.desired_object_id IS NOT NEW.desired_object_id OR OLD.lifecycle_state IS NOT NEW.lifecycle_state OR OLD.revision IS NOT NEW.revision OR OLD.is_auto IS NOT NEW.is_auto OR OLD.audio_language IS NOT NEW.audio_language OR OLD.required_reason IS NOT NEW.required_reason) AND TRIM(CAST(NEW.asset_id AS TEXT)) != '' BEGIN UPDATE android_sync_clock SET revision = revision + 1 WHERE id = 1 AND OLD.asset_id IS NOT NEW.asset_id; INSERT INTO android_sync_heads (owner_kind, owner_id, revision) SELECT 'asset', CAST(OLD.asset_id AS TEXT), revision FROM android_sync_clock WHERE id = 1 AND OLD.asset_id IS NOT NEW.asset_id AND TRIM(CAST(OLD.asset_id AS TEXT)) != '' ON CONFLICT(owner_kind, owner_id) DO UPDATE SET revision = excluded.revision; UPDATE android_sync_clock SET revision = revision + 1 WHERE id = 1; INSERT INTO android_sync_heads (owner_kind, owner_id, revision) VALUES ('asset', CAST(NEW.asset_id AS TEXT), (SELECT revision FROM android_sync_clock WHERE id = 1)) ON CONFLICT(owner_kind, owner_id) DO UPDATE SET revision = excluded.revision; END;
 
 -- trigger: android_sync_head_bookmark_categories_delete on bookmark_categories
 CREATE TRIGGER android_sync_head_bookmark_categories_delete AFTER DELETE ON bookmark_categories WHEN TRIM(CAST(OLD.id AS TEXT)) != '' BEGIN UPDATE android_sync_clock SET revision = revision + 1 WHERE id = 1; INSERT INTO android_sync_heads (owner_kind, owner_id, revision) VALUES ('bookmark_category', CAST(OLD.id AS TEXT), (SELECT revision FROM android_sync_clock WHERE id = 1)) ON CONFLICT(owner_kind, owner_id) DO UPDATE SET revision = excluded.revision; END;
@@ -552,12 +558,6 @@ CREATE TRIGGER android_sync_head_watch_history_insert AFTER INSERT ON watch_hist
 
 -- trigger: android_sync_head_watch_history_update on watch_history
 CREATE TRIGGER android_sync_head_watch_history_update AFTER UPDATE OF video_id, playback_position, duration, updated_at_ms ON watch_history WHEN (OLD.video_id IS NOT NEW.video_id OR OLD.playback_position IS NOT NEW.playback_position OR OLD.duration IS NOT NEW.duration OR OLD.updated_at_ms IS NOT NEW.updated_at_ms) AND TRIM(CAST(NEW.video_id AS TEXT)) != '' BEGIN UPDATE android_sync_clock SET revision = revision + 1 WHERE id = 1 AND OLD.video_id IS NOT NEW.video_id; INSERT INTO android_sync_heads (owner_kind, owner_id, revision) SELECT 'watch_history', CAST(OLD.video_id AS TEXT), revision FROM android_sync_clock WHERE id = 1 AND OLD.video_id IS NOT NEW.video_id AND TRIM(CAST(OLD.video_id AS TEXT)) != '' ON CONFLICT(owner_kind, owner_id) DO UPDATE SET revision = excluded.revision; UPDATE android_sync_clock SET revision = revision + 1 WHERE id = 1; INSERT INTO android_sync_heads (owner_kind, owner_id, revision) VALUES ('watch_history', CAST(NEW.video_id AS TEXT), (SELECT revision FROM android_sync_clock WHERE id = 1)) ON CONFLICT(owner_kind, owner_id) DO UPDATE SET revision = excluded.revision; END;
-
--- trigger: android_sync_revision_assets_insert on assets
-CREATE TRIGGER android_sync_revision_assets_insert AFTER INSERT ON assets WHEN NEW.state != 'pruned' BEGIN UPDATE assets SET revision = MAX(revision, 1) WHERE id = NEW.id; END;
-
--- trigger: android_sync_revision_assets_update on assets
-CREATE TRIGGER android_sync_revision_assets_update AFTER UPDATE OF asset_id, asset_kind, owner_kind, owner_id, media_index, file_path, content_type, size_bytes, sha256, is_auto, audio_language, state, required_reason ON assets WHEN OLD.asset_id IS NOT NEW.asset_id OR OLD.asset_kind IS NOT NEW.asset_kind OR OLD.owner_kind IS NOT NEW.owner_kind OR OLD.owner_id IS NOT NEW.owner_id OR OLD.media_index IS NOT NEW.media_index OR (CASE WHEN OLD.state = 'pruned' THEN 'pruned' WHEN OLD.state = 'ready' THEN 'ready' WHEN OLD.state IN ('server_missing', 'permanent_missing') THEN 'missing' ELSE 'pending' END) IS NOT (CASE WHEN NEW.state = 'pruned' THEN 'pruned' WHEN NEW.state = 'ready' THEN 'ready' WHEN NEW.state IN ('server_missing', 'permanent_missing') THEN 'missing' ELSE 'pending' END) OR ((OLD.state IN ('ready', 'server_missing', 'permanent_missing') OR NEW.state IN ('ready', 'server_missing', 'permanent_missing')) AND (OLD.file_path IS NOT NEW.file_path OR OLD.content_type IS NOT NEW.content_type OR OLD.size_bytes IS NOT NEW.size_bytes OR OLD.sha256 IS NOT NEW.sha256 OR OLD.is_auto IS NOT NEW.is_auto OR OLD.audio_language IS NOT NEW.audio_language OR OLD.required_reason IS NOT NEW.required_reason)) BEGIN UPDATE assets SET revision = revision + 1 WHERE id = NEW.id; END;
 
 -- trigger: trg_search_channel_profiles_ad on channel_profiles
 CREATE TRIGGER trg_search_channel_profiles_ad AFTER DELETE ON channel_profiles BEGIN DELETE FROM search_channels_fts WHERE rowid = (SELECT id FROM channels WHERE channel_id = old.channel_id); INSERT INTO search_channels_fts(rowid, channel_id_pk, name, source_id, display_name, handle) SELECT c.id, c.channel_id, COALESCE(c.name, ''), COALESCE(c.source_id, ''), '', '' FROM channels c WHERE c.channel_id = old.channel_id; DELETE FROM search_videos_fts WHERE rowid IN (SELECT id FROM videos WHERE channel_id = old.channel_id); INSERT INTO search_videos_fts(rowid, video_id_pk, title, dearrow_title, dearrow_title_casual, channel_name) SELECT v.id, v.video_id, COALESCE(v.title, ''), COALESCE(v.dearrow_title, ''), COALESCE(v.dearrow_title_casual, ''), '' FROM videos v WHERE v.channel_id = old.channel_id; END;

@@ -370,18 +370,18 @@ func probeSpecs() []probeSpec {
 			lifecycle:   "maintained_state",
 			build: func(opts Options) (string, []any) {
 				return `
-					SELECT asset_id
-					FROM assets
+					SELECT mo.object_id
+					FROM media_objects mo
 					WHERE (
-					    state = 'queued'
-					    AND (next_attempt_at_ms = 0 OR next_attempt_at_ms <= ?)
+					    mo.job_state = 'queued'
+					    AND (mo.next_attempt_at_ms = 0 OR mo.next_attempt_at_ms <= ?)
 					  )
 					   OR (
-					    state = 'downloading'
-					    AND lease_until_ms > 0
-					    AND lease_until_ms <= ?
+					    mo.job_state = 'downloading'
+					    AND mo.lease_until_ms > 0
+					    AND mo.lease_until_ms <= ?
 					  )
-					ORDER BY attempts ASC, updated_at_ms ASC, id ASC
+					ORDER BY mo.attempts ASC, mo.updated_at_ms ASC, mo.id ASC
 					LIMIT ?
 				`, []any{opts.NowMs, opts.NowMs, opts.Limit}
 			},

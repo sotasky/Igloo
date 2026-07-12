@@ -55,29 +55,9 @@ func TestDoctorStatusReportsLocalHealthAndMasksSecrets(t *testing.T) {
 	`, now); err != nil {
 		t.Fatalf("insert video: %v", err)
 	}
-	if err := d.ExecRaw(`
-		INSERT INTO assets (
-			asset_id, asset_kind, owner_kind, owner_id, media_index,
-			file_path, content_type, size_bytes, sha256, state, created_at_ms, updated_at_ms
-		) VALUES
-			('sample_post_asset', 'post_media', 'tweet', 'sample_post', 0,
-			 'media/sample_post_0.jpg', 'image/jpeg', 10, 'sha', 'ready', ?, ?),
-			('sample_missing_asset', 'avatar', 'channel', 'twitter_sample_profile', 0,
-			 '', '', 0, '', 'server_missing', ?, ?)
-	`, now, now, now, now); err != nil {
-		t.Fatalf("insert asset: %v", err)
-	}
-	if err := d.ExecRaw(`
-		INSERT INTO assets (
-			asset_id, asset_kind, owner_kind, owner_id, media_index,
-			file_path, content_type, size_bytes, sha256, state,
-			lease_owner, lease_until_ms, created_at_ms, updated_at_ms
-		) VALUES ('sample_downloading_asset', 'post_thumbnail', 'tweet', 'sample_post', 0,
-			'thumbnails/generated/sample_post.jpg', 'image/jpeg', 0, '', 'downloading',
-			'worker-a', ?, ?, ?)
-	`, now-1, now, now); err != nil {
-		t.Fatalf("insert downloading asset: %v", err)
-	}
+	insertMCPTestAsset(t, d, igloodb.Asset{AssetID: "sample_post_asset", AssetKind: "post_media", OwnerKind: "tweet", OwnerID: "sample_post", FilePath: "media/sample_post_0.jpg", ContentType: "image/jpeg", SizeBytes: 10, SHA256: "sha"}, igloodb.AssetStateReady, now, 0, "")
+	insertMCPTestAsset(t, d, igloodb.Asset{AssetID: "sample_missing_asset", AssetKind: "avatar", OwnerKind: "channel", OwnerID: "twitter_sample_profile"}, igloodb.AssetStateServerMissing, now, 0, "")
+	insertMCPTestAsset(t, d, igloodb.Asset{AssetID: "sample_downloading_asset", AssetKind: "post_thumbnail", OwnerKind: "tweet", OwnerID: "sample_post", FilePath: "thumbnails/generated/sample_post.jpg", ContentType: "image/jpeg"}, igloodb.AssetStateDownloading, now, now-1, "worker-a")
 	if err := d.ExecRaw(`
 		INSERT INTO download_queue (video_id, channel_id, title, status, error, added_at)
 		VALUES ('sample_video', 'youtube_sample_channel', 'Doctor Video', 'failed', 'sample failure', ?)

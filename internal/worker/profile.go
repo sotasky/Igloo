@@ -20,9 +20,9 @@ import (
 
 const (
 	profileJobBatchSize      = 4
-	identityWorkerIdlePoll   = 5 * time.Second
 	profileJobInitialBackoff = time.Minute
 	profileJobMaxBackoff     = 6 * time.Hour
+	profileJobMaxAttempts    = 8
 )
 
 // fetchFn is fetchprofile.Fetch, overridable by focused worker tests.
@@ -36,9 +36,6 @@ type instagramProfileFetchFn func(ctx context.Context, channelID, handle string)
 // media before publishing the successful parts of that same durable revision.
 func (m *Manager) runProfileJobLoop(ctx context.Context) {
 	log.Printf("[profile] durable identity worker started")
-	ticker := time.NewTicker(identityWorkerIdlePoll)
-	defer ticker.Stop()
-
 	for {
 		profileWork := m.processProfileJobBatch(ctx, fetchprofile.Fetch)
 		if ctx.Err() != nil {
@@ -47,11 +44,21 @@ func (m *Manager) runProfileJobLoop(ctx context.Context) {
 		if profileWork {
 			continue
 		}
+		delay, err := m.db.NextProfileJobDelay(time.Now().UnixMilli())
+		if err != nil {
+			log.Printf("[profile] next due: %v", err)
+			delay = time.Minute
+		}
+		timer := time.NewTimer(delay)
 		select {
 		case <-ctx.Done():
+			timer.Stop()
 			return
-		case <-ticker.C:
 		case <-m.profileKick:
+			if !timer.Stop() {
+				<-timer.C
+			}
+		case <-timer.C:
 		}
 	}
 }
@@ -110,13 +117,13 @@ func (m *Manager) processProfileJob(ctx context.Context, fetch fetchFn, job mode
 	replacements, previous, stagedPaths, stageErr := m.stageProfileJobAssets(ctx, job, profile)
 	stored, complete, err := m.db.CompleteProfileJob(job, profile, replacements, now.UnixMilli())
 	if err != nil {
-		removeFiles(stagedPaths)
+		m.removeMediaPaths(ctx, download.MediaLaneState, stagedPaths...)
 		log.Printf("[profile] CompleteProfileJob %s: %v", job.ChannelID, err)
 		m.retryProfileJob(job, err, now)
 		return
 	}
 	if !stored {
-		removeFiles(stagedPaths)
+		m.removeMediaPaths(ctx, download.MediaLaneState, stagedPaths...)
 		log.Printf("[profile] discarded superseded revision %d for %s", job.RequestedRevision, job.ChannelID)
 		m.KickProfileJobs()
 		return
@@ -210,6 +217,14 @@ func (m *Manager) retryProfileJob(job model.ProfileJob, cause error, now time.Ti
 	}
 	delay := profileJobRetryDelay(job.Attempts + 1)
 	message := download.RedactText(cause.Error())
+	if job.Attempts+1 >= profileJobMaxAttempts {
+		if err := m.db.FailProfileJob(job, message, now.UnixMilli()); err != nil {
+			log.Printf("[profile] FailProfileJob %s: %v", job.ChannelID, err)
+			return
+		}
+		log.Printf("[profile] stopped %s after %d attempts: %s", job.ChannelID, job.Attempts+1, message)
+		return
+	}
 	if err := m.db.RetryProfileJob(job, message, delay, now.UnixMilli()); err != nil {
 		log.Printf("[profile] RetryProfileJob %s: %v", job.ChannelID, err)
 		return
@@ -272,6 +287,17 @@ func (m *Manager) downloadProfileJobAsset(ctx context.Context, job model.Profile
 	if m.downloader == nil || m.downloader.HTTP == nil {
 		return db.Asset{}, "", errors.New("profile media downloader unavailable")
 	}
+	var asset db.Asset
+	var path string
+	err := m.downloader.RunMedia(ctx, download.MediaLaneState, func() error {
+		var err error
+		asset, path, err = m.downloadProfileJobAssetAdmitted(ctx, job, profile, kind, sourceURL)
+		return err
+	})
+	return asset, path, err
+}
+
+func (m *Manager) downloadProfileJobAssetAdmitted(ctx context.Context, job model.ProfileJob, profile model.ChannelProfile, kind, sourceURL string) (db.Asset, string, error) {
 	dirName := "avatars"
 	if kind == "banner" {
 		dirName = "banners"
@@ -354,14 +380,6 @@ func (m *Manager) removeReplacedProfileFiles(previous map[string]*db.Asset, prof
 		}
 		if _, err := m.db.RemoveAssetFileIfUnreferenced(asset.FilePath); err != nil {
 			log.Printf("[profile] remove replaced %s file %s: %v", kind, asset.FilePath, err)
-		}
-	}
-}
-
-func removeFiles(paths []string) {
-	for _, path := range paths {
-		if path != "" {
-			_ = os.Remove(path)
 		}
 	}
 }

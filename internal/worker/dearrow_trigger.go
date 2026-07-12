@@ -3,8 +3,9 @@ package worker
 import (
 	"context"
 	"log"
-	"os"
 	"time"
+
+	"github.com/screwys/igloo/internal/download"
 )
 
 // triggerDearrowFetch runs a DeArrow check for videoID in the background.
@@ -56,7 +57,7 @@ func (m *Manager) triggerDearrowFetch(ctx context.Context, videoID, videoRelPath
 			thumbRel = &rel
 		} else {
 			log.Printf("[dearrow] reject thumbnail path %s: %v", videoID, rErr)
-			_ = os.Remove(*res.ThumbPath)
+			m.removeMediaPaths(ctx, download.MediaLaneBulk, *res.ThumbPath)
 			if saveErr := m.db.SetDearrowTitles(videoID, res.Title, res.CasualTitle, nowMs); saveErr != nil {
 				log.Printf("[dearrow] save partial %s: %v", videoID, saveErr)
 			}
@@ -66,7 +67,7 @@ func (m *Manager) triggerDearrowFetch(ctx context.Context, videoID, videoRelPath
 	if sErr := m.db.SetDearrowData(videoID, res.Title, res.CasualTitle, thumbRel, nowMs); sErr != nil {
 		log.Printf("[dearrow] save %s: %v", videoID, sErr)
 		if res.ThumbPath != nil {
-			_ = os.Remove(*res.ThumbPath)
+			m.removeMediaPaths(ctx, download.MediaLaneBulk, *res.ThumbPath)
 		}
 	}
 }
@@ -81,8 +82,7 @@ func (m *Manager) triggerYoutubeEnrichFetch(ctx context.Context, videoID, videoR
 	}
 	m.triggerDearrowFetch(ctx, videoID, videoRelPath, platform)
 
-	// Only fetch SB if we don't already have a record for this video. Skips
-	// redundant work when the youtube-enrichment worker beat us to it.
+	// Only fetch SB if we don't already have a record for this video.
 	if existing, _ := m.db.GetSponsorBlockChecked(videoID); existing == nil {
 		var publishedAtMs int64
 		if v, err := m.db.GetVideo(videoID); err == nil && v != nil && v.PublishedAt != nil {

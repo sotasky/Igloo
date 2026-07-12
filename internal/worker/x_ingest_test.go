@@ -215,7 +215,7 @@ func TestFetchOneChannelRecordsFailureBackoff(t *testing.T) {
 	}
 }
 
-func TestRunIngestCycleSweepsRepliesWhenNoChannelsDue(t *testing.T) {
+func TestRunIngestCycleDoesNotSweepHistoricalRepliesWhenNoChannelsDue(t *testing.T) {
 	d := newTestWorkerDB(t)
 	if err := d.AddChannel(model.Channel{
 		ChannelID:    "twitter_sample_source",
@@ -275,12 +275,12 @@ func TestRunIngestCycleSweepsRepliesWhenNoChannelsDue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetFeedItemByTweetID: %v", err)
 	}
-	if parent == nil || !parent.IsGhost || parent.BodyText != "parent body" {
-		t.Fatalf("parent ghost = %+v", parent)
+	if parent != nil {
+		t.Fatalf("historical reply was swept during an unrelated cycle: %+v", parent)
 	}
 }
 
-func TestRunIngestCycleSweepsRepliesBeforeFetchingReadyChannels(t *testing.T) {
+func TestRunIngestCycleDoesNotSweepHistoricalRepliesBeforeReadyChannels(t *testing.T) {
 	d := newTestWorkerDB(t)
 	if err := d.AddChannel(model.Channel{
 		ChannelID:    "twitter_sample_source",
@@ -319,8 +319,8 @@ func TestRunIngestCycleSweepsRepliesBeforeFetchingReadyChannels(t *testing.T) {
 			if err != nil {
 				t.Fatalf("GetFeedItemByTweetID: %v", err)
 			}
-			if parent == nil {
-				t.Fatal("reply sweep did not run before ready channel fetch")
+			if parent != nil {
+				t.Fatal("historical reply sweep ran before ready channel fetch")
 			}
 			return nil, nil
 		},

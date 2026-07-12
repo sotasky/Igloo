@@ -221,7 +221,7 @@ func TestFeedItemDoesNotSynthesizeVideoEndpointWhenInventoryIsMissing(t *testing
 	}
 }
 
-func TestFeedItemUsesReadyPreviewWithoutDeferringPrefetchedImages(t *testing.T) {
+func TestFeedItemUsesReadyVideoPreviews(t *testing.T) {
 	item := model.FeedItem{
 		TweetID:              "sample_video",
 		AuthorHandle:         "sample_author",
@@ -251,9 +251,6 @@ func TestFeedItemUsesReadyPreviewWithoutDeferringPrefetchedImages(t *testing.T) 
 	}
 	if !strings.Contains(html, `poster="/api/media/thumbnail/sample_quote_video?owner_kind=tweet"`) {
 		t.Fatalf("ready local quote preview was not used as the video poster: %s", html)
-	}
-	if strings.Contains(html, `loading="lazy"`) {
-		t.Fatalf("prefetched feed card retained a second lazy image gate: %s", html)
 	}
 }
 

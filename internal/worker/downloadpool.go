@@ -18,20 +18,12 @@ import (
 	"github.com/screwys/igloo/internal/model"
 )
 
-const downloadBatchSize = 10
+const downloadBatchSize = 1
 
 var (
 	downloadPoolLeaseDuration      = 5 * time.Minute
 	downloadPoolLeaseRenewInterval = downloadPoolLeaseDuration / 2
 )
-
-// platformSem limits concurrent downloads per platform. Keep each upstream
-// platform at one active downloader; discovery pacing owns freshness.
-var platformSem = map[string]chan struct{}{
-	"youtube":   make(chan struct{}, 1),
-	"tiktok":    make(chan struct{}, 1),
-	"instagram": make(chan struct{}, 1),
-}
 
 // short-form downloads share one pacing clock to avoid rapid cross-platform bursts.
 var (
@@ -57,33 +49,41 @@ var qualityFormats = map[string]string{
 	"best":  "best",
 }
 
-// runDownloadPool processes video download queue jobs with per-platform concurrency.
-func (m *Manager) runDownloadPool(ctx context.Context) {
-	ticker := time.NewTicker(10 * time.Second)
-	defer ticker.Stop()
-
-	log.Printf("[downloadpool] worker started")
-
+func (m *Manager) runMediaExecutor(ctx context.Context) {
+	timer := time.NewTimer(0)
+	defer timer.Stop()
+	log.Printf("[media] executor started")
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-m.downloadKick:
-			if m.IsStopRequested() {
-				continue
-			}
-			m.processDownloadBatch(ctx)
-		case <-ticker.C:
-			if m.IsStopRequested() {
-				continue
-			}
+		case <-m.feedMediaKick:
+		case <-timer.C:
+		}
+		if !m.IsStopRequested() {
+			m.processFeedMediaBatch(ctx)
 			m.processDownloadBatch(ctx)
 		}
+		delay, err := m.db.NextMediaWorkDelay(time.Now().UnixMilli())
+		if err != nil {
+			log.Printf("[media] next due: %v", err)
+			delay = time.Minute
+		}
+		if delay < 10*time.Millisecond {
+			delay = 10 * time.Millisecond
+		}
+		if !timer.Stop() {
+			select {
+			case <-timer.C:
+			default:
+			}
+		}
+		timer.Reset(delay)
 	}
 }
 
-// processDownloadBatch claims pending download jobs and processes them
-// concurrently with per-platform semaphores.
+// processDownloadBatch claims one due video mutation for the media executor.
 func (m *Manager) processDownloadBatch(ctx context.Context) {
 	owner := downloadPoolLeaseOwner()
 	jobs, err := m.db.ClaimDownloadBatchWithLease(db.LeaseOptions{
@@ -101,7 +101,6 @@ func (m *Manager) processDownloadBatch(ctx context.Context) {
 
 	log.Printf("[downloadpool] processing %d jobs", len(jobs))
 
-	var wg sync.WaitGroup
 	for _, job := range jobs {
 		select {
 		case <-ctx.Done():
@@ -131,25 +130,8 @@ func (m *Manager) processDownloadBatch(ctx context.Context) {
 			subtitles = s.DownloadSubtitles
 		}
 
-		sem := platformSemFor(ch.Platform)
-
-		wg.Add(1)
-		go func(job db.DownloadQueueRow, platform, sourceID, quality string, subtitles bool) {
-			defer wg.Done()
-
-			// Acquire platform semaphore.
-			select {
-			case sem <- struct{}{}:
-			case <-ctx.Done():
-				return
-			}
-			defer func() { <-sem }()
-
-			m.downloadVideo(ctx, job, platform, sourceID, quality, subtitles)
-		}(job, ch.Platform, ch.SourceID, ch.Quality, subtitles)
+		m.downloadVideo(ctx, job, ch.Platform, ch.SourceID, ch.Quality, subtitles)
 	}
-
-	wg.Wait()
 }
 
 // downloadVideo handles a single video download job.
@@ -199,12 +181,12 @@ func (m *Manager) downloadVideo(ctx context.Context, job db.DownloadQueueRow, pl
 		m.failDownloadJob(job, fmt.Errorf("storage path: %w", err))
 		return
 	}
-	if err := os.MkdirAll(videoDir, 0o755); err != nil {
+	if err := m.downloader.RunMedia(ctx, download.MediaLaneBulk, func() error { return os.MkdirAll(videoDir, 0o755) }); err != nil {
 		log.Printf("[downloadpool] mkdir %s: %v", videoDir, err)
 		m.failDownloadJob(job, fmt.Errorf("mkdir: %w", err))
 		return
 	}
-	attemptID, err := newDownloadAttemptID(videoDir, job.VideoID)
+	attemptID, err := newDownloadAttemptID(job.VideoID)
 	if err != nil {
 		m.failDownloadJob(job, fmt.Errorf("allocate download attempt: %w", err))
 		return
@@ -233,17 +215,13 @@ func (m *Manager) downloadVideo(ctx context.Context, job db.DownloadQueueRow, pl
 		SubtitleDir:        subtitleDir,
 	}
 
-	var completed download.CompletedDownload
-	var dlErr error
-
-	if platform == "tiktok" || platform == "instagram" {
+	completed, reused, dlErr := m.reusableCompletedVideo(ctx, videoDir, job.VideoID, platform)
+	if dlErr == nil && !reused {
 		completed, dlErr = m.downloader.DownloadCompleted(ctx, sourceURL, "video", opts)
-	} else {
-		completed, dlErr = m.downloader.YtDlp.DownloadCompleted(ctx, sourceURL, opts)
 	}
 
 	if dlErr != nil {
-		(completedVideoFiles{}).removeFailedAttempt(completed)
+		m.removeFailedAttempt(ctx, completedVideoFiles{}, completed)
 		log.Printf("[downloadpool] download %s: %v", job.VideoID, dlErr)
 		m.EmitDownload(fmt.Sprintf("Failed: %s — %v", job.Title, dlErr), "error", job.ChannelID, platform)
 		m.failDownloadJob(job, fmt.Errorf("download: %w", dlErr))
@@ -251,17 +229,22 @@ func (m *Manager) downloadVideo(ctx context.Context, job db.DownloadQueueRow, pl
 	}
 
 	if len(completed.MediaPaths) == 0 {
-		(completedVideoFiles{}).removeFailedAttempt(completed)
+		m.removeFailedAttempt(ctx, completedVideoFiles{}, completed)
 		log.Printf("[downloadpool] no files returned for %s", job.VideoID)
 		m.EmitDownload(fmt.Sprintf("Failed: %s — no files returned", job.Title), "error", job.ChannelID, platform)
 		m.failDownloadJob(job, fmt.Errorf("no files returned"))
 		return
 	}
+	if reused {
+		log.Printf("[downloadpool] reusing existing media for %s", job.VideoID)
+	}
 
 	metadata := loadInfoJSONFile(completed.InfoJSONPath)
 	files, err := m.prepareCompletedVideoFiles(ctx, platform, attemptID, completed)
 	if err != nil {
-		files.removeFailedAttempt(completed)
+		if !reused {
+			m.removeFailedAttempt(ctx, files, completed)
+		}
 		m.failDownloadJob(job, fmt.Errorf("prepare completed outputs: %w", err))
 		return
 	}
@@ -319,15 +302,19 @@ func (m *Manager) downloadVideo(ctx context.Context, job db.DownloadQueueRow, pl
 		Duration: duration, PublishedAtMs: publishedAt, MetadataJSON: metadataJSON,
 		MediaKind: mediaKind, SlideCount: slideCount, Assets: files.assets,
 	}); err != nil {
-		files.removeFailedAttempt(completed)
+		if !reused {
+			m.removeFailedAttempt(ctx, files, completed)
+		}
 		log.Printf("[downloadpool] StoreCompletedVideo %s: %v", job.VideoID, err)
 		m.failDownloadJob(job, fmt.Errorf("db insert: %w", err))
 		return
 	}
-	if err := m.storeCompletedSubtitles(job.VideoID, files, completed); err != nil {
+	if err := m.storeCompletedSubtitles(ctx, job.VideoID, files, completed, reused); err != nil {
 		log.Printf("[downloadpool] StoreVideoSubtitleAssets %s: %v", job.VideoID, err)
 	}
-	files.removeTransientFiles()
+	if !reused {
+		m.removeTransientFiles(ctx, files)
+	}
 
 	// Remove from download queue.
 	if err := m.db.RemoveFromDownloadQueue(job.VideoID, job.LeaseOwner); err != nil {
@@ -605,15 +592,6 @@ func cookieFileCandidates(cookiesDir, platform string) []string {
 		out = append(out, candidate.Path)
 	}
 	return out
-}
-
-// platformSemFor returns the semaphore for the given platform.
-// Falls back to the YouTube semaphore (1 concurrent) for unknown platforms.
-func platformSemFor(platform string) chan struct{} {
-	if sem, ok := platformSem[platform]; ok {
-		return sem
-	}
-	return platformSem["youtube"]
 }
 
 func isShortFormDownloadPlatform(platform string) bool {

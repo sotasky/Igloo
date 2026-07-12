@@ -389,14 +389,8 @@ func (db *DB) ListAndroidSyncFeedRankProjections(tweetIDs []string) (map[string]
 func (db *DB) ListAndroidSyncAssetsByIDs(assetIDs []string) (map[string]Asset, error) {
 	out := make(map[string]Asset, len(assetIDs))
 	for _, chunk := range stringChunks(uniqueStrings(assetIDs), androidSyncProjectionChunkSize) {
-		rows, err := db.reader().Query(`
-			SELECT id, asset_id, asset_kind, owner_kind, owner_id, media_index,
-			       source_url, file_path, content_type, size_bytes, sha256, file_mtime_ns, revision,
-			       is_auto, audio_language, state,
-			       required_reason, last_error_kind, last_error, attempts,
-			       next_attempt_at_ms, lease_owner, lease_until_ms, created_at_ms, updated_at_ms
-			FROM assets
-			WHERE asset_id IN (`+placeholders(len(chunk))+`)
+		rows, err := db.reader().Query(`SELECT `+assetProjectionSQL+assetJoinsSQL+`
+			WHERE a.asset_id IN (`+placeholders(len(chunk))+`)
 		`, stringsToAny(chunk)...)
 		if err != nil {
 			return nil, err

@@ -1,6 +1,7 @@
 package db
 
 import (
+	"database/sql"
 	"os"
 	"path/filepath"
 	"testing"
@@ -131,15 +132,18 @@ func seedTestVideo(t *testing.T, d *DB, videoID, channelID string) {
 	seedTestChannel(t, d, channelID)
 	if err := d.ExecRaw(`
 		INSERT OR IGNORE INTO videos (video_id, channel_id, owner_kind, title, duration, published_at)
-		VALUES (?, ?, 'youtube_video', 'Fixture Video', 120, 1);
-		INSERT OR IGNORE INTO assets (
-			asset_id, asset_kind, owner_kind, owner_id, media_index,
-			file_path, content_type, size_bytes, state, created_at_ms, updated_at_ms
-		)
-		VALUES ('fixture-stream:' || ?, 'video_stream', 'youtube_video', ?, 0,
-		        'media/youtube/fixture.mp4', 'video/mp4', 1, 'ready', 1, 1)
-	`, videoID, channelID, videoID, videoID); err != nil {
+		VALUES (?, ?, 'youtube_video', 'Fixture Video', 120, 1)
+	`, videoID, channelID); err != nil {
 		t.Fatalf("seed video %s: %v", videoID, err)
+	}
+	asset := normalizeAsset(Asset{
+		AssetID: "fixture-stream:" + videoID, AssetKind: "video_stream",
+		OwnerKind: "youtube_video", OwnerID: videoID,
+		FilePath: "media/youtube/fixture.mp4", ContentType: "video/mp4",
+		SizeBytes: 1, SHA256: "fixture", FileMtimeNs: 1, State: AssetStateReady,
+	}, 1)
+	if err := d.WithWrite(func(tx *sql.Tx) error { return upsertAssetTx(tx, asset) }); err != nil {
+		t.Fatalf("seed video asset %s: %v", videoID, err)
 	}
 }
 

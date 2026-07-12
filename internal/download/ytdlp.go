@@ -414,7 +414,7 @@ func completedOutputBase(opts Opts, paths []string) string {
 // runVideoDownload executes the main yt-dlp download and extracts output paths,
 // with fallbacks for non-fatal exit codes and schema-mismatch parse errors.
 func runVideoDownload(ctx context.Context, cmd *ytdlp.Command, url string) ([]string, error) {
-	result := CommandRunner{}.RunBuilt(ctx, cmd.BuildCommand(ctx, url), CommandOptions{BulkWrite: true})
+	result := CommandRunner{}.RunBuilt(ctx, cmd.BuildCommand(ctx, url))
 	paths := extractFilenamesFromJSON(result.Stdout)
 	if result.Err != nil {
 		// yt-dlp may exit non-zero for non-fatal errors while the video

@@ -244,35 +244,26 @@ func (db *DB) materializeResolvedFeedStateTx(tx *sql.Tx, sourceID, stateID strin
 	if _, err := tx.Exec(`
 		INSERT INTO assets (
 			asset_id, asset_kind, owner_kind, owner_id, media_index,
-			source_url, file_path, content_type, size_bytes, sha256, file_mtime_ns, state,
-			required_reason, last_error_kind, last_error, attempts,
-			next_attempt_at_ms, lease_owner, lease_until_ms, created_at_ms, updated_at_ms
+			object_id, desired_object_id, is_auto, audio_language, required_reason,
+			created_at_ms, updated_at_ms
 		)
 		SELECT
 			'twitter_tweet_' || ? || '_' || asset_kind ||
 				CASE WHEN media_index > 0 THEN '_' || CAST(media_index AS TEXT) ELSE '' END,
 			asset_kind, owner_kind, ?, media_index,
-			source_url, file_path, content_type, size_bytes, sha256, file_mtime_ns, state,
-			required_reason, last_error_kind, last_error, attempts,
-			next_attempt_at_ms, lease_owner, lease_until_ms, ?, ?
+			object_id, desired_object_id, is_auto, audio_language, required_reason, ?, ?
 		FROM assets
 		WHERE owner_kind = 'tweet'
 		  AND owner_id = ?
 		  AND asset_kind IN ('post_audio', 'post_media', 'post_thumbnail')
-		  AND (
-			state != 'ready'
-			OR (file_path != '' AND size_bytes > 0)
-		  )
 		ON CONFLICT(asset_kind, owner_kind, owner_id, media_index) DO UPDATE SET
 			asset_id = excluded.asset_id,
-			source_url = excluded.source_url,
-			file_path = excluded.file_path,
-			content_type = excluded.content_type,
-			size_bytes = excluded.size_bytes,
-			sha256 = excluded.sha256,
-			file_mtime_ns = excluded.file_mtime_ns,
-			state = excluded.state,
+			object_id = excluded.object_id,
+			desired_object_id = excluded.desired_object_id,
+			is_auto = excluded.is_auto,
+			audio_language = excluded.audio_language,
 			required_reason = excluded.required_reason,
+			revision = assets.revision + 1,
 			updated_at_ms = excluded.updated_at_ms
 	`, stateID, stateID, nowMs, nowMs, sourceID); err != nil {
 		return err

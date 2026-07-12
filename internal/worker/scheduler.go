@@ -179,20 +179,10 @@ func (m *Manager) TriggerDownloadCycle(force bool) {
 }
 
 func (m *Manager) runDiscoveryMaintenance() {
-	if n, err := m.db.ResetStaleDownloadQueueItems(); err != nil {
-		log.Printf("[scheduler] ResetStaleDownloadQueueItems: %v", err)
-	} else if n > 0 {
-		log.Printf("[scheduler] reset %d stale download queue items", n)
-	}
 	if n, err := m.db.ResetStaleChannelQueueItems(discoveryChannelQueueStaleAge); err != nil {
 		log.Printf("[scheduler] ResetStaleChannelQueueItems: %v", err)
 	} else if n > 0 {
 		log.Printf("[scheduler] reset %d stale channel checks", n)
-	}
-	if n, err := m.db.ClearFailedDownloadQueueItems(); err != nil {
-		log.Printf("[scheduler] ClearFailedDownloadQueueItems: %v", err)
-	} else if n > 0 {
-		log.Printf("[scheduler] reset %d failed download queue items for retry", n)
 	}
 
 	m.cleanupTempVideos()

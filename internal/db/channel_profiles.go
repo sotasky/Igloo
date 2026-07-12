@@ -67,15 +67,17 @@ func (db *DB) GetChannelProfile(channelID string) (*model.ChannelProfile, error)
 		SELECT cp.channel_id, cp.platform, COALESCE(cp.handle, ''),
 		       COALESCE(cp.display_name, ''), COALESCE(cp.bio, ''), COALESCE(cp.website, ''),
 		       cp.followers, cp.following, cp.verified, COALESCE(cp.verified_type, ''), cp.protected,
-		       COALESCE(avatar.source_url, ''), COALESCE(banner.source_url, ''),
+		       COALESCE(avatar_object.source_url, ''), COALESCE(banner_object.source_url, ''),
 		       cp.observed_at_ms, cp.fetched_at, cp.tombstone
 		FROM channel_profiles cp
 		LEFT JOIN assets avatar
 		  ON avatar.asset_kind = 'avatar' AND avatar.owner_kind = 'channel'
 		 AND avatar.owner_id = cp.channel_id AND avatar.media_index = 0
+		LEFT JOIN media_objects avatar_object ON avatar_object.object_id = avatar.desired_object_id
 		LEFT JOIN assets banner
 		  ON banner.asset_kind = 'banner' AND banner.owner_kind = 'channel'
 		 AND banner.owner_id = cp.channel_id AND banner.media_index = 0
+		LEFT JOIN media_objects banner_object ON banner_object.object_id = banner.desired_object_id
 		WHERE cp.channel_id = ?
 	`, channelID))
 }
@@ -89,15 +91,17 @@ func (db *DB) GetYouTubeChannelProfileByHandle(handle string) (*model.ChannelPro
 		SELECT cp.channel_id, cp.platform, COALESCE(cp.handle, ''),
 		       COALESCE(cp.display_name, ''), COALESCE(cp.bio, ''), COALESCE(cp.website, ''),
 		       cp.followers, cp.following, cp.verified, COALESCE(cp.verified_type, ''), cp.protected,
-		       COALESCE(avatar.source_url, ''), COALESCE(banner.source_url, ''),
+		       COALESCE(avatar_object.source_url, ''), COALESCE(banner_object.source_url, ''),
 		       cp.observed_at_ms, cp.fetched_at, cp.tombstone
 		FROM channel_profiles cp
 		LEFT JOIN assets avatar
 		  ON avatar.asset_kind = 'avatar' AND avatar.owner_kind = 'channel'
 		 AND avatar.owner_id = cp.channel_id AND avatar.media_index = 0
+		LEFT JOIN media_objects avatar_object ON avatar_object.object_id = avatar.desired_object_id
 		LEFT JOIN assets banner
 		  ON banner.asset_kind = 'banner' AND banner.owner_kind = 'channel'
 		 AND banner.owner_id = cp.channel_id AND banner.media_index = 0
+		LEFT JOIN media_objects banner_object ON banner_object.object_id = banner.desired_object_id
 		WHERE LOWER(cp.platform) = 'youtube'
 		  AND cp.tombstone = 0
 		  AND cp.channel_id LIKE 'youtube_UC%'

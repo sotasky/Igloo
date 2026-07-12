@@ -471,68 +471,6 @@ func (db *DB) GetQueuedVideoCount(channelID string) (int, error) {
 	return count, err
 }
 
-// ResetStaleDownloadQueueItems resets processing items back to pending.
-// Returns the number of rows updated.
-func (db *DB) ResetStaleDownloadQueueItems() (int, error) {
-	return db.ResetStaleDownloadQueueItemsAt(time.Now().UnixMilli())
-}
-
-func (db *DB) ResetStaleDownloadQueueItemsAt(nowMs int64) (int, error) {
-	var affected int
-	err := db.WithWrite(func(tx *sql.Tx) error {
-		res, err := tx.Exec(`
-			UPDATE download_queue
-			   SET status='pending',
-			       lease_owner='',
-			       lease_until_ms=0,
-			       started_at=0
-			 WHERE status='processing'
-			   AND COALESCE(lease_until_ms,0) > 0
-			   AND lease_until_ms <= ?
-		`, nowMs)
-		if err != nil {
-			return err
-		}
-		n, err := res.RowsAffected()
-		if err != nil {
-			return err
-		}
-		affected = int(n)
-		return nil
-	})
-	return affected, err
-}
-
-// ClearFailedDownloadQueueItems resets failed items back to pending where retry_count < 5.
-// Returns the number of rows updated.
-func (db *DB) ClearFailedDownloadQueueItems() (int, error) {
-	var affected int
-	err := db.WithWrite(func(tx *sql.Tx) error {
-		now := time.Now().UnixMilli()
-		res, err := tx.Exec(`
-			UPDATE download_queue
-			   SET status='pending',
-			       started_at=0,
-			       lease_owner='',
-			       lease_until_ms=0
-			 WHERE status='failed'
-			   AND retry_count < 5
-			   AND next_attempt_at_ms > 0
-			   AND next_attempt_at_ms <= ?
-		`, now)
-		if err != nil {
-			return err
-		}
-		n, err := res.RowsAffected()
-		if err != nil {
-			return err
-		}
-		affected = int(n)
-		return nil
-	})
-	return affected, err
-}
-
 // ResetDownloadAuthFailuresForPlatform resets terminal auth failures after a
 // platform's credential source changes, so rows failed by stale cookies can be
 // retried with the new source.

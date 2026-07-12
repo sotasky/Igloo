@@ -40,10 +40,10 @@ func (s *Server) handleAndroidStatus(w http.ResponseWriter, r *http.Request) {
 	ready, missing := 0, 0
 	if err := s.db.QueryRow(`
 		SELECT
-			COALESCE(SUM(state = 'ready'), 0),
-			COALESCE(SUM(state IN ('server_missing', 'permanent_missing')), 0)
-		FROM assets
-		WHERE state != 'pruned'
+			COALESCE(SUM(mo.published_revision > 0 AND mo.file_path != ''), 0),
+			COALESCE(SUM(mo.published_revision = 0 AND mo.job_state IN ('server_missing', 'permanent_missing')), 0)
+		FROM assets a JOIN media_objects mo ON mo.object_id = a.desired_object_id
+		WHERE a.lifecycle_state != 'pruned'
 	`).Scan(&ready, &missing); err != nil {
 		slog.Warn("android dashboard asset summary failed", "err", err)
 	}

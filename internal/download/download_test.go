@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestIsDirectMedia(t *testing.T) {
@@ -32,6 +33,45 @@ func TestIsDirectMedia(t *testing.T) {
 		got := isDirectMedia(tt.url, tt.mediaType)
 		if got != tt.want {
 			t.Errorf("isDirectMedia(%q, %q) = %v, want %v", tt.url, tt.mediaType, got, tt.want)
+		}
+	}
+}
+
+func TestDownloaderSerializesMediaRootWriters(t *testing.T) {
+	entered := make(chan string, 2)
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		entered <- r.URL.Path
+		<-release
+		_, _ = w.Write([]byte("media"))
+	}))
+	defer srv.Close()
+
+	d := NewDownloader("")
+	d.HTTP = &HTTPDownloader{Client: srv.Client(), AllowPrivateHosts: true}
+	errs := make(chan error, 2)
+	start := func(id string) {
+		go func() {
+			_, err := d.Download(context.Background(), srv.URL+"/"+id+".jpg", "photo", Opts{
+				OutputDir: t.TempDir(),
+				ID:        id,
+			})
+			errs <- err
+		}()
+	}
+
+	start("first")
+	<-entered
+	start("second")
+	select {
+	case path := <-entered:
+		t.Fatalf("second writer entered while first was active: %s", path)
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(release)
+	for range 2 {
+		if err := <-errs; err != nil {
+			t.Fatal(err)
 		}
 	}
 }

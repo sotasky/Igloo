@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"testing"
-	"time"
 
 	"github.com/screwys/igloo/internal/dearrow"
 	"github.com/screwys/igloo/internal/sponsorblock"
@@ -27,14 +26,7 @@ func (s *stubSBClient) Fetch(_ context.Context, _ string) ([]sponsorblock.Segmen
 
 func (s *stubSBClient) calls() int { return s.callsN }
 
-// TestYoutubeEnrichOnce_CoFetchesDearrowAndSponsorBlock seeds a single YouTube
-// video, runs one enrichment pass, and verifies both APIs were called and
-// both kinds of data landed in the DB.
-func TestYoutubeEnrichOnce_CoFetchesDearrowAndSponsorBlock(t *testing.T) {
-	old := dearrowPerFetchSleep
-	dearrowPerFetchSleep = time.Millisecond
-	defer func() { dearrowPerFetchSleep = old }()
-
+func TestYoutubeDownloadEnrichmentFetchesDearrowAndSponsorBlock(t *testing.T) {
 	realTitle := "Community"
 	m, daClient := newTestManagerWithDearrow(t, dearrow.Result{Title: &realTitle}, nil)
 
@@ -45,12 +37,7 @@ func TestYoutubeEnrichOnce_CoFetchesDearrowAndSponsorBlock(t *testing.T) {
 
 	seedVideo(t, m, "v1")
 
-	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
-	defer cancel()
-
-	if n := m.youtubeEnrichOnce(ctx); n != 1 {
-		t.Fatalf("processed = %d, want 1", n)
-	}
+	m.triggerYoutubeEnrichFetch(t.Context(), "v1", "", "youtube")
 	if daClient.calls() != 1 {
 		t.Errorf("dearrow calls = %d, want 1", daClient.calls())
 	}
@@ -81,20 +68,12 @@ func TestYoutubeEnrichOnce_CoFetchesDearrowAndSponsorBlock(t *testing.T) {
 	}
 }
 
-// TestYoutubeEnrichOnce_MarksCheckedOnSBError ensures a failed SB fetch still
-// writes a sponsorblock_checked row so the video doesn't hot-loop every tick.
-func TestYoutubeEnrichOnce_MarksCheckedOnSBError(t *testing.T) {
-	old := dearrowPerFetchSleep
-	dearrowPerFetchSleep = time.Millisecond
-	defer func() { dearrowPerFetchSleep = old }()
-
+func TestFetchSponsorBlockMarksCheckedOnError(t *testing.T) {
 	m, _ := newTestManagerWithDearrow(t, dearrow.Result{}, nil)
 	m.sponsorblockClient = &stubSBClient{err: errors.New("network down")}
 	seedVideo(t, m, "v1")
 
-	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
-	defer cancel()
-	_ = m.youtubeEnrichOnce(ctx)
+	m.fetchSponsorBlockFor(t.Context(), "v1", 0)
 
 	checked, err := m.db.GetSponsorBlockChecked("v1")
 	if err != nil {
@@ -105,21 +84,12 @@ func TestYoutubeEnrichOnce_MarksCheckedOnSBError(t *testing.T) {
 	}
 }
 
-// TestYoutubeEnrichOnce_SkipsSBWhenClientNil is the test-mode path: a Manager
-// with no sponsorblockClient shouldn't try to hit the network or write an
-// empty SB-checked row.
-func TestYoutubeEnrichOnce_SkipsSBWhenClientNil(t *testing.T) {
-	old := dearrowPerFetchSleep
-	dearrowPerFetchSleep = time.Millisecond
-	defer func() { dearrowPerFetchSleep = old }()
-
+func TestFetchSponsorBlockSkipsNilClient(t *testing.T) {
 	m, _ := newTestManagerWithDearrow(t, dearrow.Result{}, nil)
 	// m.sponsorblockClient deliberately left nil.
 	seedVideo(t, m, "v1")
 
-	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
-	defer cancel()
-	_ = m.youtubeEnrichOnce(ctx)
+	m.fetchSponsorBlockFor(t.Context(), "v1", 0)
 
 	checked, _ := m.db.GetSponsorBlockChecked("v1")
 	if checked != nil {

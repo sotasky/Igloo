@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
@@ -9,7 +10,51 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/screwys/igloo/internal/storage"
 )
+
+func TestStoreReadyBulkAssetWaitsForMediaExecutor(t *testing.T) {
+	d := openWritableTestDB(t)
+	path, err := d.storage.WritePath("media/youtube/sample.mp4")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte{0, 0, 0, 20, 'f', 't', 'y', 'p', 'i', 's', 'o', 'm'}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	bulkEntered := make(chan struct{})
+	releaseBulk := make(chan struct{})
+	go func() {
+		_ = d.storage.MediaExecutor().Run(context.Background(), storage.MediaLaneBulk, func() error {
+			close(bulkEntered)
+			<-releaseBulk
+			return nil
+		})
+	}()
+	<-bulkEntered
+
+	stored := make(chan error, 1)
+	go func() {
+		stored <- d.StoreReadyAsset(Asset{
+			AssetID: "sample_stream", AssetKind: "video_stream", OwnerKind: "youtube_video", OwnerID: "sample",
+			FilePath: "media/youtube/sample.mp4", ContentType: "video/mp4",
+		}, 1)
+	}()
+	select {
+	case err := <-stored:
+		t.Fatalf("bulk asset bypassed executor: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(releaseBulk)
+	if err := <-stored; err != nil {
+		t.Fatal(err)
+	}
+}
 
 func upsertAssetForTest(t *testing.T, d *DB, asset Asset, nowMs int64) {
 	t.Helper()
@@ -39,21 +84,35 @@ func storeReadyAssetForTest(t *testing.T, d *DB, asset Asset, nowMs int64) {
 	}
 }
 
+func publishAssetMetadataForTest(t *testing.T, d *DB, asset Asset, nowMs int64) {
+	t.Helper()
+	asset.State = AssetStateReady
+	if asset.ContentType == "" {
+		asset.ContentType = "image/jpeg"
+	}
+	if asset.SizeBytes <= 0 {
+		asset.SizeBytes = 1
+	}
+	if asset.SHA256 == "" {
+		asset.SHA256 = "fixture"
+	}
+	if asset.FileMtimeNs <= 0 {
+		asset.FileMtimeNs = 1
+	}
+	asset = normalizeAsset(asset, nowMs)
+	if err := d.WithWrite(func(tx *sql.Tx) error { return upsertAssetTx(tx, asset) }); err != nil {
+		t.Fatalf("publish test asset metadata: %v", err)
+	}
+}
+
 func TestListReadyAssetsForOwnersKeepsOwnerKindsDistinct(t *testing.T) {
 	d := openWritableTestDB(t)
-	if err := d.ExecRaw(`
-		INSERT INTO assets (
-			asset_id, asset_kind, owner_kind, owner_id, media_index,
-			file_path, content_type, state, created_at_ms, updated_at_ms
-		) VALUES
-			('sample_media', 'post_media', 'tweet', 'sample_post', 0,
-			 'media/twitter/sample.jpg', 'image/jpeg', 'ready', 1, 1),
-			('sample_photo', 'post_media', 'tweet', 'sample_first', 0,
-			 'media/twitter/other.jpg', 'image/jpeg', 'ready', 1, 1),
-			('sample_avatar', 'avatar', 'channel', 'sample_post', 0,
-			 'thumbnails/avatars/sample.jpg', 'image/jpeg', 'ready', 1, 1)
-	`); err != nil {
-		t.Fatal(err)
+	for _, asset := range []Asset{
+		{AssetID: "sample_media", AssetKind: "post_media", OwnerKind: "tweet", OwnerID: "sample_post", FilePath: "media/twitter/sample.jpg"},
+		{AssetID: "sample_photo", AssetKind: "post_media", OwnerKind: "tweet", OwnerID: "sample_first", FilePath: "media/twitter/other.jpg"},
+		{AssetID: "sample_avatar", AssetKind: "avatar", OwnerKind: "channel", OwnerID: "sample_post", FilePath: "thumbnails/avatars/sample.jpg"},
+	} {
+		publishAssetMetadataForTest(t, d, asset, 1)
 	}
 
 	assets, err := d.ListReadyAssetsForOwners([]AssetOwnerRef{
@@ -153,7 +212,8 @@ func TestMarkReadyAssetUnavailableIsFileIdentityConditional(t *testing.T) {
 		t.Fatal("stale revision withdrew the ready asset")
 	}
 	if err := d.ExecRaw(`
-		UPDATE assets SET file_mtime_ns = file_mtime_ns + 1 WHERE asset_id = 'sample_ready_asset'
+		UPDATE media_objects SET file_mtime_ns = file_mtime_ns + 1
+		WHERE object_id = (SELECT object_id FROM assets WHERE asset_id = 'sample_ready_asset')
 	`); err != nil {
 		t.Fatal(err)
 	}
@@ -209,7 +269,10 @@ func TestStoreReadyAssetWaitsForFileAndDirectoryDurability(t *testing.T) {
 	d.readyAssetDurability = func(path string) error {
 		assertNotReady := func() error {
 			var count int
-			if err := d.QueryRow(`SELECT COUNT(*) FROM assets WHERE asset_id = ? AND state = 'ready'`, asset.AssetID).Scan(&count); err != nil {
+			if err := d.QueryRow(`
+				SELECT COUNT(*) FROM assets a JOIN media_objects mo ON mo.object_id = a.object_id
+				WHERE a.asset_id = ? AND mo.published_revision > 0
+			`, asset.AssetID).Scan(&count); err != nil {
 				return err
 			}
 			if count != 0 {
@@ -369,8 +432,8 @@ func TestXSourceObservationPreservesSuccessfulCapture(t *testing.T) {
 	if err != nil || after == nil {
 		t.Fatalf("asset after new observation = %+v, err = %v", after, err)
 	}
-	if after.State != AssetStateReady || after.SourceURL != oldSource || after.FilePath != before.FilePath ||
-		after.SHA256 != before.SHA256 || after.Revision != before.Revision {
+	if after.State != AssetStateReady || after.SourceURL != newSource || after.PublishedSourceURL != oldSource ||
+		after.FilePath != before.FilePath || after.SHA256 != before.SHA256 || after.Revision != before.Revision+1 {
 		t.Fatalf("successful capture was demoted by a source observation: before=%+v after=%+v", before, after)
 	}
 	claimed, err := d.ClaimContentAssetDownloadBatch(LeaseOptions{
@@ -379,8 +442,8 @@ func TestXSourceObservationPreservesSuccessfulCapture(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(claimed) != 0 {
-		t.Fatalf("immutable ready capture was queued again: %+v", claimed)
+	if len(claimed) != 1 || claimed[0].SourceURL != newSource || claimed[0].PublishedSourceURL != oldSource {
+		t.Fatalf("replacement claim did not preserve published capture: %+v", claimed)
 	}
 }
 

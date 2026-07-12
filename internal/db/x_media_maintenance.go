@@ -158,7 +158,10 @@ func (db *DB) pruneXMediaRetentionSource(source xRetentionSource, limit int, now
 			continue
 		}
 		var refs int
-		if err := db.conn.QueryRow(`SELECT COUNT(*) FROM assets WHERE file_path = ? AND state = 'ready'`, path).Scan(&refs); err == nil && refs > 0 {
+		if err := db.conn.QueryRow(`
+			SELECT COUNT(*) FROM assets a JOIN media_objects mo ON mo.object_id = a.object_id
+			WHERE a.lifecycle_state = 'active' AND mo.file_path = ? AND mo.published_revision > 0
+		`, path).Scan(&refs); err == nil && refs > 0 {
 			result.FileRemoval.StillReferenced++
 		} else {
 			result.FileRemoval.Missing++
@@ -339,13 +342,13 @@ func (db *DB) xContentAssetPaths(ownerIDs []string) (map[string]int64, int64, er
 	seen := map[string]int64{}
 	for _, chunk := range stringChunks(uniqueStrings(ownerIDs), 400) {
 		rows, err := db.conn.Query(`
-			SELECT file_path, MAX(size_bytes)
-			FROM assets
-			WHERE owner_kind = 'tweet'
-			  AND owner_id IN (`+placeholders(len(chunk))+`)
-			  AND asset_kind IN ('post_audio', 'post_media', 'post_thumbnail')
-			  AND state = 'ready' AND file_path != ''
-			GROUP BY file_path
+			SELECT mo.file_path, MAX(mo.size_bytes)
+			FROM assets a JOIN media_objects mo ON mo.object_id = a.object_id
+			WHERE a.owner_kind = 'tweet'
+			  AND a.owner_id IN (`+placeholders(len(chunk))+`)
+			  AND a.asset_kind IN ('post_audio', 'post_media', 'post_thumbnail')
+			  AND a.lifecycle_state = 'active' AND mo.published_revision > 0 AND mo.file_path != ''
+			GROUP BY mo.file_path
 		`, stringsToAny(chunk)...)
 		if err != nil {
 			return nil, 0, err
@@ -380,14 +383,11 @@ func (db *DB) markXContentAssetsPruned(ownerIDs []string, nowMs int64) (int, err
 		err := db.WithWrite(func(tx *sql.Tx) error {
 			res, err := tx.Exec(`
 				UPDATE assets
-				SET state = 'pruned', file_path = '', size_bytes = 0, sha256 = '', file_mtime_ns = 0,
-				    last_error_kind = 'retention', last_error = 'x media retention',
-				    attempts = 0, next_attempt_at_ms = 0,
-				    lease_owner = '', lease_until_ms = 0, updated_at_ms = ?
+				SET lifecycle_state = 'pruned', revision = revision + 1, updated_at_ms = ?
 				WHERE owner_kind = 'tweet'
 				  AND owner_id IN (`+placeholders(len(chunk))+`)
 				  AND asset_kind IN ('post_audio', 'post_media', 'post_thumbnail')
-				  AND state != 'pruned'
+				  AND lifecycle_state != 'pruned'
 			`, append([]any{nowMs}, stringsToAny(chunk)...)...)
 			if err != nil {
 				return err

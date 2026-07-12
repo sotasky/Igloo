@@ -48,14 +48,12 @@ func TestVideoReadersUseProfileDisplayName(t *testing.T) {
 		INSERT INTO videos (video_id, channel_id, owner_kind, title, duration, published_at)
 		VALUES
 			('sample_video', 'youtube_sample_channel', 'youtube_video', 'Sample Video', 0, 1),
-			('missing_profile_video', 'youtube_missing_profile', 'youtube_video', 'Missing Profile', 0, 1);
-		INSERT INTO assets (asset_id, asset_kind, owner_kind, owner_id, media_index, file_path, state)
-		VALUES
-			('sample_video_stream', 'video_stream', 'youtube_video', 'sample_video', 0, 'media/sample_video.mp4', 'ready'),
-			('missing_profile_stream', 'video_stream', 'youtube_video', 'missing_profile_video', 0, 'media/missing_profile.mp4', 'ready')
+			('sample_missing_profile_video', 'youtube_missing_profile', 'youtube_video', 'Missing Profile', 0, 1)
 	`); err != nil {
 		t.Fatal(err)
 	}
+	publishAssetMetadataForTest(t, d, Asset{AssetID: "sample_video_stream", AssetKind: "video_stream", OwnerKind: "youtube_video", OwnerID: "sample_video", FilePath: "media/sample_video.mp4", ContentType: "video/mp4"}, 1)
+	publishAssetMetadataForTest(t, d, Asset{AssetID: "sample_missing_profile_stream", AssetKind: "video_stream", OwnerKind: "youtube_video", OwnerID: "sample_missing_profile_video", FilePath: "media/missing_profile.mp4", ContentType: "video/mp4"}, 1)
 
 	video, err := d.GetVideo("sample_video")
 	if err != nil || video == nil {
@@ -73,7 +71,7 @@ func TestVideoReadersUseProfileDisplayName(t *testing.T) {
 		t.Fatalf("GetVideos channel name = %q, want profile display name", videos[0].ChannelName)
 	}
 
-	missing, err := d.GetVideo("missing_profile_video")
+	missing, err := d.GetVideo("sample_missing_profile_video")
 	if err != nil || missing == nil {
 		t.Fatalf("GetVideo missing profile: %v / %+v", err, missing)
 	}

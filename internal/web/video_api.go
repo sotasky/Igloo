@@ -516,13 +516,15 @@ func (s *Server) handleVideoCommentsRefresh(w http.ResponseWriter, r *http.Reque
 	defer cancel()
 
 	commentsDownloader := &download.YtDlpWrapper{}
+	var mediaDownloader *download.Downloader
 	if s.workers != nil {
 		if dl := s.workers.Downloader(); dl != nil && dl.YtDlp != nil {
+			mediaDownloader = dl
 			commentsDownloader = dl.YtDlp
 		}
 	}
 	if video.Platform == "youtube" {
-		s.refreshVideoSubtitles(r.Context(), commentsDownloader, videoID, sourceURL)
+		s.refreshVideoSubtitles(r.Context(), mediaDownloader, videoID, sourceURL)
 	}
 	parsed, err := commentsDownloader.FetchComments(ctx, sourceURL, download.DefaultCommentFetchLimit, download.Opts{
 		CookiesFromBrowser: "firefox",
@@ -585,13 +587,13 @@ func (s *Server) handleVideoCommentsRefresh(w http.ResponseWriter, r *http.Reque
 	})
 }
 
-func (s *Server) refreshVideoSubtitles(parent context.Context, downloader *download.YtDlpWrapper, videoID, sourceURL string) {
+func (s *Server) refreshVideoSubtitles(parent context.Context, downloader *download.Downloader, videoID, sourceURL string) {
 	owner, ok := s.videoAssetOwner(videoID)
 	if !ok {
 		return
 	}
 	stream := s.canonicalStreamAsset(owner)
-	if downloader == nil || stream == nil {
+	if downloader == nil || downloader.YtDlp == nil || stream == nil {
 		return
 	}
 	ctx, cancel := context.WithTimeout(parent, 30*time.Second)
@@ -601,10 +603,15 @@ func (s *Server) refreshVideoSubtitles(parent context.Context, downloader *downl
 		slog.Warn("subtitle storage path failed", "video", videoID, "err", err)
 		return
 	}
-	paths, err := downloader.DownloadSubtitles(ctx, sourceURL, download.Opts{
-		ID:                 fmt.Sprintf("%s-sub-%d", videoID, time.Now().UnixNano()),
-		SubtitleDir:        subtitleDir,
-		CookiesFromBrowser: "firefox",
+	var paths []string
+	err = downloader.RunMedia(ctx, download.MediaLaneState, func() error {
+		var err error
+		paths, err = downloader.YtDlp.DownloadSubtitles(ctx, sourceURL, download.Opts{
+			ID:                 fmt.Sprintf("%s-sub-%d", videoID, time.Now().UnixNano()),
+			SubtitleDir:        subtitleDir,
+			CookiesFromBrowser: "firefox",
+		})
+		return err
 	})
 	if err != nil {
 		slog.Warn("subtitle download failed", "video", videoID, "err", err)
@@ -614,7 +621,7 @@ func (s *Server) refreshVideoSubtitles(parent context.Context, downloader *downl
 	for index, path := range paths {
 		key, keyErr := s.cfg.Storage.Key(path)
 		if keyErr != nil {
-			removePaths(paths)
+			_ = downloader.RunMedia(ctx, download.MediaLaneState, func() error { removePaths(paths); return nil })
 			slog.Warn("subtitle output escaped storage", "video", videoID, "err", keyErr)
 			return
 		}
@@ -627,7 +634,7 @@ func (s *Server) refreshVideoSubtitles(parent context.Context, downloader *downl
 		})
 	}
 	if err := s.db.StoreVideoSubtitleAssets(videoID, assets, time.Now().UnixMilli()); err != nil {
-		removePaths(paths)
+		_ = downloader.RunMedia(ctx, download.MediaLaneState, func() error { removePaths(paths); return nil })
 		slog.Warn("publish subtitle assets failed", "video", videoID, "err", err)
 	}
 }

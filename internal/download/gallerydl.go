@@ -367,7 +367,7 @@ func (g *GalleryDLWrapper) DownloadCompleted(ctx context.Context, rawURL, destDi
 	}
 	args = appendCookieAuthArgs(args, cookiesFile, browser)
 	args = append(args, rawURL)
-	result := g.Run(ctx, "media.gallerydl", platformFromURL(rawURL), rawURL, args, cookiesFile, CommandOptions{Timeout: galleryDLDefaultTimeout, BulkWrite: true}, browser)
+	result := g.Run(ctx, "media.gallerydl", platformFromURL(rawURL), rawURL, args, cookiesFile, CommandOptions{Timeout: galleryDLDefaultTimeout}, browser)
 	output := result.CombinedOutput()
 	err = result.Err
 	// TikTok posts that are deleted, private, or geo-restricted surface as

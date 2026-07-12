@@ -9,8 +9,8 @@ import (
 )
 
 // fetchSponsorBlockFor pulls SponsorBlock segments for videoID and persists
-// them along with a sponsorblock_checked marker. Used by the youtube-enrichment
-// worker and by the download-completion hook. publishedAtMs is unix-millis
+// them along with a sponsorblock_checked marker. Used by the download-completion
+// hook. publishedAtMs is unix-millis
 // from the videos row (0 when unknown); it picks the "young"/"old" age label
 // that sbShouldFetch uses to decide whether to re-check in the future.
 //

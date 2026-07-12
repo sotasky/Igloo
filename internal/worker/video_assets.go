@@ -2,6 +2,8 @@ package worker
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -26,6 +28,19 @@ type completedVideoFiles struct {
 }
 
 func (m *Manager) prepareCompletedVideoFiles(ctx context.Context, platform, outputID string, completed download.CompletedDownload) (completedVideoFiles, error) {
+	if m == nil || m.downloader == nil {
+		return m.prepareCompletedVideoFilesAdmitted(ctx, platform, outputID, completed)
+	}
+	var files completedVideoFiles
+	err := m.downloader.RunMedia(ctx, download.MediaLaneBulk, func() error {
+		var err error
+		files, err = m.prepareCompletedVideoFilesAdmitted(ctx, platform, outputID, completed)
+		return err
+	})
+	return files, err
+}
+
+func (m *Manager) prepareCompletedVideoFilesAdmitted(ctx context.Context, platform, outputID string, completed download.CompletedDownload) (completedVideoFiles, error) {
 	var out completedVideoFiles
 	if m == nil || m.cfg == nil {
 		return out, fmt.Errorf("storage is not configured")
@@ -238,24 +253,121 @@ func safeVideoFileName(name string) (string, error) {
 	return name, nil
 }
 
-func newDownloadAttemptID(dir, videoID string) (string, error) {
+func newDownloadAttemptID(videoID string) (string, error) {
 	videoID, err := safeVideoFileName(videoID)
 	if err != nil {
 		return "", err
 	}
-	file, err := os.CreateTemp(dir, videoID+"-attempt-*")
+	var suffix [8]byte
+	if _, err := rand.Read(suffix[:]); err != nil {
+		return "", err
+	}
+	return videoID + "-attempt-" + hex.EncodeToString(suffix[:]), nil
+}
+
+func (m *Manager) reusableCompletedVideo(ctx context.Context, dir, videoID, platform string) (download.CompletedDownload, bool, error) {
+	var completed download.CompletedDownload
+	lookup := func() error {
+		var err error
+		completed, err = reusableCompletedVideoAdmitted(dir, videoID, platform)
+		return err
+	}
+	if m != nil && m.downloader != nil {
+		if err := m.downloader.RunMedia(ctx, download.MediaLaneBulk, lookup); err != nil {
+			return completed, false, err
+		}
+	} else if err := lookup(); err != nil {
+		return completed, false, err
+	}
+	return completed, len(completed.MediaPaths) > 0, nil
+}
+
+func reusableCompletedVideoAdmitted(dir, videoID, platform string) (download.CompletedDownload, error) {
+	var completed download.CompletedDownload
+	videoID, err := safeVideoFileName(videoID)
 	if err != nil {
-		return "", err
+		return completed, err
 	}
-	path := file.Name()
-	if err := file.Close(); err != nil {
-		_ = os.Remove(path)
-		return "", err
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return completed, err
 	}
-	if err := os.Remove(path); err != nil {
-		return "", err
+	var images, playable []string
+	hasNumberedImage := false
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		category := reusableVideoFileCategory(videoID, entry.Name())
+		if category == "" {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil || !info.Mode().IsRegular() || info.Size() == 0 {
+			continue
+		}
+		path := filepath.Join(dir, entry.Name())
+		switch category {
+		case "info":
+			completed.InfoJSONPath = path
+		case "subtitle":
+			completed.SubtitlePaths = append(completed.SubtitlePaths, path)
+		case "image", "numbered_image":
+			images = append(images, path)
+			hasNumberedImage = hasNumberedImage || category == "numbered_image"
+		case "playable":
+			playable = append(playable, path)
+		}
 	}
-	return filepath.Base(path), nil
+	sort.Strings(images)
+	sort.Strings(playable)
+	if len(playable) > 0 {
+		completed.MediaPaths = append(completed.MediaPaths, playable...)
+		if len(images) > 0 {
+			completed.ThumbnailPath = images[0]
+		}
+	} else if (platform == "tiktok" || platform == "instagram") && hasNumberedImage {
+		completed.MediaPaths = append(completed.MediaPaths, images...)
+	}
+	sort.Strings(completed.SubtitlePaths)
+	return completed, nil
+}
+
+func reusableVideoFileCategory(videoID, name string) string {
+	if name == videoID+".info.json" {
+		return "info"
+	}
+	if strings.HasPrefix(name, videoID+".") && strings.HasSuffix(strings.ToLower(name), ".vtt") {
+		return "subtitle"
+	}
+	ext := strings.ToLower(filepath.Ext(name))
+	if name == videoID+ext {
+		kind, _, _ := completedMediaIdentity(name)
+		if kind == "post_media" {
+			return "image"
+		}
+		if kind == "video_stream" || kind == "post_audio" {
+			return "playable"
+		}
+		return ""
+	}
+	rest := strings.TrimPrefix(name, videoID+"_")
+	if rest == name {
+		return ""
+	}
+	dot := strings.IndexByte(rest, '.')
+	if dot <= 0 {
+		return ""
+	}
+	for _, digit := range rest[:dot] {
+		if digit < '0' || digit > '9' {
+			return ""
+		}
+	}
+	if canonicalImageExtension(name) == "" {
+		return ""
+	}
+	return "numbered_image"
 }
 
 func canonicalImageExtension(path string) string {
@@ -317,28 +429,58 @@ func copyExactFile(source, destination string) error {
 	return nil
 }
 
-func (files completedVideoFiles) removeTransientFiles() {
-	removeExactPaths(files.transientPaths)
+func (m *Manager) removeTransientFiles(ctx context.Context, files completedVideoFiles) {
+	m.removeStoredPaths(ctx, files.transientPaths)
 }
 
-func (files completedVideoFiles) removeFailedAttempt(completed download.CompletedDownload) {
+func (m *Manager) removeMediaPaths(ctx context.Context, lane download.MediaLane, paths ...string) {
+	if len(paths) == 0 {
+		return
+	}
+	remove := func() error { removeExactPaths(paths); return nil }
+	if m == nil || m.downloader == nil {
+		_ = remove()
+		return
+	}
+	_ = m.downloader.RunMedia(ctx, lane, remove)
+}
+
+func (m *Manager) removeFailedAttempt(ctx context.Context, files completedVideoFiles, completed download.CompletedDownload) {
 	paths := append([]string(nil), completed.MediaPaths...)
 	paths = append(paths, completed.SubtitlePaths...)
 	paths = append(paths, completed.ThumbnailPath, completed.InfoJSONPath)
 	paths = append(paths, files.materialized...)
-	removeExactPaths(paths)
+	m.removeStoredPaths(ctx, paths)
 }
 
-func (m *Manager) storeCompletedSubtitles(videoID string, files completedVideoFiles, completed download.CompletedDownload) error {
+func (m *Manager) removeStoredPaths(ctx context.Context, paths []string) {
+	var statePaths, bulkPaths []string
+	for _, path := range paths {
+		key, err := m.cfg.Storage.Key(path)
+		if err == nil && strings.HasPrefix(key, "media/") {
+			bulkPaths = append(bulkPaths, path)
+		} else {
+			statePaths = append(statePaths, path)
+		}
+	}
+	m.removeMediaPaths(ctx, download.MediaLaneBulk, bulkPaths...)
+	m.removeMediaPaths(ctx, download.MediaLaneState, statePaths...)
+}
+
+func (m *Manager) storeCompletedSubtitles(ctx context.Context, videoID string, files completedVideoFiles, completed download.CompletedDownload, preserveOnError bool) error {
 	if len(completed.SubtitlePaths) == 0 {
 		return nil
 	}
 	if len(files.subtitleAssets) == 0 {
-		removeExactPaths(completed.SubtitlePaths)
+		if !preserveOnError {
+			m.removeMediaPaths(ctx, download.MediaLaneState, completed.SubtitlePaths...)
+		}
 		return fmt.Errorf("subtitle producer returned no publishable outputs")
 	}
 	if err := m.db.StoreVideoSubtitleAssets(videoID, files.subtitleAssets, 0); err != nil {
-		removeExactPaths(completed.SubtitlePaths)
+		if !preserveOnError {
+			m.removeMediaPaths(ctx, download.MediaLaneState, completed.SubtitlePaths...)
+		}
 		return err
 	}
 	return nil

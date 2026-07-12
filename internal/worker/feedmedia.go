@@ -16,57 +16,28 @@ import (
 )
 
 const (
-	feedMediaBatchSize     = 25
+	feedMediaBatchSize     = 1
 	feedMediaLeaseDuration = 5 * time.Minute
-	maxRetries404          = 10
 )
-
-func (m *Manager) runFeedMediaWorker(ctx context.Context) {
-	ticker := time.NewTicker(30 * time.Second)
-	defer ticker.Stop()
-	log.Printf("[feedmedia] worker started")
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			if !m.IsStopRequested() {
-				m.processFeedMediaBatch(ctx)
-			}
-		case <-m.feedMediaKick:
-			if !m.IsStopRequested() {
-				m.processFeedMediaBatch(ctx)
-			}
-		}
-	}
-}
 
 func (m *Manager) processFeedMediaBatch(ctx context.Context) {
 	if m == nil || m.db == nil || m.cfg == nil || m.downloader == nil || ctx.Err() != nil {
 		return
 	}
 	owner := feedMediaLeaseOwner()
-	for {
-		assets, err := m.db.ClaimContentAssetDownloadBatch(db.LeaseOptions{
-			Owner: owner, LeaseMs: feedMediaLeaseDuration.Milliseconds(), Limit: feedMediaBatchSize,
-		})
-		if err != nil {
-			log.Printf("[feedmedia] ClaimContentAssetDownloadBatch: %v", err)
-			return
+	assets, err := m.db.ClaimContentAssetDownloadBatch(db.LeaseOptions{
+		Owner: owner, LeaseMs: feedMediaLeaseDuration.Milliseconds(), Limit: feedMediaBatchSize,
+	})
+	if err != nil {
+		log.Printf("[feedmedia] ClaimContentAssetDownloadBatch: %v", err)
+		return
+	}
+	for _, asset := range assets {
+		if ctx.Err() != nil {
+			m.releaseContentAsset(asset)
+			continue
 		}
-		if len(assets) == 0 {
-			return
-		}
-		for _, asset := range assets {
-			if ctx.Err() != nil {
-				m.releaseContentAsset(asset)
-				continue
-			}
-			m.processContentAsset(ctx, asset)
-		}
-		if len(assets) < feedMediaBatchSize {
-			return
-		}
+		m.processContentAsset(ctx, asset)
 	}
 }
 
@@ -87,14 +58,14 @@ func (m *Manager) processContentAsset(ctx context.Context, asset db.Asset) {
 	}
 	key, err := m.cfg.Storage.Key(finalPath)
 	if err != nil {
-		_ = os.Remove(finalPath)
+		m.removeMediaPaths(ctx, mediaLaneForAsset(asset), finalPath)
 		m.failContentAsset(asset, err)
 		return
 	}
 	asset.FilePath = key
 	asset.ContentType = contentType
 	if err := m.db.CompleteAssetDownload(asset, asset.LeaseOwner, time.Now().UnixMilli()); err != nil {
-		_ = os.Remove(finalPath)
+		m.removeMediaPaths(ctx, mediaLaneForAsset(asset), finalPath)
 		if !errors.Is(err, db.ErrQueueLeaseNotHeld) {
 			log.Printf("[feedmedia] CompleteAssetDownload %s: %v", asset.AssetID, err)
 		}
@@ -114,13 +85,18 @@ func (m *Manager) processContentAsset(ctx context.Context, asset db.Asset) {
 }
 
 func (m *Manager) publishContentVideoThumbnail(ctx context.Context, media db.Asset, videoPath string) error {
-	path, err := m.materializeVideoThumbnail(ctx, "twitter", media.OwnerID, "", videoPath)
+	var path string
+	err := m.downloader.RunMedia(ctx, download.MediaLaneBulk, func() error {
+		var err error
+		path, err = m.materializeVideoThumbnail(ctx, "twitter", media.OwnerID, "", videoPath)
+		return err
+	})
 	if err != nil || path == "" {
 		return err
 	}
 	key, err := m.cfg.Storage.Key(path)
 	if err != nil {
-		_ = os.Remove(path)
+		m.removeMediaPaths(ctx, download.MediaLaneState, path)
 		return err
 	}
 	return m.db.StoreReadyAsset(db.Asset{
@@ -142,40 +118,19 @@ func (m *Manager) downloadContentAsset(ctx context.Context, asset db.Asset) (str
 	unique := fmt.Sprintf("%s_%s_%d_%d", ownerKey, asset.AssetKind, asset.MediaIndex, time.Now().UnixNano())
 	switch asset.AssetKind {
 	case "avatar", "post_thumbnail":
-		dirName := "generated"
-		if asset.AssetKind == "avatar" {
-			dirName = "avatars"
-		}
-		dir, err := m.cfg.Storage.WritePath(filepath.Join("thumbnails", dirName))
-		if err != nil {
-			return "", "", err
-		}
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return "", "", err
-		}
-		sourceURL := asset.SourceURL
-		if asset.AssetKind == "avatar" && asset.OwnerKind == "tweet" {
-			sourceURL = upgradeTwimgURL(sourceURL)
-		}
-		tmpPath, err := m.downloader.HTTP.DownloadFile(ctx, sourceURL, dir, unique+".download")
-		if err != nil && sourceURL != asset.SourceURL {
-			tmpPath, err = m.downloader.HTTP.DownloadFile(ctx, asset.SourceURL, dir, unique+".download")
-		}
-		if err != nil {
-			return "", "", err
-		}
-		path, err := normalizeDownloadedImage(tmpPath, dir, unique)
-		if err != nil {
-			return "", "", err
-		}
-		contentType, err := sniffImageContentType(path)
+		var path, contentType string
+		err := m.downloader.RunMedia(ctx, download.MediaLaneState, func() error {
+			var err error
+			path, contentType, err = m.downloadSmallContentAsset(ctx, asset, unique)
+			return err
+		})
 		return path, contentType, err
 	case "post_audio", "post_media":
 		dir, err := m.cfg.Storage.WritePath(filepath.Join("media", "twitter", ownerKey))
 		if err != nil {
 			return "", "", err
 		}
-		if err := os.MkdirAll(dir, 0o755); err != nil {
+		if err := m.downloader.RunMedia(ctx, download.MediaLaneBulk, func() error { return os.MkdirAll(dir, 0o755) }); err != nil {
 			return "", "", err
 		}
 		mediaType := "photo"
@@ -190,9 +145,7 @@ func (m *Manager) downloadContentAsset(ctx context.Context, asset db.Asset) (str
 			return "", "", err
 		}
 		if len(paths) != 1 {
-			for _, path := range paths {
-				_ = os.Remove(path)
-			}
+			m.removeMediaPaths(ctx, download.MediaLaneBulk, paths...)
 			return "", "", fmt.Errorf("source produced %d files for one canonical asset", len(paths))
 		}
 		contentType := strings.TrimSpace(asset.ContentType)
@@ -205,6 +158,44 @@ func (m *Manager) downloadContentAsset(ctx context.Context, asset db.Asset) (str
 	}
 }
 
+func mediaLaneForAsset(asset db.Asset) download.MediaLane {
+	if asset.AssetKind == "avatar" || asset.AssetKind == "post_thumbnail" {
+		return download.MediaLaneState
+	}
+	return download.MediaLaneBulk
+}
+
+func (m *Manager) downloadSmallContentAsset(ctx context.Context, asset db.Asset, unique string) (string, string, error) {
+	dirName := "generated"
+	if asset.AssetKind == "avatar" {
+		dirName = "avatars"
+	}
+	dir, err := m.cfg.Storage.WritePath(filepath.Join("thumbnails", dirName))
+	if err != nil {
+		return "", "", err
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", "", err
+	}
+	sourceURL := asset.SourceURL
+	if asset.AssetKind == "avatar" && asset.OwnerKind == "tweet" {
+		sourceURL = upgradeTwimgURL(sourceURL)
+	}
+	tmpPath, err := m.downloader.HTTP.DownloadFile(ctx, sourceURL, dir, unique+".download")
+	if err != nil && sourceURL != asset.SourceURL {
+		tmpPath, err = m.downloader.HTTP.DownloadFile(ctx, asset.SourceURL, dir, unique+".download")
+	}
+	if err != nil {
+		return "", "", err
+	}
+	path, err := normalizeDownloadedImage(tmpPath, dir, unique)
+	if err != nil {
+		return "", "", err
+	}
+	contentType, err := sniffImageContentType(path)
+	return path, contentType, err
+}
+
 func (m *Manager) failContentAsset(asset db.Asset, cause error) {
 	if errors.Is(cause, context.Canceled) && !errors.Is(cause, context.DeadlineExceeded) {
 		m.releaseContentAsset(asset)
@@ -213,7 +204,7 @@ func (m *Manager) failContentAsset(asset db.Asset, cause error) {
 	attempt := asset.Attempts + 1
 	classification := download.ClassifyFailure(cause, nil, attempt)
 	nowMs := time.Now().UnixMilli()
-	if (classification.Kind == download.ErrorKindNotFound && attempt > maxRetries404) || classification.Permanent {
+	if classification.Kind == download.ErrorKindNotFound || classification.Permanent {
 		if err := m.db.MarkContentAssetPermanentMissing(
 			asset.AssetID, asset.AssetKind, asset.LeaseOwner, classification.Kind, cause.Error(), nowMs,
 		); err != nil {

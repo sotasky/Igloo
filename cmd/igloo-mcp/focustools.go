@@ -95,11 +95,12 @@ func writeAndroidSyncHealthReports(sb *strings.Builder, conn *sql.DB) {
 func writeAndroidSyncMissingSamples(sb *strings.Builder, conn *sql.DB) {
 	sb.WriteString("Canonical missing assets:\n")
 	rows, err := conn.Query(`
-		SELECT asset_kind, owner_kind, COUNT(*)
-		FROM assets
-		WHERE state IN ('server_missing', 'permanent_missing')
-		GROUP BY asset_kind, owner_kind
-		ORDER BY COUNT(*) DESC, asset_kind, owner_kind
+		SELECT a.asset_kind, a.owner_kind, COUNT(*)
+		FROM assets a JOIN media_objects mo ON mo.object_id = a.desired_object_id
+		WHERE a.lifecycle_state = 'active' AND mo.published_revision = 0
+		  AND mo.job_state IN ('server_missing', 'permanent_missing')
+		GROUP BY a.asset_kind, a.owner_kind
+		ORDER BY COUNT(*) DESC, a.asset_kind, a.owner_kind
 		LIMIT 10
 	`)
 	if err != nil {
@@ -124,10 +125,15 @@ func writeAndroidSyncMissingSamples(sb *strings.Builder, conn *sql.DB) {
 func writeAndroidSyncInventory(sb *strings.Builder, conn *sql.DB) {
 	sb.WriteString("Current asset inventory:\n")
 	rows, err := conn.Query(`
-		SELECT state, asset_kind, COUNT(*)
-		FROM assets
-		GROUP BY state, asset_kind
-		ORDER BY state, COUNT(*) DESC, asset_kind
+		SELECT CASE WHEN a.lifecycle_state = 'pruned' THEN 'pruned'
+		            WHEN current.published_revision > 0 AND current.file_path != '' THEN 'ready'
+		            ELSE desired.job_state END AS state,
+		       a.asset_kind, COUNT(*)
+		FROM assets a
+		JOIN media_objects current ON current.object_id = a.object_id
+		JOIN media_objects desired ON desired.object_id = a.desired_object_id
+		GROUP BY state, a.asset_kind
+		ORDER BY state, COUNT(*) DESC, a.asset_kind
 		LIMIT 24
 	`)
 	if err != nil {
@@ -391,18 +397,24 @@ func loadProfileStatus(conn *sql.DB, candidate identityCandidate) profileStatus 
 		       COALESCE(pj.requested_revision, 0), COALESCE(pj.completed_revision, 0),
 		       COALESCE(pj.attempts, 0), COALESCE(pj.next_attempt_at_ms, 0),
 		       COALESCE(pj.lease_owner, ''), COALESCE(pj.lease_until_ms, 0), COALESCE(pj.last_error, ''),
-		       COALESCE(avatar.state, ''), COALESCE(avatar.file_path, ''),
-		       COALESCE(avatar.source_url, ''), COALESCE(avatar.last_error_kind, ''), COALESCE(avatar.updated_at_ms, 0),
-		       COALESCE(banner.state, ''), COALESCE(banner.file_path, ''),
-		       COALESCE(banner.source_url, ''), COALESCE(banner.last_error_kind, ''), COALESCE(banner.updated_at_ms, 0)
+		       CASE WHEN avatar_current.published_revision > 0 THEN 'ready' ELSE COALESCE(avatar_desired.job_state, '') END,
+		       COALESCE(avatar_current.file_path, ''), COALESCE(avatar_desired.source_url, ''),
+		       COALESCE(avatar_desired.last_error_kind, ''), COALESCE(avatar_desired.updated_at_ms, 0),
+		       CASE WHEN banner_current.published_revision > 0 THEN 'ready' ELSE COALESCE(banner_desired.job_state, '') END,
+		       COALESCE(banner_current.file_path, ''), COALESCE(banner_desired.source_url, ''),
+		       COALESCE(banner_desired.last_error_kind, ''), COALESCE(banner_desired.updated_at_ms, 0)
 		FROM channel_profiles cp
 		LEFT JOIN profile_jobs pj ON pj.channel_id = cp.channel_id
 		LEFT JOIN assets avatar
 		  ON avatar.owner_kind = 'channel' AND avatar.owner_id = cp.channel_id
 		 AND avatar.asset_kind = 'avatar' AND avatar.media_index = 0
+		LEFT JOIN media_objects avatar_current ON avatar_current.object_id = avatar.object_id
+		LEFT JOIN media_objects avatar_desired ON avatar_desired.object_id = avatar.desired_object_id
 		LEFT JOIN assets banner
 		  ON banner.owner_kind = 'channel' AND banner.owner_id = cp.channel_id
 		 AND banner.asset_kind = 'banner' AND banner.media_index = 0
+		LEFT JOIN media_objects banner_current ON banner_current.object_id = banner.object_id
+		LEFT JOIN media_objects banner_desired ON banner_desired.object_id = banner.desired_object_id
 		WHERE cp.channel_id = ?
 		   OR (cp.platform = ? AND LOWER(COALESCE(cp.handle, '')) = LOWER(?))
 		ORDER BY CASE WHEN cp.channel_id = ? THEN 0 ELSE 1 END

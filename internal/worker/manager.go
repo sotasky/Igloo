@@ -69,8 +69,6 @@ type Manager struct {
 	lastCycleReady    int
 	lastCycleMu       sync.RWMutex
 
-	lastReplySweepAt atomic.Int64 // unix seconds; rate-limits resolveReplyChainsSweep
-
 	replyResolver *ReplyResolver
 	xFeedFetcher  xFeedFetcher
 	xStatusMu     sync.Mutex
@@ -83,8 +81,8 @@ type Manager struct {
 
 	// sponsorblockClient fetches SponsorBlock segments. Nil means SB fetching
 	// is disabled (e.g. unit tests that don't want network calls). The
-	// youtube-enrichment worker and download-complete hook piggyback this against
-	// the DeArrow rate limit since both APIs share sponsor.ajay.app.
+	// The download-complete hook co-fetches both APIs because they share
+	// sponsor.ajay.app.
 	sponsorblockClient sponsorblockFetcher
 
 	instagramProfileFetch instagramProfileFetchFn
@@ -124,11 +122,15 @@ func NewManager(database *db.DB, cfg *config.Config) *Manager {
 		downloadBackoff: make(map[string]downloadPlatformBackoff),
 	}
 	m.dearrowFetcher = &dearrow.Fetcher{
-		Client:   dearrow.NewClient(dearrow.DefaultBaseURL),
-		Extract:  dearrow.ExtractFrame,
+		Client:  dearrow.NewClient(dearrow.DefaultBaseURL),
+		Extract: dearrow.ExtractFrame,
+		Mutate: func(ctx context.Context, work func() error) error {
+			return m.downloader.RunMedia(ctx, download.MediaLaneBulk, work)
+		},
 		ThumbDir: filepath.Join(cfg.Storage.StateRoot(), "thumbnails", "dearrow"),
 	}
 	m.sponsorblockClient = sponsorblock.NewClient(sponsorblock.DefaultBaseURL)
+	m.downloader.SetMediaExecutor(cfg.Storage.MediaExecutor())
 	m.downloader.SetOperationSink(database)
 	return m
 }
@@ -146,22 +148,15 @@ func (m *Manager) StartAll() {
 	} else if n > 0 {
 		log.Printf("[worker] reset %d in-flight channel checks on startup", n)
 	}
-	if n, err := m.db.ResetStaleDownloadQueueItems(); err != nil {
-		log.Printf("[worker] ResetStaleDownloadQueueItems: %v", err)
-	} else if n > 0 {
-		log.Printf("[worker] reset %d stale download jobs to pending", n)
-	}
 	log.Printf("[worker] startup recovery completed in %s", time.Since(startupStarted).Round(time.Millisecond))
 
 	// One-shot startup tasks — not tracked in status map.
 	m.startOnce("feed_bootstrap", m.runFeedBootstrap)
 	m.launch(xIngestWorkerName, m.runXIngestLoop)
 	m.launch("x_status_enrichment", m.runXStatusEnrichmentLoop)
-	m.launch("feed_media", m.runFeedMediaWorker)
+	m.launch("media_executor", m.runMediaExecutor)
 	m.launch("profile_refresh", m.runProfileJobLoop)
-	m.launch("dearrow", m.runDearrowWorker)
 	m.launch("scheduler", m.runScheduler)
-	m.launch("download_pool", m.runDownloadPool)
 	m.launch("preview", m.runPreviewWorker)
 	m.startOnceDelayed("ranked_queue_warmup", 3*time.Minute, m.runRankedQueueWarmup)
 	m.launchDelayed("feed_scoring", 3*time.Minute, m.runFeedScoringWorker)

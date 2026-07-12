@@ -6,24 +6,20 @@ func TestDashboardStatsUseCanonicalAssets(t *testing.T) {
 	d := openWritableTestDB(t)
 	if err := d.ExecRaw(`
 		INSERT INTO videos (video_id, channel_id, owner_kind, title, published_at)
-		VALUES ('canonical_video', 'youtube_sample', 'youtube_video', 'Canonical', 1);
+		VALUES ('sample_video_a', 'youtube_sample', 'youtube_video', 'Canonical', 1);
 		INSERT INTO watch_history (video_id, playback_position, duration, updated_at_ms)
-		VALUES ('canonical_video', 100, 100, 2);
+		VALUES ('sample_video_a', 100, 100, 2);
 		INSERT INTO feed_items (tweet_id, published_at, fetched_at)
 		VALUES
-			('canonical_feed', 1, 1),
-			('queued_feed', 1, 1);
-		INSERT INTO assets (
-			asset_id, asset_kind, owner_kind, owner_id, media_index,
-			file_path, content_type, size_bytes, state, created_at_ms, updated_at_ms
-		) VALUES
-			('canonical_video_stream', 'video_stream', 'youtube_video', 'canonical_video', 0, 'media/youtube/canonical.mp4', 'video/mp4', 100, 'ready', 1, 1),
-			('canonical_feed_media', 'post_media', 'tweet', 'canonical_feed', 0, 'media/twitter/sample/feed.jpg', 'image/jpeg', 10, 'ready', 1, 1),
-			('queued_feed_media', 'post_media', 'tweet', 'queued_feed', 0, '', 'image/jpeg', 0, 'queued', 1, 1),
-			('missing_feed_media', 'post_media', 'tweet', 'missing_feed', 0, '', 'image/jpeg', 0, 'server_missing', 1, 1);
+			('sample_post_a', 1, 1),
+			('sample_post_b', 1, 1)
 	`); err != nil {
 		t.Fatalf("seed dashboard state: %v", err)
 	}
+	publishAssetMetadataForTest(t, d, Asset{AssetID: "sample_video_asset_a", AssetKind: "video_stream", OwnerKind: "youtube_video", OwnerID: "sample_video_a", FilePath: "media/youtube/canonical.mp4", ContentType: "video/mp4", SizeBytes: 100}, 1)
+	publishAssetMetadataForTest(t, d, Asset{AssetID: "sample_media_a", AssetKind: "post_media", OwnerKind: "tweet", OwnerID: "sample_post_a", FilePath: "media/twitter/sample/feed.jpg", SizeBytes: 10}, 1)
+	upsertAssetForTest(t, d, Asset{AssetID: "sample_media_b", AssetKind: "post_media", OwnerKind: "tweet", OwnerID: "sample_post_b", SourceURL: "https://example.test/queued.jpg"}, 1)
+	upsertAssetForTest(t, d, Asset{AssetID: "sample_missing_media", AssetKind: "post_media", OwnerKind: "tweet", OwnerID: "sample_missing", SourceURL: "https://example.test/missing.jpg", State: AssetStateServerMissing}, 1)
 
 	stats, err := d.GetDashboardStats()
 	if err != nil {

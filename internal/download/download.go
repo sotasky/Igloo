@@ -11,6 +11,14 @@ import (
 	"time"
 
 	"github.com/screwys/igloo/internal/model"
+	"github.com/screwys/igloo/internal/storage"
+)
+
+type MediaLane = storage.MediaLane
+
+const (
+	MediaLaneState = storage.MediaLaneState
+	MediaLaneBulk  = storage.MediaLaneBulk
 )
 
 const (
@@ -38,6 +46,7 @@ type Downloader struct {
 	GalleryDL *GalleryDLWrapper
 	HTTP      *HTTPDownloader
 	sink      OperationSink
+	executor  *storage.MediaExecutor
 }
 
 // NewDownloader returns a Downloader with default clients.
@@ -46,6 +55,7 @@ func NewDownloader(cookiesDir string) *Downloader {
 		YtDlp:     &YtDlpWrapper{CookiesDir: cookiesDir},
 		GalleryDL: &GalleryDLWrapper{Runner: CommandRunner{}},
 		HTTP:      NewHTTPDownloader(),
+		executor:  storage.NewMediaExecutor(),
 	}
 	return d
 }
@@ -57,6 +67,12 @@ func (d *Downloader) SetOperationSink(sink OperationSink) {
 	}
 	if d.GalleryDL != nil {
 		d.GalleryDL.OperationSink = sink
+	}
+}
+
+func (d *Downloader) SetMediaExecutor(executor *storage.MediaExecutor) {
+	if executor != nil {
+		d.executor = executor
 	}
 }
 
@@ -76,6 +92,16 @@ func (d *Downloader) Download(ctx context.Context, rawURL string, mediaType stri
 // DownloadCompleted routes the request while preserving every exact output
 // path returned by the selected producer.
 func (d *Downloader) DownloadCompleted(ctx context.Context, rawURL string, mediaType string, opts Opts) (CompletedDownload, error) {
+	var completed CompletedDownload
+	err := d.RunMedia(ctx, MediaLaneBulk, func() error {
+		var err error
+		completed, err = d.downloadCompletedAdmitted(ctx, rawURL, mediaType, opts)
+		return err
+	})
+	return completed, err
+}
+
+func (d *Downloader) downloadCompletedAdmitted(ctx context.Context, rawURL string, mediaType string, opts Opts) (CompletedDownload, error) {
 	start := time.Now()
 	platform := platformFromURL(rawURL)
 	tool := "yt-dlp"
@@ -121,6 +147,24 @@ func (d *Downloader) DownloadCompleted(ctx context.Context, rawURL string, media
 		removeCompletedDownloadFiles(completed)
 	}
 	return completed, err
+}
+
+func (d *Downloader) RunMedia(ctx context.Context, lane MediaLane, work func() error) error {
+	return d.executor.Run(ctx, lane, work)
+}
+
+func (d *Downloader) DownloadFile(ctx context.Context, lane MediaLane, rawURL, dir, filename string) (string, error) {
+	return d.DownloadFileWithOptions(ctx, lane, rawURL, dir, filename, HTTPDownloadOptions{})
+}
+
+func (d *Downloader) DownloadFileWithOptions(ctx context.Context, lane MediaLane, rawURL, dir, filename string, opts HTTPDownloadOptions) (string, error) {
+	var path string
+	err := d.RunMedia(ctx, lane, func() error {
+		var err error
+		path, err = d.HTTP.DownloadFileWithOptions(ctx, rawURL, dir, filename, opts)
+		return err
+	})
+	return path, err
 }
 
 func (d *Downloader) downloadCompletedOnce(ctx context.Context, rawURL string, mediaType string, opts Opts) (CompletedDownload, error) {

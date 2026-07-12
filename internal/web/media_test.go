@@ -251,7 +251,7 @@ func testPNGBytes() []byte {
 
 func storeReadyMediaAsset(t *testing.T, srv *testServer, platform, ownerKind, ownerID, kind string, index int, relPath, contentType string, body []byte) string {
 	t.Helper()
-	if ownerKind != "tweet" {
+	if db.IsCanonicalVideoOwnerKind(ownerKind) && ownerKind != "tweet" {
 		channelID := platform + "_asset_fixture"
 		if err := srv.db.ExecRaw(`
 			INSERT OR IGNORE INTO channels (channel_id, name, platform)
@@ -411,14 +411,17 @@ func TestHandleThumbnail_DearrowQueryDoesNotGuessAroundStaleReadyAsset(t *testin
 	srv := newTestServer(t)
 	const videoID = "dearrow_missing_file"
 	dearrowRelPath := filepath.Join("thumbnails", "dearrow", videoID+".jpg")
-	if err := srv.db.ExecRaw(`
-		INSERT INTO assets (
-			asset_id, asset_kind, owner_kind, owner_id, media_index,
-			file_path, content_type, size_bytes, sha256, file_mtime_ns, state
-		)
-		VALUES (?, 'dearrow_thumbnail', 'youtube_video', ?, 0, ?, 'image/jpeg', 1, 'missing', 1, 'ready')
-	`, db.BuildAssetID("youtube", "youtube_video", videoID, "dearrow_thumbnail", 0), videoID, dearrowRelPath); err != nil {
+	assetID := db.BuildAssetID("youtube", "youtube_video", videoID, "dearrow_thumbnail", 0)
+	if err := srv.db.DeclareAsset(db.Asset{AssetID: assetID, AssetKind: "dearrow_thumbnail", OwnerKind: "youtube_video", OwnerID: videoID, SourceURL: "https://example.test/missing.jpg", ContentType: "image/jpeg"}, 1); err != nil {
 		t.Fatalf("insert missing canonical asset: %v", err)
+	}
+	if err := srv.db.ExecRaw(`
+		UPDATE media_objects
+		SET published_revision = desired_revision, published_source_url = source_url,
+		    file_path = ?, content_type = 'image/jpeg', size_bytes = 1, sha256 = 'missing', file_mtime_ns = 1, job_state = 'ready'
+		WHERE object_id = (SELECT desired_object_id FROM assets WHERE asset_id = ?)
+	`, dearrowRelPath, assetID); err != nil {
+		t.Fatalf("publish missing canonical metadata: %v", err)
 	}
 	regularRelPath := filepath.Join("thumbnails", "original", videoID+".jpg")
 	storeReadyMediaAsset(t, srv, "youtube", "youtube_video", videoID, "post_thumbnail", 0, regularRelPath, "image/jpeg", testJPEGBytes())

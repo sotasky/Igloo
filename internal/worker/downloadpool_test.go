@@ -586,26 +586,3 @@ func TestParseDateString(t *testing.T) {
 		})
 	}
 }
-
-func TestPlatformSemFor(t *testing.T) {
-	youtubeSem := platformSemFor("youtube")
-	if cap(youtubeSem) != 1 {
-		t.Errorf("youtube semaphore cap = %d, want 1", cap(youtubeSem))
-	}
-
-	tt := platformSemFor("tiktok")
-	if cap(tt) != 1 {
-		t.Errorf("tiktok semaphore cap = %d, want 1", cap(tt))
-	}
-
-	ig := platformSemFor("instagram")
-	if cap(ig) != 1 {
-		t.Errorf("instagram semaphore cap = %d, want 1", cap(ig))
-	}
-
-	// Unknown platform falls back to the youtube semaphore.
-	unknown := platformSemFor("unknown")
-	if cap(unknown) != cap(youtubeSem) {
-		t.Errorf("unknown platform semaphore cap = %d, want %d", cap(unknown), cap(youtubeSem))
-	}
-}

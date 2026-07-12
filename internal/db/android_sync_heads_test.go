@@ -131,22 +131,16 @@ func TestAndroidSyncHeadsFilterSettingsAndHydrateProtectedContent(t *testing.T) 
 
 func TestAndroidSyncAssetRevisionAlwaysAdvancesOwnerHead(t *testing.T) {
 	d := openWritableTestDB(t)
-	if err := d.ExecRaw(`
-		INSERT INTO assets (
-			asset_id, asset_kind, owner_kind, owner_id, state, required_reason
-		) VALUES ('sample_asset', 'post_media', 'tweet', 'sample_post', 'server_missing', 'first')
-	`); err != nil {
-		t.Fatal(err)
-	}
+	asset := Asset{AssetID: "sample_asset", AssetKind: "post_media", OwnerKind: "tweet", OwnerID: "sample_post", SourceURL: "https://example.test/sample.jpg", RequiredReason: "first"}
+	upsertAssetForTest(t, d, asset, 1)
 	before := requireAndroidSyncHead(t, d, "asset", "sample_asset")
 	var assetRevisionBefore int64
 	if err := d.QueryRow(`SELECT revision FROM assets WHERE asset_id = 'sample_asset'`).Scan(&assetRevisionBefore); err != nil {
 		t.Fatal(err)
 	}
 
-	if err := d.ExecRaw(`UPDATE assets SET required_reason = 'second' WHERE asset_id = 'sample_asset'`); err != nil {
-		t.Fatal(err)
-	}
+	asset.RequiredReason = "second"
+	upsertAssetForTest(t, d, asset, 2)
 	after := requireAndroidSyncHead(t, d, "asset", "sample_asset")
 	var assetRevisionAfter int64
 	if err := d.QueryRow(`SELECT revision FROM assets WHERE asset_id = 'sample_asset'`).Scan(&assetRevisionAfter); err != nil {

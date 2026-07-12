@@ -38,9 +38,9 @@ func (db *DB) GetDashboardStats() (map[string]any, error) {
 
 	// Canonical asset state is both pipeline state and presentation readiness.
 	stats["media_pipeline"] = map[string]int{
-		"ready":  queryInt("SELECT COUNT(*) FROM assets WHERE state='ready'"),
-		"queued": queryInt("SELECT COUNT(*) FROM assets WHERE state IN ('queued','downloading','stale')"),
-		"failed": queryInt("SELECT COUNT(*) FROM assets WHERE state IN ('failed','server_missing','permanent_missing')"),
+		"ready":  queryInt("SELECT COUNT(*) FROM media_objects WHERE published_revision > 0 AND file_path != ''"),
+		"queued": queryInt("SELECT COUNT(*) FROM media_objects WHERE job_state IN ('queued','downloading','stale')"),
+		"failed": queryInt("SELECT COUNT(*) FROM media_objects WHERE published_revision = 0 AND job_state IN ('failed','server_missing','permanent_missing')"),
 	}
 
 	// Download queue
@@ -92,13 +92,12 @@ func (db *DB) GetDashboardStats() (map[string]any, error) {
 
 	// Storage totals
 	totalVideoBytes := queryInt64(`
-		SELECT COALESCE(SUM(size_bytes), 0)
-		FROM (
-			SELECT file_path, MAX(size_bytes) AS size_bytes
-			FROM assets
-			WHERE state = 'ready' AND file_path != ''
-			  AND (asset_kind = 'video_stream' OR content_type LIKE 'video/%')
-			GROUP BY file_path
+		SELECT COALESCE(SUM(size_bytes), 0) FROM (
+			SELECT mo.file_path, MAX(mo.size_bytes) AS size_bytes
+			FROM media_objects mo JOIN assets a ON a.object_id = mo.object_id
+			WHERE mo.published_revision > 0 AND mo.file_path != ''
+			  AND (a.asset_kind = 'video_stream' OR mo.content_type LIKE 'video/%')
+			GROUP BY mo.file_path
 		)
 	`)
 	videosTotal := queryInt(`
@@ -109,8 +108,8 @@ func (db *DB) GetDashboardStats() (map[string]any, error) {
 		SELECT COALESCE(SUM(size_bytes), 0)
 		FROM (
 			SELECT file_path, MAX(size_bytes) AS size_bytes
-			FROM assets
-			WHERE state = 'ready' AND file_path != ''
+			FROM media_objects
+			WHERE published_revision > 0 AND file_path != ''
 			GROUP BY file_path
 		)
 	`)
@@ -136,17 +135,17 @@ func (db *DB) GetDashboardStats() (map[string]any, error) {
 		SELECT COUNT(*)
 		FROM feed_items fi
 		WHERE EXISTS (
-			SELECT 1 FROM assets a
+			SELECT 1 FROM assets a JOIN media_objects mo ON mo.object_id = a.object_id
 			WHERE a.owner_kind = 'tweet'
 			  AND a.owner_id IN (fi.tweet_id, COALESCE(NULLIF(fi.quote_tweet_id, ''), fi.tweet_id))
 			  AND a.asset_kind IN ('post_media', 'post_audio')
-			  AND a.state = 'ready'
+			  AND mo.published_revision > 0 AND mo.file_path != ''
 		)
 	`)
 
 	// Preview queue is represented by canonical ready sprite assets.
 	stats["preview_queue"] = map[string]int{
-		"ready":   queryInt("SELECT COUNT(*) FROM assets WHERE asset_kind='preview_sprite' AND state='ready'"),
+		"ready":   queryInt("SELECT COUNT(*) FROM assets a JOIN media_objects mo ON mo.object_id=a.object_id WHERE a.asset_kind='preview_sprite' AND mo.published_revision>0 AND mo.file_path!=''"),
 		"pending": 0,
 	}
 

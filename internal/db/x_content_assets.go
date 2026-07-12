@@ -86,46 +86,7 @@ func declareSourceAssetTx(tx *sql.Tx, asset Asset, nowMs int64) error {
 	if asset.SourceURL == "" {
 		return nil
 	}
-	_, err := tx.Exec(`
-		INSERT INTO assets (
-			asset_id, asset_kind, owner_kind, owner_id, media_index,
-			source_url, content_type, state, required_reason,
-			created_at_ms, updated_at_ms
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(asset_kind, owner_kind, owner_id, media_index) DO UPDATE SET
-			asset_id = excluded.asset_id,
-			source_url = CASE
-				WHEN assets.state = 'ready' THEN assets.source_url
-				ELSE excluded.source_url
-			END,
-			content_type = CASE
-				WHEN assets.content_type = '' THEN excluded.content_type
-				ELSE assets.content_type
-			END,
-			required_reason = CASE
-				WHEN assets.required_reason IN ('bookmark', 'like') THEN assets.required_reason
-				ELSE excluded.required_reason
-			END,
-			state = CASE
-				WHEN assets.state != 'ready' AND assets.source_url != excluded.source_url THEN 'queued'
-				ELSE assets.state
-			END,
-			last_error_kind = CASE WHEN assets.state != 'ready' AND assets.source_url != excluded.source_url THEN '' ELSE assets.last_error_kind END,
-			last_error = CASE WHEN assets.state != 'ready' AND assets.source_url != excluded.source_url THEN '' ELSE assets.last_error END,
-			attempts = CASE WHEN assets.state != 'ready' AND assets.source_url != excluded.source_url THEN 0 ELSE assets.attempts END,
-			next_attempt_at_ms = CASE WHEN assets.state != 'ready' AND assets.source_url != excluded.source_url THEN 0 ELSE assets.next_attempt_at_ms END,
-			lease_owner = CASE WHEN assets.state != 'ready' AND assets.source_url != excluded.source_url THEN '' ELSE assets.lease_owner END,
-			lease_until_ms = CASE WHEN assets.state != 'ready' AND assets.source_url != excluded.source_url THEN 0 ELSE assets.lease_until_ms END,
-			updated_at_ms = CASE
-				WHEN (assets.state != 'ready' AND assets.source_url != excluded.source_url)
-				  OR assets.required_reason != excluded.required_reason
-				THEN excluded.updated_at_ms
-				ELSE assets.updated_at_ms
-			END
-	`, asset.AssetID, asset.AssetKind, asset.OwnerKind, asset.OwnerID, asset.MediaIndex,
-		asset.SourceURL, asset.ContentType, asset.State, asset.RequiredReason,
-		asset.CreatedAtMs, asset.UpdatedAtMs)
-	return err
+	return upsertAssetTx(tx, asset)
 }
 
 // ClaimContentAssetDownloadBatch claims content media and non-profile comment
@@ -135,25 +96,31 @@ func (db *DB) ClaimContentAssetDownloadBatch(opts LeaseOptions) ([]Asset, error)
 	var claimed []Asset
 	err := db.WithWrite(func(tx *sql.Tx) error {
 		query := `
-			SELECT asset_id
-			FROM assets
-			WHERE ` + leaseEligibleSQLFor("state", "next_attempt_at_ms", "lease_until_ms") + `
-			  AND source_url != ''
+			SELECT desired.object_id
+			FROM media_objects desired
+			JOIN assets a ON a.desired_object_id = desired.object_id
+			WHERE ` + leaseEligibleSQLFor("desired.job_state", "desired.next_attempt_at_ms", "desired.lease_until_ms") + `
+			  AND desired.source_url != ''
+			  AND a.lifecycle_state = 'active'
 			  AND (
-			    (owner_kind = 'tweet' AND asset_kind IN ('post_audio', 'post_media', 'post_thumbnail'))
-			    OR (owner_kind = 'comment_author' AND asset_kind = 'avatar')
+			    (a.owner_kind = 'tweet' AND a.asset_kind IN ('post_audio', 'post_media', 'post_thumbnail'))
+			    OR (a.owner_kind = 'comment_author' AND a.asset_kind = 'avatar')
 			  )
-			ORDER BY CASE WHEN required_reason IN ('bookmark', 'like') THEN 0 ELSE 1 END,
-			         attempts ASC, updated_at_ms DESC, id DESC
+			GROUP BY desired.object_id
+			ORDER BY MIN(CASE WHEN a.required_reason IN ('bookmark', 'like') THEN 0 ELSE 1 END),
+			         desired.attempts ASC, desired.updated_at_ms DESC, desired.id DESC
 			LIMIT ?`
-		ids, err := claimLeasedIDsWithStateColumn(tx, "assets", "asset_id", "state", query, []any{
+		ids, err := claimLeasedIDsWithStateColumn(tx, "media_objects", "object_id", "job_state", query, []any{
 			opts.NowMs, opts.StatusFrom, opts.NowMs, opts.StatusTo, opts.NowMs, opts.Limit,
 		}, opts)
 		if err != nil {
 			return err
 		}
 		for _, id := range ids {
-			asset, err := readAssetTx(tx, id)
+			asset, err := scanAsset(tx.QueryRow(`SELECT `+assetProjectionSQL+assetJoinsSQL+`
+				WHERE a.desired_object_id = ?
+				ORDER BY CASE WHEN a.required_reason IN ('bookmark', 'like') THEN 0 ELSE 1 END, a.id
+				LIMIT 1`, id))
 			if err != nil {
 				return err
 			}
@@ -179,20 +146,30 @@ func (db *DB) RequeueXContentAssets(ownerIDs []string, includePruned bool, reaso
 	changed := 0
 	for _, chunk := range stringChunks(ownerIDs, 400) {
 		err := db.WithWrite(func(tx *sql.Tx) error {
-			res, err := tx.Exec(`
+			reason = strings.TrimSpace(reason)
+			if _, err := tx.Exec(`
 				UPDATE assets
-				SET state = 'queued',
-				    required_reason = CASE WHEN ? != '' THEN ? ELSE required_reason END,
+				SET required_reason = CASE WHEN ? != '' THEN ? ELSE required_reason END,
+				    lifecycle_state = 'active', revision = revision + 1, updated_at_ms = ?
+				WHERE owner_kind = 'tweet' AND owner_id IN (`+placeholders(len(chunk))+`)
+				  AND asset_kind IN ('post_audio', 'post_media', 'post_thumbnail')
+			`, append([]any{reason, reason, nowMs}, stringsToAny(chunk)...)...); err != nil {
+				return err
+			}
+			res, err := tx.Exec(`
+				UPDATE media_objects
+				SET job_state = 'queued',
 				    attempts = 0, next_attempt_at_ms = 0,
 				    last_error_kind = '', last_error = '',
 				    lease_owner = '', lease_until_ms = 0,
 				    updated_at_ms = ?
-				WHERE owner_kind = 'tweet'
-				  AND owner_id IN (`+placeholders(len(chunk))+`)
-				  AND source_url != ''
-				  AND asset_kind IN ('post_audio', 'post_media', 'post_thumbnail')
-				  AND state IN (`+states+`)
-			`, append([]any{strings.TrimSpace(reason), strings.TrimSpace(reason), nowMs}, stringsToAny(chunk)...)...)
+				WHERE source_url != '' AND job_state IN (`+states+`)
+				  AND object_id IN (
+				    SELECT desired_object_id FROM assets
+				    WHERE owner_kind = 'tweet' AND owner_id IN (`+placeholders(len(chunk))+`)
+				      AND asset_kind IN ('post_audio', 'post_media', 'post_thumbnail')
+				  )
+			`, append([]any{nowMs}, stringsToAny(chunk)...)...)
 			if err != nil {
 				return err
 			}
@@ -215,43 +192,28 @@ func requireXContentAssetsForUserStateTx(tx *sql.Tx, tweetIDs []string, reason s
 		return err
 	}
 	for _, chunk := range stringChunks(ownerIDs, 400) {
+		args := stringsToAny(chunk)
 		_, err := tx.Exec(`
-			UPDATE assets
-			SET required_reason = ?,
-			    state = CASE
-			      WHEN state IN ('failed', 'permanent_missing', 'server_missing', 'stale', 'pruned') THEN 'queued'
-			      ELSE state
-			    END,
-			    attempts = CASE
-			      WHEN state IN ('failed', 'permanent_missing', 'server_missing', 'stale', 'pruned') THEN 0
-			      ELSE attempts
-			    END,
-			    next_attempt_at_ms = CASE
-			      WHEN state IN ('failed', 'permanent_missing', 'server_missing', 'stale', 'pruned') THEN 0
-			      ELSE next_attempt_at_ms
-			    END,
-			    last_error_kind = CASE
-			      WHEN state IN ('failed', 'permanent_missing', 'server_missing', 'stale', 'pruned') THEN ''
-			      ELSE last_error_kind
-			    END,
-			    last_error = CASE
-			      WHEN state IN ('failed', 'permanent_missing', 'server_missing', 'stale', 'pruned') THEN ''
-			      ELSE last_error
-			    END,
-			    lease_owner = CASE
-			      WHEN state IN ('failed', 'permanent_missing', 'server_missing', 'stale', 'pruned') THEN ''
-			      ELSE lease_owner
-			    END,
-			    lease_until_ms = CASE
-			      WHEN state IN ('failed', 'permanent_missing', 'server_missing', 'stale', 'pruned') THEN 0
-			      ELSE lease_until_ms
-			    END,
-			    updated_at_ms = ?
-			WHERE owner_kind = 'tweet'
-			  AND owner_id IN (`+placeholders(len(chunk))+`)
-			  AND source_url != ''
+			UPDATE assets SET required_reason = ?, lifecycle_state = 'active', revision = revision + 1, updated_at_ms = ?
+			WHERE owner_kind = 'tweet' AND owner_id IN (`+placeholders(len(chunk))+`)
 			  AND asset_kind IN ('post_audio', 'post_media', 'post_thumbnail')
-		`, append([]any{strings.TrimSpace(reason), nowMs}, stringsToAny(chunk)...)...)
+		`, append([]any{strings.TrimSpace(reason), nowMs}, args...)...)
+		if err != nil {
+			return err
+		}
+		_, err = tx.Exec(`
+			UPDATE media_objects
+			SET job_state = 'queued', attempts = 0, next_attempt_at_ms = 0,
+			    last_error_kind = '', last_error = '', lease_owner = '', lease_until_ms = 0,
+			    updated_at_ms = ?
+			WHERE source_url != ''
+			  AND job_state IN ('failed', 'permanent_missing', 'server_missing', 'stale', 'pruned')
+			  AND object_id IN (
+			    SELECT desired_object_id FROM assets
+			    WHERE owner_kind = 'tweet' AND owner_id IN (`+placeholders(len(chunk))+`)
+			      AND asset_kind IN ('post_audio', 'post_media', 'post_thumbnail')
+			  )
+		`, append([]any{nowMs}, args...)...)
 		if err != nil {
 			return err
 		}
@@ -338,17 +300,17 @@ func (db *DB) MarkContentAssetPermanentMissing(assetID, assetKind, owner, kind, 
 	}
 	return db.WithWrite(func(tx *sql.Tx) error {
 		res, err := tx.Exec(`
-			UPDATE assets
-			SET state = 'permanent_missing', attempts = attempts + 1,
+			UPDATE media_objects
+			SET job_state = 'permanent_missing', attempts = attempts + 1,
 			    next_attempt_at_ms = 0, last_error_kind = ?, last_error = ?,
 			    lease_owner = '', lease_until_ms = 0, updated_at_ms = ?
-			WHERE asset_id = ? AND asset_kind = ?
-			  AND state = 'downloading' AND lease_owner = ?
+			WHERE object_id = (SELECT desired_object_id FROM assets WHERE asset_id = ? AND asset_kind = ?)
+			  AND job_state = 'downloading' AND lease_owner = ?
 		`, trimJobError(kind), trimJobError(message), nowMs,
 			strings.TrimSpace(assetID), strings.TrimSpace(assetKind), strings.TrimSpace(owner))
 		if err != nil {
 			return err
 		}
-		return requireQueueLeaseUpdate(res, "assets", assetID+"/"+assetKind, owner)
+		return requireQueueLeaseUpdate(res, "media_objects", assetID+"/"+assetKind, owner)
 	})
 }

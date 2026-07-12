@@ -103,6 +103,24 @@ func TestProcessContentAssetStoresPermanentFailureOnAsset(t *testing.T) {
 	}
 }
 
+func TestProcessContentAssetDoesNotRetryMissingImmutableMedia(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.NotFound(w, nil)
+	}))
+	defer server.Close()
+
+	d, m, asset := claimedContentAsset(t, server.URL+"/sample.jpg", "post_media", 0)
+	m.processContentAsset(context.Background(), asset)
+
+	failed, err := d.GetAsset(asset.AssetID, asset.AssetKind)
+	if err != nil {
+		t.Fatalf("GetAsset: %v", err)
+	}
+	if failed == nil || failed.State != db.AssetStatePermanentMissing || failed.Attempts != 1 || failed.LastErrorKind != "not_found" || failed.LeaseOwner != "" {
+		t.Fatalf("missing asset = %+v", failed)
+	}
+}
+
 func TestProcessContentAssetCancellationReleasesClaim(t *testing.T) {
 	d, m, asset := claimedContentAsset(t, "https://cdn.example/sample.jpg", "post_media", 0)
 	m.failContentAsset(asset, context.Canceled)
@@ -130,16 +148,16 @@ func claimedQueuedAsset(t *testing.T, asset db.Asset) (*db.DB, *Manager, db.Asse
 	stateRoot := t.TempDir()
 	d := newTestWorkerDBAt(t, stateRoot)
 	now := time.Now().UnixMilli()
-	if err := d.ExecRaw(`
-		INSERT INTO assets (
-			asset_id, asset_kind, owner_kind, owner_id, media_index,
-			source_url, content_type, state, required_reason, attempts,
-			created_at_ms, updated_at_ms
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, asset.AssetID, asset.AssetKind, asset.OwnerKind, asset.OwnerID, asset.MediaIndex,
-		asset.SourceURL, asset.ContentType, asset.State, asset.RequiredReason, asset.Attempts,
-		now, now); err != nil {
+	if err := d.DeclareAsset(asset, now); err != nil {
 		t.Fatalf("insert queued test asset: %v", err)
+	}
+	if asset.Attempts > 0 {
+		if err := d.ExecRaw(`
+			UPDATE media_objects SET attempts = ?
+			WHERE object_id = (SELECT desired_object_id FROM assets WHERE asset_id = ?)
+		`, asset.Attempts, asset.AssetID); err != nil {
+			t.Fatalf("set queued test attempts: %v", err)
+		}
 	}
 	claimed, err := d.ClaimContentAssetDownloadBatch(db.LeaseOptions{
 		Owner: "worker-a", NowMs: now + 1, LeaseMs: time.Minute.Milliseconds(), Limit: 1,

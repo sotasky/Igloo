@@ -177,7 +177,7 @@ func readProfileObservationStateTx(tx *sql.Tx, channelID string) (profileObserva
 	var tombstone int
 	err := tx.QueryRow(`
 		SELECT COALESCE(cp.handle, ''), COALESCE(cp.display_name, ''),
-		       COALESCE(a.source_url, ''),
+		       COALESCE(mo.source_url, ''),
 		       MAX(COALESCE(cp.observed_at_ms, 0), COALESCE(cp.fetched_at, 0)),
 		       COALESCE(cp.fetched_at, 0), COALESCE(cp.tombstone, 0),
 		       COALESCE(pj.requested_revision, 0), COALESCE(pj.completed_revision, 0),
@@ -189,6 +189,7 @@ func readProfileObservationStateTx(tx *sql.Tx, channelID string) (profileObserva
 		 AND a.owner_kind = 'channel'
 		 AND a.owner_id = cp.channel_id
 		 AND a.media_index = 0
+		LEFT JOIN media_objects mo ON mo.object_id = a.desired_object_id
 		WHERE cp.channel_id = ?
 	`, channelID).Scan(
 		&state.handle, &state.displayName, &state.avatarURL,
@@ -556,11 +557,14 @@ func reusableProfileAssetTx(tx *sql.Tx, channelID, kind, sourceURL string) (bool
 	var storedSource, filePath, contentType, sha256, state string
 	var sizeBytes, fileMtimeNs int64
 	err := tx.QueryRow(`
-		SELECT COALESCE(source_url, ''), COALESCE(file_path, ''), COALESCE(content_type, ''),
-		       COALESCE(size_bytes, 0), COALESCE(sha256, ''), COALESCE(file_mtime_ns, 0), state
-		FROM assets
-		WHERE asset_kind = ? AND owner_kind = 'channel'
-		  AND owner_id = ? AND media_index = 0
+		SELECT COALESCE(current.published_source_url, ''), COALESCE(current.file_path, ''), COALESCE(current.content_type, ''),
+		       COALESCE(current.size_bytes, 0), COALESCE(current.sha256, ''), COALESCE(current.file_mtime_ns, 0),
+		       CASE WHEN current.published_revision > 0 AND current.file_path != '' THEN 'ready' ELSE desired.job_state END
+		FROM assets a
+		JOIN media_objects current ON current.object_id = a.object_id
+		JOIN media_objects desired ON desired.object_id = a.desired_object_id
+		WHERE a.asset_kind = ? AND a.owner_kind = 'channel'
+		  AND a.owner_id = ? AND a.media_index = 0
 	`, kind, channelID).Scan(&storedSource, &filePath, &contentType, &sizeBytes, &sha256, &fileMtimeNs, &state)
 	if err == sql.ErrNoRows {
 		return false, nil
@@ -609,6 +613,53 @@ func (db *DB) RetryProfileJob(job model.ProfileJob, message string, delay time.D
 		}
 		return requireQueueLeaseUpdate(res, "profile_jobs", job.ChannelID, job.LeaseOwner)
 	})
+}
+
+func (db *DB) FailProfileJob(job model.ProfileJob, message string, nowMs int64) error {
+	if nowMs <= 0 {
+		nowMs = time.Now().UnixMilli()
+	}
+	return db.WithWrite(func(tx *sql.Tx) error {
+		res, err := tx.Exec(`
+			UPDATE profile_jobs
+			SET completed_revision = CASE WHEN requested_revision = ? THEN requested_revision ELSE completed_revision END,
+			    attempts = CASE WHEN requested_revision = ? THEN attempts + 1 ELSE 0 END,
+			    next_attempt_at_ms = 0, last_error = ?,
+			    lease_owner = '', lease_until_ms = 0, updated_at_ms = ?
+			WHERE channel_id = ? AND lease_owner = ? AND lease_until_ms = ?
+		`, job.RequestedRevision, job.RequestedRevision, strings.TrimSpace(message), nowMs,
+			job.ChannelID, job.LeaseOwner, profileJobLeaseUntilMs(job))
+		if err != nil {
+			return err
+		}
+		return requireQueueLeaseUpdate(res, "profile_jobs", job.ChannelID, job.LeaseOwner)
+	})
+}
+
+func (db *DB) NextProfileJobDelay(nowMs int64) (time.Duration, error) {
+	if nowMs <= 0 {
+		nowMs = time.Now().UnixMilli()
+	}
+	var due sql.NullInt64
+	err := db.reader().QueryRow(`
+		SELECT MIN(CASE
+			WHEN lease_owner != '' THEN lease_until_ms
+			WHEN next_attempt_at_ms > 0 THEN next_attempt_at_ms
+			ELSE ? END)
+		FROM profile_jobs
+		WHERE completed_revision < requested_revision
+	`, nowMs).Scan(&due)
+	if err != nil {
+		return 0, err
+	}
+	if !due.Valid {
+		return 5 * time.Minute, nil
+	}
+	delay := time.Duration(due.Int64-nowMs) * time.Millisecond
+	if delay < 0 {
+		return 0, nil
+	}
+	return delay, nil
 }
 
 func profileJobLeaseUntilMs(job model.ProfileJob) int64 {

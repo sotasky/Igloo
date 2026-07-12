@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/screwys/igloo/internal/db"
+	"github.com/screwys/igloo/internal/download"
 )
 
 const (
@@ -55,7 +56,9 @@ func (m *Manager) runPreviewWorker(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case req := <-m.previewChan:
-			if err := m.generatePreview(ctx, req); err != nil {
+			if err := m.downloader.RunMedia(ctx, download.MediaLaneBulk, func() error {
+				return m.generatePreview(ctx, req)
+			}); err != nil {
 				log.Printf("[preview] generatePreview %s: %v", req.VideoID, err)
 			}
 		}

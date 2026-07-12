@@ -91,12 +91,83 @@ func TestPrepareCompletedVideoFilesKeepsMediaExternalAndUsesExactThumbnail(t *te
 	if string(body) != "exact thumbnail" {
 		t.Fatalf("stored thumbnail came from another file: %q", body)
 	}
-	files.removeTransientFiles()
+	m.removeTransientFiles(context.Background(), files)
 	if _, err := os.Stat(exactThumbnail); !os.IsNotExist(err) {
 		t.Fatalf("producer thumbnail sidecar was not retired: %v", err)
 	}
 	if body, err := os.ReadFile(decoyThumbnail); err != nil || string(body) != "decoy thumbnail" {
 		t.Fatalf("same-directory decoy was touched: body=%q err=%v", body, err)
+	}
+}
+
+func TestReusableCompletedVideoUsesOnlyCanonicalFiles(t *testing.T) {
+	dir := t.TempDir()
+	for name, body := range map[string]string{
+		"sample.mp4":                   "video",
+		"sample.webp":                  "thumbnail",
+		"sample.info.json":             `{}`,
+		"sample.en.vtt":                "WEBVTT\n",
+		"sample-attempt-deadbeef.mp4":  "partial",
+		"sample.f137.mp4":              "format fragment",
+		"sample_other-not-indexed.jpg": "not canonical",
+		"sample2.mp4":                  "another video",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	completed, err := reusableCompletedVideoAdmitted(dir, "sample", "youtube")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(completed.MediaPaths) != 1 || filepath.Base(completed.MediaPaths[0]) != "sample.mp4" {
+		t.Fatalf("media paths = %v", completed.MediaPaths)
+	}
+	if filepath.Base(completed.ThumbnailPath) != "sample.webp" {
+		t.Fatalf("thumbnail path = %q", completed.ThumbnailPath)
+	}
+	if filepath.Base(completed.InfoJSONPath) != "sample.info.json" {
+		t.Fatalf("info path = %q", completed.InfoJSONPath)
+	}
+	if len(completed.SubtitlePaths) != 1 || filepath.Base(completed.SubtitlePaths[0]) != "sample.en.vtt" {
+		t.Fatalf("subtitle paths = %v", completed.SubtitlePaths)
+	}
+}
+
+func TestReusableCompletedVideoRejectsLoneThumbnail(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "sample.webp"), []byte("thumbnail"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	completed, err := reusableCompletedVideoAdmitted(dir, "sample", "youtube")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(completed.MediaPaths) != 0 {
+		t.Fatalf("lone thumbnail was adopted as media: %v", completed.MediaPaths)
+	}
+}
+
+func TestReusableCompletedVideoRecognizesNumberedSlideshow(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"sample.jpg", "sample_2.jpg", "sample_10.webp", "sample_note.jpg"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(name), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	completed, err := reusableCompletedVideoAdmitted(dir, "sample", "tiktok")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(completed.MediaPaths) != 3 {
+		t.Fatalf("media paths = %v", completed.MediaPaths)
+	}
+	for _, path := range completed.MediaPaths {
+		if filepath.Base(path) == "sample_note.jpg" {
+			t.Fatalf("non-indexed sibling was adopted: %v", completed.MediaPaths)
+		}
 	}
 }
 
@@ -127,7 +198,7 @@ func TestFailedRedownloadPreservesReadyBytesAndRemovesOnlyAttemptOutputs(t *test
 		t.Fatalf("ready stream: %+v %v", before, err)
 	}
 
-	attemptID, err := newDownloadAttemptID(mediaDir, videoID)
+	attemptID, err := newDownloadAttemptID(videoID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,7 +236,7 @@ func TestFailedRedownloadPreservesReadyBytesAndRemovesOnlyAttemptOutputs(t *test
 	if err == nil {
 		t.Fatal("redownload unexpectedly committed after its media disappeared")
 	}
-	files.removeFailedAttempt(completed)
+	m.removeFailedAttempt(context.Background(), files, completed)
 
 	after, err := m.db.GetAssetByOwnerIdentity("video_stream", "youtube_video", videoID, 0)
 	if err != nil || after == nil || after.FilePath != oldKey || after.SHA256 != before.SHA256 {

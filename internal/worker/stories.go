@@ -110,10 +110,10 @@ func (m *Manager) downloadNativeStory(ctx context.Context, platform, handle stri
 	if err != nil {
 		return fmt.Errorf("storage path: %w", err)
 	}
-	if err := os.MkdirAll(videoDir, 0o755); err != nil {
+	if err := m.downloader.RunMedia(ctx, download.MediaLaneBulk, func() error { return os.MkdirAll(videoDir, 0o755) }); err != nil {
 		return fmt.Errorf("mkdir: %w", err)
 	}
-	attemptID, err := newDownloadAttemptID(videoDir, ref.VideoID)
+	attemptID, err := newDownloadAttemptID(ref.VideoID)
 	if err != nil {
 		return fmt.Errorf("allocate download attempt: %w", err)
 	}
@@ -128,17 +128,17 @@ func (m *Manager) downloadNativeStory(ctx context.Context, platform, handle stri
 	}
 	completed, err := m.downloader.DownloadCompleted(ctx, ref.URL, "video", opts)
 	if err != nil {
-		(completedVideoFiles{}).removeFailedAttempt(completed)
+		m.removeFailedAttempt(ctx, completedVideoFiles{}, completed)
 		return err
 	}
 	if len(completed.MediaPaths) == 0 {
-		(completedVideoFiles{}).removeFailedAttempt(completed)
+		m.removeFailedAttempt(ctx, completedVideoFiles{}, completed)
 		return fmt.Errorf("no files returned")
 	}
 
 	files, err := m.prepareCompletedVideoFiles(ctx, platform, attemptID, completed)
 	if err != nil {
-		files.removeFailedAttempt(completed)
+		m.removeFailedAttempt(ctx, files, completed)
 		return fmt.Errorf("prepare completed outputs: %w", err)
 	}
 	metadata := loadInfoJSONFile(completed.InfoJSONPath)
@@ -199,10 +199,10 @@ func (m *Manager) downloadNativeStory(ctx context.Context, platform, handle stri
 		MediaKind: mediaKind, SlideCount: slideCount, SourceKind: "story", Assets: files.assets,
 	})
 	if err == nil {
-		files.removeTransientFiles()
+		m.removeTransientFiles(ctx, files)
 		m.enqueueCompletedVideoPreview(ref.VideoID, platform, files.primaryPath, float64(duration))
 	} else {
-		files.removeFailedAttempt(completed)
+		m.removeFailedAttempt(ctx, files, completed)
 	}
 	return err
 }

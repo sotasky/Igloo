@@ -711,57 +711,6 @@ func TestResetDownloadAuthFailuresForPlatform(t *testing.T) {
 	}
 }
 
-func TestResetStaleDownloadQueueItems(t *testing.T) {
-	d := openWritableTestDB(t)
-
-	// Add and claim a video so it enters processing state
-	videoID := "dlq_vid_stale_001"
-	if err := d.AddToDownloadQueue(videoID, "dlq_ch_stale", "Stale Video"); err != nil {
-		t.Fatalf("AddToDownloadQueue: %v", err)
-	}
-	claimed, err := d.ClaimDownloadBatch(10)
-	if err != nil {
-		t.Fatalf("ClaimDownloadBatch: %v", err)
-	}
-	found := false
-	for _, r := range claimed {
-		if r.VideoID == videoID {
-			found = true
-		}
-	}
-	if !found {
-		t.Skip("stale test video not claimed (unexpected DB state)")
-	}
-
-	if err := d.ExecRaw(`UPDATE download_queue SET lease_until_ms=? WHERE video_id=?`, time.Now().UnixMilli()-1, videoID); err != nil {
-		t.Fatalf("expire lease: %v", err)
-	}
-
-	// Reset expired leased items
-	n, err := d.ResetStaleDownloadQueueItems()
-	if err != nil {
-		t.Fatalf("ResetStaleDownloadQueueItems: %v", err)
-	}
-	if n < 1 {
-		t.Errorf("expected at least 1 reset item, got %d", n)
-	}
-
-	// Video should now be claimable again
-	claimed2, err := d.ClaimDownloadBatch(100)
-	if err != nil {
-		t.Fatalf("second ClaimDownloadBatch: %v", err)
-	}
-	reclaimed := false
-	for _, r := range claimed2 {
-		if r.VideoID == videoID {
-			reclaimed = true
-		}
-	}
-	if !reclaimed {
-		t.Errorf("video %q should be claimable after stale reset", videoID)
-	}
-}
-
 func TestClaimDownloadBatchWithLeaseExcludesActiveLease(t *testing.T) {
 	d := openWritableTestDB(t)
 	now := time.Now().UnixMilli()

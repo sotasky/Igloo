@@ -1107,14 +1107,15 @@ func (db *DB) GetVideoStats() (unwatched int, totalBytes int64, err error) {
 	err = db.conn.QueryRow(`
 		SELECT
 			COUNT(DISTINCT CASE WHEN NOT `+videoFullyWatchedSQL("v")+` THEN v.video_id END),
-			COALESCE(SUM(a.size_bytes),0)
+			COALESCE(SUM(mo.size_bytes),0)
 		FROM videos v
 		JOIN assets a
 		  ON a.owner_kind = v.owner_kind
 		 AND a.owner_id = v.video_id
+		JOIN media_objects mo ON mo.object_id = a.object_id
 		WHERE a.asset_kind IN ('video_stream', 'post_media', 'post_audio')
-		  AND a.state = 'ready'
-		  AND a.file_path != ''
+		  AND mo.published_revision > 0
+		  AND mo.file_path != ''
 	`).Scan(&unwatched, &totalBytes)
 	return
 }

@@ -3,6 +3,7 @@ package web
 import (
 	"testing"
 
+	"github.com/screwys/igloo/internal/db"
 	"github.com/screwys/igloo/internal/model"
 )
 
@@ -55,17 +56,11 @@ func TestBuildFeedSourcesShowsNeverIngestedChannelAsPending(t *testing.T) {
 
 func TestCountReadyAvatarsCountsCanonicalChannelIdentityOnly(t *testing.T) {
 	srv := newTestServer(t)
-	if err := srv.db.ExecRaw(`
-		INSERT INTO assets (
-			asset_id, asset_kind, owner_kind, owner_id, media_index,
-			state, created_at_ms, updated_at_ms
-		) VALUES
-			('channel_avatar', 'avatar', 'channel', 'twitter_sample', 0, 'ready', 1, 1),
-			('comment_avatar', 'avatar', 'comment_author', 'comment_sample', 0, 'ready', 1, 1),
-			('retired_tweet_avatar', 'avatar', 'tweet', 'tweet_sample', 0, 'ready', 1, 1),
-			('queued_channel_avatar', 'avatar', 'channel', 'twitter_pending', 0, 'queued', 1, 1)
-	`); err != nil {
-		t.Fatalf("seed avatar inventory: %v", err)
+	storeReadyMediaAsset(t, srv, "twitter", "channel", "twitter_sample", "avatar", 0, "thumbnails/avatars/twitter_sample.jpg", "image/jpeg", testJPEGBytes())
+	storeReadyMediaAsset(t, srv, "youtube", "comment_author", "comment_sample", "avatar", 0, "thumbnails/avatars/comment_sample.jpg", "image/jpeg", testJPEGBytes())
+	storeReadyMediaAsset(t, srv, "twitter", "tweet", "tweet_sample", "avatar", 0, "thumbnails/avatars/tweet_sample.jpg", "image/jpeg", testJPEGBytes())
+	if err := srv.db.DeclareAsset(db.Asset{AssetID: "queued_channel_avatar", AssetKind: "avatar", OwnerKind: "channel", OwnerID: "twitter_sample_new", SourceURL: "https://example.test/avatar.jpg"}, 1); err != nil {
+		t.Fatalf("seed queued avatar: %v", err)
 	}
 
 	if got := srv.countReadyAvatars(); got != 1 {

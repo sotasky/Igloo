@@ -23,6 +23,7 @@ type Fetcher struct {
 	Client   ClientAPI
 	Extract  ExtractFunc
 	ThumbDir string // absolute path where extracted frames are written
+	Mutate   func(context.Context, func() error) error
 	// FileExists is used after extraction to confirm the output file landed.
 	// Leave nil to use os.Stat. Tests may override.
 	FileExists func(path string) bool
@@ -62,43 +63,53 @@ func (f *Fetcher) FetchAndProcess(ctx context.Context, videoID, videoPath string
 		return out, fmt.Errorf("DeArrow thumbnail requested for %s without a video path", videoID)
 	}
 
-	if err := os.MkdirAll(f.ThumbDir, 0o755); err != nil {
-		return out, err
+	mutate := f.Mutate
+	if mutate == nil {
+		mutate = func(_ context.Context, work func() error) error { return work() }
 	}
-	tmp, err := os.CreateTemp(f.ThumbDir, "dearrow-*.jpg")
+	var pathCopy string
+	err = mutate(ctx, func() error {
+		if err := os.MkdirAll(f.ThumbDir, 0o755); err != nil {
+			return err
+		}
+		tmp, err := os.CreateTemp(f.ThumbDir, "dearrow-*.jpg")
+		if err != nil {
+			return err
+		}
+		dst := tmp.Name()
+		if err := tmp.Close(); err != nil {
+			_ = os.Remove(dst)
+			return err
+		}
+		if err := os.Remove(dst); err != nil {
+			return err
+		}
+		keep := false
+		defer func() {
+			if !keep {
+				_ = os.Remove(dst)
+			}
+		}()
+		if err := f.Extract(ctx, videoPath, *res.ThumbTimestamp, dst); err != nil {
+			return err
+		}
+		exists := f.FileExists
+		if exists == nil {
+			exists = func(p string) bool {
+				info, statErr := os.Stat(p)
+				return statErr == nil && info.Mode().IsRegular() && info.Size() > 0
+			}
+		}
+		if !exists(dst) {
+			return fmt.Errorf("DeArrow extractor produced no thumbnail for %s", videoID)
+		}
+		keep = true
+		pathCopy = dst
+		return nil
+	})
 	if err != nil {
 		return out, err
 	}
-	dst := tmp.Name()
-	if err := tmp.Close(); err != nil {
-		_ = os.Remove(dst)
-		return out, err
-	}
-	if err := os.Remove(dst); err != nil {
-		return out, err
-	}
-	keep := false
-	defer func() {
-		if !keep {
-			_ = os.Remove(dst)
-		}
-	}()
-	if err := f.Extract(ctx, videoPath, *res.ThumbTimestamp, dst); err != nil {
-		// Preserve titles we already collected; caller may still persist them.
-		return out, err
-	}
-	exists := f.FileExists
-	if exists == nil {
-		exists = func(p string) bool {
-			info, statErr := os.Stat(p)
-			return statErr == nil && info.Mode().IsRegular() && info.Size() > 0
-		}
-	}
-	if !exists(dst) {
-		return out, fmt.Errorf("DeArrow extractor produced no thumbnail for %s", videoID)
-	}
-	keep = true
-	pathCopy := dst
 	out.ThumbPath = &pathCopy
 	return out, nil
 }

@@ -14,10 +14,7 @@ import (
 func (m *Manager) runFeedScoringWorker(ctx context.Context) {
 	log.Printf("[feed_scoring] worker started")
 
-	lastRun := time.Now()
-
-	ticker := time.NewTicker(5 * time.Minute)
-	defer ticker.Stop()
+	lastRun := time.Time{}
 	var kickTimer *time.Timer
 	var kickTimerC <-chan time.Time
 	stopKickTimer := func() {
@@ -53,6 +50,7 @@ func (m *Manager) runFeedScoringWorker(ctx context.Context) {
 			kickTimerC = kickTimer.C
 		}
 	}
+	runNow()
 
 	for {
 		select {
@@ -61,8 +59,6 @@ func (m *Manager) runFeedScoringWorker(ctx context.Context) {
 		case <-m.feedScoringKick:
 			scheduleKick()
 		case <-kickTimerC:
-			runNow()
-		case <-ticker.C:
 			runNow()
 		}
 	}
@@ -77,8 +73,6 @@ func (m *Manager) scoreFeedItems(ctx context.Context) {
 
 	scored := m.runScoringPhase()
 
-	// Rebuild the snapshot on every tick so time-decay drift stays fresh even
-	// when no items needed re-scoring.
 	snap := m.runSnapshotPhaseStats(ctx)
 
 	totalElapsed := time.Since(start).Round(time.Millisecond)

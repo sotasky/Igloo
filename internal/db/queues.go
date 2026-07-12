@@ -6,6 +6,51 @@ import (
 	"time"
 )
 
+// NextMediaWorkDelay returns the next due time across the two durable media
+// queues. Enqueue signals may wake the executor sooner.
+func (db *DB) NextMediaWorkDelay(nowMs int64) (time.Duration, error) {
+	if nowMs <= 0 {
+		nowMs = time.Now().UnixMilli()
+	}
+	var due sql.NullInt64
+	err := db.reader().QueryRow(`
+		SELECT MIN(due_ms) FROM (
+			SELECT CASE
+			         WHEN mo.job_state = 'downloading' THEN mo.lease_until_ms
+			         WHEN mo.next_attempt_at_ms > 0 THEN mo.next_attempt_at_ms
+			         ELSE ?
+			       END AS due_ms
+			FROM media_objects mo
+			WHERE mo.job_state IN ('queued', 'downloading')
+			  AND EXISTS (
+			    SELECT 1 FROM assets a
+			    WHERE a.desired_object_id = mo.object_id AND a.lifecycle_state = 'active'
+			      AND ((a.owner_kind = 'tweet' AND a.asset_kind IN ('post_audio', 'post_media', 'post_thumbnail'))
+			        OR (a.owner_kind = 'comment_author' AND a.asset_kind = 'avatar'))
+			  )
+			UNION ALL
+			SELECT CASE
+			         WHEN status = 'processing' THEN lease_until_ms
+			         WHEN next_attempt_at_ms > 0 THEN next_attempt_at_ms
+			         ELSE ?
+			       END
+			FROM download_queue
+			WHERE status IN ('pending', 'processing')
+		)
+	`, nowMs, nowMs).Scan(&due)
+	if err != nil {
+		return 0, err
+	}
+	if !due.Valid {
+		return 5 * time.Minute, nil
+	}
+	delay := time.Duration(due.Int64-nowMs) * time.Millisecond
+	if delay < 0 {
+		return 0, nil
+	}
+	return delay, nil
+}
+
 // XContentDownloadOwner is the compact owner-level status projection used by
 // queue UIs. Individual asset rows remain the only durable work records.
 type XContentDownloadOwner struct {
@@ -50,19 +95,20 @@ func (db *DB) ListPendingXContentDownloads() (processing, pending []XContentDown
 	rows, err := db.conn.Query(`
 		SELECT a.owner_id,
 		       COALESCE(fi.source_handle, ''),
-		       CASE WHEN SUM(CASE WHEN a.state = 'downloading' THEN 1 ELSE 0 END) > 0
+		       CASE WHEN SUM(CASE WHEN mo.job_state = 'downloading' THEN 1 ELSE 0 END) > 0
 		            THEN 'processing' ELSE 'queued' END,
-		       CASE WHEN SUM(CASE WHEN a.content_type LIKE 'video/%' THEN 1 ELSE 0 END) > 0
+		       CASE WHEN SUM(CASE WHEN mo.content_type LIKE 'video/%' THEN 1 ELSE 0 END) > 0
 		            THEN 'video' ELSE 'image' END,
 		       SUM(CASE WHEN a.asset_kind = 'post_media' THEN 1 ELSE 0 END),
-		       MAX(a.attempts), MAX(a.last_error)
+		       MAX(mo.attempts), MAX(mo.last_error)
 		FROM assets a
+		JOIN media_objects mo ON mo.object_id = a.desired_object_id
 		LEFT JOIN feed_items_resolved fi ON fi.tweet_id = a.owner_id
 		WHERE a.owner_kind = 'tweet'
 		  AND a.asset_kind IN ('post_audio', 'post_media', 'post_thumbnail')
-		  AND a.state IN ('queued', 'downloading')
+		  AND mo.job_state IN ('queued', 'downloading')
 		GROUP BY a.owner_id, fi.source_handle
-		ORDER BY MAX(a.updated_at_ms) ASC, a.owner_id ASC
+		ORDER BY MAX(mo.updated_at_ms) ASC, a.owner_id ASC
 	`)
 	if err != nil {
 		return nil, nil, err
@@ -90,13 +136,14 @@ func (db *DB) ListPendingXContentDownloads() (processing, pending []XContentDown
 func (db *DB) CountPendingXContentDownloads() (queued int, processing int, err error) {
 	err = db.conn.QueryRow(`
 		WITH owner_state AS (
-			SELECT owner_id,
-			       MAX(CASE WHEN state = 'downloading' THEN 1 ELSE 0 END) AS processing
-			FROM assets
-			WHERE owner_kind = 'tweet'
-			  AND asset_kind IN ('post_audio', 'post_media', 'post_thumbnail')
-			  AND state IN ('queued', 'downloading')
-			GROUP BY owner_id
+			SELECT a.owner_id,
+			       MAX(CASE WHEN mo.job_state = 'downloading' THEN 1 ELSE 0 END) AS processing
+			FROM assets a
+			JOIN media_objects mo ON mo.object_id = a.desired_object_id
+			WHERE a.owner_kind = 'tweet'
+			  AND a.asset_kind IN ('post_audio', 'post_media', 'post_thumbnail')
+			  AND mo.job_state IN ('queued', 'downloading')
+			GROUP BY a.owner_id
 		)
 		SELECT COALESCE(SUM(CASE WHEN processing = 0 THEN 1 ELSE 0 END), 0),
 		       COALESCE(SUM(processing), 0)

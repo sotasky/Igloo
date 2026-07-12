@@ -592,11 +592,12 @@ func (db *DB) PurgeUnfollowedChannelContent(channelID string) ([]string, error) 
 
 func (db *DB) purgeVideoChannelAfterUnfollowTx(tx *sql.Tx, channelID string) ([]string, error) {
 	keys, err := queryAssetFileKeysTx(tx, `
-		SELECT DISTINCT a.file_path
+		SELECT DISTINCT mo.file_path
 		FROM assets a
+		JOIN media_objects mo ON mo.object_id = a.object_id
 		JOIN videos v ON v.video_id = a.owner_id
 		WHERE a.owner_kind = v.owner_kind
-		  AND a.file_path != ''
+		  AND mo.published_revision > 0 AND mo.file_path != ''
 		  AND v.channel_id = ?
 		  AND NOT EXISTS (
 		        SELECT 1
@@ -686,11 +687,12 @@ func (db *DB) purgeTwitterAfterUnfollowTx(tx *sql.Tx, channelID string) ([]strin
 	`
 	args := []any{channelID, channelID, channelID, channelID, channelID}
 	keys, err := queryAssetFileKeysTx(tx, `
-		SELECT DISTINCT file_path
-		FROM assets
-		WHERE owner_kind = 'tweet'
-		  AND file_path != ''
-		  AND owner_id IN (
+		SELECT DISTINCT mo.file_path
+		FROM assets a
+		JOIN media_objects mo ON mo.object_id = a.object_id
+		WHERE a.owner_kind = 'tweet'
+		  AND mo.published_revision > 0 AND mo.file_path != ''
+		  AND a.owner_id IN (
 		    SELECT fi.tweet_id
 		    FROM feed_items fi
 		    WHERE `+candidate+`

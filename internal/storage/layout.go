@@ -18,6 +18,7 @@ type Layout struct {
 	stateRoot         string
 	mediaRoot         string
 	externalMediaRoot bool
+	mediaExecutor     *MediaExecutor
 }
 
 func New(stateRoot, mediaRoot string) (Layout, error) {
@@ -50,12 +51,14 @@ func New(stateRoot, mediaRoot string) (Layout, error) {
 	if external && (containsPath(stateRoot, mediaRoot) || containsPath(mediaRoot, stateRoot)) {
 		return Layout{}, fmt.Errorf("external media root %q overlaps state root %q", mediaRoot, stateRoot)
 	}
-	return Layout{stateRoot: stateRoot, mediaRoot: mediaRoot, externalMediaRoot: external}, nil
+	return Layout{stateRoot: stateRoot, mediaRoot: mediaRoot, externalMediaRoot: external, mediaExecutor: NewMediaExecutor()}, nil
 }
 
 func (l Layout) StateRoot() string { return l.stateRoot }
 
 func (l Layout) MediaRoot() string { return l.mediaRoot }
+
+func (l Layout) MediaExecutor() *MediaExecutor { return l.mediaExecutor }
 
 func (l Layout) DatabasePath() string { return filepath.Join(l.stateRoot, "igloo.db") }
 

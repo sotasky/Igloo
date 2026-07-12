@@ -194,10 +194,10 @@ func TestResolveReplyChainDeclaresMediaForGhostParent(t *testing.T) {
 
 	var state, kind, sourceURL string
 	if err := d.QueryRow(`
-		SELECT COALESCE(state,''), COALESCE(content_type,''), COALESCE(source_url,'')
-		FROM assets
-		WHERE owner_kind = 'tweet' AND owner_id = '1000000000000000012'
-		  AND asset_kind = 'post_media' AND media_index = 0
+		SELECT COALESCE(mo.job_state,''), COALESCE(mo.content_type,''), COALESCE(mo.source_url,'')
+		FROM assets a JOIN media_objects mo ON mo.object_id = a.desired_object_id
+		WHERE a.owner_kind = 'tweet' AND a.owner_id = '1000000000000000012'
+		  AND a.asset_kind = 'post_media' AND a.media_index = 0
 	`).Scan(&state, &kind, &sourceURL); err != nil {
 		t.Fatalf("missing feed media asset: %v", err)
 	}

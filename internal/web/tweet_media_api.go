@@ -264,7 +264,7 @@ func (s *Server) handleTweetMediaDl(w http.ResponseWriter, r *http.Request) {
 		_ = os.RemoveAll(tmpDir)
 	}()
 
-	paths, dlErr := dl.YtDlp.Download(ctx, body.TweetURL, download.Opts{
+	paths, dlErr := dl.Download(ctx, body.TweetURL, "video", download.Opts{
 		OutputDir: tmpDir,
 		Cookies:   filepath.Join(s.cfg.CookiesDir, "x.com_cookies.txt"),
 	})
@@ -406,7 +406,7 @@ func archiveTweetMediaURL(ctx context.Context, dl *download.Downloader, mediaURL
 	ext := tweetMediaExtFromURL(mediaURL)
 	filename := fmt.Sprintf("%s %03d%s", safeName, fileNum, ext)
 	if strings.EqualFold(ext, ".mp4") {
-		destPath, err := dl.HTTP.DownloadFileWithOptions(ctx, mediaURL, archivePath, filename, download.HTTPDownloadOptions{
+		destPath, err := dl.DownloadFileWithOptions(ctx, download.MediaLaneBulk, mediaURL, archivePath, filename, download.HTTPDownloadOptions{
 			MaxBytes: 4 << 30,
 			Timeout:  2 * time.Hour,
 		})
@@ -419,7 +419,7 @@ func archiveTweetMediaURL(ctx context.Context, dl *download.Downloader, mediaURL
 		}
 		return destPath, nil
 	}
-	return dl.HTTP.DownloadFile(ctx, mediaURL, archivePath, filename)
+	return dl.DownloadFile(ctx, download.MediaLaneBulk, mediaURL, archivePath, filename)
 }
 
 func validateTweetMediaStagingFile(path, ext string) error {

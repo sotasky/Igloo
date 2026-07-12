@@ -142,9 +142,9 @@ func pipelineStatus() (string, error) {
 			failedStates:   []string{"failed", "error"},
 		},
 		{
-			name:           "Asset Inventory",
-			table:          "assets",
-			statusCol:      "state",
+			name:           "Media Objects",
+			table:          "media_objects",
+			statusCol:      "job_state",
 			timeCol:        "updated_at_ms",
 			nextAttemptCol: "next_attempt_at_ms",
 			leaseUntilCol:  "lease_until_ms",

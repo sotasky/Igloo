@@ -383,7 +383,7 @@ func dbSummary() (string, error) {
 	// Queue statuses
 	sb.WriteString("\nQueue statuses:\n")
 	queueQueries := map[string]string{
-		"assets":         `SELECT state, COUNT(*) FROM assets GROUP BY state ORDER BY COUNT(*) DESC`,
+		"media_objects":  `SELECT job_state, COUNT(*) FROM media_objects GROUP BY job_state ORDER BY COUNT(*) DESC`,
 		"download_queue": `SELECT status, COUNT(*) FROM download_queue GROUP BY status ORDER BY COUNT(*) DESC`,
 		"channel_queue":  `SELECT status, COUNT(*) FROM channel_queue GROUP BY status ORDER BY COUNT(*) DESC`,
 	}
@@ -413,7 +413,7 @@ func dbSummary() (string, error) {
 		{"Latest feed item", `SELECT published_at FROM feed_items ORDER BY published_at DESC LIMIT 1`},
 		{"Latest video", `SELECT downloaded_at FROM videos ORDER BY downloaded_at DESC LIMIT 1`},
 		{"Latest ingest", `SELECT datetime(last_success_at, 'unixepoch') FROM ingest_state ORDER BY last_success_at DESC LIMIT 1`},
-		{"Latest asset update", `SELECT updated_at_ms FROM assets ORDER BY updated_at_ms DESC LIMIT 1`},
+		{"Latest asset update", `SELECT updated_at_ms FROM media_objects ORDER BY updated_at_ms DESC LIMIT 1`},
 	}
 	for _, ts := range timestamps {
 		var val sql.NullString

@@ -90,17 +90,11 @@ func (db *DB) ListAndroidSyncCommentAuthorAssets(videoIDs []string, limitPerVide
 		for _, ownerID := range chunk {
 			args = append(args, ownerID)
 		}
-		rows, err := db.reader().Query(`
-			SELECT id, asset_id, asset_kind, owner_kind, owner_id, media_index,
-			       source_url, file_path, content_type, size_bytes, sha256, file_mtime_ns, revision,
-			       is_auto, audio_language, state,
-			       required_reason, last_error_kind, last_error, attempts,
-			       next_attempt_at_ms, lease_owner, lease_until_ms, created_at_ms, updated_at_ms
-				FROM assets
-				WHERE asset_kind = ?
-				  AND owner_kind = ?
-				  AND state != 'pruned'
-				  AND owner_id IN (`+placeholders(len(chunk))+`)
+		rows, err := db.reader().Query(`SELECT `+assetProjectionSQL+assetJoinsSQL+`
+				WHERE a.asset_kind = ?
+				  AND a.owner_kind = ?
+				  AND a.lifecycle_state != 'pruned'
+				  AND a.owner_id IN (`+placeholders(len(chunk))+`)
 		`, args...)
 		if err != nil {
 			return nil, err
