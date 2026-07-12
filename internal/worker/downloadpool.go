@@ -18,7 +18,10 @@ import (
 	"github.com/screwys/igloo/internal/model"
 )
 
-const downloadBatchSize = 1
+const (
+	downloadBatchSize  = 1
+	feedMediaBurstSize = 32
+)
 
 var (
 	downloadPoolLeaseDuration      = 5 * time.Minute
@@ -62,7 +65,8 @@ func (m *Manager) runMediaExecutor(ctx context.Context) {
 		case <-timer.C:
 		}
 		if !m.IsStopRequested() {
-			m.processFeedMediaBatch(ctx)
+			for i := 0; i < feedMediaBurstSize && m.processFeedMediaBatch(ctx); i++ {
+			}
 			m.processDownloadBatch(ctx)
 		}
 		delay, err := m.db.NextMediaWorkDelay(time.Now().UnixMilli())

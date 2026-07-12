@@ -20,9 +20,9 @@ const (
 	feedMediaLeaseDuration = 5 * time.Minute
 )
 
-func (m *Manager) processFeedMediaBatch(ctx context.Context) {
+func (m *Manager) processFeedMediaBatch(ctx context.Context) bool {
 	if m == nil || m.db == nil || m.cfg == nil || m.downloader == nil || ctx.Err() != nil {
-		return
+		return false
 	}
 	owner := feedMediaLeaseOwner()
 	assets, err := m.db.ClaimContentAssetDownloadBatch(db.LeaseOptions{
@@ -30,7 +30,10 @@ func (m *Manager) processFeedMediaBatch(ctx context.Context) {
 	})
 	if err != nil {
 		log.Printf("[feedmedia] ClaimContentAssetDownloadBatch: %v", err)
-		return
+		return false
+	}
+	if len(assets) == 0 {
+		return false
 	}
 	for _, asset := range assets {
 		if ctx.Err() != nil {
@@ -39,6 +42,7 @@ func (m *Manager) processFeedMediaBatch(ctx context.Context) {
 		}
 		m.processContentAsset(ctx, asset)
 	}
+	return true
 }
 
 func (m *Manager) processContentAsset(ctx context.Context, asset db.Asset) {

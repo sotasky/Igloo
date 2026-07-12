@@ -95,7 +95,65 @@ func (db *DB) ClaimContentAssetDownloadBatch(opts LeaseOptions) ([]Asset, error)
 	opts = normalizeLeaseOptions(opts, AssetStateQueued, AssetStateDownloading)
 	var claimed []Asset
 	err := db.WithWrite(func(tx *sql.Tx) error {
-		query := `
+		rankedQuery := `
+			WITH ranked AS MATERIALIZED (
+				SELECT tweet_id, MIN(rank_position) AS rank_position
+				FROM feed_rank_snapshot_history
+				GROUP BY tweet_id
+			)
+			SELECT desired.object_id
+			FROM ranked
+			CROSS JOIN assets a INDEXED BY idx_assets_owner
+			  ON a.owner_kind = 'tweet' AND a.owner_id = ranked.tweet_id
+			CROSS JOIN media_objects desired ON desired.object_id = a.desired_object_id
+			WHERE ` + leaseEligibleSQLFor("desired.job_state", "desired.next_attempt_at_ms", "desired.lease_until_ms") + `
+			  AND desired.source_url != ''
+			  AND a.lifecycle_state = 'active'
+			  AND a.asset_kind IN ('post_audio', 'post_media', 'post_thumbnail')
+			GROUP BY desired.object_id
+			ORDER BY MIN(CASE WHEN a.required_reason IN ('bookmark', 'like') THEN 0 ELSE 1 END),
+			         desired.attempts ASC, MIN(ranked.rank_position), desired.id DESC
+			LIMIT ?`
+		ids, err := claimLeasedIDsWithStateColumn(tx, "media_objects", "object_id", "job_state", rankedQuery, []any{
+			opts.NowMs, opts.StatusFrom, opts.NowMs, opts.StatusTo, opts.NowMs, opts.Limit,
+		}, opts)
+		if err != nil {
+			return err
+		}
+
+		recentQuery := `
+			WITH recent AS MATERIALIZED (
+				SELECT tweet_id, published_at
+				FROM feed_items INDEXED BY idx_feed_items_published
+				WHERE published_at > ?
+				ORDER BY published_at DESC
+				LIMIT 10000
+			)
+			SELECT desired.object_id
+			FROM recent
+			CROSS JOIN assets a INDEXED BY idx_assets_owner
+			  ON a.owner_kind = 'tweet' AND a.owner_id = recent.tweet_id
+			CROSS JOIN media_objects desired ON desired.object_id = a.desired_object_id
+			WHERE ` + leaseEligibleSQLFor("desired.job_state", "desired.next_attempt_at_ms", "desired.lease_until_ms") + `
+			  AND desired.source_url != ''
+			  AND a.lifecycle_state = 'active'
+			  AND a.asset_kind IN ('post_audio', 'post_media', 'post_thumbnail')
+			GROUP BY desired.object_id
+			ORDER BY MIN(CASE WHEN a.required_reason IN ('bookmark', 'like') THEN 0 ELSE 1 END),
+			         desired.attempts ASC, MAX(recent.published_at) DESC, desired.id DESC
+			LIMIT ?`
+		if remaining := opts.Limit - len(ids); remaining > 0 {
+			recentIDs, err := claimLeasedIDsWithStateColumn(tx, "media_objects", "object_id", "job_state", recentQuery, []any{
+				opts.NowMs - (48 * time.Hour).Milliseconds(),
+				opts.NowMs, opts.StatusFrom, opts.NowMs, opts.StatusTo, opts.NowMs, remaining,
+			}, opts)
+			if err != nil {
+				return err
+			}
+			ids = append(ids, recentIDs...)
+		}
+		if remaining := opts.Limit - len(ids); remaining > 0 {
+			backlogQuery := `
 			SELECT desired.object_id
 			FROM media_objects desired
 			JOIN assets a ON a.desired_object_id = desired.object_id
@@ -110,11 +168,13 @@ func (db *DB) ClaimContentAssetDownloadBatch(opts LeaseOptions) ([]Asset, error)
 			ORDER BY MIN(CASE WHEN a.required_reason IN ('bookmark', 'like') THEN 0 ELSE 1 END),
 			         desired.attempts ASC, desired.updated_at_ms DESC, desired.id DESC
 			LIMIT ?`
-		ids, err := claimLeasedIDsWithStateColumn(tx, "media_objects", "object_id", "job_state", query, []any{
-			opts.NowMs, opts.StatusFrom, opts.NowMs, opts.StatusTo, opts.NowMs, opts.Limit,
-		}, opts)
-		if err != nil {
-			return err
+			backlogIDs, err := claimLeasedIDsWithStateColumn(tx, "media_objects", "object_id", "job_state", backlogQuery, []any{
+				opts.NowMs, opts.StatusFrom, opts.NowMs, opts.StatusTo, opts.NowMs, remaining,
+			}, opts)
+			if err != nil {
+				return err
+			}
+			ids = append(ids, backlogIDs...)
 		}
 		for _, id := range ids {
 			asset, err := scanAsset(tx.QueryRow(`SELECT `+assetProjectionSQL+assetJoinsSQL+`

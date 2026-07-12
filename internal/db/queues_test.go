@@ -51,6 +51,67 @@ func TestClaimContentAssetsLeavesProfileIdentityOutsideQueue(t *testing.T) {
 	}
 }
 
+func TestClaimContentAssetsPrefersNewestPublishedPostOverQueueRefresh(t *testing.T) {
+	d := openFreshTestDB(t)
+	now := time.Now().UnixMilli()
+	if err := d.ExecRaw(`INSERT INTO feed_items (tweet_id, published_at) VALUES
+		('sample_old_post', ?), ('sample_new_post', ?)`, now-2000, now-1000); err != nil {
+		t.Fatal(err)
+	}
+	upsertAssetForTest(t, d, Asset{
+		AssetID:   BuildAssetID("twitter", "tweet", "sample_new_post", "post_media", 0),
+		AssetKind: "post_media", OwnerKind: "tweet", OwnerID: "sample_new_post",
+		SourceURL: "https://example.test/new.jpg", State: AssetStateQueued,
+	}, now)
+	upsertAssetForTest(t, d, Asset{
+		AssetID:   BuildAssetID("twitter", "tweet", "sample_old_post", "post_media", 0),
+		AssetKind: "post_media", OwnerKind: "tweet", OwnerID: "sample_old_post",
+		SourceURL: "https://example.test/old.jpg", State: AssetStateQueued,
+	}, now+100)
+
+	claimed, err := d.ClaimContentAssetDownloadBatch(LeaseOptions{
+		Owner: "x-worker", NowMs: now + 101, LeaseMs: 1000, Limit: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(claimed) != 1 || claimed[0].OwnerID != "sample_new_post" {
+		t.Fatalf("claimed = %+v, want newest published post", claimed)
+	}
+}
+
+func TestClaimContentAssetsPrefersPinnedFeedGeneration(t *testing.T) {
+	d := openFreshTestDB(t)
+	now := time.Now().UnixMilli()
+	if err := d.ExecRaw(`INSERT INTO feed_items (tweet_id, published_at) VALUES
+		('sample_ranked_first', ?), ('sample_newer_post', ?)`, now-2000, now-1000); err != nil {
+		t.Fatal(err)
+	}
+	for _, ownerID := range []string{"sample_ranked_first", "sample_newer_post"} {
+		upsertAssetForTest(t, d, Asset{
+			AssetID:   BuildAssetID("twitter", "tweet", ownerID, "post_media", 0),
+			AssetKind: "post_media", OwnerKind: "tweet", OwnerID: ownerID,
+			SourceURL: "https://example.test/" + ownerID + ".jpg", State: AssetStateQueued,
+		}, now)
+	}
+	if err := d.ReplaceFeedRankSnapshot([]SnapshotRow{
+		{TweetID: "sample_ranked_first", RankPosition: 1},
+		{TweetID: "sample_newer_post", RankPosition: 2},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	claimed, err := d.ClaimContentAssetDownloadBatch(LeaseOptions{
+		Owner: "x-worker", NowMs: now + 1, LeaseMs: 1000, Limit: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(claimed) != 1 || claimed[0].OwnerID != "sample_ranked_first" {
+		t.Fatalf("claimed = %+v, want first pinned feed owner", claimed)
+	}
+}
+
 func TestContentAssetLeasePublishesFingerprintAndRejectsStaleOwner(t *testing.T) {
 	d := openFreshTestDB(t)
 	now := time.Now().UnixMilli()
