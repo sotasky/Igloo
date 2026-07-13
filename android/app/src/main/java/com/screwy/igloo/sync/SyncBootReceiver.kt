@@ -27,9 +27,8 @@ class SyncBootReceiver : BroadcastReceiver() {
                 val koin = GlobalContext.get()
                 val prefs: PreferencesRepo = koin.get()
                 PeriodicSyncWorker.enqueue(application, prefs)
-                PeriodicSyncWorker.enqueueCatchup(application, prefs)
                 koin.get<Logger>().info(
-                    event = "sync_bootstrap_enqueued",
+                    event = "sync_schedule_restored",
                     fields = mapOf("reason" to action.substringAfterLast('.')),
                 )
             } finally {

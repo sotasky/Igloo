@@ -9,6 +9,114 @@ import (
 	"time"
 )
 
+func TestInstagramChannelPreservesSuccessfulHalfAsIncomplete(t *testing.T) {
+	bin := t.TempDir()
+	writeExecutable(t, filepath.Join(bin, "gallery-dl"), `#!/bin/sh
+last=""
+for arg in "$@"; do
+  last="$arg"
+done
+case "$last" in
+  */reels/)
+    printf '[2, {"subcategory":"reels","type":"reel","username":"sample.creator","post_shortcode":"sample_reel"}]\n'
+    ;;
+  */posts/)
+    printf 'posts source failed\n' >&2
+    exit 4
+    ;;
+esac
+`)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	snapshot, err := (&GalleryDLWrapper{Runner: CommandRunner{}}).InstagramChannel(context.Background(), "sample.creator", 20, "")
+	if err == nil {
+		t.Fatal("InstagramChannel returned nil error after one source failed")
+	}
+	if len(snapshot.Windows) != 2 {
+		t.Fatalf("windows = %#v", snapshot.Windows)
+	}
+	reels, posts := snapshot.Windows[0], snapshot.Windows[1]
+	if reels.Component != SourceComponentReels || !reels.Complete || len(reels.Refs) != 1 || reels.Refs[0].VideoID != "instagram_reel_sample_reel" {
+		t.Fatalf("reels window = %#v", reels)
+	}
+	if posts.Component != SourceComponentPosts || posts.Complete || len(posts.Refs) != 0 {
+		t.Fatalf("posts window = %#v", posts)
+	}
+}
+
+func TestInstagramChannelTreatsTwoSuccessfulEmptySourcesAsComplete(t *testing.T) {
+	bin := t.TempDir()
+	writeExecutable(t, filepath.Join(bin, "gallery-dl"), `#!/bin/sh
+exit 0
+`)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	snapshot, err := (&GalleryDLWrapper{Runner: CommandRunner{}}).InstagramChannel(context.Background(), "sample.creator", 20, "")
+	if err != nil {
+		t.Fatalf("InstagramChannel: %v", err)
+	}
+	if len(snapshot.Windows) != 2 || !snapshot.Windows[0].Complete || !snapshot.Windows[1].Complete ||
+		len(snapshot.Windows[0].Refs) != 0 || len(snapshot.Windows[1].Refs) != 0 {
+		t.Fatalf("empty snapshot = %#v", snapshot)
+	}
+}
+
+func TestInstagramChannelPreservesFailedComponentPartialOutput(t *testing.T) {
+	bin := t.TempDir()
+	writeExecutable(t, filepath.Join(bin, "gallery-dl"), `#!/bin/sh
+last=""
+for arg in "$@"; do last="$arg"; done
+case "$last" in
+  */reels/) exit 0 ;;
+  */posts/)
+    printf '[2, {"subcategory":"posts","type":"post","username":"sample.creator","post_shortcode":"sample_post"}]\n'
+    exit 4
+    ;;
+esac
+`)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	snapshot, err := (&GalleryDLWrapper{Runner: CommandRunner{}}).InstagramChannel(context.Background(), "sample.creator", 20, "")
+	if err == nil {
+		t.Fatal("InstagramChannel returned nil error after one source failed")
+	}
+	posts := snapshot.Windows[1]
+	if posts.Complete || len(posts.Refs) != 1 || posts.Refs[0].VideoID != "instagram_post_sample_post" {
+		t.Fatalf("posts window = %#v", posts)
+	}
+}
+
+func TestInstagramChannelKeepsEachObservedComponentForGlobalReconciliation(t *testing.T) {
+	bin := t.TempDir()
+	writeExecutable(t, filepath.Join(bin, "gallery-dl"), `#!/bin/sh
+last=""
+for arg in "$@"; do last="$arg"; done
+case "$last" in
+  */reels/)
+    printf '[2, {"subcategory":"reels","type":"reel","username":"sample.creator","post_shortcode":"new_reel","date":3000}]\n'
+    printf '[2, {"subcategory":"reels","type":"reel","username":"sample.creator","post_shortcode":"old_reel","date":1000}]\n'
+    ;;
+  */posts/)
+    printf '[2, {"subcategory":"posts","type":"post","username":"sample.creator","post_shortcode":"new_post","date":4000}]\n'
+    printf '[2, {"subcategory":"posts","type":"post","username":"sample.creator","post_shortcode":"old_post","date":2000}]\n'
+    ;;
+esac
+`)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	snapshot, err := (&GalleryDLWrapper{Runner: CommandRunner{}}).InstagramChannel(context.Background(), "sample.creator", 2, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	refs := snapshot.FlattenRefs(0)
+	if len(refs) != 4 {
+		t.Fatalf("observed refs = %#v", refs)
+	}
+	if len(snapshot.Windows[0].Refs) != 2 || len(snapshot.Windows[1].Refs) != 2 {
+		t.Fatalf("component windows = %#v", snapshot.Windows)
+	}
+}
+
 func TestParseInstagramChannelDump(t *testing.T) {
 	dump := []byte(`
 [2, {"subcategory":"posts","type":"post","username":"cinema","fullname":"Cinema","profile_pic_url":"https://cdn.example/avatar.jpg","post_shortcode":"POST123","post_url":"https://www.instagram.com/p/POST123/","description":"A carousel","date":"2026-04-30 16:26:41"}]
@@ -399,16 +507,16 @@ func TestParseInstagramProfileDumpEmptyOutputDoesNotFallback(t *testing.T) {
 	}
 }
 
-func TestMergeInstagramRefsSortsAndDedupes(t *testing.T) {
-	refs := mergeInstagramRefs([]VideoRef{
-		{VideoID: "instagram_post_old", PublishedAtMs: 1000},
-		{VideoID: "instagram_reel_new", PublishedAtMs: 3000},
-		{VideoID: "instagram_post_old", PublishedAtMs: 2000},
+func TestMergeSourceRefsPreservesProducerOrderAndDedupes(t *testing.T) {
+	refs := mergeSourceRefs([]VideoRef{
+		{VideoID: "instagram_post_sample"},
+		{VideoID: "instagram_reel_sample", PublishedAtMs: 3000},
+		{VideoID: "instagram_post_sample", PublishedAtMs: 2000},
 	}, 2)
 	if len(refs) != 2 {
 		t.Fatalf("len(refs) = %d", len(refs))
 	}
-	if refs[0].VideoID != "instagram_reel_new" || refs[1].VideoID != "instagram_post_old" {
+	if refs[0].VideoID != "instagram_post_sample" || refs[1].VideoID != "instagram_reel_sample" {
 		t.Fatalf("unexpected order: %#v", refs)
 	}
 }

@@ -2,9 +2,11 @@ package com.screwy.igloo.data
 
 import com.screwy.igloo.data.entity.ChannelEntity
 import com.screwy.igloo.data.entity.ChannelProfileEntity
+import com.screwy.igloo.data.entity.ChannelSettingEntity
 import com.screwy.igloo.data.entity.FeedItemEntity
 import com.screwy.igloo.data.entity.FeedLikeEntity
 import com.screwy.igloo.data.entity.MutedChannelEntity
+import com.screwy.igloo.data.entity.RetweetSourceEntity
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.After
@@ -99,6 +101,67 @@ class FeedReadDaoTest {
         val rows = db.feedReadDao().feedFlow().first()
 
         assertEquals(listOf("sample_tweet_visible"), rows.map { it.item.tweetId })
+    }
+
+    @Test
+    fun mainFeedAppliesRepostVisibilityToRowsAndHeadCandidates() = runBlocking {
+        db.feedItemDao()
+            .upsert(
+                listOf(
+                    FeedItemEntity(
+                        tweetId = "sample_repost_hidden",
+                        sourceChannelId = "sample_muted_reposter",
+                        channelId = "sample_author",
+                        isRetweet = true,
+                        contentHash = "sample_hidden_hash",
+                        publishedAt = 2,
+                    ),
+                    FeedItemEntity(
+                        tweetId = "sample_repost_visible",
+                        sourceChannelId = "sample_muted_reposter",
+                        channelId = "sample_author",
+                        isRetweet = true,
+                        contentHash = "sample_visible_hash",
+                        publishedAt = 1,
+                    ),
+                )
+            )
+        db.channelSettingDao()
+            .upsert(
+                listOf(
+                    ChannelSettingEntity("sample_muted_reposter", includeReposts = 0),
+                    ChannelSettingEntity("sample_enabled_reposter", includeReposts = 1),
+                )
+            )
+        db.retweetSourceDao()
+            .upsert(
+                listOf(
+                    RetweetSourceEntity(
+                        "sample_hidden_hash",
+                        "sample_muted_reposter",
+                        "sample_repost_hidden",
+                    ),
+                    RetweetSourceEntity(
+                        "sample_visible_hash",
+                        "sample_muted_reposter",
+                        "sample_repost_visible",
+                    ),
+                    RetweetSourceEntity(
+                        "sample_visible_hash",
+                        "sample_enabled_reposter",
+                        "sample_visible_copy",
+                    ),
+                )
+            )
+
+        assertEquals(
+            listOf("sample_repost_visible"),
+            db.feedReadDao().feedFlow().first().map { it.item.tweetId },
+        )
+        assertEquals(
+            listOf("sample_repost_visible"),
+            db.feedReadDao().mainFeedHeadCandidatesFlow(10).first().map { it.tweetId },
+        )
     }
 
     @Test

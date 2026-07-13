@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/screwys/igloo/internal/db"
+	"github.com/screwys/igloo/internal/model"
 )
 
 func TestProcessContentAssetPublishesFingerprintWithoutLegacyRows(t *testing.T) {
@@ -19,7 +21,7 @@ func TestProcessContentAssetPublishesFingerprintWithoutLegacyRows(t *testing.T) 
 	defer server.Close()
 
 	d, m, asset := claimedContentAsset(t, server.URL+"/sample.jpg", "post_media", 0)
-	m.processContentAsset(context.Background(), asset)
+	m.processContentAsset(context.Background(), asset, db.DownloadLaneCurrent)
 
 	ready, err := d.GetAsset(asset.AssetID, asset.AssetKind)
 	if err != nil {
@@ -55,7 +57,7 @@ func TestProcessContentAssetPublishesCommentAvatar(t *testing.T) {
 		State:          db.AssetStateQueued,
 		RequiredReason: "comment_avatar",
 	})
-	m.processContentAsset(context.Background(), asset)
+	m.processContentAsset(context.Background(), asset, db.DownloadLaneCurrent)
 
 	ready, err := d.GetAsset(asset.AssetID, asset.AssetKind)
 	if err != nil {
@@ -74,7 +76,7 @@ func TestProcessContentAssetStoresTransientRetryOnAsset(t *testing.T) {
 
 	d, m, asset := claimedContentAsset(t, server.URL+"/sample.jpg", "post_media", 1)
 	before := time.Now().UnixMilli()
-	m.processContentAsset(context.Background(), asset)
+	m.processContentAsset(context.Background(), asset, db.DownloadLaneCurrent)
 
 	retried, err := d.GetAsset(asset.AssetID, asset.AssetKind)
 	if err != nil {
@@ -85,21 +87,75 @@ func TestProcessContentAssetStoresTransientRetryOnAsset(t *testing.T) {
 	}
 }
 
-func TestProcessContentAssetStoresPermanentFailureOnAsset(t *testing.T) {
+func TestProcessContentAssetParksForbiddenMedia(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 	}))
 	defer server.Close()
 
 	d, m, asset := claimedContentAsset(t, server.URL+"/sample.jpg", "post_media", 0)
-	m.processContentAsset(context.Background(), asset)
+	m.processContentAsset(context.Background(), asset, db.DownloadLaneCurrent)
 
 	failed, err := d.GetAsset(asset.AssetID, asset.AssetKind)
 	if err != nil {
 		t.Fatalf("GetAsset: %v", err)
 	}
-	if failed == nil || failed.State != db.AssetStatePermanentMissing || failed.Attempts != 1 || failed.LastErrorKind != "permanent_http" || failed.LeaseOwner != "" {
-		t.Fatalf("permanent asset = %+v", failed)
+	if failed == nil || failed.State != db.AssetStateFailed || failed.Attempts != 1 || failed.NextAttemptAtMs != 0 || failed.LastErrorKind != "permanent_http" || failed.LeaseOwner != "" {
+		t.Fatalf("parked asset = %+v", failed)
+	}
+}
+
+func TestContentAssetPermanentFailuresStayDormantUntilExplicitRecovery(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		cause    error
+		wantKind string
+		wakeAuth bool
+	}{
+		{name: "authentication", cause: errors.New("login required; cookies missing"), wantKind: "auth", wakeAuth: true},
+		{name: "empty result", cause: errors.New("no files downloaded"), wantKind: "empty_result"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			d, m, asset := claimedContentAsset(t, "https://cdn.example/sample.jpg", "post_media", 0)
+			m.failContentAsset(asset, tt.cause)
+
+			failed, err := d.GetAsset(asset.AssetID, asset.AssetKind)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if failed == nil || failed.State != db.AssetStateFailed || failed.LastErrorKind != tt.wantKind || failed.NextAttemptAtMs != 0 || failed.LeaseOwner != "" {
+				t.Fatalf("dormant failure = %+v", failed)
+			}
+			if _, err := d.UpsertFeedItems([]model.FeedItem{{
+				TweetID:   "sample_tweet",
+				MediaJSON: `[{"url":"https://cdn.example/sample.jpg","type":"photo"}]`,
+			}}); err != nil {
+				t.Fatal(err)
+			}
+			failed, err = d.GetAsset(asset.AssetID, asset.AssetKind)
+			if err != nil || failed == nil || failed.State != db.AssetStateFailed || failed.LastErrorKind != tt.wantKind {
+				t.Fatalf("failure after repeated source observation = %+v, err = %v", failed, err)
+			}
+			claimed, err := d.ClaimContentAssetDownloadBatch(db.LeaseOptions{
+				Owner: "worker-b", NowMs: time.Now().Add(24 * time.Hour).UnixMilli(), LeaseMs: time.Minute.Milliseconds(), Limit: 1,
+			}, true, db.DownloadLaneBackfill)
+			if err != nil || len(claimed) != 0 {
+				t.Fatalf("claimed dormant failure = %+v, err = %v", claimed, err)
+			}
+			if !tt.wakeAuth {
+				return
+			}
+			n, err := d.WakeContentAssetAuthRetriesForPlatform("twitter")
+			if err != nil || n != 1 {
+				t.Fatalf("wake auth retries = (%d, %v)", n, err)
+			}
+			claimed, err = d.ClaimContentAssetDownloadBatch(db.LeaseOptions{
+				Owner: "worker-c", NowMs: time.Now().UnixMilli(), LeaseMs: time.Minute.Milliseconds(), Limit: 1,
+			}, true, db.DownloadLaneBackfill)
+			if err != nil || len(claimed) != 1 || claimed[0].LastErrorKind != "" || claimed[0].Attempts != 0 {
+				t.Fatalf("claimed recovered auth asset = %+v, err = %v", claimed, err)
+			}
+		})
 	}
 }
 
@@ -110,7 +166,7 @@ func TestProcessContentAssetDoesNotRetryMissingImmutableMedia(t *testing.T) {
 	defer server.Close()
 
 	d, m, asset := claimedContentAsset(t, server.URL+"/sample.jpg", "post_media", 0)
-	m.processContentAsset(context.Background(), asset)
+	m.processContentAsset(context.Background(), asset, db.DownloadLaneCurrent)
 
 	failed, err := d.GetAsset(asset.AssetID, asset.AssetKind)
 	if err != nil {
@@ -118,6 +174,19 @@ func TestProcessContentAssetDoesNotRetryMissingImmutableMedia(t *testing.T) {
 	}
 	if failed == nil || failed.State != db.AssetStatePermanentMissing || failed.Attempts != 1 || failed.LastErrorKind != "not_found" || failed.LeaseOwner != "" {
 		t.Fatalf("missing asset = %+v", failed)
+	}
+}
+
+func TestContentAssetAmbiguousUnavailableResultRemainsRetryable(t *testing.T) {
+	d, m, asset := claimedContentAsset(t, "https://cdn.example/sample.jpg", "post_media", 0)
+	m.failContentAsset(asset, errors.New("requested post not available"))
+
+	retried, err := d.GetAsset(asset.AssetID, asset.AssetKind)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retried == nil || retried.State != db.AssetStateQueued || retried.LastErrorKind != "not_found" || retried.NextAttemptAtMs <= time.Now().UnixMilli() || retried.LeaseOwner != "" {
+		t.Fatalf("ambiguous unavailable asset = %+v", retried)
 	}
 }
 
@@ -159,9 +228,13 @@ func claimedQueuedAsset(t *testing.T, asset db.Asset) (*db.DB, *Manager, db.Asse
 			t.Fatalf("set queued test attempts: %v", err)
 		}
 	}
+	lane := db.DownloadLaneBackfill
+	if asset.OwnerKind == "comment_author" {
+		lane = db.DownloadLaneCurrent
+	}
 	claimed, err := d.ClaimContentAssetDownloadBatch(db.LeaseOptions{
 		Owner: "worker-a", NowMs: now + 1, LeaseMs: time.Minute.Milliseconds(), Limit: 1,
-	})
+	}, true, lane)
 	if err != nil {
 		t.Fatalf("ClaimContentAssetDownloadBatch: %v", err)
 	}

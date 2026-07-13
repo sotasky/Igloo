@@ -47,8 +47,8 @@ func (db *DB) GetDashboardStats() (map[string]any, error) {
 	stats["download_queue"] = map[string]int{
 		"pending":    queryInt("SELECT COUNT(*) FROM download_queue WHERE status='pending'"),
 		"processing": queryInt("SELECT COUNT(*) FROM download_queue WHERE status='processing'"),
-		"completed":  queryInt("SELECT COUNT(*) FROM download_queue WHERE status='completed'"),
-		"failed":     queryInt("SELECT COUNT(*) FROM download_queue WHERE status='failed'"),
+		"completed":  0,
+		"failed":     queryInt("SELECT COUNT(*) FROM download_queue WHERE status='blocked'"),
 	}
 
 	// SponsorBlock (tables may not exist if Python never created them)
@@ -146,7 +146,7 @@ func (db *DB) GetDashboardStats() (map[string]any, error) {
 	// Preview queue is represented by canonical ready sprite assets.
 	stats["preview_queue"] = map[string]int{
 		"ready":   queryInt("SELECT COUNT(*) FROM assets a JOIN media_objects mo ON mo.object_id=a.object_id WHERE a.asset_kind='preview_sprite' AND mo.published_revision>0 AND mo.file_path!=''"),
-		"pending": 0,
+		"pending": queryInt("SELECT COUNT(*) " + pendingVideoPreviewFromSQL),
 	}
 
 	// Table count

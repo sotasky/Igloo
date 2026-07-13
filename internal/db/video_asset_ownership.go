@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/screwys/igloo/internal/model"
+	"github.com/screwys/igloo/internal/storage"
 )
 
 var completedVideoAssetKinds = []string{
@@ -34,7 +35,17 @@ type CompletedVideo struct {
 	SlideCount    int
 	IsTemp        bool
 	SourceKind    string
+	MediaLane     storage.MediaLane
 	Assets        []Asset
+}
+
+type VideoPreviewCandidate struct {
+	VideoID      string
+	OwnerKind    string
+	FilePath     string
+	InputSHA256  string
+	Duration     int
+	DownloadedAt int64
 }
 
 // StoreCompletedVideo fingerprints every producer-supplied file before the DB
@@ -147,8 +158,7 @@ func observeInstagramVideoAccountsTx(tx *sql.Tx, primaryChannelID string, accoun
 
 func (db *DB) prepareCompletedVideoAssets(video CompletedVideo, platform string) ([]Asset, map[string]struct{}, error) {
 	nowMs := time.Now().UnixMilli()
-	prepared := make([]Asset, 0, len(video.Assets))
-	newKeys := make(map[string]struct{}, len(video.Assets))
+	inputs := make([]Asset, 0, len(video.Assets))
 	seen := make(map[string]struct{}, len(video.Assets))
 	for _, input := range video.Assets {
 		input.AssetKind = strings.TrimSpace(input.AssetKind)
@@ -175,12 +185,16 @@ func (db *DB) prepareCompletedVideoAssets(video CompletedVideo, platform string)
 			input.RequiredReason = "retention"
 		}
 		input.State = AssetStateReady
-		ready, err := db.prepareReadyAssetMetadata(input, nowMs)
-		if err != nil {
-			return nil, nil, fmt.Errorf("fingerprint %s %s: %w", video.VideoID, identity, err)
-		}
-		ready = normalizeAsset(ready, nowMs)
-		prepared = append(prepared, ready)
+		inputs = append(inputs, input)
+	}
+	prepared, err := db.prepareReadyAssetSetMetadataInLane(inputs, nowMs, video.MediaLane)
+	if err != nil {
+		return nil, nil, fmt.Errorf("fingerprint completed asset set for %s: %w", video.VideoID, err)
+	}
+	newKeys := make(map[string]struct{}, len(prepared))
+	for i := range prepared {
+		prepared[i] = normalizeAsset(prepared[i], nowMs)
+		ready := prepared[i]
 		newKeys[ready.FilePath] = struct{}{}
 	}
 	sort.Slice(prepared, func(i, j int) bool {
@@ -415,6 +429,99 @@ func (db *DB) StoreVideoPreviewAssets(videoID, inputSHA256, trackPath, spritePat
 		{AssetKind: "preview_sprite", FilePath: spritePath, ContentType: "image/jpeg", SourceURL: source},
 	}
 	return db.storeVideoAssets(videoID, []string{"preview_track_json", "preview_sprite"}, assets, inputSHA256, nowMs)
+}
+
+func (db *DB) GetPendingVideoPreview(videoID string) (*VideoPreviewCandidate, error) {
+	rows, err := db.listPendingVideoPreviews(strings.TrimSpace(videoID), 1)
+	if err != nil || len(rows) == 0 {
+		return nil, err
+	}
+	return &rows[0], nil
+}
+
+func (db *DB) ListPendingVideoPreviews(limit int) ([]VideoPreviewCandidate, error) {
+	return db.listPendingVideoPreviews("", limit)
+}
+
+const pendingVideoPreviewFromSQL = `
+	FROM videos v
+	JOIN assets stream_asset
+	  ON stream_asset.owner_kind = v.owner_kind
+	 AND stream_asset.owner_id = v.video_id
+	 AND stream_asset.asset_kind = 'video_stream'
+	 AND stream_asset.media_index = 0
+	 AND stream_asset.lifecycle_state = 'active'
+	JOIN media_objects stream ON stream.object_id = stream_asset.object_id
+	LEFT JOIN assets preview_track_asset
+	  ON preview_track_asset.asset_kind = 'preview_track_json'
+	 AND preview_track_asset.owner_kind = v.owner_kind
+	 AND preview_track_asset.owner_id = v.video_id
+	 AND preview_track_asset.media_index = 0
+	LEFT JOIN media_objects preview_track ON preview_track.object_id = preview_track_asset.object_id
+	LEFT JOIN assets preview_sprite_asset
+	  ON preview_sprite_asset.asset_kind = 'preview_sprite'
+	 AND preview_sprite_asset.owner_kind = v.owner_kind
+	 AND preview_sprite_asset.owner_id = v.video_id
+	 AND preview_sprite_asset.media_index = 0
+	LEFT JOIN media_objects preview_sprite ON preview_sprite.object_id = preview_sprite_asset.object_id
+	WHERE v.owner_kind IN ('youtube_video', 'instagram_reel', 'tiktok_video')
+	  AND stream.published_revision > 0
+	  AND stream.file_path != ''
+	  AND stream.sha256 != ''
+	  AND (LOWER(stream.file_path) LIKE '%.mp4'
+	    OR LOWER(stream.file_path) LIKE '%.webm'
+	    OR LOWER(stream.file_path) LIKE '%.mkv'
+	    OR LOWER(stream.file_path) LIKE '%.mov'
+	    OR LOWER(stream.file_path) LIKE '%.m4v')
+	  AND (COALESCE(preview_track_asset.lifecycle_state, '') != 'active'
+	    OR COALESCE(preview_track.published_revision, 0) = 0
+	    OR COALESCE(preview_track.file_path, '') = ''
+	    OR COALESCE(preview_track.published_source_url, '') != 'sha256:' || stream.sha256
+	    OR COALESCE(preview_sprite_asset.lifecycle_state, '') != 'active'
+	    OR COALESCE(preview_sprite.published_revision, 0) = 0
+	    OR COALESCE(preview_sprite.file_path, '') = ''
+	    OR COALESCE(preview_sprite.published_source_url, '') != 'sha256:' || stream.sha256)`
+
+func (db *DB) listPendingVideoPreviews(videoID string, limit int) ([]VideoPreviewCandidate, error) {
+	if limit <= 0 {
+		limit = 1
+	}
+	whereVideo := ""
+	args := make([]any, 0, 2)
+	if videoID != "" {
+		whereVideo = " AND v.video_id = ?"
+		args = append(args, videoID)
+	}
+	args = append(args, limit)
+	rows, err := db.reader().Query(`
+		SELECT v.video_id, v.owner_kind, stream.file_path, stream.sha256,
+		       COALESCE(v.duration, 0), v.downloaded_at
+		`+pendingVideoPreviewFromSQL+whereVideo+`
+		ORDER BY v.downloaded_at DESC, v.published_at DESC, v.video_id
+		LIMIT ?
+	`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	candidates := make([]VideoPreviewCandidate, 0, limit)
+	for rows.Next() {
+		var candidate VideoPreviewCandidate
+		if err := rows.Scan(
+			&candidate.VideoID, &candidate.OwnerKind, &candidate.FilePath,
+			&candidate.InputSHA256, &candidate.Duration, &candidate.DownloadedAt,
+		); err != nil {
+			return nil, err
+		}
+		candidates = append(candidates, candidate)
+	}
+	return candidates, rows.Err()
+}
+
+func (db *DB) CountPendingVideoPreviews() (int, error) {
+	var count int
+	err := db.reader().QueryRow(`SELECT COUNT(*) ` + pendingVideoPreviewFromSQL).Scan(&count)
+	return count, err
 }
 
 // StoreVideoSubtitleAssets fingerprints and replaces the complete subtitle set

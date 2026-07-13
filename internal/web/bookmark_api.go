@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/screwys/igloo/internal/components"
 	"github.com/screwys/igloo/internal/db"
+	"github.com/screwys/igloo/internal/storage"
 )
 
 // registerBookmarkAPIRoutes registers bookmark CRUD API routes.
@@ -163,8 +165,8 @@ func (s *Server) handleBookmarkAdd(w http.ResponseWriter, r *http.Request) {
 			_ = s.db.InvalidateAlgoScore(result.CanonicalID)
 			s.workers.KickFeedScoring()
 			if result.Affected > 0 {
-				s.workers.KickFeedMedia()
-				s.startBookmarkArchive(result.CanonicalID, archivePath, body.CustomTitle, accountHandlesJSON, body.MediaIndices)
+				s.workers.KickMediaWork()
+				s.archiveBookmark(result.CanonicalID, archivePath, body.CustomTitle, accountHandlesJSON, body.MediaIndices)
 			}
 		}()
 	}
@@ -177,11 +179,15 @@ func nullableString(value sql.NullString) string {
 	return value.String
 }
 
-func (s *Server) startBookmarkArchive(videoID, archivePath, customTitle, accountHandles string, mediaIndices []int) {
+func (s *Server) archiveBookmark(videoID, archivePath, customTitle, accountHandles string, mediaIndices []int) {
 	if archivePath == "" {
 		return
 	}
-	go s.archiveBookmarkCombined(videoID, archivePath, customTitle, accountHandles, mediaIndices)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	defer cancel()
+	if err := s.archiveBookmarkCombined(ctx, videoID, archivePath, customTitle, accountHandles, mediaIndices); err != nil {
+		slog.Warn("[Bookmark] archive failed", "tweet", videoID, "err", err)
+	}
 }
 
 func (s *Server) handleBookmarkRemove(w http.ResponseWriter, r *http.Request) {
@@ -554,13 +560,9 @@ func (s *Server) handleBookmarkCategoryDelete(w http.ResponseWriter, r *http.Req
 // and quote media into a single list that matches the JS modal's index order:
 // parent slides (indices 0..M-1) + quote slides (indices M..M+Q-1).
 // If mediaIndices is non-empty, only the selected indices are archived.
-func (s *Server) archiveBookmarkCombined(tweetID, archivePath, customTitle, accountHandlesJSON string, mediaIndices []int) {
+func (s *Server) archiveBookmarkCombined(ctx context.Context, tweetID, archivePath, customTitle, accountHandlesJSON string, mediaIndices []int) error {
 	if archivePath == "" {
-		return
-	}
-	if err := ensureArchivePath(archivePath); err != nil {
-		slog.Warn("[Bookmark] archive path is not writable", "path", archivePath, "err", err)
-		return
+		return nil
 	}
 
 	// Build the combined slide list: parent first, then quote.
@@ -579,12 +581,15 @@ func (s *Server) archiveBookmarkCombined(tweetID, archivePath, customTitle, acco
 	}
 
 	if len(allSlides) == 0 {
-		allSlides = s.waitForBookmarkArchiveSlides(tweetID, 15*time.Second)
+		allSlides = s.waitForBookmarkArchiveSlides(ctx, tweetID, 15*time.Second)
 	}
 
 	if len(allSlides) == 0 {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		slog.Warn("[Bookmark] no slides found", "tweet", tweetID)
-		return
+		return nil
 	}
 
 	slog.Info("[Bookmark] combined slides", "tweet", tweetID, "total", len(allSlides), "slides", allSlides, "mediaIndices", mediaIndices)
@@ -606,7 +611,7 @@ func (s *Server) archiveBookmarkCombined(tweetID, archivePath, customTitle, acco
 
 	if len(allSlides) == 0 {
 		slog.Warn("[Bookmark] no slides after filtering", "tweet", tweetID, "indices", mediaIndices)
-		return
+		return nil
 	}
 
 	// Build filename prefix
@@ -617,52 +622,74 @@ func (s *Server) archiveBookmarkCombined(tweetID, archivePath, customTitle, acco
 	}
 	safeName := sanitizeArchiveName(account + " " + label)
 
-	// Find the highest existing numbered file for this name prefix so we
-	// don't overwrite previous bookmarks saved under the same label.
-	startNum := 0
-	entries, _ := os.ReadDir(archivePath)
-	namePrefix := safeName + " "
-	for _, e := range entries {
-		n := e.Name()
-		if strings.HasPrefix(n, namePrefix) {
-			// Extract number from "prefix NNN.ext"
-			numPart := strings.TrimPrefix(n, namePrefix)
-			numPart = strings.TrimSuffix(numPart, filepath.Ext(numPart))
-			if num, err := strconv.Atoi(strings.TrimSpace(numPart)); err == nil && num > startNum {
-				startNum = num
+	err := s.cfg.Storage.MediaExecutor().Run(ctx, storage.MediaLaneBulkForeground, func() error {
+		if err := ensureArchivePath(archivePath); err != nil {
+			return fmt.Errorf("prepare archive path: %w", err)
+		}
+
+		// Find the highest existing numbered file for this name prefix so we
+		// don't overwrite previous bookmarks saved under the same label.
+		startNum := 0
+		entries, err := os.ReadDir(archivePath)
+		if err != nil {
+			return fmt.Errorf("read archive path: %w", err)
+		}
+		namePrefix := safeName + " "
+		for _, e := range entries {
+			n := e.Name()
+			if strings.HasPrefix(n, namePrefix) {
+				// Extract number from "prefix NNN.ext"
+				numPart := strings.TrimPrefix(n, namePrefix)
+				numPart = strings.TrimSuffix(numPart, filepath.Ext(numPart))
+				if num, err := strconv.Atoi(strings.TrimSpace(numPart)); err == nil && num > startNum {
+					startNum = num
+				}
 			}
 		}
-	}
 
-	// Copy files
-	for i, slidePath := range allSlides {
-		ext := filepath.Ext(slidePath)
-		if ext == "" {
-			ext = ".jpg"
+		copied := 0
+		var copyErr error
+		for i, slidePath := range allSlides {
+			ext := filepath.Ext(slidePath)
+			if ext == "" {
+				ext = ".jpg"
+			}
+			fileNum := startNum + i + 1
+			destFile := filepath.Join(archivePath, fmt.Sprintf("%s %03d%s", safeName, fileNum, ext))
+			if err := copyFileAtomic(ctx, slidePath, destFile); err != nil {
+				copyErr = errors.Join(copyErr, fmt.Errorf("copy %s: %w", filepath.Base(slidePath), err))
+				continue
+			}
+			copied++
 		}
-		fileNum := startNum + i + 1
-		destFile := filepath.Join(archivePath, fmt.Sprintf("%s %03d%s", safeName, fileNum, ext))
-		src, err := os.Open(slidePath)
-		if err != nil {
-			slog.Warn("[Bookmark] cannot open slide", "path", slidePath, "err", err)
-			continue
+		if copied > 0 {
+			copyErr = errors.Join(copyErr, storage.SyncDirectory(archivePath))
 		}
-		dst, err := os.Create(destFile)
-		if err != nil {
-			_ = src.Close()
-			continue
+		if copyErr != nil {
+			return fmt.Errorf("archived %d of %d slides: %w", copied, len(allSlides), copyErr)
 		}
-		_, _ = io.Copy(dst, src)
-		_ = dst.Close()
-		_ = src.Close()
+		return nil
+	})
+	if err != nil {
+		return err
 	}
 	slog.Info("[Bookmark] archived", "tweet", tweetID, "slides", len(allSlides), "dest", archivePath)
+	return nil
 }
 
-func (s *Server) waitForBookmarkArchiveSlides(tweetID string, timeout time.Duration) []string {
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		time.Sleep(500 * time.Millisecond)
+func (s *Server) waitForBookmarkArchiveSlides(ctx context.Context, tweetID string, timeout time.Duration) []string {
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-timer.C:
+			return nil
+		case <-ticker.C:
+		}
 		var slides []string
 		slides = append(slides, s.collectSlides(tweetID)...)
 		items, _ := s.db.GetFeedItemsForTweetIDs([]string{tweetID})
@@ -673,7 +700,6 @@ func (s *Server) waitForBookmarkArchiveSlides(tweetID string, timeout time.Durat
 			return slides
 		}
 	}
-	return nil
 }
 
 // collectSlides gathers canonical local media paths for a tweet ID.

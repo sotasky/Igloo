@@ -2,6 +2,7 @@ package worker
 
 import (
 	"archive/zip"
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,7 +20,7 @@ func TestCreateBackupWritesIglooDBAndSkipsStaleSnapshotName(t *testing.T) {
 	cfg.CookiesDir = filepath.Join(fx.confDir, "cookies")
 	cfg.AuthUsersPath = filepath.Join(fx.confDir, "auth_users.json")
 	m := NewManager(fx.database, cfg)
-	if err := m.createBackup(fx.backupDir); err != nil {
+	if err := m.createBackup(context.Background(), fx.backupDir); err != nil {
 		t.Fatalf("createBackup: %v", err)
 	}
 
@@ -70,7 +71,10 @@ func TestPruneBackupsUsesConfiguredKeepCount(t *testing.T) {
 		}
 	}
 
-	(&Manager{}).pruneBackups(backupDir, 2)
+	m := &Manager{cfg: testCfg(t.TempDir())}
+	if err := m.pruneBackups(context.Background(), backupDir, 2); err != nil {
+		t.Fatalf("pruneBackups: %v", err)
+	}
 
 	matches, err := filepath.Glob(filepath.Join(backupDir, backupPrefix+"*.zip"))
 	if err != nil {
@@ -134,7 +138,7 @@ func TestCreateBackupRejectsRelativeDir(t *testing.T) {
 	}()
 
 	m := NewManager(database, testCfg(dataDir))
-	if err := m.createBackup(filepath.Join("var", "mnt", "external_drive")); err == nil {
+	if err := m.createBackup(context.Background(), filepath.Join("var", "mnt", "external_drive")); err == nil {
 		t.Fatal("createBackup accepted a relative backup dir")
 	}
 	if _, err := os.Stat(filepath.Join("var", "mnt", "external_drive")); !os.IsNotExist(err) {

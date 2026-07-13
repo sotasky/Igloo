@@ -144,8 +144,65 @@ func TestPruneXMediaRetentionKeepsLikedQuoteOwner(t *testing.T) {
 	}
 }
 
+func TestPruneXMediaRetentionKeepsAssetsInsideAndroidFeedWindow(t *testing.T) {
+	d := openFreshTestDB(t)
+	channelID, sourceHandle := seedXRetentionChannel(t, d, 1)
+	nowMs := int64(10 * 24 * time.Hour / time.Millisecond)
+	items := []model.FeedItem{
+		xRetentionFeedItem("sample_android_new", sourceHandle, nowMs-time.Hour.Milliseconds()),
+		xRetentionFeedItem("sample_android_recent", sourceHandle, nowMs-12*time.Hour.Milliseconds()),
+		xRetentionFeedItem("sample_android_old", sourceHandle, nowMs-48*time.Hour.Milliseconds()),
+	}
+	if _, err := d.UpsertFeedItems(items); err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range items {
+		publishXRetentionAsset(t, d, item.TweetID, []byte(item.TweetID))
+	}
+
+	recordAndroidFeedRetention(t, d, 1, nowMs)
+	result, err := d.PruneXMediaRetentionForChannel(channelID, XMediaRetentionOptions{NowMs: nowMs})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.PrunedItems != 2 || result.AssetsPruned != 1 {
+		t.Fatalf("retention result = %+v", result)
+	}
+	if asset := readXRetentionAsset(t, d, "sample_android_recent"); asset.State != AssetStateReady {
+		t.Fatalf("Android-retained asset = %+v", asset)
+	}
+	if asset := readXRetentionAsset(t, d, "sample_android_old"); asset.State != AssetStatePruned {
+		t.Fatalf("expired asset = %+v", asset)
+	}
+}
+
+func TestPruneXMediaRetentionFailsClosedWhenAndroidRetentionCannotBeRead(t *testing.T) {
+	d := openFreshTestDB(t)
+	channelID, sourceHandle := seedXRetentionChannel(t, d, 1)
+	items := []model.FeedItem{
+		xRetentionFeedItem("sample_fail_closed_new", sourceHandle, 200),
+		xRetentionFeedItem("sample_fail_closed_old", sourceHandle, 100),
+	}
+	if _, err := d.UpsertFeedItems(items); err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range items {
+		publishXRetentionAsset(t, d, item.TweetID, []byte(item.TweetID))
+	}
+	if err := d.ExecRaw(`DELETE FROM android_feed_retention`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.PruneXMediaRetentionForChannel(channelID, XMediaRetentionOptions{NowMs: 3000}); err == nil {
+		t.Fatal("retention succeeded without the Android owner root")
+	}
+	if asset := readXRetentionAsset(t, d, "sample_fail_closed_old"); asset.State != AssetStateReady {
+		t.Fatalf("fail-open pruning changed asset: %+v", asset)
+	}
+}
+
 func seedXRetentionChannel(t *testing.T, d *DB, limit int) (string, string) {
 	t.Helper()
+	recordAndroidFeedRetention(t, d, 0, 1)
 	channelID, sourceHandle := "twitter_sample_source", "sample_source"
 	if err := d.ExecRaw(`
 		INSERT INTO channels (channel_id, source_id, name, url, platform, created_at)
@@ -194,4 +251,11 @@ func readXRetentionAsset(t *testing.T, d *DB, ownerID string) Asset {
 		t.Fatalf("missing asset %s", ownerID)
 	}
 	return *asset
+}
+
+func recordAndroidFeedRetention(t *testing.T, d *DB, feedDays int, reportedAtMs int64) {
+	t.Helper()
+	if err := d.RecordAndroidFeedRetention(feedDays, reportedAtMs); err != nil {
+		t.Fatalf("record Android retention: %v", err)
+	}
 }

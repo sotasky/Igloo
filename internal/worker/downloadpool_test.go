@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -88,12 +89,12 @@ func TestExtractPublishedAt(t *testing.T) {
 
 func TestPublishedAtForJobFallsBackToQueuedPublishedAt(t *testing.T) {
 	const publishedAtMs int64 = 1714475201000
-	got := publishedAtForJob(map[string]any{"title": "Queued date"}, db.DownloadQueueRow{PublishedAtMs: publishedAtMs})
+	got := publishedAtForJob(map[string]any{"title": "Queued date"}, db.DownloadWork{PublishedAtMs: publishedAtMs})
 	if got != publishedAtMs {
 		t.Fatalf("publishedAtForJob fallback = %d, want %d", got, publishedAtMs)
 	}
 
-	got = publishedAtForJob(map[string]any{"timestamp": float64(1700000000)}, db.DownloadQueueRow{PublishedAtMs: publishedAtMs})
+	got = publishedAtForJob(map[string]any{"timestamp": float64(1700000000)}, db.DownloadWork{PublishedAtMs: publishedAtMs})
 	if got != 1700000000*1000 {
 		t.Fatalf("publishedAtForJob metadata priority = %d", got)
 	}
@@ -190,6 +191,12 @@ func TestBuildSourceURL(t *testing.T) {
 			want:     "https://www.tiktok.com/@user_example/video/7234567890123456789",
 		},
 		{
+			platform: "tiktok",
+			sourceID: "user_example",
+			videoID:  "tiktok_story_sample",
+			want:     "https://www.tiktok.com/@user_example/video/sample",
+		},
+		{
 			platform: "instagram",
 			sourceID: "user_example",
 			videoID:  "instagram_reel_ABC123",
@@ -200,6 +207,12 @@ func TestBuildSourceURL(t *testing.T) {
 			sourceID: "user_example",
 			videoID:  "instagram_post_DEF456",
 			want:     "https://www.instagram.com/p/DEF456/",
+		},
+		{
+			platform: "instagram",
+			sourceID: "user_example",
+			videoID:  "instagram_story_sample",
+			want:     "https://www.instagram.com/stories/user_example/sample/",
 		},
 		{
 			platform: "unknown",
@@ -322,16 +335,16 @@ func TestDownloadPoolLeaseOwnerIsProcessScoped(t *testing.T) {
 	}
 }
 
-func TestStartDownloadQueueLeaseRenewalExtendsOwnedJob(t *testing.T) {
+func TestStartDownloadWorkLeaseRenewalExtendsOwnedJob(t *testing.T) {
 	d := newTestWorkerDB(t)
-	now := time.Now().UnixMilli()
-	videoID := "dlq_worker_lease_renew"
-	if err := d.ExecRaw(`
-		INSERT INTO download_queue
-			(video_id, channel_id, title, status, lease_owner, lease_until_ms, next_attempt_at_ms, added_at)
-		VALUES (?, 'youtube_test_channel', 'Renew Lease', 'processing', 'download-current', ?, 0, ?)
-	`, videoID, now+10, now); err != nil {
-		t.Fatalf("insert download queue row: %v", err)
+	now := time.Now()
+	job := claimDownloadWorkForTest(
+		t, d, "youtube_sample_channel", "youtube_sample_channel",
+		"sample_video_lease", db.DownloadLaneCurrent, "download-current", now,
+	)
+	initialLease := time.Now().Add(10 * time.Millisecond).UnixMilli()
+	if err := d.ExecRaw(`UPDATE download_queue SET lease_until_ms=? WHERE video_id=?`, initialLease, job.VideoID); err != nil {
+		t.Fatalf("shorten initial lease: %v", err)
 	}
 
 	oldDuration := downloadPoolLeaseDuration
@@ -344,22 +357,19 @@ func TestStartDownloadQueueLeaseRenewalExtendsOwnedJob(t *testing.T) {
 	})
 
 	m := &Manager{db: d}
-	stop := m.startDownloadQueueLeaseRenewal(context.Background(), db.DownloadQueueRow{
-		VideoID:    videoID,
-		LeaseOwner: "download-current",
-	})
+	stop := m.startDownloadWorkLeaseRenewal(context.Background(), job)
 	if stop == nil {
-		t.Fatal("startDownloadQueueLeaseRenewal returned nil")
+		t.Fatal("startDownloadWorkLeaseRenewal returned nil")
 	}
 	defer stop()
 
 	deadline := time.After(250 * time.Millisecond)
 	for {
 		var leaseUntil int64
-		if err := d.QueryRow(`SELECT COALESCE(lease_until_ms,0) FROM download_queue WHERE video_id=?`, videoID).Scan(&leaseUntil); err != nil {
+		if err := d.QueryRow(`SELECT lease_until_ms FROM download_queue WHERE video_id=?`, job.VideoID).Scan(&leaseUntil); err != nil {
 			t.Fatalf("query lease: %v", err)
 		}
-		if leaseUntil > now+10 {
+		if leaseUntil > initialLease {
 			return
 		}
 		select {
@@ -371,195 +381,254 @@ func TestStartDownloadQueueLeaseRenewalExtendsOwnedJob(t *testing.T) {
 	}
 }
 
-func TestFailDownloadJobPersistsClassification(t *testing.T) {
+func TestFailDownloadJobRetriesRecoverableFailures(t *testing.T) {
 	tests := []struct {
-		name       string
-		err        error
-		wantStatus string
-		wantKind   string
-		wantStrat  string
-		wantNext   bool
+		name     string
+		err      error
+		wantKind string
 	}{
 		{
-			name:       "auth",
-			err:        errors.New("login required; cookies missing"),
-			wantStatus: "failed",
-			wantKind:   download.ErrorKindAuth,
-			wantStrat:  download.ErrorStrategyPermanent,
+			name:     "auth",
+			err:      errors.New("login required; cookies missing"),
+			wantKind: download.ErrorKindAuth,
 		},
 		{
-			name:       "permanent_http",
-			err:        &download.HTTPStatusError{StatusCode: 403, URL: "https://example.invalid/video"},
-			wantStatus: "failed",
-			wantKind:   download.ErrorKindPermanentHTTP,
-			wantStrat:  download.ErrorStrategyPermanent,
+			name:     "http_403",
+			err:      &download.HTTPStatusError{StatusCode: 403, URL: "https://example.invalid/video"},
+			wantKind: download.ErrorKindPermanentHTTP,
 		},
 		{
-			name:       "rate_limit",
-			err:        &download.HTTPStatusError{StatusCode: 429, URL: "https://example.invalid/video"},
-			wantStatus: "pending",
-			wantKind:   download.ErrorKindRateLimit,
-			wantStrat:  download.ErrorStrategyRetry,
-			wantNext:   true,
+			name:     "rate_limit",
+			err:      &download.HTTPStatusError{StatusCode: 429, URL: "https://example.invalid/video"},
+			wantKind: download.ErrorKindRateLimit,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			d := newTestWorkerDB(t)
-			now := time.Now().UnixMilli()
-			videoID := "dlq_classify_" + tt.name
-			if err := d.ExecRaw(`
-				INSERT INTO download_queue
-					(video_id, channel_id, title, status, retry_count, lease_owner, lease_until_ms, next_attempt_at_ms, added_at)
-				VALUES (?, 'youtube_test_channel', 'Classify Failure', 'processing', 0, 'download-current', ?, 0, ?)
-			`, videoID, now+60000, now); err != nil {
-				t.Fatalf("insert download queue row: %v", err)
-			}
+			now := time.Now()
+			videoID := "sample_video_" + tt.name
+			job := claimDownloadWorkForTest(
+				t, d, "youtube_sample_channel", "youtube_sample_channel",
+				videoID, db.DownloadLaneCurrent, "download-current", now,
+			)
 			m := &Manager{db: d}
-			m.failDownloadJob(db.DownloadQueueRow{
-				VideoID:    videoID,
-				RetryCount: 0,
-				LeaseOwner: "download-current",
-			}, tt.err)
+			m.failDownloadJob(job, tt.err)
 
-			var status, kind, strategy, owner string
+			var status, kind, owner string
 			var retries int
 			var nextAttempt, leaseUntil int64
 			if err := d.QueryRow(`
 				SELECT status, retry_count, COALESCE(next_attempt_at_ms,0),
-				       COALESCE(last_error_kind,''), COALESCE(last_error_strategy,''),
-				       COALESCE(lease_owner,''), COALESCE(lease_until_ms,0)
+				       COALESCE(last_error_kind,''), lease_owner, lease_until_ms
 				FROM download_queue WHERE video_id=?
-			`, videoID).Scan(&status, &retries, &nextAttempt, &kind, &strategy, &owner, &leaseUntil); err != nil {
+			`, videoID).Scan(&status, &retries, &nextAttempt, &kind, &owner, &leaseUntil); err != nil {
 				t.Fatalf("query download queue row: %v", err)
 			}
-			if status != tt.wantStatus || retries != 1 || kind != tt.wantKind || strategy != tt.wantStrat || owner != "" || leaseUntil != 0 {
-				t.Fatalf("row = status=%q retries=%d kind=%q strategy=%q owner=%q lease=%d, want status=%q retry=1 kind=%q strategy=%q cleared lease",
-					status, retries, kind, strategy, owner, leaseUntil, tt.wantStatus, tt.wantKind, tt.wantStrat)
+			if status != "pending" || retries != 1 || kind != tt.wantKind || owner != "" || leaseUntil != 0 {
+				t.Fatalf("row = status=%q retries=%d kind=%q owner=%q lease=%d, want pending retry=1 kind=%q with cleared lease",
+					status, retries, kind, owner, leaseUntil, tt.wantKind)
 			}
-			if tt.wantNext && nextAttempt <= now {
-				t.Fatalf("next_attempt_at_ms = %d, want after %d", nextAttempt, now)
-			}
-			if !tt.wantNext && nextAttempt != 0 {
-				t.Fatalf("next_attempt_at_ms = %d, want 0", nextAttempt)
+			if nextAttempt <= now.UnixMilli() {
+				t.Fatalf("next_attempt_at_ms = %d, want after %d", nextAttempt, now.UnixMilli())
 			}
 		})
 	}
 }
 
-func TestFailDownloadJobPersistsDownloaderContext(t *testing.T) {
+func TestFailDownloadJobRetriesGalleryDLUnavailableResult(t *testing.T) {
+	bin := t.TempDir()
+	tool := filepath.Join(bin, "gallery-dl")
+	if err := os.WriteFile(tool, []byte("#!/bin/sh\nprintf 'Requested post not available\\n'\n"), 0o755); err != nil {
+		t.Fatalf("write gallery-dl: %v", err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	_, producerErr := (&download.GalleryDLWrapper{Runner: download.CommandRunner{}}).DownloadCompleted(
+		context.Background(),
+		"https://www.tiktok.com/@sample_handle/video/sample_video",
+		t.TempDir(),
+		"sample_video",
+		"",
+	)
+	if producerErr == nil {
+		t.Fatal("gallery-dl unavailable result returned no error")
+	}
+	var statusErr *download.HTTPStatusError
+	if errors.As(producerErr, &statusErr) {
+		t.Fatalf("textual unavailable result fabricated HTTP status %d", statusErr.StatusCode)
+	}
+
 	d := newTestWorkerDB(t)
-	now := time.Now().UnixMilli()
-	videoID := "dlq_context_auth"
-	if err := d.ExecRaw(`
-		INSERT INTO download_queue
-			(video_id, channel_id, title, status, retry_count, lease_owner, lease_until_ms, next_attempt_at_ms, added_at)
-		VALUES (?, 'instagram_sample_channel', 'Context Failure', 'processing', 0, 'download-current', ?, 0, ?)
-	`, videoID, now+60000, now); err != nil {
-		t.Fatalf("insert download queue row: %v", err)
+	now := time.Now()
+	job := claimDownloadWorkForTest(
+		t, d, "tiktok_sample_channel", "tiktok_sample_channel",
+		"sample_video_unavailable", db.DownloadLaneCurrent, "download-current", now,
+	)
+	(&Manager{db: d}).failDownloadJob(job, fmt.Errorf("download: %w", producerErr))
+
+	var status, kind, leaseOwner string
+	var retries int
+	var nextAttempt, leaseUntil int64
+	if err := d.QueryRow(`
+		SELECT status, retry_count, next_attempt_at_ms, last_error_kind, lease_owner, lease_until_ms
+		FROM download_queue WHERE video_id = ?
+	`, job.VideoID).Scan(&status, &retries, &nextAttempt, &kind, &leaseOwner, &leaseUntil); err != nil {
+		t.Fatalf("query retried download work: %v", err)
+	}
+	if status != "pending" || retries != 1 || kind != download.ErrorKindNotFound ||
+		nextAttempt <= now.UnixMilli() || leaseOwner != "" || leaseUntil != 0 {
+		t.Fatalf("retried work = status=%q retries=%d next=%d kind=%q owner=%q lease=%d",
+			status, retries, nextAttempt, kind, leaseOwner, leaseUntil)
+	}
+}
+
+func TestFailDownloadJobBlocksNotFoundWork(t *testing.T) {
+	d := newTestWorkerDB(t)
+	now := time.Now()
+	videoID := "sample_video_missing"
+	job := claimDownloadWorkForTest(
+		t, d, "youtube_sample_channel", "youtube_sample_channel",
+		videoID, db.DownloadLaneCurrent, "download-current", now,
+	)
+	m := &Manager{db: d}
+	m.failDownloadJob(job, fmt.Errorf("download: %w", download.WithOperationContext(
+		&download.HTTPStatusError{StatusCode: 404, URL: "https://example.invalid/video"},
+		"http", "",
+	)))
+
+	var status, kind, reason, leaseOwner string
+	var leaseUntil int64
+	if err := d.QueryRow(`
+		SELECT status, last_error_kind, last_error, lease_owner, lease_until_ms
+		FROM download_queue WHERE video_id=?
+	`, videoID).Scan(&status, &kind, &reason, &leaseOwner, &leaseUntil); err != nil {
+		t.Fatalf("query blocked download work: %v", err)
+	}
+	if status != "blocked" || kind != download.ErrorKindNotFound || reason == "" || leaseOwner != "" || leaseUntil != 0 {
+		t.Fatalf("blocked work = status=%q kind=%q reason=%q owner=%q lease=%d", status, kind, reason, leaseOwner, leaseUntil)
+	}
+}
+
+func TestDownloadPlatformBackoffSkipsDueWork(t *testing.T) {
+	d := newTestWorkerDB(t)
+	now := time.Now()
+	firstID := "instagram_post_rate_first"
+	secondID := "instagram_post_rate_second"
+	if err := d.FollowChannel("instagram_sample_channel"); err != nil {
+		t.Fatalf("FollowChannel: %v", err)
+	}
+	_, err := d.ReconcileVideoDesires(db.VideoDesireSnapshot{
+		SourceChannelID: "instagram_sample_channel",
+		Component:       "posts",
+		Items: []db.VideoDesire{
+			{VideoID: firstID, OwnerChannelID: "instagram_sample_channel", SourcePosition: 0, Lane: db.DownloadLaneCurrent},
+			{VideoID: secondID, OwnerChannelID: "instagram_sample_channel", SourcePosition: 1, Lane: db.DownloadLaneCurrent},
+		},
+	})
+	if err != nil {
+		t.Fatalf("ReconcileVideoDesires: %v", err)
 	}
 
 	m := &Manager{db: d}
-	err := download.WithOperationContext(errors.New("login required; cookies missing"), "yt-dlp", "browser:firefox")
-	m.failDownloadJob(db.DownloadQueueRow{
-		VideoID:    videoID,
-		RetryCount: 0,
-		LeaseOwner: "download-current",
-	}, err)
-
-	var tool, cookieLabel string
-	if err := d.QueryRow(`
-		SELECT COALESCE(tool,''), COALESCE(cookie_label,'')
-		  FROM download_queue
-		 WHERE video_id=?
-	`, videoID).Scan(&tool, &cookieLabel); err != nil {
-		t.Fatalf("query download queue row: %v", err)
+	first, ok, err := m.claimDownloadWorkInLane("download-current", db.DownloadLaneCurrent, now)
+	if err != nil {
+		t.Fatalf("claim first work: %v", err)
 	}
-	if tool != "yt-dlp" || cookieLabel != "browser:firefox" {
-		t.Fatalf("tool=%q cookie_label=%q, want yt-dlp/browser:firefox", tool, cookieLabel)
+	if !ok || first.VideoID != firstID {
+		t.Fatalf("first claim = (%q, %t), want %q", first.VideoID, ok, firstID)
 	}
-}
+	m.failDownloadJob(first, &download.HTTPStatusError{StatusCode: 429, URL: "https://example.invalid/video"})
 
-func TestFailDownloadJobRetriesShortFormAuthWithBackoff(t *testing.T) {
-	d := newTestWorkerDB(t)
-	now := time.Now().UnixMilli()
-	videoID := "instagram_post_auth_retry"
-	if err := d.ExecRaw(`
-		INSERT INTO download_queue
-			(video_id, channel_id, title, status, retry_count, lease_owner, lease_until_ms, next_attempt_at_ms, added_at)
-		VALUES (?, 'instagram_sample_channel', 'Auth Retry', 'processing', 0, 'download-current', ?, 0, ?)
-	`, videoID, now+60000, now); err != nil {
-		t.Fatalf("insert download queue row: %v", err)
+	claimed, ok, err := m.claimDownloadWorkInLane("download-current", db.DownloadLaneCurrent, now.Add(time.Second))
+	if err != nil {
+		t.Fatalf("claim during platform cooldown: %v", err)
+	}
+	if ok {
+		t.Fatalf("claim during platform cooldown = %q, want none", claimed.VideoID)
 	}
 
-	m := &Manager{db: d, cfg: testCfg(t.TempDir())}
-	m.failDownloadJob(db.DownloadQueueRow{
-		VideoID:    videoID,
-		ChannelID:  "instagram_sample_channel",
-		RetryCount: 0,
-		LeaseOwner: "download-current",
-	}, errors.New("login required; cookies missing"))
-
-	var status, kind, strategy string
-	var retries int
-	var nextAttempt int64
-	if err := d.QueryRow(`
-		SELECT status, retry_count, COALESCE(next_attempt_at_ms,0),
-		       COALESCE(last_error_kind,''), COALESCE(last_error_strategy,'')
-		  FROM download_queue
-		 WHERE video_id=?
-	`, videoID).Scan(&status, &retries, &nextAttempt, &kind, &strategy); err != nil {
-		t.Fatalf("query download queue row: %v", err)
+	direct, ok, err := d.ClaimDownloadWork("direct-proof", db.DownloadLaneCurrent, "instagram", now.Add(time.Second).UnixMilli(), time.Minute)
+	if err != nil {
+		t.Fatalf("direct claim: %v", err)
 	}
-	if status != "pending" || retries != 1 || kind != download.ErrorKindAuth || strategy != download.ErrorStrategyRetry || nextAttempt <= now {
-		t.Fatalf("row = status=%q retries=%d kind=%q strategy=%q next=%d, want pending retry auth with future retry", status, retries, kind, strategy, nextAttempt)
+	if !ok || direct.VideoID != secondID {
+		t.Fatalf("direct claim = %+v, %v, want due work %q", direct, ok, secondID)
 	}
 }
 
-func TestDownloadPlatformBackoffPostponesClaimedJobs(t *testing.T) {
+func TestClaimDownloadWorkExcludesDisabledPlatforms(t *testing.T) {
 	d := newTestWorkerDB(t)
-	now := time.Now().UnixMilli()
-	firstID := "instagram_post_rate_first"
-	secondID := "instagram_post_rate_second"
-	for _, videoID := range []string{firstID, secondID} {
-		if err := d.ExecRaw(`
-			INSERT INTO download_queue
-				(video_id, channel_id, title, status, retry_count, lease_owner, lease_until_ms, next_attempt_at_ms, added_at)
-			VALUES (?, 'instagram_sample_channel', 'Backoff Proof', 'processing', 0, 'download-current', ?, 0, ?)
-		`, videoID, now+60000, now); err != nil {
-			t.Fatalf("insert %s: %v", videoID, err)
-		}
+	now := time.Now()
+	if err := d.FollowChannel("instagram_sample_channel"); err != nil {
+		t.Fatalf("FollowChannel: %v", err)
+	}
+	if _, err := d.ReconcileVideoDesires(db.VideoDesireSnapshot{
+		SourceChannelID: "instagram_sample_channel",
+		Component:       "posts",
+		Items: []db.VideoDesire{{
+			VideoID:        "instagram_sample_post_disabled",
+			OwnerChannelID: "instagram_sample_channel",
+			Lane:           db.DownloadLaneCurrent,
+		}},
+	}); err != nil {
+		t.Fatalf("ReconcileVideoDesires: %v", err)
 	}
 
-	m := &Manager{db: d, cfg: testCfg(t.TempDir())}
-	m.failDownloadJob(db.DownloadQueueRow{
-		VideoID:    firstID,
-		ChannelID:  "instagram_sample_channel",
-		RetryCount: 0,
-		LeaseOwner: "download-current",
-	}, errors.New("Requested content is not available, rate-limit reached or login required"))
-
-	m.downloadVideo(context.Background(), db.DownloadQueueRow{
-		VideoID:    secondID,
-		ChannelID:  "instagram_sample_channel",
-		RetryCount: 0,
-		LeaseOwner: "download-current",
-	}, "instagram", "sample_channel", "", false)
-
-	var status, kind string
-	var retries int
-	var nextAttempt int64
-	if err := d.QueryRow(`
-		SELECT status, retry_count, COALESCE(next_attempt_at_ms,0), COALESCE(last_error_kind,'')
-		  FROM download_queue
-		 WHERE video_id=?
-	`, secondID).Scan(&status, &retries, &nextAttempt, &kind); err != nil {
-		t.Fatalf("query second row: %v", err)
+	m := &Manager{
+		db:  d,
+		cfg: &config.Config{EnabledPlatformSet: map[string]bool{"youtube": true}},
 	}
-	if status != "pending" || retries != 0 || kind != download.ErrorKindRateLimit || nextAttempt <= now {
-		t.Fatalf("row = status=%q retries=%d kind=%q next=%d, want pending retry=0 rate_limit future next", status, retries, kind, nextAttempt)
+	if work, ok, err := m.claimDownloadWorkInLane("download-current", db.DownloadLaneCurrent, now); err != nil {
+		t.Fatalf("claim disabled work: %v", err)
+	} else if ok {
+		t.Fatalf("claimed disabled work: %+v", work)
 	}
+
+	work, ok, err := d.ClaimDownloadWork("direct-proof", db.DownloadLaneCurrent, "instagram", now.UnixMilli(), time.Minute)
+	if err != nil {
+		t.Fatalf("direct claim: %v", err)
+	}
+	if !ok || work.VideoID != "instagram_sample_post_disabled" {
+		t.Fatalf("direct claim = (%q, %t), want pending disabled work", work.VideoID, ok)
+	}
+}
+
+func claimDownloadWorkForTest(
+	t *testing.T,
+	d *db.DB,
+	sourceChannelID, ownerChannelID, videoID string,
+	lane db.DownloadLane,
+	leaseOwner string,
+	now time.Time,
+) db.DownloadWork {
+	t.Helper()
+	if err := d.FollowChannel(sourceChannelID); err != nil {
+		t.Fatalf("FollowChannel: %v", err)
+	}
+	if _, err := d.ReconcileVideoDesires(db.VideoDesireSnapshot{
+		SourceChannelID: sourceChannelID,
+		Component:       "direct",
+		Items: []db.VideoDesire{{
+			VideoID: videoID, OwnerChannelID: ownerChannelID,
+			Title: "Sample video", Lane: lane,
+		}},
+	}); err != nil {
+		t.Fatalf("ReconcileVideoDesires: %v", err)
+	}
+	platform := platformFromDownloadChannelID(ownerChannelID)
+	if platform == "" {
+		platform = "youtube"
+	}
+	work, ok, err := d.ClaimDownloadWork(leaseOwner, lane, platform, now.UnixMilli(), time.Minute)
+	if err != nil {
+		t.Fatalf("ClaimDownloadWork: %v", err)
+	}
+	if !ok {
+		t.Fatal("ClaimDownloadWork returned no work")
+	}
+	return work
 }
 
 func TestParseDateString(t *testing.T) {

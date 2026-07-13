@@ -89,6 +89,64 @@ func (db *DB) GetSubscribedChannels() ([]model.Channel, error) {
 	return channels, rows.Err()
 }
 
+// NextSubscribedChannel returns the least-recently checked followed channel
+// for one platform and the platform's total followed count.
+func (db *DB) NextSubscribedChannel(platform string) (*model.Channel, int, error) {
+	platform = strings.ToLower(strings.TrimSpace(platform))
+	if platform == "" {
+		return nil, 0, nil
+	}
+	row := db.reader().QueryRow(`
+		SELECT COALESCE(c.id, 0), cf.channel_id, COALESCE(c.source_id, ''), COALESCE(c.name, ''),
+		       COALESCE(c.url, ''), COALESCE(c.platform, ''),
+		       CASE WHEN stars.channel_id IS NOT NULL THEN 1 ELSE 0 END,
+		       COALESCE(c.quality, ''), c.last_checked, c.created_at,
+		       settings.include_reposts, COALESCE(profile.handle, ''),
+		       COALESCE(profile.display_name, ''), COUNT(*) OVER ()
+		FROM channel_follows cf
+		LEFT JOIN channels c ON c.channel_id = cf.channel_id
+		LEFT JOIN channel_stars stars ON stars.channel_id = cf.channel_id
+		LEFT JOIN channel_settings settings ON settings.channel_id = cf.channel_id
+		LEFT JOIN channel_profiles profile ON profile.channel_id = cf.channel_id
+		WHERE COALESCE(NULLIF(c.platform, ''), CASE
+		        WHEN cf.channel_id LIKE 'youtube_%' THEN 'youtube'
+		        WHEN cf.channel_id LIKE 'tiktok_%' THEN 'tiktok'
+		        WHEN cf.channel_id LIKE 'instagram_%' THEN 'instagram'
+		        WHEN cf.channel_id LIKE 'twitter_%' OR cf.channel_id LIKE 'x_%' THEN 'twitter'
+		        ELSE '' END) = ?
+		ORDER BY CASE WHEN COALESCE(c.last_checked, 0) <= 0 THEN 0 ELSE 1 END,
+		         COALESCE(c.last_checked, 0), cf.channel_id
+		LIMIT 1
+	`, platform)
+	var ch model.Channel
+	var lastChecked, createdAt sql.NullInt64
+	var includeReposts sql.NullBool
+	var total int
+	if err := row.Scan(
+		&ch.ID, &ch.ChannelID, &ch.SourceID, &ch.Name,
+		&ch.URL, &ch.Platform, &ch.IsStarred, &ch.Quality,
+		&lastChecked, &createdAt, &includeReposts, &ch.Handle,
+		&ch.DisplayName, &total,
+	); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, 0, nil
+		}
+		return nil, 0, err
+	}
+	ch.IsSubscribed = true
+	if includeReposts.Valid {
+		value := includeReposts.Bool
+		ch.IncludeReposts = &value
+	}
+	ch.LastChecked = millisToTimePtr(lastChecked)
+	if created := millisToTimePtr(createdAt); created != nil {
+		ch.CreatedAt = *created
+	}
+	applyChannelIDDefaults(&ch)
+	ch.Platform = detectPlatform(ch.Platform, ch.URL)
+	return &ch, total, nil
+}
+
 func applyChannelIDDefaults(ch *model.Channel) {
 	sourceID, name, urlValue, platform := channelDefaultsFromID(ch.ChannelID)
 	if ch.SourceID == "" {
@@ -591,53 +649,7 @@ func (db *DB) PurgeUnfollowedChannelContent(channelID string) ([]string, error) 
 }
 
 func (db *DB) purgeVideoChannelAfterUnfollowTx(tx *sql.Tx, channelID string) ([]string, error) {
-	keys, err := queryAssetFileKeysTx(tx, `
-		SELECT DISTINCT mo.file_path
-		FROM assets a
-		JOIN media_objects mo ON mo.object_id = a.object_id
-		JOIN videos v ON v.video_id = a.owner_id
-		WHERE a.owner_kind = v.owner_kind
-		  AND mo.published_revision > 0 AND mo.file_path != ''
-		  AND v.channel_id = ?
-		  AND NOT EXISTS (
-		        SELECT 1
-		        FROM bookmarks b
-		        WHERE b.video_id = v.video_id
-		  )
-	`, channelID)
-	if err != nil {
-		return nil, err
-	}
-	if _, err := tx.Exec(`
-		DELETE FROM assets
-		WHERE id IN (
-		  SELECT a.id
-		  FROM assets a
-		  JOIN videos v ON v.video_id = a.owner_id
-		  WHERE a.owner_kind = v.owner_kind
-		    AND v.channel_id = ?
-		    AND NOT EXISTS (
-		        SELECT 1
-		        FROM bookmarks b
-		        WHERE b.video_id = v.video_id
-		    )
-		  )
-	`, channelID); err != nil {
-		return nil, err
-	}
-	if _, err := tx.Exec(`
-		DELETE FROM videos
-		WHERE channel_id = ?
-		  AND NOT EXISTS (
-		    SELECT 1
-		    FROM bookmarks b
-		    WHERE b.video_id = videos.video_id
-		  )
-	`, channelID); err != nil {
-		return nil, err
-	}
-
-	return keys, nil
+	return removeVideoDesiresForSourceTx(tx, channelID)
 }
 
 func (db *DB) purgeTwitterAfterUnfollowTx(tx *sql.Tx, channelID string) ([]string, error) {

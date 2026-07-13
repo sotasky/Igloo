@@ -285,49 +285,6 @@ func (db *DB) GetStoryVideos(channelID string, nowMs int64) ([]model.Video, erro
 	return videos, nil
 }
 
-func (db *DB) DeleteExpiredStoryVideos(nowMs int64) (int, error) {
-	cutoff := db.StoryCutoffMs(nowMs)
-	if cutoff <= 0 {
-		return 0, nil
-	}
-	rows, err := db.conn.Query(`
-		SELECT v.video_id
-		FROM videos v
-		WHERE COALESCE(v.source_kind, '') = 'story'
-		  AND COALESCE(v.published_at, 0) < ?
-		  AND COALESCE(v.is_pinned, 0) = 0
-		  AND NOT EXISTS (
-		      SELECT 1
-		      FROM bookmarks b
-		      WHERE b.video_id = v.video_id
-		  )
-	`, cutoff)
-	if err != nil {
-		return 0, err
-	}
-	defer func() {
-		_ = rows.Close()
-	}()
-
-	var ids []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return 0, err
-		}
-		ids = append(ids, id)
-	}
-	if err := rows.Err(); err != nil {
-		return 0, err
-	}
-	for _, id := range ids {
-		if err := db.DeleteVideoWithFile(id); err != nil {
-			return len(ids), err
-		}
-	}
-	return len(ids), nil
-}
-
 func (db *DB) momentViewedSet(videos []model.Video) (map[string]bool, error) {
 	out := map[string]bool{}
 	ids := make([]string, 0, len(videos))

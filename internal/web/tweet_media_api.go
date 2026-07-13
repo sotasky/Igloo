@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -10,9 +11,11 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/screwys/igloo/internal/download"
+	"github.com/screwys/igloo/internal/storage"
 	"github.com/screwys/igloo/internal/subscribe"
 )
 
@@ -147,6 +150,7 @@ func (s *Server) handleTweetMediaMove(w http.ResponseWriter, r *http.Request) {
 	_ = os.MkdirAll(archivePath, 0o755)
 
 	var moved, failed []string
+	dl := s.workers.Downloader()
 	for i, item := range body.StagedFiles {
 		name := filepath.Base(item.StagingName) // prevent path traversal
 		src := filepath.Join(stagingDir, name)
@@ -181,7 +185,7 @@ func (s *Server) handleTweetMediaMove(w http.ResponseWriter, r *http.Request) {
 
 		fileNum := startNum + i + 1
 		destFile := filepath.Join(archivePath, fmt.Sprintf("%s %03d%s", safeName, fileNum, ext))
-		if err := moveFile(src, destFile); err != nil {
+		if err := moveFile(r.Context(), dl, src, destFile); err != nil {
 			slog.Warn("[TweetMediaMove] move failed", "src", src, "dst", destFile, "err", err)
 			failed = append(failed, name)
 			continue
@@ -264,7 +268,7 @@ func (s *Server) handleTweetMediaDl(w http.ResponseWriter, r *http.Request) {
 		_ = os.RemoveAll(tmpDir)
 	}()
 
-	paths, dlErr := dl.Download(ctx, body.TweetURL, "video", download.Opts{
+	paths, dlErr := dl.Download(ctx, download.MediaLaneBulkForeground, body.TweetURL, "video", download.Opts{
 		OutputDir: tmpDir,
 		Cookies:   filepath.Join(s.cfg.CookiesDir, "x.com_cookies.txt"),
 	})
@@ -297,7 +301,7 @@ func (s *Server) handleTweetMediaDl(w http.ResponseWriter, r *http.Request) {
 		}
 		fileNum := startNum + i
 		destFile := filepath.Join(archivePath, fmt.Sprintf("%s %03d%s", safeName, fileNum, ext))
-		if err := moveFile(p, destFile); err != nil {
+		if err := moveFile(ctx, dl, p, destFile); err != nil {
 			slog.Warn("[TweetMedia] move failed", "src", p, "dst", destFile, "err", err)
 			continue
 		}
@@ -406,7 +410,7 @@ func archiveTweetMediaURL(ctx context.Context, dl *download.Downloader, mediaURL
 	ext := tweetMediaExtFromURL(mediaURL)
 	filename := fmt.Sprintf("%s %03d%s", safeName, fileNum, ext)
 	if strings.EqualFold(ext, ".mp4") {
-		destPath, err := dl.DownloadFileWithOptions(ctx, download.MediaLaneBulk, mediaURL, archivePath, filename, download.HTTPDownloadOptions{
+		destPath, err := dl.DownloadFileWithOptions(ctx, download.MediaLaneBulkForeground, mediaURL, archivePath, filename, download.HTTPDownloadOptions{
 			MaxBytes: 4 << 30,
 			Timeout:  2 * time.Hour,
 		})
@@ -419,7 +423,7 @@ func archiveTweetMediaURL(ctx context.Context, dl *download.Downloader, mediaURL
 		}
 		return destPath, nil
 	}
-	return dl.DownloadFile(ctx, download.MediaLaneBulk, mediaURL, archivePath, filename)
+	return dl.DownloadFile(ctx, download.MediaLaneBulkForeground, mediaURL, archivePath, filename)
 }
 
 func validateTweetMediaStagingFile(path, ext string) error {
@@ -468,10 +472,31 @@ func isAllowedTweetMediaURL(rawURL string) bool {
 	}
 }
 
-func moveFile(src, dst string) error {
+func moveFile(ctx context.Context, dl *download.Downloader, src, dst string) error {
 	if err := os.Rename(src, dst); err == nil {
 		return nil
+	} else if !errors.Is(err, syscall.EXDEV) {
+		return err
 	}
+	if dl == nil {
+		return fmt.Errorf("media downloader unavailable for cross-device move")
+	}
+	return dl.RunMedia(ctx, download.MediaLaneBulkForeground, func() error {
+		return copyFileAcrossDevices(ctx, src, dst)
+	})
+}
+
+func copyFileAcrossDevices(ctx context.Context, src, dst string) error {
+	if err := copyFileAtomic(ctx, src, dst); err != nil {
+		return err
+	}
+	if err := storage.SyncDirectory(filepath.Dir(dst)); err != nil {
+		return err
+	}
+	return os.Remove(src)
+}
+
+func copyFileAtomic(ctx context.Context, src, dst string) error {
 	in, err := os.Open(src)
 	if err != nil {
 		return err
@@ -485,6 +510,15 @@ func moveFile(src, dst string) error {
 		return err
 	}
 	tmpPath := tmp.Name()
+	if info, err := in.Stat(); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
+		return err
+	} else if err := tmp.Chmod(info.Mode().Perm()); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
+		return err
+	}
 	success := false
 	defer func() {
 		if !success {
@@ -492,7 +526,15 @@ func moveFile(src, dst string) error {
 		}
 	}()
 
-	if _, err := io.Copy(tmp, in); err != nil {
+	if _, err := io.CopyBuffer(tmp, contextIO{ctx: ctx, src: in}, make([]byte, 256*1024)); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
 		_ = tmp.Close()
 		return err
 	}
@@ -503,6 +545,25 @@ func moveFile(src, dst string) error {
 		return err
 	}
 	success = true
-	_ = os.Remove(src)
 	return nil
+}
+
+type contextIO struct {
+	ctx context.Context
+	src io.Reader
+	dst io.Writer
+}
+
+func (rw contextIO) Read(p []byte) (int, error) {
+	if err := rw.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return rw.src.Read(p)
+}
+
+func (rw contextIO) Write(p []byte) (int, error) {
+	if err := rw.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return rw.dst.Write(p)
 }

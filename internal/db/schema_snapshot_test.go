@@ -72,6 +72,7 @@ func TestSchemaTableLifecycleClassifications(t *testing.T) {
 	want := map[string]schemaTableLifecycle{
 		"assets":         schemaLifecycleMaintainedState,
 		"media_objects":  schemaLifecycleMaintainedState,
+		"video_desires":  schemaLifecycleMaintainedState,
 		"bookmarks":      schemaLifecycleUserState,
 		"download_queue": schemaLifecycleQueue,
 		"feed_items":     schemaLifecycleArchive,
@@ -85,7 +86,9 @@ func TestSchemaTableLifecycleClassifications(t *testing.T) {
 
 func TestFreshSchemaOmitsRetiredMediaTables(t *testing.T) {
 	d := openSchemaSnapshotDB(t)
-	for _, table := range []string{"media_files", "feed_media_jobs"} {
+	for _, table := range []string{
+		"media_files", "feed_media_jobs", "channel_queue", "video_download_blocks",
+	} {
 		var count int
 		if err := d.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, table).Scan(&count); err != nil {
 			t.Fatalf("check %s: %v", table, err)

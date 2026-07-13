@@ -109,7 +109,7 @@ func (m *Manager) DownloadTemp(ctx context.Context, rawURL string, saveChannel b
 	if err != nil {
 		return TempDownloadResult{Message: fmt.Sprintf("Storage path: %v", err)}
 	}
-	if err := m.downloader.RunMedia(ctx, download.MediaLaneBulk, func() error { return os.MkdirAll(tempDir, 0o755) }); err != nil {
+	if err := m.downloader.RunMedia(ctx, download.MediaLaneBulkForeground, func() error { return os.MkdirAll(tempDir, 0o755) }); err != nil {
 		return TempDownloadResult{Message: fmt.Sprintf("Create storage directory: %v", err)}
 	}
 	attemptID, err := newDownloadAttemptID(videoID)
@@ -131,9 +131,9 @@ func (m *Manager) DownloadTemp(ctx context.Context, rawURL string, saveChannel b
 		SubtitleDir:        subtitleDir,
 	}
 
-	completed, dlErr := m.downloader.DownloadCompleted(ctx, rawURL, "video", opts)
+	completed, dlErr := m.downloader.DownloadCompleted(ctx, download.MediaLaneBulkForeground, rawURL, "video", opts)
 	if dlErr != nil || len(completed.MediaPaths) == 0 {
-		m.removeFailedAttempt(ctx, completedVideoFiles{}, completed)
+		m.removeFailedAttempt(ctx, download.MediaLaneBulkForeground, completedVideoFiles{}, completed)
 		msg := "Download failed"
 		if dlErr != nil {
 			msg = dlErr.Error()
@@ -141,9 +141,9 @@ func (m *Manager) DownloadTemp(ctx context.Context, rawURL string, saveChannel b
 		return TempDownloadResult{Message: msg}
 	}
 
-	files, err := m.prepareCompletedVideoFiles(ctx, platform, attemptID, completed)
+	files, err := m.prepareCompletedVideoFiles(ctx, download.MediaLaneBulkForeground, platform, attemptID, completed)
 	if err != nil {
-		m.removeFailedAttempt(ctx, files, completed)
+		m.removeFailedAttempt(ctx, download.MediaLaneBulkForeground, files, completed)
 		return TempDownloadResult{Message: fmt.Sprintf("Prepare completed outputs: %v", err)}
 	}
 
@@ -196,17 +196,18 @@ func (m *Manager) DownloadTemp(ctx context.Context, rawURL string, saveChannel b
 	if err := m.db.StoreCompletedVideo(db.CompletedVideo{
 		VideoID: videoID, ChannelID: channelID, OwnerKind: ownerKind, Title: title, Description: description,
 		Duration: duration, PublishedAtMs: publishedAt, MetadataJSON: metadataJSON,
-		MediaKind: mediaKind, SlideCount: slideCount, IsTemp: true, Assets: files.assets,
+		MediaKind: mediaKind, SlideCount: slideCount, IsTemp: true,
+		MediaLane: download.MediaLaneBulkForeground, Assets: files.assets,
 	}); err != nil {
-		m.removeFailedAttempt(ctx, files, completed)
+		m.removeFailedAttempt(ctx, download.MediaLaneBulkForeground, files, completed)
 		return TempDownloadResult{Message: fmt.Sprintf("DB insert: %v", err)}
 	}
 	if err := m.storeCompletedSubtitles(ctx, videoID, files, completed, false); err != nil {
 		log.Printf("[temp] subtitle publish failed for %s: %v", videoID, err)
 	}
-	m.removeTransientFiles(ctx, files)
+	m.removeTransientFiles(ctx, download.MediaLaneBulkForeground, files)
 
-	m.enqueueCompletedVideoPreview(videoID, platform, files.primaryPath, float64(duration))
+	m.RequestVideoPreview(videoID)
 
 	// Channel creation owns the durable profile job. Wake its consumer without
 	// creating a synchronous render-time identity path.
@@ -223,7 +224,7 @@ func (m *Manager) DownloadTemp(ctx context.Context, rawURL string, saveChannel b
 		if err != nil {
 			log.Printf("[temp] store comments for %s: %v", videoID, err)
 		} else {
-			m.KickFeedMedia()
+			m.KickMediaWork()
 			log.Printf("[temp] fetched %d comments for %s", inserted, videoID)
 		}
 	}
@@ -255,7 +256,7 @@ func (m *Manager) downloadPlaylist(ctx context.Context, rawURL, playlistID strin
 	if err != nil {
 		return TempDownloadResult{Message: fmt.Sprintf("Storage path: %v", err)}
 	}
-	if err := m.downloader.RunMedia(ctx, download.MediaLaneBulk, func() error { return os.MkdirAll(targetDir, 0o755) }); err != nil {
+	if err := m.downloader.RunMedia(ctx, download.MediaLaneBulkForeground, func() error { return os.MkdirAll(targetDir, 0o755) }); err != nil {
 		return TempDownloadResult{Message: fmt.Sprintf("Create storage directory: %v", err)}
 	}
 
@@ -295,17 +296,17 @@ func (m *Manager) downloadPlaylist(ctx context.Context, rawURL, playlistID strin
 			Cookies:            authOpts.Cookies,
 			CookiesFromBrowser: authOpts.CookiesFromBrowser,
 		}
-		completed, dlErr := m.downloader.DownloadCompleted(ctx, videoURL, "video", opts)
+		completed, dlErr := m.downloader.DownloadCompleted(ctx, download.MediaLaneBulkForeground, videoURL, "video", opts)
 		if dlErr != nil || len(completed.MediaPaths) == 0 {
-			m.removeFailedAttempt(ctx, completedVideoFiles{}, completed)
+			m.removeFailedAttempt(ctx, download.MediaLaneBulkForeground, completedVideoFiles{}, completed)
 			log.Printf("[temp] playlist item %s failed: %v", videoID, dlErr)
 			failed++
 			continue
 		}
 
-		files, prepareErr := m.prepareCompletedVideoFiles(ctx, "youtube", attemptID, completed)
+		files, prepareErr := m.prepareCompletedVideoFiles(ctx, download.MediaLaneBulkForeground, "youtube", attemptID, completed)
 		if prepareErr != nil {
-			m.removeFailedAttempt(ctx, files, completed)
+			m.removeFailedAttempt(ctx, download.MediaLaneBulkForeground, files, completed)
 			log.Printf("[temp] playlist item %s output preparation failed: %v", videoID, prepareErr)
 			failed++
 			continue
@@ -324,15 +325,15 @@ func (m *Manager) downloadPlaylist(ctx context.Context, rawURL, playlistID strin
 		if err := m.db.StoreCompletedVideo(db.CompletedVideo{
 			VideoID: videoID, ChannelID: playlistChannelID, OwnerKind: "youtube_video", Title: entryTitle, Description: description,
 			Duration: duration, PublishedAtMs: publishedAt, MetadataJSON: metaJSON,
-			Assets: files.assets,
+			SourceKind: "playlist", MediaLane: download.MediaLaneBulkForeground, Assets: files.assets,
 		}); err != nil {
-			m.removeFailedAttempt(ctx, files, completed)
+			m.removeFailedAttempt(ctx, download.MediaLaneBulkForeground, files, completed)
 			log.Printf("[temp] playlist item %s DB insert failed: %v", videoID, err)
 			failed++
 			continue
 		}
-		m.removeTransientFiles(ctx, files)
-		m.enqueueCompletedVideoPreview(videoID, "youtube", files.primaryPath, float64(duration))
+		m.removeTransientFiles(ctx, download.MediaLaneBulkForeground, files)
+		m.RequestVideoPreview(videoID)
 		downloaded++
 	}
 

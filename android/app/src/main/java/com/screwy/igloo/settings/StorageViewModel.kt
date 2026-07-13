@@ -120,9 +120,6 @@ class StorageViewModel(
 
     fun triggerSyncNow() {
         scheduler?.triggerAll()
-        viewModelScope.launch {
-            periodicSyncScheduler?.enqueueCatchup()
-        }
     }
 
     private suspend fun loadStats() {

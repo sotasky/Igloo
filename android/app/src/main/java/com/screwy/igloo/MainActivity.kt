@@ -20,7 +20,6 @@ import com.screwy.igloo.log.iglooLogModule
 import com.screwy.igloo.media.iglooMediaModule
 import com.screwy.igloo.net.Reachability
 import com.screwy.igloo.net.iglooNetModule
-import com.screwy.igloo.sync.PeriodicSyncWorker
 import com.screwy.igloo.sync.SyncCoordinator
 import com.screwy.igloo.sync.iglooSyncModule
 import com.screwy.igloo.ui.iglooUiModule
@@ -116,15 +115,12 @@ object AppRuntime {
         koin.get<Logger>().info(event = "app_start", fields = emptyMap())
 
         val scheduler: SyncCoordinator = koin.get()
-        val prefs: PreferencesRepo = koin.get()
         val authRepo: AuthRepo = koin.get()
         val scope: CoroutineScope = koin.get(named("applicationScope"))
         scope.launch {
             authRepo.onAppStart()
             if (authRepo.hasSessionSync()) {
                 scheduler.start()
-                PeriodicSyncWorker.enqueue(koin.get<Application>(), prefs)
-                PeriodicSyncWorker.enqueueCatchup(koin.get<Application>(), prefs)
             }
         }
     }

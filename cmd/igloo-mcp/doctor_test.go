@@ -59,9 +59,15 @@ func TestDoctorStatusReportsLocalHealthAndMasksSecrets(t *testing.T) {
 	insertMCPTestAsset(t, d, igloodb.Asset{AssetID: "sample_missing_asset", AssetKind: "avatar", OwnerKind: "channel", OwnerID: "twitter_sample_profile"}, igloodb.AssetStateServerMissing, now, 0, "")
 	insertMCPTestAsset(t, d, igloodb.Asset{AssetID: "sample_downloading_asset", AssetKind: "post_thumbnail", OwnerKind: "tweet", OwnerID: "sample_post", FilePath: "thumbnails/generated/sample_post.jpg", ContentType: "image/jpeg"}, igloodb.AssetStateDownloading, now, now-1, "worker-a")
 	if err := d.ExecRaw(`
-		INSERT INTO download_queue (video_id, channel_id, title, status, error, added_at)
-		VALUES ('sample_video', 'youtube_sample_channel', 'Doctor Video', 'failed', 'sample failure', ?)
-	`, now); err != nil {
+		INSERT INTO download_queue (
+			video_id, owner_channel_id, status, retry_count,
+			last_error_kind, last_error, added_at_ms
+		) VALUES
+			('sample_video', 'youtube_sample_channel', 'pending', 1,
+			 'temporary', 'sample retry', ?),
+			('sample_blocked_video', 'youtube_sample_channel', 'blocked', 1,
+			 'unsupported', 'sample terminal failure', ?)
+	`, now, now); err != nil {
 		t.Fatalf("insert download queue: %v", err)
 	}
 	if err := d.ExecRaw(`
@@ -121,6 +127,8 @@ func TestDoctorStatusReportsLocalHealthAndMasksSecrets(t *testing.T) {
 		"unclassified_tables",
 		"Android sync:",
 		"Queue counts:",
+		"download_queue:",
+		"blocked=1",
 		"Profile/media readiness:",
 		"channel_profiles: total=1 tombstones=0",
 		"profile_jobs: pending=1 leased=0 failed=1",

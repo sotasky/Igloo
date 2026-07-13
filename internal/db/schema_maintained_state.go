@@ -2,6 +2,11 @@ package db
 
 func schemaMaintainedStateStatements() []string {
 	return []string{
+		`CREATE TABLE IF NOT EXISTS android_feed_retention (
+			id               INTEGER PRIMARY KEY CHECK (id = 1),
+			feed_days        INTEGER NOT NULL,
+			reconciled_at_ms INTEGER NOT NULL
+		)`,
 		`CREATE TABLE IF NOT EXISTS media_objects (
 			id                   INTEGER PRIMARY KEY AUTOINCREMENT,
 			object_id            TEXT UNIQUE NOT NULL,
@@ -53,5 +58,15 @@ func schemaMaintainedStateStatements() []string {
 		`CREATE INDEX IF NOT EXISTS idx_assets_owner ON assets(owner_kind, owner_id, asset_kind, media_index)`,
 		`CREATE INDEX IF NOT EXISTS idx_assets_object ON assets(object_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_assets_desired_object ON assets(desired_object_id)`,
+		`CREATE TABLE IF NOT EXISTS video_desires (
+			source_channel_id TEXT NOT NULL,
+			source_component  TEXT NOT NULL,
+			video_id          TEXT NOT NULL,
+			source_position   INTEGER NOT NULL DEFAULT 0,
+			lane              TEXT NOT NULL CHECK(lane IN ('current', 'backfill')),
+			PRIMARY KEY (source_channel_id, source_component, video_id)
+		) WITHOUT ROWID`,
+		`CREATE INDEX IF NOT EXISTS idx_video_desires_video ON video_desires(video_id, lane, source_position)`,
+		`CREATE INDEX IF NOT EXISTS idx_video_desires_source_position ON video_desires(source_channel_id, source_component, source_position, video_id)`,
 	}
 }

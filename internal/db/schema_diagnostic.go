@@ -36,6 +36,7 @@ func schemaDiagnosticStatements() []string {
 			verified_bytes  INTEGER NOT NULL DEFAULT 0
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_android_sync_health_cursor ON android_sync_health_reports(cursor, reported_at_ms DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_android_sync_health_reported ON android_sync_health_reports(reported_at_ms DESC, id DESC)`,
 
 		`CREATE TABLE IF NOT EXISTS analytics_events (
 			event_id     TEXT PRIMARY KEY,

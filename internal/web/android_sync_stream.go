@@ -19,11 +19,11 @@ import (
 )
 
 const (
-	androidSyncModelVersion       = 1
-	androidSyncChangePageSize     = 500
-	androidSyncBootstrapPageSize  = 1000
-	androidSyncBootstrapLifetime  = 30 * time.Minute
-	androidSyncMaxBootstrapCaches = 4
+	androidSyncModelVersion      = 1
+	androidSyncChangePageSize    = 500
+	androidSyncBootstrapPageSize = 1000
+	androidSyncSessionLifetime   = 30 * time.Minute
+	androidSyncMaxSessions       = 4
 )
 
 type androidSyncCursor struct {
@@ -36,11 +36,13 @@ type androidSyncCursor struct {
 	Retention string `json:"t,omitempty"`
 }
 
-type androidSyncBootstrapSession struct {
+type androidSyncSession struct {
+	Mode          string
 	Epoch         string
 	Through       int64
 	RetentionHash string
 	Heads         []model.AndroidSyncHead
+	Selection     *db.AndroidSyncDesiredSets
 	CreatedAt     time.Time
 }
 
@@ -56,6 +58,12 @@ func (s *Server) handleAndroidSyncBootstrap(w http.ResponseWriter, r *http.Reque
 	}
 	after := strings.TrimSpace(r.URL.Query().Get("after"))
 	if after == "" {
+		if s.workers != nil {
+			if err := s.workers.ApplyAndroidFeedRetention(retention.FeedDays); err != nil {
+				writeJSONError(w, http.StatusInternalServerError, "retention_failed", "media retention reconciliation failed")
+				return
+			}
+		}
 		s.startAndroidSyncBootstrap(w, retention)
 		return
 	}
@@ -68,7 +76,7 @@ func (s *Server) handleAndroidSyncBootstrap(w http.ResponseWriter, r *http.Reque
 }
 
 func (s *Server) startAndroidSyncBootstrap(w http.ResponseWriter, retention db.AndroidRetentionSettings) {
-	var session *androidSyncBootstrapSession
+	var session *androidSyncSession
 	err := s.db.WithReadSnapshot(func(snapshot *db.DB) error {
 		clock, err := snapshot.GetAndroidSyncClock()
 		if err != nil {
@@ -78,7 +86,8 @@ func (s *Server) startAndroidSyncBootstrap(w http.ResponseWriter, retention db.A
 		if err != nil {
 			return err
 		}
-		session = &androidSyncBootstrapSession{
+		session = &androidSyncSession{
+			Mode:          "bootstrap",
 			Epoch:         clock.Epoch,
 			Through:       clock.Revision,
 			RetentionHash: androidSyncRetentionHash(retention),
@@ -96,23 +105,7 @@ func (s *Server) startAndroidSyncBootstrap(w http.ResponseWriter, retention db.A
 		writeJSONError(w, http.StatusInternalServerError, "bootstrap_failed", "bootstrap token failed")
 		return
 	}
-	s.androidSyncBootstrapMu.Lock()
-	s.pruneAndroidSyncBootstrapsLocked(time.Now())
-	if s.androidSyncBootstraps == nil {
-		s.androidSyncBootstraps = make(map[string]*androidSyncBootstrapSession)
-	}
-	for len(s.androidSyncBootstraps) >= androidSyncMaxBootstrapCaches {
-		var oldestID string
-		var oldest time.Time
-		for id, candidate := range s.androidSyncBootstraps {
-			if oldestID == "" || candidate.CreatedAt.Before(oldest) {
-				oldestID, oldest = id, candidate.CreatedAt
-			}
-		}
-		delete(s.androidSyncBootstraps, oldestID)
-	}
-	s.androidSyncBootstraps[sessionID] = session
-	s.androidSyncBootstrapMu.Unlock()
+	s.storeAndroidSyncSession(sessionID, session)
 	s.writeAndroidSyncBootstrapPage(w, androidSyncCursor{
 		Version: androidSyncModelVersion, Mode: "bootstrap", Epoch: session.Epoch,
 		Session: sessionID, Retention: session.RetentionHash,
@@ -124,17 +117,17 @@ func (s *Server) writeAndroidSyncBootstrapPage(w http.ResponseWriter, cursor and
 		writeAndroidSyncResetRequired(w)
 		return
 	}
-	s.androidSyncBootstrapMu.Lock()
-	s.pruneAndroidSyncBootstrapsLocked(time.Now())
-	session := s.androidSyncBootstraps[cursor.Session]
-	if session == nil || session.Epoch != cursor.Epoch || session.RetentionHash != cursor.Retention {
-		s.androidSyncBootstrapMu.Unlock()
+	s.androidSyncSessionMu.Lock()
+	s.pruneAndroidSyncSessionsLocked(time.Now())
+	session := s.androidSyncSessions[cursor.Session]
+	if session == nil || session.Mode != "bootstrap" || session.Epoch != cursor.Epoch || session.RetentionHash != cursor.Retention {
+		s.androidSyncSessionMu.Unlock()
 		writeAndroidSyncResetRequired(w)
 		return
 	}
 	start := cursor.Index
 	if start > len(session.Heads) {
-		s.androidSyncBootstrapMu.Unlock()
+		s.androidSyncSessionMu.Unlock()
 		writeAndroidSyncResetRequired(w)
 		return
 	}
@@ -151,7 +144,7 @@ func (s *Server) writeAndroidSyncBootstrapPage(w http.ResponseWriter, cursor and
 		next = cursor
 		next.Index = end
 	}
-	s.androidSyncBootstrapMu.Unlock()
+	s.androidSyncSessionMu.Unlock()
 	var changes []model.AndroidSyncChange
 	err := s.db.WithReadSnapshot(func(snapshot *db.DB) error {
 		clock, err := snapshot.GetAndroidSyncClock()
@@ -199,6 +192,32 @@ func (s *Server) handleAndroidSyncChanges(w http.ResponseWriter, r *http.Request
 		writeAndroidSyncResetRequired(w)
 		return
 	}
+	sessionID := cursor.Session
+	var session *androidSyncSession
+	newSession := sessionID == ""
+	if !newSession {
+		session = s.getAndroidSyncSession(sessionID)
+		if session == nil {
+			newSession = true
+			sessionID = ""
+		} else if session.Mode != "changes" || session.Epoch != cursor.Epoch || session.RetentionHash != retentionHash {
+			writeAndroidSyncResetRequired(w)
+			return
+		}
+	}
+	if newSession {
+		if s.workers != nil {
+			if err := s.workers.ApplyAndroidFeedRetention(retention.FeedDays); err != nil {
+				writeJSONError(w, http.StatusInternalServerError, "retention_failed", "media retention reconciliation failed")
+				return
+			}
+		}
+		sessionID, err = newAndroidSyncSessionID()
+		if err != nil {
+			writeJSONError(w, http.StatusInternalServerError, "changes_failed", "sync session failed")
+			return
+		}
+	}
 	var changes []model.AndroidSyncChange
 	var nextRevision int64
 	var finished bool
@@ -210,7 +229,19 @@ func (s *Server) handleAndroidSyncChanges(w http.ResponseWriter, r *http.Request
 		if clock.Epoch != cursor.Epoch || cursor.Revision > clock.Revision {
 			return errAndroidSyncResetRequired
 		}
-		heads, err := snapshot.ListAndroidSyncHeads(cursor.Revision, androidSyncChangePageSize+1)
+		if newSession {
+			session = &androidSyncSession{
+				Mode:          "changes",
+				Epoch:         clock.Epoch,
+				Through:       clock.Revision,
+				RetentionHash: retentionHash,
+				CreatedAt:     time.Now(),
+			}
+		}
+		if cursor.Revision > session.Through {
+			return errAndroidSyncResetRequired
+		}
+		heads, err := snapshot.ListAndroidSyncHeadsThrough(cursor.Revision, session.Through, androidSyncChangePageSize+1)
 		if err != nil {
 			return err
 		}
@@ -218,24 +249,27 @@ func (s *Server) handleAndroidSyncChanges(w http.ResponseWriter, r *http.Request
 		if !finished {
 			heads = heads[:androidSyncChangePageSize]
 		}
-		var desired *db.AndroidSyncDesiredSets
-		for _, head := range heads {
-			if head.OwnerKind == "feed" || head.OwnerKind == "video" ||
-				head.OwnerKind == "retweet_sources" || head.OwnerKind == "feed_rank" {
-				selection, err := snapshot.ListAndroidSyncDesiredContent(retention, time.Now().UnixMilli())
+		if newSession {
+			selection := emptyAndroidSyncDesiredSets()
+			if len(heads) > 0 {
+				selection, err = s.buildAndroidSyncChangeSelection(
+					snapshot, retention, time.Now().UnixMilli(), cursor.Revision, session.Through,
+				)
 				if err != nil {
 					return err
 				}
-				desired = &selection
-				break
 			}
+			session.Selection = &selection
 		}
-		changes, err = s.materializeAndroidSyncHeads(snapshot, heads, desired)
+		if session.Selection == nil {
+			return errAndroidSyncResetRequired
+		}
+		changes, err = s.materializeAndroidSyncHeads(snapshot, heads, session.Selection)
 		if err != nil {
 			return err
 		}
 		if finished {
-			nextRevision = clock.Revision
+			nextRevision = session.Through
 		} else {
 			nextRevision = heads[len(heads)-1].Revision
 		}
@@ -249,9 +283,16 @@ func (s *Server) handleAndroidSyncChanges(w http.ResponseWriter, r *http.Request
 		writeJSONError(w, http.StatusInternalServerError, "changes_failed", err.Error())
 		return
 	}
+	if newSession && !finished {
+		s.storeAndroidSyncSession(sessionID, session)
+	}
+	nextSession := sessionID
+	if finished {
+		nextSession = ""
+	}
 	next, err := encodeAndroidSyncCursor(androidSyncCursor{
 		Version: androidSyncModelVersion, Mode: "changes", Epoch: cursor.Epoch,
-		Revision: nextRevision, Retention: retentionHash,
+		Revision: nextRevision, Session: nextSession, Retention: retentionHash,
 	})
 	if err != nil {
 		writeJSONError(w, http.StatusInternalServerError, "cursor_failed", "sync cursor failed")
@@ -394,12 +435,39 @@ func newAndroidSyncSessionID() (string, error) {
 	return hex.EncodeToString(raw), nil
 }
 
-func (s *Server) pruneAndroidSyncBootstrapsLocked(now time.Time) {
-	for id, session := range s.androidSyncBootstraps {
-		if now.Sub(session.CreatedAt) > androidSyncBootstrapLifetime {
-			delete(s.androidSyncBootstraps, id)
+func (s *Server) pruneAndroidSyncSessionsLocked(now time.Time) {
+	for id, session := range s.androidSyncSessions {
+		if now.Sub(session.CreatedAt) > androidSyncSessionLifetime {
+			delete(s.androidSyncSessions, id)
 		}
 	}
+}
+
+func (s *Server) getAndroidSyncSession(id string) *androidSyncSession {
+	s.androidSyncSessionMu.Lock()
+	defer s.androidSyncSessionMu.Unlock()
+	s.pruneAndroidSyncSessionsLocked(time.Now())
+	return s.androidSyncSessions[id]
+}
+
+func (s *Server) storeAndroidSyncSession(id string, session *androidSyncSession) {
+	s.androidSyncSessionMu.Lock()
+	defer s.androidSyncSessionMu.Unlock()
+	s.pruneAndroidSyncSessionsLocked(time.Now())
+	if s.androidSyncSessions == nil {
+		s.androidSyncSessions = make(map[string]*androidSyncSession)
+	}
+	for len(s.androidSyncSessions) >= androidSyncMaxSessions {
+		var oldestID string
+		var oldest time.Time
+		for candidateID, candidate := range s.androidSyncSessions {
+			if oldestID == "" || candidate.CreatedAt.Before(oldest) {
+				oldestID, oldest = candidateID, candidate.CreatedAt
+			}
+		}
+		delete(s.androidSyncSessions, oldestID)
+	}
+	s.androidSyncSessions[id] = session
 }
 
 func marshalAndroidSyncChange(ownerKind, ownerID, bucket string, retainAtMs int64, payload any) (model.AndroidSyncChange, error) {

@@ -169,8 +169,7 @@ func (s *Server) handleResume(w http.ResponseWriter, r *http.Request) {
 	}
 	s.workers.SetStopRequested(false)
 	s.workers.SetIngestPaused(false)
-	s.workers.KickDownloadPool()
-	s.workers.KickFeedMedia()
+	s.workers.KickMediaWork()
 	s.workers.KickIngest()
 	if r.Header.Get("HX-Request") != "" {
 		_ = components.StopPlayButton(s.pageProps(w, r), false).Render(r.Context(), w)

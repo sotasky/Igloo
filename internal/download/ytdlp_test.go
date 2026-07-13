@@ -11,6 +11,48 @@ import (
 	ytdlp "github.com/lrstanley/go-ytdlp"
 )
 
+func TestChannelCheckPreservesPartialOutputAsIncomplete(t *testing.T) {
+	bin := t.TempDir()
+	writeExecutable(t, filepath.Join(bin, "yt-dlp"), `#!/bin/sh
+printf '{"_type":"video","id":"sample_partial","title":"Partial item","timestamp":1710000000}\n'
+printf 'source stopped before the full window was read\n' >&2
+exit 1
+`)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	snapshot, err := (&YtDlpWrapper{}).ChannelCheck(context.Background(), "https://example.invalid/channel", 20)
+	if err == nil {
+		t.Fatal("ChannelCheck returned nil error after the command failed")
+	}
+	if len(snapshot.Windows) != 1 || snapshot.Windows[0].Component != SourceComponentDirect {
+		t.Fatalf("windows = %#v", snapshot.Windows)
+	}
+	window := snapshot.Windows[0]
+	if window.Complete {
+		t.Fatal("failed command returned a complete source window")
+	}
+	if len(window.Refs) != 1 || window.Refs[0].VideoID != "sample_partial" {
+		t.Fatalf("partial refs = %#v", window.Refs)
+	}
+}
+
+func TestChannelCheckTreatsSuccessfulEmptyOutputAsComplete(t *testing.T) {
+	bin := t.TempDir()
+	writeExecutable(t, filepath.Join(bin, "yt-dlp"), `#!/bin/sh
+exit 0
+`)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	snapshot, err := (&YtDlpWrapper{}).ChannelCheck(context.Background(), "https://example.invalid/channel", 20)
+	if err != nil {
+		t.Fatalf("ChannelCheck: %v", err)
+	}
+	if len(snapshot.Windows) != 1 || snapshot.Windows[0].Component != SourceComponentDirect ||
+		!snapshot.Windows[0].Complete || len(snapshot.Windows[0].Refs) != 0 {
+		t.Fatalf("empty snapshot = %#v", snapshot)
+	}
+}
+
 func TestCompletedYtDlpOutputsReturnsOnlyExactProducerSidecars(t *testing.T) {
 	dir := t.TempDir()
 	for name, body := range map[string]string{

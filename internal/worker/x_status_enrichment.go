@@ -137,7 +137,7 @@ func (m *Manager) upsertXStatusEnrichmentItems(ctx context.Context, items []mode
 		log.Printf("[x_status_enrichment] upsert: %v", err)
 		return
 	}
-	m.KickFeedMedia()
+	m.KickMediaWork()
 	if n > 0 {
 		m.KickFeedScoring()
 	}

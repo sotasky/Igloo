@@ -369,7 +369,7 @@ func writeDoctorAndroidSync(sb *strings.Builder, conn *sql.DB) {
 
 func writeDoctorQueues(sb *strings.Builder, conn *sql.DB) {
 	sb.WriteString("Queue counts:\n")
-	for _, table := range []string{"download_queue", "channel_queue", "translation_jobs"} {
+	for _, table := range []string{"download_queue", "translation_jobs"} {
 		parts := doctorStatusCounts(conn, table, "status", "")
 		if len(parts) == 0 {
 			parts = []string{"empty=0"}

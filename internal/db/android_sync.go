@@ -13,6 +13,7 @@ import (
 type AndroidSyncDesiredSets struct {
 	Tweets           map[string]struct{}
 	TweetAssetOwners map[string]struct{}
+	FeedRanks        map[string]struct{}
 	Videos           map[string]struct{}
 	MediaVideos      map[string]struct{}
 	Channels         map[string]struct{}
@@ -145,6 +146,67 @@ func androidEligibleFeedCTE(cutoffMs int64) (string, []any) {
 		}
 }
 
+func (db *DB) listAndroidSyncDesiredFeed(feedDays int, nowMs int64) (map[string]struct{}, map[string]struct{}, error) {
+	tweets := map[string]struct{}{}
+	assetOwners := map[string]struct{}{}
+	feedCutoff := retentionCutoffMs(nowMs, feedDays)
+	cte, args := androidEligibleFeedCTE(feedCutoff)
+	start := time.Now()
+	err := db.collectStrings(cte+`,
+		reply_chain(tweet_id, is_ancestor) AS (
+			SELECT tweet_id, 0 FROM eligible_tweet_ids
+
+			UNION
+
+			SELECT fi.reply_to_status, 1
+			FROM reply_chain rc
+			JOIN feed_items fi ON fi.tweet_id = rc.tweet_id
+			WHERE COALESCE(fi.reply_to_status, '') != ''
+		)
+		SELECT DISTINCT fi.tweet_id
+		FROM reply_chain rc
+		JOIN feed_items fi ON fi.tweet_id = rc.tweet_id
+		WHERE rc.is_ancestor = 1
+		   OR EXISTS (SELECT 1 FROM feed_likes fl WHERE fl.tweet_id = fi.tweet_id)
+		   OR EXISTS (SELECT 1 FROM bookmarks b WHERE b.video_id = fi.tweet_id)
+		   OR (`+retweetFilterClause("fi")+`)
+	`, args, tweets)
+	androidSyncLogDesiredSetQuery("feed", len(tweets), len(tweets), start, err)
+	if err != nil {
+		return nil, nil, fmt.Errorf("android sync desired tweets: %w", err)
+	}
+	for id := range tweets {
+		assetOwners[id] = struct{}{}
+	}
+	tweetIDsJSON, err := json.Marshal(sortedKeys(tweets))
+	if err != nil {
+		return nil, nil, err
+	}
+	start = time.Now()
+	before := len(assetOwners)
+	err = db.collectStrings(`
+		SELECT DISTINCT quote_tweet_id
+		FROM feed_items
+		WHERE tweet_id IN (SELECT value FROM json_each(?))
+		  AND COALESCE(quote_tweet_id, '') != ''
+	`, []any{string(tweetIDsJSON)}, assetOwners)
+	androidSyncLogDesiredSetQuery("quote_asset_owners", len(assetOwners)-before, len(assetOwners), start, err)
+	if err != nil {
+		return nil, nil, fmt.Errorf("android sync desired quote asset owners: %w", err)
+	}
+	return tweets, assetOwners, nil
+}
+
+// ListAndroidSyncDesiredFeedAssetOwners is the shared feed-media ownership
+// boundary used by Android sync and server-side X retention.
+func (db *DB) ListAndroidSyncDesiredFeedAssetOwners(feedDays int, nowMs int64) ([]string, error) {
+	_, owners, err := db.listAndroidSyncDesiredFeed(feedDays, nowMs)
+	if err != nil {
+		return nil, err
+	}
+	return sortedKeys(owners), nil
+}
+
 // ListAndroidSyncDesiredContent returns the canonical retained/protected
 // content selection without expanding its identity dependencies.
 func (db *DB) ListAndroidSyncDesiredContent(settings AndroidRetentionSettings, nowMs int64) (AndroidSyncDesiredSets, error) {
@@ -170,7 +232,6 @@ func (db *DB) ListAndroidSyncDesiredContent(settings AndroidRetentionSettings, n
 		return err
 	}
 
-	feedCutoff := retentionCutoffMs(nowMs, settings.FeedDays)
 	youtubeCutoff := retentionCutoffMs(nowMs, settings.YoutubeDays)
 	momentsCutoff := retentionCutoffMs(nowMs, settings.MomentsDays)
 	storyCutoff := int64(math.MaxInt64)
@@ -181,42 +242,10 @@ func (db *DB) ListAndroidSyncDesiredContent(settings AndroidRetentionSettings, n
 	includeInstagramTagged := db.InstagramIncludeTaggedEnabled()
 	includeSourceWindows := includeMomentReposts || includeInstagramTagged
 
-	cte, args := androidEligibleFeedCTE(feedCutoff)
-	if err := collect("feed", cte+`,
-		reply_chain(tweet_id, is_ancestor) AS (
-			SELECT tweet_id, 0 FROM eligible_tweet_ids
-
-			UNION
-
-			SELECT fi.reply_to_status, 1
-			FROM reply_chain rc
-			JOIN feed_items fi ON fi.tweet_id = rc.tweet_id
-			WHERE COALESCE(fi.reply_to_status, '') != ''
-		)
-		SELECT DISTINCT fi.tweet_id
-		FROM reply_chain rc
-		JOIN feed_items fi ON fi.tweet_id = rc.tweet_id
-		WHERE rc.is_ancestor = 1
-		   OR EXISTS (SELECT 1 FROM feed_likes fl WHERE fl.tweet_id = fi.tweet_id)
-		   OR EXISTS (SELECT 1 FROM bookmarks b WHERE b.video_id = fi.tweet_id)
-		   OR (`+retweetFilterClause("fi")+`)
-	`, args, out.Tweets); err != nil {
-		return out, fmt.Errorf("android sync desired tweets: %w", err)
-	}
-	for id := range out.Tweets {
-		out.TweetAssetOwners[id] = struct{}{}
-	}
-	tweetIDsJSON, err := json.Marshal(out.SortedTweets())
+	var err error
+	out.Tweets, out.TweetAssetOwners, err = db.listAndroidSyncDesiredFeed(settings.FeedDays, nowMs)
 	if err != nil {
 		return out, err
-	}
-	if err := collect("quote_asset_owners", `
-		SELECT DISTINCT quote_tweet_id
-		FROM feed_items
-		WHERE tweet_id IN (SELECT value FROM json_each(?))
-		  AND COALESCE(quote_tweet_id, '') != ''
-	`, []any{string(tweetIDsJSON)}, out.TweetAssetOwners); err != nil {
-		return out, fmt.Errorf("android sync desired quote asset owners: %w", err)
 	}
 
 	if err := collect(

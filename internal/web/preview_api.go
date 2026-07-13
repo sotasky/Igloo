@@ -56,6 +56,6 @@ func (s *Server) handlePreviewTrackJSON(w http.ResponseWriter, r *http.Request) 
 
 func (s *Server) handlePreviewStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{
-		"queue_length": len(s.workers.PreviewChan()),
+		"queue_length": s.workers.PreviewQueueLen(),
 	})
 }

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -87,6 +88,35 @@ func (m *Manager) xFeedFetchDelay() time.Duration {
 	return time.Duration(secs) * time.Second
 }
 
+func filterReadyXFeedSources(sources []model.FeedSource, interval time.Duration, now time.Time) ([]model.FeedSource, int) {
+	ready := make([]model.FeedSource, 0, len(sources))
+	notDue := 0
+	for _, source := range sources {
+		if !source.Enabled {
+			continue
+		}
+		if interval > 0 && source.LastChecked != nil && now.Sub(*source.LastChecked) < interval {
+			notDue++
+			continue
+		}
+		ready = append(ready, source)
+	}
+	sort.SliceStable(ready, func(i, j int) bool {
+		left, right := ready[i].LastChecked, ready[j].LastChecked
+		if left == nil {
+			return right != nil
+		}
+		if right == nil {
+			return false
+		}
+		if left.Equal(*right) {
+			return ready[i].SourceID < ready[j].SourceID
+		}
+		return left.Before(*right)
+	})
+	return ready, notDue
+}
+
 // runIngestCycle fetches subscribed Twitter channels sequentially with a fixed delay
 // between fetches. The delay is configurable via x_feed_fetch_delay (seconds).
 // On restart, recently-fetched accounts are skipped and the remaining handles are
@@ -119,7 +149,13 @@ func (m *Manager) runIngestCycle(ctx context.Context) {
 		m.setStatus(xIngestWorkerName, workerStatus(xIngestWorkerName, true, "", err.Error()))
 		return
 	}
-	if len(twitterChannels) == 0 && len(feedSources) == 0 {
+	enabledFeedSources := make([]model.FeedSource, 0, len(feedSources))
+	for _, source := range feedSources {
+		if source.Enabled {
+			enabledFeedSources = append(enabledFeedSources, source)
+		}
+	}
+	if len(twitterChannels) == 0 && len(enabledFeedSources) == 0 {
 		log.Printf("[x_ingest] no subscribed Twitter channels or X feed sources")
 		return
 	}
@@ -135,13 +171,12 @@ func (m *Manager) runIngestCycle(ctx context.Context) {
 	var ready []string
 	notDue := 0
 	cooling := 0
-	cycleInterval := time.Duration(0)
+	cycleInterval := fetchDelay * time.Duration(len(allHandles)+len(enabledFeedSources))
 	if len(allHandles) > 0 {
-		// The effective cycle duration is fetchDelay * totalChannels.
-		// Accounts fetched within that window are "not_due".
-		cycleInterval = fetchDelay * time.Duration(len(allHandles))
 		ready, notDue, cooling = m.db.FilterReadyHandles(allHandles, cycleInterval.Seconds())
 	}
+	readyFeedSources, feedSourcesNotDue := filterReadyXFeedSources(enabledFeedSources, cycleInterval, time.Now())
+	notDue += feedSourcesNotDue
 
 	// Build fetch list.
 	fetchList := make([]model.Channel, 0, len(ready))
@@ -150,14 +185,15 @@ func (m *Manager) runIngestCycle(ctx context.Context) {
 	}
 
 	log.Printf("[x_ingest] ingest cycle start (delay %s, cycle ~%s): %d ready, %d not_due, %d cooling, %d total",
-		fetchDelay, cycleInterval.Round(time.Minute), len(fetchList), notDue, cooling, len(twitterChannels))
+		fetchDelay, cycleInterval.Round(time.Minute), len(fetchList)+len(readyFeedSources), notDue, cooling,
+		len(twitterChannels)+len(enabledFeedSources))
 
-	if len(fetchList) == 0 && len(feedSources) == 0 {
+	if len(fetchList) == 0 && len(readyFeedSources) == 0 {
 		return
 	}
 
 	// Set live progress counters for the dashboard.
-	atomic.StoreInt32(&m.ingestCycleTotal, int32(len(twitterChannels)))
+	atomic.StoreInt32(&m.ingestCycleTotal, int32(len(twitterChannels)+len(enabledFeedSources)))
 	atomic.StoreInt32(&m.ingestCycleDone, int32(notDue))
 
 	// Sequential paced fetch.
@@ -165,21 +201,24 @@ func (m *Manager) runIngestCycle(ctx context.Context) {
 	var pendingItems []model.FeedItem
 	var totalUpserted int
 	cycleFailures := make(map[string]string)
-
-	for i, ch := range fetchList {
-		// Pacing delay between fetches (not before the first one).
-		// Re-read from DB each time so setting changes apply immediately.
-		if i > 0 {
+	fetchesStarted := 0
+	waitForFetch := func() bool {
+		if fetchesStarted > 0 {
 			delay := m.xFeedFetchDelay()
-			if delay > 0 {
-				select {
-				case <-ctx.Done():
-				case <-time.After(delay):
-				}
+			select {
+			case <-ctx.Done():
+			case <-time.After(delay):
 			}
 		}
-
 		if ctx.Err() != nil || m.IsIngestPaused() {
+			return false
+		}
+		fetchesStarted++
+		return true
+	}
+
+	for _, ch := range fetchList {
+		if !waitForFetch() {
 			if m.IsIngestPaused() {
 				log.Printf("[x_ingest] ingest cycle aborted (paused)")
 				m.EmitFeed(xIngestActivitySource, "Ingest cycle aborted (paused)", "warning")
@@ -231,22 +270,21 @@ func (m *Manager) runIngestCycle(ctx context.Context) {
 			} else {
 				totalUpserted += n
 				m.enforceXMediaLimitsForItems(flushedItems)
-				m.KickFeedMedia()
+				m.KickMediaWork()
 			}
 
 			pendingItems = pendingItems[:0]
 		}
 	}
 
-	for _, source := range feedSources {
-		if !source.Enabled {
-			continue
-		}
-		if ctx.Err() != nil || m.IsIngestPaused() {
+	for _, source := range readyFeedSources {
+		if !waitForFetch() {
 			break
 		}
 		m.EmitFeed(xIngestActivitySource, fmt.Sprintf("Fetching %s", source.Label), "info")
-		if _, err := m.FetchOneFeedSource(ctx, source.SourceID); err != nil {
+		_, err := m.FetchOneFeedSource(ctx, source.SourceID)
+		atomic.AddInt32(&m.ingestCycleDone, 1)
+		if err != nil {
 			log.Printf("[x_ingest] feed source %s: %v", source.SourceID, err)
 			cycleFailures[source.SourceID] = err.Error()
 		}
@@ -260,7 +298,7 @@ func (m *Manager) runIngestCycle(ctx context.Context) {
 		} else {
 			totalUpserted += n
 			m.enforceXMediaLimitsForItems(pendingItems)
-			m.KickFeedMedia()
+			m.KickMediaWork()
 		}
 	}
 
@@ -269,7 +307,7 @@ func (m *Manager) runIngestCycle(ctx context.Context) {
 	m.lastCycleFailures = cycleFailures
 	m.lastCycleCooling = cooling
 	m.lastCycleNotDue = notDue
-	m.lastCycleReady = len(fetchList)
+	m.lastCycleReady = len(fetchList) + len(readyFeedSources)
 	m.lastCycleMu.Unlock()
 
 	// Reply chain resolution runs per-batch inside the fetch loop above so
@@ -285,7 +323,7 @@ func (m *Manager) runIngestCycle(ctx context.Context) {
 	elapsed := time.Since(start)
 	detail := fmt.Sprintf("cycle done: %d items, %s", totalUpserted, elapsed.Round(time.Millisecond))
 	log.Printf("[x_ingest] %s", detail)
-	m.Emit(xIngestActivitySource, fmt.Sprintf("Ingested %d items from %d sources", totalUpserted, len(fetchList)), "done")
+	m.Emit(xIngestActivitySource, fmt.Sprintf("Ingested %d items from %d sources", totalUpserted, len(fetchList)+len(readyFeedSources)), "done")
 	m.setStatus(xIngestWorkerName, workerStatus(xIngestWorkerName, true, detail, ""))
 }
 
@@ -307,8 +345,8 @@ func (m *Manager) fetchXTimeline(ctx context.Context, handle string, limit int) 
 }
 
 func xTimelineLimit(settings *db.ChannelSettings) int {
-	if settings != nil && settings.MaxVideos > 0 {
-		return settings.MaxVideos
+	if settings != nil && settings.MediaDownloadLimit > 0 {
+		return settings.MediaDownloadLimit
 	}
 	return 100
 }
@@ -368,7 +406,7 @@ func (m *Manager) FetchOneChannel(ctx context.Context, channelID string) (int, e
 		return 0, fmt.Errorf("upsert: %w", err)
 	}
 	m.enforceXMediaLimit(channelID)
-	m.KickFeedMedia()
+	m.KickMediaWork()
 
 	m.KickFeedScoring()
 	return n, nil
@@ -384,7 +422,8 @@ func (m *Manager) FetchOneFeedSource(ctx context.Context, sourceID string) (int,
 	if source.Platform != "twitter" {
 		return 0, fmt.Errorf("unsupported feed source platform: %s", source.Platform)
 	}
-	items, err := m.xFeedClient().FetchSource(ctx, source.URL, 100)
+	limit := m.xMediaDownloadLimit()
+	items, err := m.xFeedClient().FetchSource(ctx, source.URL, limit)
 	if err != nil {
 		_ = m.db.RecordFeedSourceFailure(sourceID, err.Error())
 		return 0, err
@@ -394,7 +433,12 @@ func (m *Manager) FetchOneFeedSource(ctx context.Context, sourceID string) (int,
 		_ = m.db.RecordFeedSourceFailure(sourceID, err.Error())
 		return 0, err
 	}
+	if err := m.enforceXFeedSourceLimit(sourceID, m.xMediaDownloadLimit()); err != nil {
+		_ = m.db.RecordFeedSourceFailure(sourceID, err.Error())
+		return n, err
+	}
 	_ = m.db.RecordFeedSourceSuccess(sourceID)
+	m.KickMediaWork()
 	return n, nil
 }
 
@@ -414,49 +458,36 @@ func (m *Manager) upsertFeedSourceItems(ctx context.Context, source model.FeedSo
 			return n, fmt.Errorf("record source attribution: %w", err)
 		}
 	}
-	m.KickFeedMedia()
 	m.KickFeedScoring()
 	return n, nil
 }
 
 func (m *Manager) enforceXMediaLimitsForItems(items []model.FeedItem) {
-	seen := map[string]struct{}{}
+	affected := make(map[string]struct{}, len(items))
 	for _, item := range items {
-		handle := strings.TrimSpace(item.SourceHandle)
-		if handle == "" {
-			handle = item.AuthorHandle
+		handle := item.SourceHandle
+		if item.IsRetweet {
+			handle = item.RetweetedByHandle
+			if model.IsPlaceholderTwitterHandle(handle) {
+				handle = item.SourceHandle
+			}
 		}
-		handle = xfeed.NormalizeHandle(handle)
-		if handle == "" {
+		channelID := model.TwitterChannelIDFromHandle(handle)
+		if channelID == "" {
 			continue
 		}
-		channelID := "twitter_" + strings.ToLower(handle)
-		if _, ok := seen[channelID]; ok {
+		if _, exists := affected[channelID]; exists {
 			continue
 		}
-		seen[channelID] = struct{}{}
+		affected[channelID] = struct{}{}
 		m.enforceXMediaLimit(channelID)
 	}
 }
 
 func (m *Manager) enforceXMediaLimit(channelID string) {
-	if m == nil || m.db == nil {
-		return
-	}
-	result, err := m.db.PruneXMediaRetentionForChannel(channelID, db.XMediaRetentionOptions{})
-	if err != nil {
+	if err := m.EnforceXMediaRetentionForChannel(channelID); err != nil {
 		log.Printf("[x_ingest] prune X media retention %s: %v", channelID, err)
-		return
 	}
-	if result.PrunedItems == 0 && result.AssetsPruned == 0 && result.FileRemoval.Removed == 0 {
-		return
-	}
-	log.Printf("[x_ingest] pruned X media retention for %s: items=%d assets=%d files=%d bytes=%d",
-		channelID,
-		result.PrunedItems,
-		result.AssetsPruned,
-		result.FileRemoval.Removed,
-		result.FileRemoval.RemovedBytes)
 }
 
 // applyChannelFiltersFromSettings filters items using ChannelSettings

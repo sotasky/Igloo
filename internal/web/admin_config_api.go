@@ -3,6 +3,7 @@ package web
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -42,7 +43,7 @@ func (s *Server) handleConfigExport(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if dir := s.configuredExportDir(); dir != "" {
-		path, err := writeExportFile(dir, "igloo-config", ".json", func(dst io.Writer) error {
+		path, err := writeExportFile(r.Context(), s.cfg.Storage.MediaExecutor(), dir, "igloo-config", ".json", func(dst io.Writer) error {
 			return writeConfigExportJSON(dst, cfg)
 		})
 		if err != nil {
@@ -82,7 +83,7 @@ func (s *Server) handleConfigExportSubscriptions(w http.ResponseWriter, r *http.
 	}
 
 	if dir := s.configuredExportDir(); dir != "" {
-		path, err := writeExportFile(dir, "igloo-subscriptions", ".json", func(dst io.Writer) error {
+		path, err := writeExportFile(r.Context(), s.cfg.Storage.MediaExecutor(), dir, "igloo-subscriptions", ".json", func(dst io.Writer) error {
 			return writeSubscriptionsExportJSON(dst, cfg)
 		})
 		if err != nil {
@@ -119,7 +120,7 @@ func (s *Server) handleConfigExportFull(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	runtimeManifest := s.fullExportRuntimeManifest()
-	dbSnapshotPath, cleanupSnapshot, err := s.createFullExportDatabaseSnapshot()
+	dbSnapshotPath, cleanupSnapshot, err := s.createFullExportDatabaseSnapshot(r.Context())
 	if err != nil {
 		slog.Error("ExportFullData database snapshot", "err", err)
 		writeJSON(w, 500, map[string]any{"error": "export snapshot error"})
@@ -134,7 +135,7 @@ func (s *Server) handleConfigExportFull(w http.ResponseWriter, r *http.Request) 
 	}
 
 	if dir := s.configuredExportDir(); dir != "" {
-		path, err := writeExportFile(dir, "igloo-full", ".zip", func(dst io.Writer) error {
+		path, err := writeExportFile(r.Context(), s.cfg.Storage.MediaExecutor(), dir, "igloo-full", ".zip", func(dst io.Writer) error {
 			return writeFullExportZip(dst, cfg, dbSnapshotPath, runtimeFiles, runtimeManifest)
 		})
 		if err != nil {
@@ -241,7 +242,7 @@ func exportFullDataSnapshot(path string, layout storage.Layout) (db.ConfigExport
 	return cfg, errors.Join(exportErr, closeErr)
 }
 
-func (s *Server) createFullExportDatabaseSnapshot() (string, func(), error) {
+func (s *Server) createFullExportDatabaseSnapshot(ctx context.Context) (string, func(), error) {
 	if s == nil || s.db == nil {
 		return "", func() {}, fmt.Errorf("database is unavailable")
 	}
@@ -267,7 +268,7 @@ func (s *Server) createFullExportDatabaseSnapshot() (string, func(), error) {
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		return "", func() {}, fmt.Errorf("prepare database snapshot path: %w", err)
 	}
-	if err := s.db.VacuumInto(path); err != nil {
+	if err := s.db.VacuumInto(ctx, path); err != nil {
 		_ = os.Remove(path)
 		return "", func() {}, fmt.Errorf("vacuum database snapshot: %w", err)
 	}
@@ -287,50 +288,57 @@ func (s *Server) configuredExportDir() string {
 	return dir
 }
 
-func writeExportFile(dir, prefix, ext string, write func(io.Writer) error) (string, error) {
-	dir = strings.TrimSpace(dir)
-	if dir == "" {
-		return "", fmt.Errorf("export dir is required")
-	}
-	if !filepath.IsAbs(dir) {
-		return "", fmt.Errorf("export dir must be absolute: %s", dir)
-	}
-	if err := storage.EnsureDirectory(dir, 0o755); err != nil {
-		return "", fmt.Errorf("create export dir: %w", err)
-	}
-	stamp := time.Now().UTC().Format("2006-01-02-150405")
-	name := fmt.Sprintf("%s-%s%s", prefix, stamp, ext)
-	tmp, err := os.CreateTemp(dir, "."+prefix+"-*.tmp")
-	if err != nil {
-		return "", fmt.Errorf("create temp export: %w", err)
-	}
-	tmpPath := tmp.Name()
-	closed := false
-	defer func() {
-		if !closed {
-			_ = tmp.Close()
+func writeExportFile(ctx context.Context, executor *storage.MediaExecutor, dir, prefix, ext string, write func(io.Writer) error) (string, error) {
+	var finalPath string
+	err := executor.Run(ctx, storage.MediaLaneBulkForeground, func() error {
+		dir = strings.TrimSpace(dir)
+		if dir == "" {
+			return fmt.Errorf("export dir is required")
 		}
-		_ = os.Remove(tmpPath)
-	}()
-	if err := write(tmp); err != nil {
-		return "", err
-	}
-	if err := tmp.Sync(); err != nil {
-		return "", fmt.Errorf("sync export: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
+		if !filepath.IsAbs(dir) {
+			return fmt.Errorf("export dir must be absolute: %s", dir)
+		}
+		if err := storage.EnsureDirectory(dir, 0o755); err != nil {
+			return fmt.Errorf("create export dir: %w", err)
+		}
+		stamp := time.Now().UTC().Format("2006-01-02-150405")
+		name := fmt.Sprintf("%s-%s%s", prefix, stamp, ext)
+		tmp, err := os.CreateTemp(dir, "."+prefix+"-*.tmp")
+		if err != nil {
+			return fmt.Errorf("create temp export: %w", err)
+		}
+		tmpPath := tmp.Name()
+		closed := false
+		defer func() {
+			if !closed {
+				_ = tmp.Close()
+			}
+			_ = os.Remove(tmpPath)
+		}()
+		if err := write(contextIO{ctx: ctx, dst: tmp}); err != nil {
+			return err
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := tmp.Sync(); err != nil {
+			return fmt.Errorf("sync export: %w", err)
+		}
+		if err := tmp.Close(); err != nil {
+			closed = true
+			return err
+		}
 		closed = true
-		return "", err
-	}
-	closed = true
-	finalPath := filepath.Join(dir, name)
-	if err := os.Rename(tmpPath, finalPath); err != nil {
-		return "", fmt.Errorf("rename export: %w", err)
-	}
-	if err := storage.SyncDirectory(dir); err != nil {
-		return "", fmt.Errorf("sync export directory: %w", err)
-	}
-	return finalPath, nil
+		finalPath = filepath.Join(dir, name)
+		if err := os.Rename(tmpPath, finalPath); err != nil {
+			return fmt.Errorf("rename export: %w", err)
+		}
+		if err := storage.SyncDirectory(dir); err != nil {
+			return fmt.Errorf("sync export directory: %w", err)
+		}
+		return nil
+	})
+	return finalPath, err
 }
 
 type fullExportRuntimeFile struct {

@@ -340,10 +340,20 @@ func (s *Server) resetDownloadAuthFailuresAfterCookieChange(platform string) {
 	if len(download.ResolveCookieSets(cookiesDir, platform, fileEnabled != "0", browser)) == 0 {
 		return
 	}
-	n, err := s.db.ResetDownloadAuthFailuresForPlatform(platform)
+	n, err := s.db.WakeDownloadAuthRetriesForPlatform(platform)
 	if err != nil {
 		slog.Error("reset auth-failed downloads after cookie change", "platform", platform, "err", err)
 		return
+	}
+	contentN, err := s.db.WakeContentAssetAuthRetriesForPlatform(platform)
+	if err != nil {
+		slog.Error("reset auth-failed content after cookie change", "platform", platform, "err", err)
+		return
+	}
+	n += contentN
+	if s.workers != nil {
+		s.workers.ClearDownloadPlatformBackoff(platform)
+		s.workers.KickMediaWork()
 	}
 	if n > 0 {
 		slog.Info("reset auth-failed downloads after cookie change", "platform", platform, "count", n)

@@ -96,32 +96,30 @@ func TestManagerShutdownTimeoutReturnsWhenWorkerIgnoresCancel(t *testing.T) {
 	m.Shutdown()
 }
 
-// TestManagerFeedMediaKick verifies that KickFeedMedia is non-blocking and
-// that multiple kicks coalesce into a single buffered signal.
-func TestManagerFeedMediaKick(t *testing.T) {
+func TestManagerMediaKick(t *testing.T) {
 	cfg := &config.Config{}
 	m := NewManager(nil, cfg)
 	m.downloader = nil
 
 	// Channel is buffered(1); multiple kicks must not block.
 	for i := 0; i < 10; i++ {
-		m.KickFeedMedia()
+		m.KickMediaWork()
 	}
 
-	// Exactly one signal should be in the channel (coalesced).
-	select {
-	case <-m.feedMediaKick:
-		// Good.
-	default:
-		t.Fatal("expected a signal in feedMediaKick channel after kicks")
-	}
-
-	// Channel should now be empty (only 1 signal was queued).
-	select {
-	case <-m.feedMediaKick:
-		t.Fatal("expected feedMediaKick to be empty after draining one signal")
-	default:
-		// Good.
+	for name, kick := range map[string]chan struct{}{
+		"current":  m.mediaCurrentKick,
+		"backfill": m.mediaBackfillKick,
+	} {
+		select {
+		case <-kick:
+		default:
+			t.Fatalf("expected a signal in %s media channel after kicks", name)
+		}
+		select {
+		case <-kick:
+			t.Fatalf("expected %s media channel to coalesce kicks", name)
+		default:
+		}
 	}
 }
 

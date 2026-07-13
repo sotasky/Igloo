@@ -43,6 +43,9 @@ func newTestWorkerDBAt(t *testing.T, stateRoot string) *db.DB {
 	if err != nil {
 		t.Fatalf("db.Open: %v", err)
 	}
+	if err := d.RecordAndroidFeedRetention(0, 1); err != nil {
+		t.Fatalf("initialize Android feed retention: %v", err)
+	}
 	t.Cleanup(func() { _ = d.Close() })
 	return d
 }

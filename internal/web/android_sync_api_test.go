@@ -258,11 +258,15 @@ func TestAndroidSyncChangesApplyCanonicalFeedRankCap(t *testing.T) {
 		t.Fatal(err)
 	}
 	desired := emptyAndroidSyncDesiredSets()
-	for n := 1; n <= rows; n++ {
-		desired.Tweets[fmt.Sprintf("sample_rank_%04d", n)] = struct{}{}
-	}
 	insideID := fmt.Sprintf("sample_rank_%04d", androidSyncFeedRankMaxRows)
 	beyondID := fmt.Sprintf("sample_rank_%04d", rows)
+	feedRanks, err := srv.db.ListAndroidSyncDesiredFeedRanksAmong(
+		7, now, []string{insideID, beyondID}, androidSyncFeedRankMaxRows,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	desired.FeedRanks = feedRanks
 	changes, err := srv.materializeAndroidSyncHeads(srv.db, []model.AndroidSyncHead{
 		{OwnerKind: "feed_rank", OwnerID: insideID},
 		{OwnerKind: "feed_rank", OwnerID: beyondID},
@@ -379,6 +383,113 @@ func TestAndroidSyncBootstrapFinalPageCanBeRetried(t *testing.T) {
 	}
 }
 
+func TestAndroidSyncChangesSessionBoundsPagesAndRetainsSelectionForRetry(t *testing.T) {
+	srv := newAndroidSyncTestServer(t)
+	if err := srv.db.ExecRaw(`
+		INSERT INTO channel_settings (channel_id, include_reposts, updated_at)
+		VALUES ('twitter_sample_source', 0, 1)
+	`); err != nil {
+		t.Fatal(err)
+	}
+	bootstrap := requestAndroidSyncPage(t, srv, "/api/android/sync/bootstrap?"+androidSyncTestRetentionQuery)
+	nowMs := time.Now().UnixMilli()
+	if err := srv.db.ExecRaw(`
+		WITH RECURSIVE seq(n) AS (
+			VALUES (1)
+			UNION ALL
+			SELECT n + 1 FROM seq WHERE n < 500
+		)
+		INSERT INTO feed_seen (tweet_id, seen_at)
+		SELECT printf('sample_seen_%04d', n), n FROM seq;
+		INSERT INTO feed_items (
+			tweet_id, source_channel_id, channel_id, is_retweet,
+			content_hash, published_at, fetched_at
+		) VALUES (
+			'sample_session_feed', 'twitter_sample_source', 'twitter_sample_author', 1,
+			'sample_session_hash', ?, ?
+		);
+		INSERT INTO retweet_sources (content_hash, retweeter_channel_id, tweet_id, published_at)
+		VALUES ('sample_session_hash', 'twitter_sample_reposter', 'sample_session_feed', ?)
+	`, nowMs, nowMs, nowMs); err != nil {
+		t.Fatal(err)
+	}
+
+	firstPath := "/api/android/sync/changes?" + androidSyncTestRetentionQuery + "&after=" + bootstrap.NextCursor
+	first := requestAndroidSyncPage(t, srv, firstPath)
+	if first.EndOfStream {
+		t.Fatalf("first changes page unexpectedly ended: %+v", androidSyncChangeKeys(first.Changes))
+	}
+	firstCursor, err := decodeAndroidSyncCursor(first.NextCursor)
+	if err != nil || firstCursor.Session == "" {
+		t.Fatalf("changes session cursor = %+v / %v", firstCursor, err)
+	}
+	if err := srv.db.ExecRaw(`
+		DELETE FROM retweet_sources WHERE content_hash = 'sample_session_hash';
+		INSERT INTO feed_seen (tweet_id, seen_at) VALUES ('sample_after_through', ?)
+	`, nowMs+1); err != nil {
+		t.Fatal(err)
+	}
+
+	finalPath := "/api/android/sync/changes?" + androidSyncTestRetentionQuery + "&after=" + first.NextCursor
+	final := requestAndroidSyncPage(t, srv, finalPath)
+	if !final.EndOfStream {
+		t.Fatalf("bounded changes session did not end: %+v", androidSyncChangeKeys(final.Changes))
+	}
+	feed := findAndroidSyncChange(final.Changes, "feed", "sample_session_feed")
+	if feed == nil || feed.Operation != model.AndroidSyncOperationUpsert {
+		t.Fatalf("captured selection changed between pages: %+v", androidSyncChangeKeys(final.Changes))
+	}
+	if findAndroidSyncChange(final.Changes, "feed_seen", "sample_after_through") != nil {
+		t.Fatalf("post-through head leaked into session: %+v", androidSyncChangeKeys(final.Changes))
+	}
+	retry := requestAndroidSyncPage(t, srv, finalPath)
+	if !retry.EndOfStream || retry.NextCursor != final.NextCursor ||
+		!reflect.DeepEqual(androidSyncChangeKeys(retry.Changes), androidSyncChangeKeys(final.Changes)) {
+		t.Fatalf("final changes page retry changed: first=%+v retry=%+v", final, retry)
+	}
+
+	next := requestAndroidSyncPage(t, srv,
+		"/api/android/sync/changes?"+androidSyncTestRetentionQuery+"&after="+final.NextCursor)
+	if findAndroidSyncChange(next.Changes, "feed_seen", "sample_after_through") == nil {
+		t.Fatalf("post-through head did not enter next stream: %+v", androidSyncChangeKeys(next.Changes))
+	}
+	removed := findAndroidSyncChange(next.Changes, "feed", "sample_session_feed")
+	if removed == nil || removed.Operation != model.AndroidSyncOperationDelete {
+		t.Fatalf("next stream did not apply changed selection: %+v", androidSyncChangeKeys(next.Changes))
+	}
+}
+
+func TestAndroidSyncChangesSessionResumesAfterCacheLoss(t *testing.T) {
+	srv := newAndroidSyncTestServer(t)
+	bootstrap := requestAndroidSyncPage(t, srv, "/api/android/sync/bootstrap?"+androidSyncTestRetentionQuery)
+	if err := srv.db.ExecRaw(`
+		WITH RECURSIVE seq(n) AS (
+			VALUES (1)
+			UNION ALL
+			SELECT n + 1 FROM seq WHERE n < 501
+		)
+		INSERT INTO feed_seen (tweet_id, seen_at)
+		SELECT printf('sample_resume_seen_%04d', n), n FROM seq
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	first := requestAndroidSyncPage(t, srv,
+		"/api/android/sync/changes?"+androidSyncTestRetentionQuery+"&after="+bootstrap.NextCursor)
+	if first.EndOfStream {
+		t.Fatalf("first changes page unexpectedly ended: %+v", androidSyncChangeKeys(first.Changes))
+	}
+	srv.androidSyncSessionMu.Lock()
+	srv.androidSyncSessions = nil
+	srv.androidSyncSessionMu.Unlock()
+
+	resumed := requestAndroidSyncPage(t, srv,
+		"/api/android/sync/changes?"+androidSyncTestRetentionQuery+"&after="+first.NextCursor)
+	if !resumed.EndOfStream || findAndroidSyncChange(resumed.Changes, "feed_seen", "sample_resume_seen_0501") == nil {
+		t.Fatalf("changes session did not resume from the committed revision: %+v", androidSyncChangeKeys(resumed.Changes))
+	}
+}
+
 func TestAndroidSyncAssetFileIsAuthenticatedAndRevisionBound(t *testing.T) {
 	srv := newAndroidSyncTestServer(t)
 	asset := seedAndroidSyncContent(t, srv)
@@ -489,6 +600,26 @@ func TestAndroidSyncAssetFileWithdrawsUnavailableReadyDescriptor(t *testing.T) {
 	}
 }
 
+func TestAndroidSyncReadyAssetPreservesStoredFingerprint(t *testing.T) {
+	stored := db.Asset{
+		AssetID:     "asset_sample",
+		AssetKind:   "post_media",
+		OwnerID:     "post_sample",
+		OwnerKind:   "tweet",
+		ContentType: "application/octet-stream",
+		SizeBytes:   128,
+		SHA256:      fmt.Sprintf("%064x", 1),
+		Revision:    1,
+		State:       db.AssetStateReady,
+	}
+
+	got := (&Server{}).androidSyncAssetFromInventory(stored)
+	if got.State != "ready" || got.ContentType != stored.ContentType ||
+		got.SizeBytes != stored.SizeBytes || got.SHA256 != stored.SHA256 {
+		t.Fatalf("ready fingerprint changed: got=%+v stored=%+v", got, stored)
+	}
+}
+
 func TestAndroidSyncHealthValidatesAuthenticatedCursor(t *testing.T) {
 	srv := newAndroidSyncTestServer(t)
 	seedAndroidSyncContent(t, srv)
@@ -509,6 +640,39 @@ func TestAndroidSyncHealthValidatesAuthenticatedCursor(t *testing.T) {
 	report, err := srv.db.GetLatestAndroidSyncHealthReport()
 	if err != nil || report == nil || report.Cursor != bootstrap.NextCursor || report.VerifiedAssets != 1 || report.VerifiedBytes != 128 {
 		t.Fatalf("health report = %+v / %v", report, err)
+	}
+}
+
+func TestAndroidSyncHealthDoesNotOwnFeedRetention(t *testing.T) {
+	srv := newAndroidSyncTestServer(t)
+	bootstrap := requestAndroidSyncPage(t, srv, "/api/android/sync/bootstrap?"+androidSyncTestRetentionQuery)
+	applied, err := srv.db.GetAndroidFeedRetention()
+	if err != nil || applied == nil || applied.FeedDays != 7 {
+		t.Fatalf("bootstrap retention = %+v / %v", applied, err)
+	}
+	if err := srv.db.RecordAndroidFeedRetention(1, 1234); err != nil {
+		t.Fatal(err)
+	}
+	body := map[string]any{
+		"cursor": bootstrap.NextCursor, "reported_at_ms": int64(2000),
+		"retention": map[string]int{"feed_days": 7, "youtube_days": 7, "moments_days": 7, "story_hours": 48},
+		"counts":    map[string]int{"total": 1, "verified": 0, "pending": 1, "missing": 0},
+		"bytes":     map[string]int64{"verified": 0},
+	}
+	if rec := requestAndroidSync(t, srv, http.MethodPost, "/api/android/sync/health", body, true); rec.Code != http.StatusOK {
+		t.Fatalf("health status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	stored, err := srv.db.GetAndroidFeedRetention()
+	if err != nil || stored == nil || stored.FeedDays != 1 || stored.ReconciledAtMs != 1234 {
+		t.Fatalf("health changed retention owner: %+v / %v", stored, err)
+	}
+	if err := srv.db.RecordAndroidSyncHealth("sample_diagnostic", 3000,
+		[]byte(`{"retention":{"feed_days":3,"youtube_days":3,"moments_days":3,"story_hours":24}}`),
+		0, 0, 0, 0, 0); err != nil {
+		t.Fatal(err)
+	}
+	if fallback := srv.androidSyncRetentionFallback(); fallback.FeedDays != 7 {
+		t.Fatalf("health changed request fallback: %+v", fallback)
 	}
 }
 
@@ -579,6 +743,15 @@ func requestAndroidSyncPage(t *testing.T, srv *testServer, path string) androidS
 	rec := requestAndroidSync(t, srv, http.MethodGet, path, nil, true)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("GET %s status = %d body=%s", path, rec.Code, rec.Body.String())
+	}
+	var envelope struct {
+		Changes json.RawMessage `json:"changes"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Equal(envelope.Changes, []byte("null")) {
+		t.Fatalf("GET %s returned null changes", path)
 	}
 	var page androidSyncPageResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &page); err != nil {
@@ -669,6 +842,9 @@ func newAndroidSyncTestServer(t *testing.T) *testServer {
 	database, err := db.OpenPath(dbPath, dataDir)
 	if err != nil {
 		_ = os.Remove(dbPath)
+		t.Fatal(err)
+	}
+	if err := database.RecordAndroidFeedRetention(0, 1); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {

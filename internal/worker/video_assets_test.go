@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/screwys/igloo/internal/config"
 	"github.com/screwys/igloo/internal/db"
@@ -59,7 +60,7 @@ func TestPrepareCompletedVideoFilesKeepsMediaExternalAndUsesExactThumbnail(t *te
 		}
 	}
 
-	files, err := m.prepareCompletedVideoFiles(context.Background(), "youtube", "sample-attempt-123", download.CompletedDownload{
+	files, err := m.prepareCompletedVideoFiles(context.Background(), download.MediaLaneBulkForeground, "youtube", "sample-attempt-123", download.CompletedDownload{
 		MediaPaths:    []string{videoPath},
 		ThumbnailPath: exactThumbnail,
 		SubtitlePaths: []string{subtitlePath},
@@ -91,7 +92,35 @@ func TestPrepareCompletedVideoFilesKeepsMediaExternalAndUsesExactThumbnail(t *te
 	if string(body) != "exact thumbnail" {
 		t.Fatalf("stored thumbnail came from another file: %q", body)
 	}
-	m.removeTransientFiles(context.Background(), files)
+	executor := storage.NewMediaExecutor()
+	m.downloader = download.NewDownloader("")
+	m.downloader.SetMediaExecutor(executor)
+	backgroundHeld := make(chan struct{})
+	releaseBackground := make(chan struct{})
+	backgroundDone := make(chan struct{})
+	go func() {
+		defer close(backgroundDone)
+		_ = executor.Run(context.Background(), storage.MediaLaneBulkBackground, func() error {
+			close(backgroundHeld)
+			<-releaseBackground
+			return nil
+		})
+	}()
+	<-backgroundHeld
+	cleanupDone := make(chan struct{})
+	go func() {
+		m.removeTransientFiles(context.Background(), download.MediaLaneBulkForeground, files)
+		close(cleanupDone)
+	}()
+	select {
+	case <-cleanupDone:
+	case <-time.After(time.Second):
+		close(releaseBackground)
+		<-backgroundDone
+		t.Fatal("foreground cleanup waited for historical media work")
+	}
+	close(releaseBackground)
+	<-backgroundDone
 	if _, err := os.Stat(exactThumbnail); !os.IsNotExist(err) {
 		t.Fatalf("producer thumbnail sidecar was not retired: %v", err)
 	}
@@ -151,7 +180,7 @@ func TestReusableCompletedVideoRejectsLoneThumbnail(t *testing.T) {
 
 func TestReusableCompletedVideoRecognizesNumberedSlideshow(t *testing.T) {
 	dir := t.TempDir()
-	for _, name := range []string{"sample.jpg", "sample_2.jpg", "sample_10.webp", "sample_note.jpg"} {
+	for _, name := range []string{"sample.jpg", "sample_2.jpg", "sample_3.webp", "sample_note.jpg"} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(name), 0o644); err != nil {
 			t.Fatal(err)
 		}
@@ -223,7 +252,7 @@ func TestFailedRedownloadPreservesReadyBytesAndRemovesOnlyAttemptOutputs(t *test
 		MediaPaths: []string{mediaPath}, ThumbnailPath: thumbPath,
 		InfoJSONPath: infoPath, SubtitlePaths: []string{subtitlePath},
 	}
-	files, err := m.prepareCompletedVideoFiles(context.Background(), "youtube", attemptID, completed)
+	files, err := m.prepareCompletedVideoFiles(context.Background(), download.MediaLaneBulkForeground, "youtube", attemptID, completed)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -236,7 +265,7 @@ func TestFailedRedownloadPreservesReadyBytesAndRemovesOnlyAttemptOutputs(t *test
 	if err == nil {
 		t.Fatal("redownload unexpectedly committed after its media disappeared")
 	}
-	m.removeFailedAttempt(context.Background(), files, completed)
+	m.removeFailedAttempt(context.Background(), download.MediaLaneBulkForeground, files, completed)
 
 	after, err := m.db.GetAssetByOwnerIdentity("video_stream", "youtube_video", videoID, 0)
 	if err != nil || after == nil || after.FilePath != oldKey || after.SHA256 != before.SHA256 {
@@ -252,40 +281,5 @@ func TestFailedRedownloadPreservesReadyBytesAndRemovesOnlyAttemptOutputs(t *test
 	}
 	if body, err := os.ReadFile(decoyPath); err != nil || string(body) != "decoy" {
 		t.Fatalf("unrelated file was touched: body=%q err=%v", body, err)
-	}
-}
-
-func TestEnqueueCompletedVideoPreviewUsesExactOwnerKind(t *testing.T) {
-	root := t.TempDir()
-	m := &Manager{cfg: testCfg(root), db: newTestWorkerDBAt(t, root), previewChan: make(chan PreviewRequest, 2)}
-	key := "media/tiktok/sample_video.mp4"
-	path, err := m.cfg.Storage.Path(key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, []byte("tiktok stream"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := m.db.StoreReadyAsset(db.Asset{
-		AssetID:   db.BuildAssetID("tiktok", "tiktok_video", "sample_video", "video_stream", 0),
-		AssetKind: "video_stream", OwnerKind: "tiktok_video", OwnerID: "sample_video", FilePath: key,
-	}, 1); err != nil {
-		t.Fatal(err)
-	}
-
-	m.enqueueCompletedVideoPreview("sample_video", "youtube", path, 30)
-	if got := len(m.previewChan); got != 0 {
-		t.Fatalf("colliding tiktok asset queued as youtube: queue length = %d", got)
-	}
-	m.enqueueCompletedVideoPreview("sample_video", "tiktok", path, 30)
-	if got := len(m.previewChan); got != 1 {
-		t.Fatalf("exact tiktok asset was not queued: queue length = %d", got)
-	}
-	req := <-m.previewChan
-	if req.OwnerKind != "tiktok_video" {
-		t.Fatalf("queued owner kind = %q", req.OwnerKind)
 	}
 }

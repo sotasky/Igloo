@@ -17,11 +17,13 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/screwys/igloo/internal/config"
 	"github.com/screwys/igloo/internal/db"
 	"github.com/screwys/igloo/internal/download"
 	"github.com/screwys/igloo/internal/model"
+	"github.com/screwys/igloo/internal/storage"
 )
 
 func TestSettingsFromForm_PersistsDearrowMode(t *testing.T) {
@@ -711,7 +713,7 @@ func TestHandleConfigExportDownloadsWhenBackupDirConfiguredButDisabled(t *testin
 }
 
 func TestWriteExportFileRejectsRelativeDir(t *testing.T) {
-	_, err := writeExportFile(filepath.Join("var", "mnt", "external_drive"), "igloo-config", ".json", func(dst io.Writer) error {
+	_, err := writeExportFile(context.Background(), storage.NewMediaExecutor(), filepath.Join("var", "mnt", "external_drive"), "igloo-config", ".json", func(dst io.Writer) error {
 		_, err := dst.Write([]byte("{}"))
 		return err
 	})
@@ -1061,16 +1063,25 @@ func TestHandleSetCookieBrowserRequeuesAuthFailedDownloads(t *testing.T) {
 	`); err != nil {
 		t.Fatalf("insert channel: %v", err)
 	}
-	if err := srv.db.ExecRaw(`
-		INSERT INTO download_queue
-			(video_id, channel_id, title, status, retry_count, error,
-			 last_error_kind, last_error_strategy, added_at, started_at, completed_at,
-			 tool, cookie_label)
-		VALUES
-			('sample_instagram_auth_failed', 'instagram_sample', 'Auth Failed', 'failed', 1,
-			 'login required', 'auth', 'permanent', ?, ?, ?, 'yt-dlp', 'instagram_cookies.txt')
-	`, now, now, now); err != nil {
-		t.Fatalf("insert download queue: %v", err)
+	if err := srv.db.FollowChannel("instagram_sample"); err != nil {
+		t.Fatalf("follow channel: %v", err)
+	}
+	if _, err := srv.db.ReconcileVideoDesires(db.VideoDesireSnapshot{
+		SourceChannelID: "instagram_sample",
+		Component:       "posts",
+		Items: []db.VideoDesire{{
+			VideoID: "sample_instagram_auth_failed", OwnerChannelID: "instagram_sample",
+			Title: "Auth Failed", Lane: db.DownloadLaneCurrent,
+		}},
+	}); err != nil {
+		t.Fatalf("reconcile desire: %v", err)
+	}
+	claimed, ok, err := srv.db.ClaimDownloadWork("test", db.DownloadLaneCurrent, "instagram", now, time.Minute)
+	if err != nil || !ok {
+		t.Fatalf("claim download work = %v, %v, %v", claimed, ok, err)
+	}
+	if err := srv.db.RetryDownloadWork(claimed.VideoID, claimed.LeaseOwner, "auth", "login required", time.Hour, now); err != nil {
+		t.Fatalf("retry auth work: %v", err)
 	}
 
 	req := httptest.NewRequest("POST", "/api/cookies/instagram/browser", strings.NewReader(`{"browser":"firefox"}`))
@@ -1084,19 +1095,57 @@ func TestHandleSetCookieBrowserRequeuesAuthFailedDownloads(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 	}
-	var status, kind, msg, label string
+	var status, kind, msg string
 	var retries int
+	var nextAttempt int64
 	if err := srv.db.QueryRow(`
 		SELECT status, retry_count, COALESCE(last_error_kind,''),
-		       COALESCE(error,''), COALESCE(cookie_label,'')
+		       COALESCE(last_error,''), next_attempt_at_ms
 		  FROM download_queue
 		 WHERE video_id='sample_instagram_auth_failed'
-	`).Scan(&status, &retries, &kind, &msg, &label); err != nil {
+	`).Scan(&status, &retries, &kind, &msg, &nextAttempt); err != nil {
 		t.Fatalf("query queue row: %v", err)
 	}
-	if status != "pending" || retries != 0 || kind != "" || msg != "" || label != "" {
-		t.Fatalf("row = status=%q retries=%d kind=%q msg=%q label=%q, want reset pending row",
-			status, retries, kind, msg, label)
+	if status != "pending" || retries != 0 || kind != "" || msg != "" || nextAttempt != 0 {
+		t.Fatalf("row = status=%q retries=%d kind=%q msg=%q next=%d, want reset pending row",
+			status, retries, kind, msg, nextAttempt)
+	}
+}
+
+func TestCookieChangeRequeuesAuthFailedXContent(t *testing.T) {
+	srv := newTestServer(t)
+	srv.cfg.CookiesDir = t.TempDir()
+	if err := os.WriteFile(filepath.Join(srv.cfg.CookiesDir, "twitter_cookies.txt"), []byte("cookies"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	asset := db.Asset{
+		AssetID:   db.BuildAssetID("twitter", "tweet", "sample_post", "post_media", 0),
+		AssetKind: "post_media", OwnerKind: "tweet", OwnerID: "sample_post",
+		SourceURL: "https://example.test/auth.jpg", State: db.AssetStateQueued,
+	}
+	if err := srv.db.DeclareAsset(asset, 1000); err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := srv.db.ClaimContentAssetDownloadBatch(db.LeaseOptions{
+		Owner: "sample-worker", NowMs: 1001, LeaseMs: time.Minute.Milliseconds(), Limit: 1,
+	}, true, db.DownloadLaneBackfill)
+	if err != nil || len(claimed) != 1 {
+		t.Fatalf("claim = %+v, err = %v", claimed, err)
+	}
+	if err := srv.db.MarkContentAssetFailed(
+		asset.AssetID, asset.AssetKind, "sample-worker", download.ErrorKindAuth, "login required", 1002,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	srv.resetDownloadAuthFailuresAfterCookieChange("twitter")
+
+	recovered, err := srv.db.GetAsset(asset.AssetID, asset.AssetKind)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recovered == nil || recovered.State != db.AssetStateQueued || recovered.Attempts != 0 || recovered.NextAttemptAtMs != 0 || recovered.LastErrorKind != "" {
+		t.Fatalf("recovered content asset = %+v", recovered)
 	}
 }
 

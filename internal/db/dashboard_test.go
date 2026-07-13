@@ -12,7 +12,13 @@ func TestDashboardStatsUseCanonicalAssets(t *testing.T) {
 		INSERT INTO feed_items (tweet_id, published_at, fetched_at)
 		VALUES
 			('sample_post_a', 1, 1),
-			('sample_post_b', 1, 1)
+			('sample_post_b', 1, 1);
+		INSERT INTO download_queue (
+			video_id, owner_channel_id, status, last_error_kind, last_error, added_at_ms
+		) VALUES (
+			'sample_blocked_video', 'youtube_sample', 'blocked',
+			'unsupported', 'sample terminal failure', 1
+		)
 	`); err != nil {
 		t.Fatalf("seed dashboard state: %v", err)
 	}
@@ -40,5 +46,12 @@ func TestDashboardStatsUseCanonicalAssets(t *testing.T) {
 	}
 	if pipeline["ready"] != 2 || pipeline["queued"] != 1 || pipeline["failed"] != 1 {
 		t.Fatalf("media_pipeline = %+v, want canonical state counts 2/1/1", pipeline)
+	}
+	downloadQueue, ok := stats["download_queue"].(map[string]int)
+	if !ok {
+		t.Fatalf("download_queue has unexpected type: %T", stats["download_queue"])
+	}
+	if downloadQueue["failed"] != 1 {
+		t.Fatalf("download_queue = %+v, want terminal block exposed as failed", downloadQueue)
 	}
 }

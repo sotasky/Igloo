@@ -449,8 +449,8 @@ func TestFetchOneFeedSourceRecordsAttribution(t *testing.T) {
 				if rawURL != "https://x.com/i/lists/123" {
 					t.Fatalf("rawURL = %q", rawURL)
 				}
-				if limit != 100 {
-					t.Fatalf("limit = %d, want 100", limit)
+				if limit != 20 {
+					t.Fatalf("limit = %d, want 20", limit)
 				}
 				return []model.FeedItem{{
 					TweetID:          "1000000000000000200",
@@ -478,5 +478,181 @@ func TestFetchOneFeedSourceRecordsAttribution(t *testing.T) {
 	}
 	if len(items) != 1 || items[0].TweetID != "1000000000000000200" {
 		t.Fatalf("source items = %+v", items)
+	}
+}
+
+func TestFilterReadyXFeedSourcesUsesLastChecked(t *testing.T) {
+	now := time.Unix(10_000, 0)
+	recent := now.Add(-10 * time.Minute)
+	stale := now.Add(-31 * time.Minute)
+	sources := []model.FeedSource{
+		{SourceID: "twitter_list_sample_alpha", Enabled: true},
+		{SourceID: "twitter_list_sample_beta", Enabled: true, LastChecked: &recent, LastOK: &recent},
+		{SourceID: "twitter_list_sample_gamma", Enabled: true, LastChecked: &recent, LastError: "temporary"},
+		{SourceID: "twitter_list_sample_delta", Enabled: true, LastChecked: &stale, LastOK: &stale},
+	}
+
+	ready, notDue := filterReadyXFeedSources(sources, 30*time.Minute, now)
+	if notDue != 2 {
+		t.Fatalf("not due = %d, want 2", notDue)
+	}
+	if len(ready) != 2 || ready[0].SourceID != "twitter_list_sample_alpha" || ready[1].SourceID != "twitter_list_sample_delta" {
+		t.Fatalf("ready sources = %#v", ready)
+	}
+}
+
+func TestFetchOneFeedSourceUsesGlobalLimitAndPrunesPreviousWindow(t *testing.T) {
+	d := newTestWorkerDB(t)
+	if err := d.SetSetting("media_download_limit_default", "1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.RecordAndroidFeedRetention(0, 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.UpsertFeedSource(model.FeedSource{
+		SourceID: "twitter_list_sample", Platform: "twitter", SourceType: "list",
+		ExternalID: "bounded", Label: "Bounded", URL: "https://x.com/i/lists/bounded", Enabled: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	oldTime := time.Unix(100, 0)
+	old := model.FeedItem{
+		TweetID: "sample_source_old", SourceHandle: "sample_old", AuthorHandle: "sample_old",
+		MediaJSON:   `[{"url":"https://cdn.example/old.jpg","type":"photo"}]`,
+		PublishedAt: &oldTime,
+	}
+	if _, err := d.UpsertFeedItems([]model.FeedItem{old}); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.RecordFeedItemSources(old.TweetID, []string{"twitter_list_sample"}); err != nil {
+		t.Fatal(err)
+	}
+
+	newTime := time.Unix(200, 0)
+	m := &Manager{
+		db: d, cfg: testCfg(t.TempDir()), downloader: testDownloader(),
+		xFeedFetcher: fakeXFeedFetcher{
+			timeline: func(context.Context, string, int) ([]model.FeedItem, error) {
+				t.Fatal("timeline fetch should not be called")
+				return nil, nil
+			},
+			source: func(_ context.Context, _ string, limit int) ([]model.FeedItem, error) {
+				if limit != 1 {
+					t.Fatalf("source fetch limit = %d, want 1", limit)
+				}
+				return []model.FeedItem{{
+					TweetID: "sample_source_new", SourceHandle: "sample_new", AuthorHandle: "sample_new",
+					MediaJSON: `[{"url":"https://cdn.example/new.jpg","type":"photo"}]`, PublishedAt: &newTime,
+				}}, nil
+			},
+		},
+	}
+	if n, err := m.FetchOneFeedSource(context.Background(), "twitter_list_sample"); err != nil || n != 1 {
+		t.Fatalf("FetchOneFeedSource = (%d, %v)", n, err)
+	}
+	items, err := d.ListFeedItemsBySourceID("twitter_list_sample", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].TweetID != "sample_source_new" {
+		t.Fatalf("bounded source items = %+v", items)
+	}
+	asset, err := d.GetAsset(db.BuildAssetID("twitter", "tweet", old.TweetID, "post_media", 0), "post_media")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if asset == nil || asset.State != db.AssetStatePruned {
+		t.Fatalf("old source asset = %+v", asset)
+	}
+}
+
+func TestEnforceXMediaLimitsForItemsOnlyTouchesEffectiveSources(t *testing.T) {
+	d := newTestWorkerDB(t)
+	if err := d.RecordAndroidFeedRetention(0, 1); err != nil {
+		t.Fatal(err)
+	}
+	for _, handle := range []string{"sample_alpha", "sample_beta", "sample_source", "sample_gamma"} {
+		channelID := model.TwitterChannelIDFromHandle(handle)
+		if err := d.AddChannel(model.Channel{
+			ChannelID: channelID, SourceID: handle, Name: "Sample Channel",
+			Platform: "twitter", IsSubscribed: true,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if err := d.UpdateChannelSettings(channelID, map[string]any{"media_download_limit": 1}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	item := func(tweetID, sourceHandle, reposterHandle string, isRetweet bool, publishedAtMs int64) model.FeedItem {
+		publishedAt := time.UnixMilli(publishedAtMs)
+		return model.FeedItem{
+			TweetID: tweetID, SourceHandle: sourceHandle, AuthorHandle: "sample_author",
+			IsRetweet: isRetweet, RetweetedByHandle: reposterHandle,
+			MediaJSON:   `[{"url":"https://cdn.example/` + tweetID + `.jpg","type":"photo"}]`,
+			PublishedAt: &publishedAt,
+		}
+	}
+	items := []model.FeedItem{
+		item("sample_alpha_new", "sample_alpha", "", false, 200),
+		item("sample_alpha_old", "sample_alpha", "", false, 100),
+		item("sample_beta_new", "sample_source", "sample_beta", true, 200),
+		item("sample_beta_old", "sample_source", "sample_beta", true, 100),
+		item("sample_source_new", "sample_source", "", false, 200),
+		item("sample_source_old", "sample_source", "", false, 100),
+		item("sample_gamma_new", "sample_gamma", "", true, 200),
+		item("sample_gamma_old", "sample_gamma", "", true, 100),
+	}
+	if n, err := d.UpsertFeedItems(items); err != nil || n != len(items) {
+		t.Fatalf("UpsertFeedItems = (%d, %v), want (%d, nil)", n, err, len(items))
+	}
+
+	m := &Manager{db: d}
+	m.enforceXMediaLimitsForItems([]model.FeedItem{items[0], items[1], items[2], items[6]})
+
+	for ownerID, wantState := range map[string]string{
+		"sample_alpha_old":  db.AssetStatePruned,
+		"sample_beta_old":   db.AssetStatePruned,
+		"sample_gamma_old":  db.AssetStatePruned,
+		"sample_source_old": db.AssetStateQueued,
+	} {
+		asset, err := d.GetAsset(db.BuildAssetID("twitter", "tweet", ownerID, "post_media", 0), "post_media")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if asset == nil || asset.State != wantState {
+			t.Fatalf("asset %s = %+v, want state %s", ownerID, asset, wantState)
+		}
+	}
+}
+
+func TestXTimelineLimitUsesMediaRetentionSetting(t *testing.T) {
+	settings := &db.ChannelSettings{MediaDownloadLimit: 7, MaxVideos: 200}
+	if got := xTimelineLimit(settings); got != 7 {
+		t.Fatalf("x timeline limit = %d, want 7", got)
+	}
+}
+
+func TestTriggerChannelCheckRoutesXThroughIngestState(t *testing.T) {
+	d := newTestWorkerDB(t)
+	if err := d.AddChannel(model.Channel{
+		ChannelID: "twitter_sample_source", SourceID: "sample_source", Name: "Refresh Source",
+		Platform: "twitter", IsSubscribed: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.RecordIngestSuccess("twitter_sample_source", float64(time.Now().Unix()), 0); err != nil {
+		t.Fatal(err)
+	}
+	m := NewManager(d, testCfg(t.TempDir()))
+	m.TriggerChannelCheck("twitter_sample_source")
+	state, err := d.GetIngestState("twitter_sample_source")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.LastSuccessAt != 0 {
+		t.Fatalf("last_success_at = %f, want 0", state.LastSuccessAt)
+	}
+	if len(m.ingestKick) != 1 {
+		t.Fatalf("ingest kicks = %d, want 1", len(m.ingestKick))
 	}
 }

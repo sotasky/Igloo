@@ -57,7 +57,7 @@ func (m *Manager) triggerDearrowFetch(ctx context.Context, videoID, videoRelPath
 			thumbRel = &rel
 		} else {
 			log.Printf("[dearrow] reject thumbnail path %s: %v", videoID, rErr)
-			m.removeMediaPaths(ctx, download.MediaLaneBulk, *res.ThumbPath)
+			m.removeMediaPaths(ctx, download.MediaLaneBulkBackground, *res.ThumbPath)
 			if saveErr := m.db.SetDearrowTitles(videoID, res.Title, res.CasualTitle, nowMs); saveErr != nil {
 				log.Printf("[dearrow] save partial %s: %v", videoID, saveErr)
 			}
@@ -67,7 +67,7 @@ func (m *Manager) triggerDearrowFetch(ctx context.Context, videoID, videoRelPath
 	if sErr := m.db.SetDearrowData(videoID, res.Title, res.CasualTitle, thumbRel, nowMs); sErr != nil {
 		log.Printf("[dearrow] save %s: %v", videoID, sErr)
 		if res.ThumbPath != nil {
-			m.removeMediaPaths(ctx, download.MediaLaneBulk, *res.ThumbPath)
+			m.removeMediaPaths(ctx, download.MediaLaneBulkBackground, *res.ThumbPath)
 		}
 	}
 }

@@ -9,6 +9,9 @@ import (
 
 func TestLikeMutationRequeuesPrunedDirectAndQuoteAssets(t *testing.T) {
 	d := openWritableTestDB(t)
+	if err := d.RecordAndroidFeedRetention(0, 1); err != nil {
+		t.Fatal(err)
+	}
 	item := model.FeedItem{
 		TweetID: "sample_liked_parent", SourceHandle: "sample_source", AuthorHandle: "sample_author",
 		MediaJSON:      `[{"url":"https://cdn.example/direct.jpg","type":"photo"}]`,
@@ -34,16 +37,19 @@ func TestLikeMutationRequeuesPrunedDirectAndQuoteAssets(t *testing.T) {
 			t.Fatalf("required asset %s = %+v", ownerID, asset)
 		}
 	}
-	prunable, err := d.xPrunableAssetOwners([]string{item.TweetID})
+	retained, err := d.xRetainedMediaOwnerSet(2000, 0, []string{item.TweetID, item.QuoteTweetID})
 	if err != nil {
-		t.Fatalf("xPrunableAssetOwners: %v", err)
+		t.Fatalf("xRetainedMediaOwnerSet: %v", err)
 	}
-	if len(prunable) != 0 {
-		t.Fatalf("liked direct/quote owners remained prunable: %v", prunable)
+	if _, direct := retained[item.TweetID]; !direct {
+		t.Fatalf("liked direct owner missing from retained set: %v", sortedKeys(retained))
+	}
+	if _, quote := retained[item.QuoteTweetID]; !quote {
+		t.Fatalf("liked quote owner missing from retained set: %v", sortedKeys(retained))
 	}
 	claimed, err := d.ClaimContentAssetDownloadBatch(LeaseOptions{
 		Owner: "x-worker", NowMs: 2001, LeaseMs: time.Minute.Milliseconds(), Limit: 10,
-	})
+	}, true, DownloadLaneCurrent)
 	if err != nil || len(claimed) != 2 {
 		t.Fatalf("claimed = %+v, err = %v; want direct and quote", claimed, err)
 	}

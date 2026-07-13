@@ -109,25 +109,15 @@ func pipelineStatus() (string, error) {
 			name:           "Download Queue",
 			table:          "download_queue",
 			statusCol:      "status",
-			timeCol:        "added_at",
-			startCol:       "started_at",
+			timeCol:        "added_at_ms",
+			startCol:       "started_at_ms",
 			nextAttemptCol: "next_attempt_at_ms",
 			leaseUntilCol:  "lease_until_ms",
-			errorCol:       "error",
+			errorCol:       "last_error",
 			errorKindCol:   "last_error_kind",
-			pendingStates:  []string{"pending", "queued"},
-			activeStates:   []string{"processing", "running", "downloading"},
-			failedStates:   []string{"failed", "error"},
-		},
-		{
-			name:          "Channel Queue",
-			table:         "channel_queue",
-			statusCol:     "status",
-			timeCol:       "added_at",
-			startCol:      "started_at",
-			pendingStates: []string{"pending", "queued"},
-			activeStates:  []string{"processing", "running"},
-			failedStates:  []string{"failed", "error"},
+			pendingStates:  []string{"pending"},
+			activeStates:   []string{"processing"},
+			failedStates:   []string{"blocked"},
 		},
 		{
 			name:           "Translation Jobs",
@@ -301,15 +291,16 @@ func pipelineStuckCount(conn *sql.DB, q pipelineQueue, cutoffMs int64) (int, err
 }
 
 func pipelineErrorKinds(conn *sql.DB, q pipelineQueue) ([]string, error) {
-	if q.errorKindCol == "" || len(q.failedStates) == 0 {
+	if q.errorKindCol == "" || q.errorKindCol == q.statusCol {
 		return nil, nil
 	}
+	where := fmt.Sprintf("%s != ''", q.errorKindCol)
+	if len(q.failedStates) > 0 {
+		where = fmt.Sprintf("%s IN (%s)", q.statusCol, sqlStringList(q.failedStates))
+	}
 	rows, err := conn.Query(fmt.Sprintf(
-		"SELECT COALESCE(NULLIF(%s, ''), 'unclassified'), COUNT(*) FROM %s WHERE %s IN (%s) GROUP BY 1 ORDER BY COUNT(*) DESC, 1 LIMIT 8",
-		q.errorKindCol,
-		q.table,
-		q.statusCol,
-		sqlStringList(q.failedStates),
+		"SELECT COALESCE(NULLIF(%s, ''), 'unclassified'), COUNT(*) FROM %s WHERE %s GROUP BY 1 ORDER BY COUNT(*) DESC, 1 LIMIT 8",
+		q.errorKindCol, q.table, where,
 	))
 	if err != nil {
 		return nil, err
@@ -331,17 +322,20 @@ func pipelineErrorKinds(conn *sql.DB, q pipelineQueue) ([]string, error) {
 }
 
 func pipelineRecentErrors(conn *sql.DB, q pipelineQueue) ([]string, error) {
-	if q.errorCol == "" || len(q.failedStates) == 0 {
+	if q.errorCol == "" {
 		return nil, nil
 	}
+	where := fmt.Sprintf("%s != ''", q.errorCol)
+	if len(q.failedStates) > 0 {
+		where = fmt.Sprintf("%s IN (%s)", q.statusCol, sqlStringList(q.failedStates))
+	}
 	rows, err := conn.Query(fmt.Sprintf(
-		"SELECT %s, COALESCE(%s, ''), COALESCE(%s, '') FROM %s WHERE %s IN (%s) ORDER BY %s DESC LIMIT 5",
+		"SELECT %s, COALESCE(%s, ''), COALESCE(%s, '') FROM %s WHERE %s ORDER BY %s DESC LIMIT 5",
 		q.timeCol,
 		q.errorKindSelect(),
 		q.errorCol,
 		q.table,
-		q.statusCol,
-		sqlStringList(q.failedStates),
+		where,
 		q.timeCol,
 	))
 	if err != nil {

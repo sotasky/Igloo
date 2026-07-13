@@ -30,37 +30,44 @@ type WorkerStatus struct {
 
 // Manager owns all background goroutines.
 type Manager struct {
-	db               *db.DB
-	cfg              *config.Config
-	downloader       *download.Downloader
-	ctx              context.Context
-	cancel           context.CancelFunc
-	wg               sync.WaitGroup
-	feedMediaKick    chan struct{} // buffered(1): coalescing kick
-	downloadKick     chan struct{} // buffered(1): coalescing kick for download pool
-	discoveryKick    chan struct{} // buffered(1): coalescing kick for platform discovery
-	discoveryJobs    chan db.ChannelQueueRow
-	profileKick      chan struct{} // buffered(1): durable profile job wake-up
-	xStatusEnrich    chan xfeed.StatusEnrichmentRequest
-	previewChan      chan PreviewRequest // buffered(256): FIFO preview queue
-	ingestKick       chan struct{}       // buffered(1): trigger immediate ingest
-	feedScoringKick  chan struct{}       // buffered(1): trigger immediate scoring
-	ingestPaused     int32               // atomic: 1 = paused
-	ingestRunning    int32               // atomic: 1 = cycle in progress
-	ingestCycleTotal int32               // atomic: channels to fetch in current cycle
-	ingestCycleDone  int32               // atomic: channels fetched so far in current cycle
-	stopRequested    int32               // atomic: 1 = stop requested
-	statuses         map[string]*atomic.Value
-	statusMu         sync.RWMutex
-	activity         *ActivityRing // general server activity (200 items)
-	dlActivity       *ActivityRing // download-specific activity (100 items)
-	feedActivity     *ActivityRing // x_ingest/feed_media per-item activity (200 items)
+	db                *db.DB
+	cfg               *config.Config
+	downloader        *download.Downloader
+	ctx               context.Context
+	cancel            context.CancelFunc
+	wg                sync.WaitGroup
+	mediaCurrentKick  chan struct{} // buffered(1): coalescing kick for current media
+	mediaBackfillKick chan struct{} // buffered(1): coalescing kick for historical media
+	discoveryKick     chan struct{} // buffered(1): coalescing kick for platform discovery
+	profileKick       chan struct{} // buffered(1): durable profile job wake-up
+	xStatusEnrich     chan xfeed.StatusEnrichmentRequest
+	ingestKick        chan struct{} // buffered(1): trigger immediate ingest
+	feedScoringKick   chan struct{} // buffered(1): trigger immediate scoring
+	ingestPaused      int32         // atomic: 1 = paused
+	ingestRunning     int32         // atomic: 1 = cycle in progress
+	ingestCycleTotal  int32         // atomic: channels to fetch in current cycle
+	ingestCycleDone   int32         // atomic: channels fetched so far in current cycle
+	stopRequested     int32         // atomic: 1 = stop requested
+	statuses          map[string]*atomic.Value
+	statusMu          sync.RWMutex
+	activity          *ActivityRing // general server activity (200 items)
+	dlActivity        *ActivityRing // download-specific activity (100 items)
+	feedActivity      *ActivityRing // x_ingest/feed_media per-item activity (200 items)
 
-	dlSessionCompleted int32        // atomic
-	dlSessionFailed    int32        // atomic
-	dlLastDownload     atomic.Value // stores *LastDownloadInfo
-	downloadBackoffMu  sync.Mutex
-	downloadBackoff    map[string]downloadPlatformBackoff
+	dlSessionCompleted       int32        // atomic
+	dlSessionFailed          int32        // atomic
+	dlLastDownload           atomic.Value // stores *LastDownloadInfo
+	downloadBackoffMu        sync.Mutex
+	downloadBackoff          map[string]downloadPlatformBackoff
+	downloadPlatformMu       sync.Mutex
+	downloadPlatformAt       map[db.DownloadLane]int
+	mediaCurrentTurn         uint64
+	mediaBackgroundTurn      uint64
+	previewMu                sync.Mutex
+	previewHints             map[string]struct{}
+	previewRetry             map[string]previewRetryState
+	previewNotBefore         time.Time
+	previewBackfillNotBefore time.Time
 
 	lastCycleAt       int64
 	lastCycleFailures map[string]string
@@ -73,7 +80,7 @@ type Manager struct {
 	xFeedFetcher  xFeedFetcher
 	xStatusMu     sync.Mutex
 	xStatusQueued map[string]time.Time
-	discoveryGate *platformDiscoveryGate
+	xRetentionMu  sync.Mutex
 
 	// dearrowFetcher is the configured DeArrow orchestrator. Nil means DeArrow
 	// fetching is disabled (e.g. unit tests that don't care about it).
@@ -99,33 +106,37 @@ type sponsorblockFetcher interface {
 func NewManager(database *db.DB, cfg *config.Config) *Manager {
 	ctx, cancel := context.WithCancel(context.Background())
 	m := &Manager{
-		db:              database,
-		cfg:             cfg,
-		downloader:      download.NewDownloader(cfg.CookiesDir),
-		ctx:             ctx,
-		cancel:          cancel,
-		feedMediaKick:   make(chan struct{}, 1),
-		downloadKick:    make(chan struct{}, 1),
-		discoveryKick:   make(chan struct{}, 1),
-		discoveryJobs:   make(chan db.ChannelQueueRow, discoveryWorkerCount),
-		profileKick:     make(chan struct{}, 1),
-		xStatusEnrich:   make(chan xfeed.StatusEnrichmentRequest, 1024),
-		previewChan:     make(chan PreviewRequest, 256),
-		ingestKick:      make(chan struct{}, 1),
-		feedScoringKick: make(chan struct{}, 1),
-		statuses:        make(map[string]*atomic.Value),
-		activity:        NewActivityRing(200),
-		dlActivity:      NewActivityRing(100),
-		feedActivity:    NewActivityRing(200),
-		xStatusQueued:   make(map[string]time.Time),
-		discoveryGate:   newPlatformDiscoveryGate(),
-		downloadBackoff: make(map[string]downloadPlatformBackoff),
+		db:                database,
+		cfg:               cfg,
+		downloader:        download.NewDownloader(cfg.CookiesDir),
+		ctx:               ctx,
+		cancel:            cancel,
+		mediaCurrentKick:  make(chan struct{}, 1),
+		mediaBackfillKick: make(chan struct{}, 1),
+		discoveryKick:     make(chan struct{}, 1),
+		profileKick:       make(chan struct{}, 1),
+		xStatusEnrich:     make(chan xfeed.StatusEnrichmentRequest, 1024),
+		ingestKick:        make(chan struct{}, 1),
+		feedScoringKick:   make(chan struct{}, 1),
+		statuses:          make(map[string]*atomic.Value),
+		activity:          NewActivityRing(200),
+		dlActivity:        NewActivityRing(100),
+		feedActivity:      NewActivityRing(200),
+		xStatusQueued:     make(map[string]time.Time),
+		downloadBackoff:   make(map[string]downloadPlatformBackoff),
+		downloadPlatformAt: map[db.DownloadLane]int{
+			db.DownloadLaneCurrent:  0,
+			db.DownloadLaneBackfill: 0,
+		},
+		previewHints:             make(map[string]struct{}),
+		previewRetry:             make(map[string]previewRetryState),
+		previewBackfillNotBefore: time.Now().Add(previewBackfillInterval),
 	}
 	m.dearrowFetcher = &dearrow.Fetcher{
 		Client:  dearrow.NewClient(dearrow.DefaultBaseURL),
 		Extract: dearrow.ExtractFrame,
 		Mutate: func(ctx context.Context, work func() error) error {
-			return m.downloader.RunMedia(ctx, download.MediaLaneBulk, work)
+			return m.downloader.RunMedia(ctx, download.MediaLaneBulkBackground, work)
 		},
 		ThumbDir: filepath.Join(cfg.Storage.StateRoot(), "thumbnails", "dearrow"),
 	}
@@ -143,21 +154,16 @@ func (m *Manager) StartAll() {
 	if err := m.db.ResetExpiredIngestBackoff(); err != nil {
 		log.Printf("[worker] ResetExpiredIngestBackoff: %v", err)
 	}
-	if n, err := m.db.ResetProcessingChannelQueueItems(); err != nil {
-		log.Printf("[worker] ResetProcessingChannelQueueItems: %v", err)
-	} else if n > 0 {
-		log.Printf("[worker] reset %d in-flight channel checks on startup", n)
-	}
 	log.Printf("[worker] startup recovery completed in %s", time.Since(startupStarted).Round(time.Millisecond))
 
 	// One-shot startup tasks — not tracked in status map.
 	m.startOnce("feed_bootstrap", m.runFeedBootstrap)
 	m.launch(xIngestWorkerName, m.runXIngestLoop)
 	m.launch("x_status_enrichment", m.runXStatusEnrichmentLoop)
-	m.launch("media_executor", m.runMediaExecutor)
+	m.launch("media_current", m.runMediaCurrentLoop)
+	m.launch("media_backfill", m.runMediaBackfillLoop)
 	m.launch("profile_refresh", m.runProfileJobLoop)
 	m.launch("scheduler", m.runScheduler)
-	m.launch("preview", m.runPreviewWorker)
 	m.startOnceDelayed("ranked_queue_warmup", 3*time.Minute, m.runRankedQueueWarmup)
 	m.launchDelayed("feed_scoring", 3*time.Minute, m.runFeedScoringWorker)
 	m.launchDelayed("downloader_operation_prune", 5*time.Minute, m.runDownloaderOperationPruner)
@@ -207,19 +213,13 @@ func (m *Manager) ShutdownTimeout(timeout time.Duration) bool {
 	}
 }
 
-// KickFeedMedia sends a non-blocking signal to wake the feed media worker immediately.
-func (m *Manager) KickFeedMedia() {
-	select {
-	case m.feedMediaKick <- struct{}{}:
-	default:
-	}
-}
-
-// KickDownloadPool sends a non-blocking signal to wake the download pool immediately.
-func (m *Manager) KickDownloadPool() {
-	select {
-	case m.downloadKick <- struct{}{}:
-	default:
+// KickMediaWork sends a non-blocking signal to wake durable media work immediately.
+func (m *Manager) KickMediaWork() {
+	for _, kick := range []chan struct{}{m.mediaCurrentKick, m.mediaBackfillKick} {
+		select {
+		case kick <- struct{}{}:
+		default:
+		}
 	}
 }
 
@@ -289,9 +289,21 @@ func (m *Manager) IsIngestRunning() bool {
 	return atomic.LoadInt32(&m.ingestRunning) == 1
 }
 
-// TriggerChannelCheck queues a single channel for immediate check.
+// TriggerChannelCheck makes a single followed channel immediately due.
 func (m *Manager) TriggerChannelCheck(channelID string) {
-	_ = m.db.AddChannelToQueue(channelID, 10) // high priority
+	channel, err := m.db.GetChannel(channelID)
+	if err == nil && channel != nil && channel.Platform == "twitter" {
+		if err := m.db.ResetIngestHandle(channelID); err != nil {
+			log.Printf("[worker] X channel refresh reset failed: %s: %v", channelID, err)
+			return
+		}
+		m.KickIngest()
+		return
+	}
+	if err := m.db.ClearChannelChecked(channelID); err != nil {
+		log.Printf("[worker] channel refresh clear failed: %s: %v", channelID, err)
+		return
+	}
 	m.KickDiscovery()
 }
 
@@ -334,11 +346,13 @@ func (m *Manager) IsStopRequested() bool {
 	return atomic.LoadInt32(&m.stopRequested) == 1
 }
 
-// PreviewChan returns the preview channel for status reporting.
-func (m *Manager) PreviewChan() <-chan PreviewRequest { return m.previewChan }
-
-// PreviewQueueLen returns the number of preview requests currently queued.
-func (m *Manager) PreviewQueueLen() int { return len(m.previewChan) }
+func (m *Manager) PreviewQueueLen() int {
+	if m == nil || m.db == nil {
+		return 0
+	}
+	count, _ := m.db.CountPendingVideoPreviews()
+	return count
+}
 
 // Emit records an activity event. Source identifies the worker (e.g. "x_ingest", "download").
 func (m *Manager) Emit(source, message, status string) {

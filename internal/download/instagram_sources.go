@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net/url"
 	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -39,53 +38,51 @@ type InstagramProfile struct {
 
 // InstagramChannel fetches recent Instagram posts and reels through gallery-dl
 // without downloading media.
-func (g *GalleryDLWrapper) InstagramChannel(ctx context.Context, handle string, limit int, cookiesFile string, cookiesBrowser ...string) ([]VideoRef, error) {
+func (g *GalleryDLWrapper) InstagramChannel(ctx context.Context, handle string, limit int, cookiesFile string, cookiesBrowser ...string) (SourceSnapshot, error) {
 	handle = strings.ToLower(strings.TrimPrefix(strings.TrimSpace(handle), "@"))
 	if handle == "" {
-		return nil, nil
+		return SourceSnapshot{}, nil
 	}
 	if limit <= 0 {
 		limit = 20
 	}
 	authAttempts := instagramCookieAuthAttempts(cookiesFile, optionalCookieBrowser(cookiesBrowser))
-	var all []VideoRef
+	snapshot := SourceSnapshot{Windows: make([]SourceWindow, 0, len(instagramSourceSuffixes))}
 	var firstErr error
-	anySuccess := false
 	for _, suffix := range instagramSourceSuffixes {
 		rawURL := "https://www.instagram.com/" + handle + "/" + suffix + "/"
-		var refs []VideoRef
-		var err error
+		window := SourceWindow{Component: suffix}
+		var partialRefs []VideoRef
+		var firstAttemptErr error
 		authSucceeded := false
 		for _, auth := range authAttempts {
 			cookieRefs, cookieErr := g.instagramDump(ctx, rawURL, limit, auth, handle)
 			if cookieErr == nil {
 				authSucceeded = true
-				refs, err = cookieRefs, nil
+				window.Refs = cookieRefs
 				if len(cookieRefs) > 0 {
 					break
 				}
 				continue
 			}
-			if err == nil {
-				err = cookieErr
+			partialRefs = append(partialRefs, cookieRefs...)
+			if firstAttemptErr == nil {
+				firstAttemptErr = cookieErr
 			}
 		}
-		if authSucceeded && len(refs) == 0 {
-			err = nil
-		}
-		if err != nil {
+		window.Complete = authSucceeded
+		if !authSucceeded {
+			window.Refs = mergeSourceRefs(partialRefs, limit)
 			if firstErr == nil {
-				firstErr = err
+				firstErr = firstAttemptErr
 			}
-			continue
 		}
-		anySuccess = true
-		all = append(all, refs...)
+		snapshot.Windows = append(snapshot.Windows, window)
 	}
-	if len(all) == 0 && firstErr != nil && !anySuccess {
-		return nil, firstErr
+	if firstErr != nil {
+		return snapshot, firstErr
 	}
-	return mergeInstagramRefs(all, limit), nil
+	return snapshot, nil
 }
 
 // InstagramTagged fetches recent posts where handle was tagged. The returned
@@ -125,7 +122,7 @@ func (g *GalleryDLWrapper) InstagramTagged(ctx context.Context, handle string, l
 	if err != nil {
 		return refs, err
 	}
-	return mergeInstagramRefs(refs, limit), nil
+	return mergeSourceRefs(refs, limit), nil
 }
 
 func (g *GalleryDLWrapper) InstagramProfile(ctx context.Context, handle string, cookiesFile string, cookiesBrowser ...string) (*InstagramProfile, error) {
@@ -226,10 +223,7 @@ func optionalCookieBrowser(cookiesBrowser []string) string {
 
 func (g *GalleryDLWrapper) instagramDump(ctx context.Context, rawURL string, limit int, cookies CookieSet, sourceHandle string) ([]VideoRef, error) {
 	output, err := g.instagramDumpOutput(ctx, rawURL, limit, cookies.File, cookies.Browser)
-	if err != nil {
-		return nil, err
-	}
-	return ParseInstagramChannelDumpForHandle(output, sourceHandle), nil
+	return ParseInstagramChannelDumpForHandle(output, sourceHandle), err
 }
 
 func (g *GalleryDLWrapper) instagramDumpOutput(ctx context.Context, rawURL string, limit int, cookiesFile string, cookiesBrowser ...string) ([]byte, error) {
@@ -240,9 +234,9 @@ func (g *GalleryDLWrapper) instagramDumpOutput(ctx context.Context, rawURL strin
 	err := result.Err
 	if err != nil {
 		if errors.Is(result.Err, context.DeadlineExceeded) {
-			return nil, fmt.Errorf("gallery-dl Instagram timed out after %s for %s", instagramGalleryDLTimeout, rawURL)
+			return output, fmt.Errorf("gallery-dl Instagram timed out after %s for %s", instagramGalleryDLTimeout, rawURL)
 		}
-		return nil, fmt.Errorf("gallery-dl Instagram: %w: %s", err, RedactText(string(output)))
+		return output, fmt.Errorf("gallery-dl Instagram: %w: %s", err, RedactText(string(output)))
 	}
 	return output, nil
 }
@@ -837,7 +831,7 @@ func instagramShortcodeFromURL(raw string) string {
 	return ""
 }
 
-func mergeInstagramRefs(refs []VideoRef, limit int) []VideoRef {
+func mergeSourceRefs(refs []VideoRef, limit int) []VideoRef {
 	seen := map[string]struct{}{}
 	out := make([]VideoRef, 0, len(refs))
 	for _, ref := range refs {
@@ -850,19 +844,6 @@ func mergeInstagramRefs(refs []VideoRef, limit int) []VideoRef {
 		seen[ref.VideoID] = struct{}{}
 		out = append(out, ref)
 	}
-	sort.SliceStable(out, func(i, j int) bool {
-		left, right := out[i].PublishedAtMs, out[j].PublishedAtMs
-		if left == right {
-			return false
-		}
-		if left == 0 {
-			return false
-		}
-		if right == 0 {
-			return true
-		}
-		return left > right
-	})
 	if limit > 0 && len(out) > limit {
 		out = out[:limit]
 	}

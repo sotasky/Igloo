@@ -529,6 +529,40 @@ class AndroidSyncMirrorTest {
         assertNotNull(db.channelDao().getById("sample_channel"))
     }
 
+    @Test
+    fun narrowingRepostSettingDoesNotBootstrap() = runBlocking {
+        db.androidSyncDao().upsertSyncState(changesState("cursor-a"))
+        val requests = mutableListOf<String>()
+        val engine = MockEngine { request ->
+            when (request.url.encodedPath) {
+                "/api/android/sync/changes" -> {
+                    requests += "changes:${request.url.parameters["after"]}"
+                    respondJson(
+                        page(
+                            listOf(
+                                channelSettingChange(
+                                    "sample_channel",
+                                    mediaOnly = 0,
+                                    maxVideos = 5,
+                                    includeReposts = 0,
+                                )
+                            ),
+                            "cursor-b",
+                        )
+                    )
+                }
+                "/api/android/sync/health" -> respondOk()
+                else -> error("Unexpected request ${request.url}")
+            }
+        }
+
+        buildMirror(engine).syncOnce()
+
+        assertEquals(listOf("changes:cursor-a"), requests)
+        assertEquals(0, db.channelSettingDao().getById("sample_channel")?.includeReposts)
+        assertFalse(requireNotNull(db.androidSyncDao().syncState()).bootstrapRequired)
+    }
+
     private fun buildMirror(engine: MockEngine): AndroidSyncMirror {
         if (::client.isInitialized) client.close()
         client =
@@ -875,6 +909,7 @@ class AndroidSyncMirrorTest {
         id: String,
         mediaOnly: Int,
         maxVideos: Int,
+        includeReposts: Int? = null,
     ) =
         upsertChange(
             ownerKind = "channel_setting",
@@ -883,6 +918,7 @@ class AndroidSyncMirrorTest {
                 put("channel_id", id)
                 put("media_only", mediaOnly)
                 put("max_videos", maxVideos)
+                includeReposts?.let { put("include_reposts", it) }
                 put("updated_at", nowMs)
             },
         )

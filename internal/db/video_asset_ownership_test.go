@@ -1,11 +1,109 @@
 package db
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/screwys/igloo/internal/storage"
 )
+
+func TestStoreCompletedVideoForegroundPublicationDoesNotWaitForBackfill(t *testing.T) {
+	d := openWritableTestDB(t)
+	key := filepath.Join("media", "instagram", "sample_foreground.mp4")
+	path, err := d.storage.Path(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeDBTestFile(t, path, []byte("foreground video"))
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	backgroundDone := make(chan error, 1)
+	go func() {
+		backgroundDone <- d.storage.MediaExecutor().Run(context.Background(), storage.MediaLaneBulkBackground, func() error {
+			close(started)
+			<-release
+			return nil
+		})
+	}()
+	<-started
+
+	storeDone := make(chan error, 1)
+	go func() {
+		storeDone <- d.StoreCompletedVideo(CompletedVideo{
+			VideoID: "sample_foreground", ChannelID: "instagram_sample", OwnerKind: "instagram_reel",
+			MediaLane: storage.MediaLaneBulkForeground,
+			Assets:    []Asset{{AssetKind: "video_stream", FilePath: key}},
+		})
+	}()
+
+	select {
+	case err := <-storeDone:
+		if err != nil {
+			close(release)
+			<-backgroundDone
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		close(release)
+		<-backgroundDone
+		t.Fatal("foreground publication waited for the backfill lane")
+	}
+	close(release)
+	if err := <-backgroundDone; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCompletedVideoAssetSetSyncsSharedDirectoryOnce(t *testing.T) {
+	d := openWritableTestDB(t)
+	keys := []string{
+		filepath.Join("media", "instagram", "sample_slideshow", "0.jpg"),
+		filepath.Join("media", "instagram", "sample_slideshow", "1.jpg"),
+	}
+	assets := make([]Asset, 0, len(keys))
+	for i, key := range keys {
+		path, err := d.storage.WritePath(key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		writeDBTestFile(t, path, []byte{byte('a' + i)})
+		assets = append(assets, Asset{
+			AssetID:   BuildAssetID("instagram", "instagram_post", "sample_slideshow", "post_media", i),
+			AssetKind: "post_media", OwnerKind: "instagram_post", OwnerID: "sample_slideshow",
+			MediaIndex: i, FilePath: key, ContentType: "image/jpeg", State: AssetStateReady,
+		})
+	}
+
+	var fileSyncs, directorySyncs int
+	prepared, err := d.prepareReadyAssetSetMetadataWith(
+		assets,
+		1,
+		func(*os.File) error {
+			fileSyncs++
+			return nil
+		},
+		func(string) error {
+			directorySyncs++
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fileSyncs != len(assets) || directorySyncs != 1 {
+		t.Fatalf("durability calls = %d files, %d directories; want %d files, 1 directory", fileSyncs, directorySyncs, len(assets))
+	}
+	for _, asset := range prepared {
+		if asset.SizeBytes != 1 || len(asset.SHA256) != 64 || asset.FileMtimeNs <= 0 {
+			t.Fatalf("prepared asset lost fingerprint metadata: %+v", asset)
+		}
+	}
+}
 
 func TestStoreCompletedVideoObservesInstagramAccountsAndDropsRawAvatars(t *testing.T) {
 	d := openWritableTestDB(t)
@@ -428,5 +526,65 @@ func TestStoreCompletedVideoKeepsPreviewWhenStreamFingerprintIsUnchanged(t *test
 		if _, err := os.Stat(path); err != nil {
 			t.Fatalf("same stream fingerprint removed %s file: %v", kind, err)
 		}
+	}
+}
+
+func TestPendingVideoPreviewsDeriveFromCanonicalStreamFingerprint(t *testing.T) {
+	d := openWritableTestDB(t)
+	store := func(videoID, ownerKind, path string, downloadedAt int64) *Asset {
+		t.Helper()
+		fullPath, err := d.storage.Path(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		writeDBTestFile(t, fullPath, []byte("stream:"+videoID))
+		if err := d.StoreCompletedVideo(CompletedVideo{
+			VideoID: videoID, ChannelID: "sample_channel", OwnerKind: ownerKind,
+			Duration: 30, Assets: []Asset{{AssetKind: "video_stream", FilePath: path}},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if err := d.ExecRaw(`UPDATE videos SET downloaded_at = ? WHERE video_id = ?`, downloadedAt, videoID); err != nil {
+			t.Fatal(err)
+		}
+		asset, err := d.GetAssetByOwnerIdentity("video_stream", ownerKind, videoID, 0)
+		if err != nil || asset == nil {
+			t.Fatalf("stream %s = %+v, %v", videoID, asset, err)
+		}
+		return asset
+	}
+
+	ready := store("sample_ready", "youtube_video", "media/youtube/sample_ready.mp4", 100)
+	store("sample_old", "instagram_reel", "media/instagram/sample_old.mp4", 200)
+	store("sample_new", "tiktok_video", "media/tiktok/sample_new.mp4", 300)
+	track := "thumbnails/previews/sample_ready/track.json"
+	sprite := "thumbnails/previews/sample_ready/sprite.jpg"
+	for path, body := range map[string]string{track: `{}`, sprite: "sprite"} {
+		fullPath, err := d.storage.Path(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		writeDBTestFile(t, fullPath, []byte(body))
+	}
+	if err := d.StoreVideoPreviewAssets("sample_ready", ready.SHA256, track, sprite, 1); err != nil {
+		t.Fatal(err)
+	}
+
+	candidates, err := d.ListPendingVideoPreviews(10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(candidates) != 2 || candidates[0].VideoID != "sample_new" || candidates[1].VideoID != "sample_old" {
+		t.Fatalf("pending previews = %+v", candidates)
+	}
+	if candidates[0].OwnerKind != "tiktok_video" || candidates[0].InputSHA256 == "" || candidates[0].Duration != 30 {
+		t.Fatalf("newest candidate lost canonical input: %+v", candidates[0])
+	}
+	count, err := d.CountPendingVideoPreviews()
+	if err != nil || count != 2 {
+		t.Fatalf("pending count = %d, %v", count, err)
+	}
+	if candidate, err := d.GetPendingVideoPreview("sample_ready"); err != nil || candidate != nil {
+		t.Fatalf("ready preview returned as pending: %+v, %v", candidate, err)
 	}
 }

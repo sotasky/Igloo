@@ -10,6 +10,37 @@ import com.screwy.igloo.data.entity.FeedRowActionState
 import com.screwy.igloo.data.entity.FeedThreadContext
 import kotlinx.coroutines.flow.Flow
 
+private const val MAIN_FEED_REPOST_VISIBILITY =
+    """
+    NOT (
+        COALESCE(fi.is_retweet, 0) = 1
+        AND COALESCE(fi.source_channel_id, '') != ''
+        AND fi.source_channel_id != COALESCE(fi.channel_id, '')
+        AND EXISTS (
+            SELECT 1 FROM channel_settings source_settings
+            WHERE source_settings.channel_id = fi.source_channel_id
+              AND source_settings.include_reposts = 0
+        )
+        AND NOT EXISTS (
+            SELECT 1 FROM retweet_sources source
+            LEFT JOIN channel_settings retweeter_settings
+              ON retweeter_settings.channel_id = source.retweeter_channel_id
+            WHERE source.content_hash = COALESCE(fi.content_hash, '')
+              AND COALESCE(retweeter_settings.include_reposts, 1) != 0
+        )
+    )
+    AND NOT (
+        COALESCE(fi.quote_tweet_id, '') != ''
+        AND COALESCE(fi.channel_id, '') != ''
+        AND fi.channel_id != COALESCE(fi.quote_channel_id, '')
+        AND EXISTS (
+            SELECT 1 FROM channel_settings author_settings
+            WHERE author_settings.channel_id = fi.channel_id
+              AND author_settings.include_reposts = 0
+        )
+    )
+    """
+
 /**
  * Feed read DAO. Single row shape, separate query methods for each feed surface.
  *
@@ -119,6 +150,9 @@ interface FeedReadDao {
                 SELECT 1 FROM muted_channels mc WHERE mc.channel_id = fi.reposter_channel_id
             )
             AND COALESCE(fi.is_ghost, 0) = 0
+            AND (
+        """ + MAIN_FEED_REPOST_VISIBILITY + """
+            )
         ORDER BY COALESCE(fr.rank_position, 2147483647) ASC, fi.published_at DESC, fi.tweet_id DESC
         LIMIT :limit OFFSET :offset
         """
@@ -140,6 +174,9 @@ interface FeedReadDao {
             NOT EXISTS (SELECT 1 FROM muted_channels mc WHERE mc.channel_id = fi.channel_id)
             AND NOT EXISTS (SELECT 1 FROM muted_channels mc WHERE mc.channel_id = fi.reposter_channel_id)
             AND COALESCE(fi.is_ghost, 0) = 0
+            AND (
+        """ + MAIN_FEED_REPOST_VISIBILITY + """
+            )
         ORDER BY COALESCE(fr.rank_position, 2147483647) ASC, fi.published_at DESC, fi.tweet_id DESC
         LIMIT :limit
         """

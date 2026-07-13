@@ -11,6 +11,7 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -33,14 +34,14 @@ class SyncCoordinator(
         jobs.clear()
         jobs += scope.launch { run() }
         jobs += scope.launch {
-            foregroundFlow.collect { foreground ->
+            foregroundFlow.drop(1).collect { foreground ->
                 if (foreground) trigger()
             }
         }
         jobs += scope.launch {
             var previous = reachability.state.value
             reachability.state.collect { current ->
-                if (previous !is Reachability.State.Online && current is Reachability.State.Online) {
+                if (previous is Reachability.State.Offline && current is Reachability.State.Online) {
                     trigger()
                 }
                 previous = current
@@ -54,6 +55,7 @@ class SyncCoordinator(
                 prefs.storiesWindowHours(),
             ) { feed, moments, youtube, stories -> listOf(feed, moments, youtube, stories) }
                 .distinctUntilChanged()
+                .drop(1)
                 .collect { trigger() }
         }
         trigger()

@@ -71,6 +71,50 @@ func (s *Server) buildAndroidSyncBootstrapHeads(database *db.DB, retention db.An
 	return heads, nil
 }
 
+func (s *Server) buildAndroidSyncChangeSelection(
+	database *db.DB,
+	retention db.AndroidRetentionSettings,
+	nowMs int64,
+	afterRevision int64,
+	throughRevision int64,
+) (db.AndroidSyncDesiredSets, error) {
+	heads, err := database.ListAndroidSyncContentHeadsThrough(afterRevision, throughRevision)
+	if err != nil {
+		return db.AndroidSyncDesiredSets{}, err
+	}
+	byKind := make(map[string][]string)
+	for _, head := range heads {
+		byKind[head.OwnerKind] = append(byKind[head.OwnerKind], head.OwnerID)
+	}
+	feedIDs := sortedNonEmpty(byKind["feed"])
+	if hashes := sortedNonEmpty(byKind["retweet_sources"]); len(hashes) > 0 {
+		peers, err := database.ListAndroidSyncFeedIDsByContentHashes(hashes)
+		if err != nil {
+			return db.AndroidSyncDesiredSets{}, err
+		}
+		feedIDs = append(feedIDs, peers...)
+	}
+	if len(feedIDs) > 0 {
+		feedIDs, err = database.ListAndroidSyncFeedHydrationIDs(feedIDs)
+		if err != nil {
+			return db.AndroidSyncDesiredSets{}, err
+		}
+	}
+	selection, err := database.ListAndroidSyncDesiredContentAmong(
+		retention, nowMs, feedIDs, byKind["video"],
+	)
+	if err != nil {
+		return db.AndroidSyncDesiredSets{}, err
+	}
+	selection.FeedRanks, err = database.ListAndroidSyncDesiredFeedRanksAmong(
+		retention.FeedDays, nowMs, byKind["feed_rank"], androidSyncFeedRankMaxRows,
+	)
+	if err != nil {
+		return db.AndroidSyncDesiredSets{}, err
+	}
+	return selection, nil
+}
+
 func (s *Server) materializeAndroidSyncHeads(database *db.DB, heads []model.AndroidSyncHead, desired *db.AndroidSyncDesiredSets) ([]model.AndroidSyncChange, error) {
 	byKind := make(map[string][]string)
 	for _, head := range heads {
@@ -88,7 +132,7 @@ func (s *Server) materializeAndroidSyncHeads(database *db.DB, heads []model.Andr
 		byKind["feed"] = append(byKind["feed"], feedIDs...)
 	}
 
-	var changes []model.AndroidSyncChange
+	changes := make([]model.AndroidSyncChange, 0)
 	if desired != nil {
 		feedRoots := sortedNonEmpty(byKind["feed"])
 		if len(feedRoots) > 0 {
@@ -112,15 +156,18 @@ func (s *Server) materializeAndroidSyncHeads(database *db.DB, heads []model.Andr
 		filterContent("feed", desired.Tweets)
 		filterContent("video", desired.Videos)
 		if len(byKind["feed_rank"]) > 0 {
-			_, ranks, err := database.ListAndroidSyncFeedRankRows(
-				desired.SortedTweets(), androidSyncFeedRankMaxRows,
-			)
-			if err != nil {
-				return nil, err
-			}
-			selectedRanks := make(map[string]struct{}, len(ranks))
-			for _, rank := range ranks {
-				selectedRanks[rank.TweetID] = struct{}{}
+			selectedRanks := desired.FeedRanks
+			if selectedRanks == nil {
+				_, ranks, err := database.ListAndroidSyncFeedRankRows(
+					desired.SortedTweets(), androidSyncFeedRankMaxRows,
+				)
+				if err != nil {
+					return nil, err
+				}
+				selectedRanks = make(map[string]struct{}, len(ranks))
+				for _, rank := range ranks {
+					selectedRanks[rank.TweetID] = struct{}{}
+				}
 			}
 			filterContent("feed_rank", selectedRanks)
 		}

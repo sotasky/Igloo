@@ -553,7 +553,7 @@ func (s *Server) handleVideoCommentsRefresh(w http.ResponseWriter, r *http.Reque
 		slog.Error("AddComments", "video", videoID, "err", err)
 	}
 	if err == nil && s.workers != nil && len(parsed) > 0 {
-		s.workers.KickFeedMedia()
+		s.workers.KickMediaWork()
 	}
 
 	// If fetch returned nothing but had comments before, log warning

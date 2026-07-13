@@ -74,6 +74,9 @@ func newTestServer(t *testing.T) *testServer {
 		_ = os.Remove(path)
 		t.Fatalf("db.Open: %v", err)
 	}
+	if err := d.RecordAndroidFeedRetention(0, 1); err != nil {
+		t.Fatalf("initialize Android feed retention: %v", err)
+	}
 	t.Cleanup(func() {
 		_ = d.Close()
 		_ = os.Remove(path)

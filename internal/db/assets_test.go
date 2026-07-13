@@ -30,7 +30,7 @@ func TestStoreReadyBulkAssetWaitsForMediaExecutor(t *testing.T) {
 	bulkEntered := make(chan struct{})
 	releaseBulk := make(chan struct{})
 	go func() {
-		_ = d.storage.MediaExecutor().Run(context.Background(), storage.MediaLaneBulk, func() error {
+		_ = d.storage.MediaExecutor().Run(context.Background(), storage.MediaLaneBulkRegular, func() error {
 			close(bulkEntered)
 			<-releaseBulk
 			return nil
@@ -438,12 +438,40 @@ func TestXSourceObservationPreservesSuccessfulCapture(t *testing.T) {
 	}
 	claimed, err := d.ClaimContentAssetDownloadBatch(LeaseOptions{
 		Owner: "sample-worker", NowMs: 2001, LeaseMs: time.Minute.Milliseconds(), Limit: 1,
-	})
+	}, true, DownloadLaneBackfill)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(claimed) != 1 || claimed[0].SourceURL != newSource || claimed[0].PublishedSourceURL != oldSource {
 		t.Fatalf("replacement claim did not preserve published capture: %+v", claimed)
+	}
+}
+
+func TestDeclareAssetPromotesReusablePublishedObject(t *testing.T) {
+	d := openWritableTestDB(t)
+	const sharedSource = "https://example.test/shared.jpg"
+	storeReadyAssetForTest(t, d, Asset{
+		AssetID:   BuildAssetID("twitter", "tweet", "sample_first", "post_media", 0),
+		AssetKind: "post_media", OwnerKind: "tweet", OwnerID: "sample_first",
+		SourceURL: sharedSource, FilePath: "media/twitter/sample/shared.jpg", ContentType: "image/jpeg",
+	}, 1000)
+
+	assetID := BuildAssetID("twitter", "tweet", "sample_second", "post_media", 0)
+	for index, source := range []string{"https://example.test/pending.jpg", sharedSource} {
+		if err := d.DeclareAsset(Asset{
+			AssetID: assetID, AssetKind: "post_media", OwnerKind: "tweet", OwnerID: "sample_second",
+			SourceURL: source, ContentType: "image/jpeg",
+		}, int64(2000+index)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got, err := d.GetAsset(assetID, "post_media")
+	if err != nil || got == nil {
+		t.Fatalf("reused asset = %+v / %v", got, err)
+	}
+	if !ReadyAssetMatchesSource(got, sharedSource) || got.ObjectID != got.DesiredObjectID {
+		t.Fatalf("published object was not promoted: %+v", got)
 	}
 }
 

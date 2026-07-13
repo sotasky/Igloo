@@ -2,6 +2,7 @@ package db
 
 import (
 	"database/sql"
+	"fmt"
 	"strings"
 	"time"
 )
@@ -35,6 +36,7 @@ type XMediaRetentionResult struct {
 	KeptItems          int                   `json:"kept_items"`
 	PrunedItems        int                   `json:"pruned_items"`
 	AssetsPruned       int                   `json:"assets_pruned"`
+	AssetsRestored     int                   `json:"assets_restored"`
 	CandidateFileBytes int64                 `json:"candidate_file_bytes"`
 	FileRemoval        DataFileRemovalResult `json:"file_removal"`
 }
@@ -60,55 +62,111 @@ func (db *DB) PruneXMediaRetentionForChannel(channelID string, opts XMediaRetent
 		return result, err
 	}
 	result.RetentionLimit = limit
-	return db.pruneXMediaRetentionSource(source, limit, opts.NowMs, result)
+	items, err := db.xMediaRetentionItems(channelID)
+	if err != nil {
+		return result, err
+	}
+	pruneIDs := addXRetentionStats(&result, items, limit)
+	candidates, err := db.xAssetOwnerIDsForTweets(pruneIDs)
+	if err != nil {
+		return result, err
+	}
+	retained, err := db.xRetainedMediaOwnerSet(normalizeNowMs(opts.NowMs), opts.RetentionLimit, candidates)
+	if err != nil {
+		return result, err
+	}
+	return db.reconcileXMediaOwnerSet(result, retained, candidates, false, normalizeNowMs(opts.NowMs))
 }
 
 func (db *DB) PruneXMediaRetention(opts XMediaRetentionOptions) (XMediaRetentionResult, error) {
 	result := XMediaRetentionResult{DryRun: opts.DryRun, Limit: opts.Limit, RetentionLimit: opts.RetentionLimit}
-	sources, err := db.followedXMediaRetentionSources()
+	nowMs := normalizeNowMs(opts.NowMs)
+	var pruneIDs []string
+	if opts.Limit > 0 {
+		sources, err := db.followedXMediaRetentionSources()
+		if err != nil {
+			return result, err
+		}
+		if len(sources) > opts.Limit {
+			sources = sources[:opts.Limit]
+			result.LimitReached = true
+		}
+		for _, source := range sources {
+			limit, err := db.xRetentionLimit(source, opts.RetentionLimit)
+			if err != nil {
+				return result, err
+			}
+			if limit <= 0 {
+				continue
+			}
+			items, err := db.xMediaRetentionItems(source.channelID)
+			if err != nil {
+				return result, err
+			}
+			pruneIDs = append(pruneIDs, addXRetentionStats(&result, items, limit)...)
+		}
+	}
+	retained, err := db.xRetainedMediaOwnerSet(nowMs, opts.RetentionLimit, nil)
 	if err != nil {
 		return result, err
 	}
-	if opts.Limit > 0 && len(sources) > opts.Limit {
-		sources = sources[:opts.Limit]
-		result.LimitReached = true
-	}
-	for _, source := range sources {
-		limit, err := db.xRetentionLimit(source, opts.RetentionLimit)
+	if !opts.DryRun {
+		feedLimit := db.IntSetting("media_download_limit_default")
+		if feedLimit < 1 {
+			feedLimit = 1
+		}
+		feedSources, err := db.ListFeedSources("twitter")
 		if err != nil {
 			return result, err
 		}
-		if limit <= 0 {
-			continue
+		for _, source := range feedSources {
+			if !source.Enabled {
+				continue
+			}
+			items, err := db.xFeedSourceRetentionItems(source.SourceID)
+			if err != nil {
+				return result, err
+			}
+			removeIDs := addXRetentionStats(&result, items, feedLimit)
+			if err := db.deleteXFeedSourceAttribution(source.SourceID, removeIDs); err != nil {
+				return result, err
+			}
 		}
-		result, err = db.pruneXMediaRetentionSource(source, limit, opts.NowMs, result)
+	}
+	if opts.Limit > 0 {
+		candidates, err := db.xAssetOwnerIDsForTweets(pruneIDs)
 		if err != nil {
 			return result, err
 		}
+		return db.reconcileXMediaOwnerSet(result, retained, candidates, false, nowMs)
 	}
-	return result, nil
+	return db.reconcileXMediaOwnerSet(result, retained, nil, true, nowMs)
 }
 
-func (db *DB) xRetentionLimit(source xRetentionSource, override int) (int, error) {
-	if override > 0 {
-		return override, nil
+func (db *DB) RestoreXMediaForAndroidFeed(feedDays int, nowMs int64) (XMediaRetentionResult, error) {
+	result := XMediaRetentionResult{}
+	if !IsValidRetentionDays(feedDays) {
+		return result, fmt.Errorf("invalid Android feed retention: %d", feedDays)
 	}
-	settings, err := db.GetChannelSettings(source.channelID)
-	if err != nil || settings == nil {
-		return 0, err
+	nowMs = normalizeNowMs(nowMs)
+	retained, err := db.xRetainedMediaOwnerSetForFeedDays(nowMs, 0, nil, feedDays)
+	if err != nil {
+		return result, err
 	}
-	return settings.MediaDownloadLimit, nil
+	restored, err := db.restorePrunedXMediaOwners(sortedKeys(retained), nowMs)
+	result.AssetsRestored = restored
+	return result, err
 }
 
-func (db *DB) pruneXMediaRetentionSource(source xRetentionSource, limit int, nowMs int64, result XMediaRetentionResult) (XMediaRetentionResult, error) {
-	if nowMs <= 0 {
-		nowMs = time.Now().UnixMilli()
+func normalizeNowMs(nowMs int64) int64 {
+	if nowMs > 0 {
+		return nowMs
 	}
+	return time.Now().UnixMilli()
+}
+
+func addXRetentionStats(result *XMediaRetentionResult, items []xRetentionItem, limit int) []string {
 	result.SourcesScanned++
-	items, err := db.xMediaRetentionItems(source.channelID)
-	if err != nil {
-		return result, err
-	}
 	kept := 0
 	var pruneIDs []string
 	for _, item := range items {
@@ -124,50 +182,377 @@ func (db *DB) pruneXMediaRetentionSource(source xRetentionSource, limit int, now
 		pruneIDs = append(pruneIDs, item.tweetID)
 		result.PrunedItems++
 	}
-	if len(pruneIDs) == 0 {
-		return result, nil
+	if len(pruneIDs) > 0 {
+		result.SourcesOverLimit++
 	}
-	result.SourcesOverLimit++
-	assetOwnerIDs, err := db.xPrunableAssetOwners(pruneIDs)
+	return pruneIDs
+}
+
+func (db *DB) xRetainedMediaOwnerSet(nowMs int64, followedOverride int, candidates []string) (map[string]struct{}, error) {
+	state, err := db.GetAndroidFeedRetention()
 	if err != nil {
-		return result, err
+		return nil, err
 	}
-	pathSizes, bytes, err := db.xContentAssetPaths(assetOwnerIDs)
+	if state == nil {
+		return nil, fmt.Errorf("Android feed retention is not initialized")
+	}
+	return db.xRetainedMediaOwnerSetForFeedDays(nowMs, followedOverride, candidates, state.FeedDays)
+}
+
+func (db *DB) xRetainedMediaOwnerSetForFeedDays(nowMs int64, followedOverride int, candidates []string, feedDays int) (map[string]struct{}, error) {
+	var androidOwners []string
+	var err error
+	if len(candidates) == 0 {
+		androidOwners, err = db.ListAndroidSyncDesiredFeedAssetOwners(feedDays, nowMs)
+	} else {
+		androidOwners, err = db.ListAndroidSyncDesiredFeedAssetOwnersAmong(feedDays, nowMs, candidates)
+	}
+	if err != nil {
+		return nil, err
+	}
+	candidateSet := make(map[string]struct{}, len(candidates))
+	for _, ownerID := range uniqueStrings(candidates) {
+		candidateSet[ownerID] = struct{}{}
+	}
+	retained := make(map[string]struct{}, len(androidOwners))
+	for _, ownerID := range androidOwners {
+		if len(candidateSet) == 0 {
+			retained[ownerID] = struct{}{}
+		} else if _, ok := candidateSet[ownerID]; ok {
+			retained[ownerID] = struct{}{}
+		}
+	}
+	if len(candidateSet) > 0 {
+		if err := db.addCandidateServerXMediaOwners(retained, candidateSet, followedOverride); err != nil {
+			return nil, err
+		}
+		return retained, nil
+	}
+
+	feedLimit := db.IntSetting("media_download_limit_default")
+	if feedLimit < 1 {
+		feedLimit = 1
+	}
+	if err := db.collectStrings(`
+		WITH asset_owners AS MATERIALIZED (
+			SELECT DISTINCT owner_id
+			FROM assets
+			WHERE owner_kind = 'tweet'
+			  AND asset_kind IN ('post_audio', 'post_media', 'post_thumbnail')
+		), candidate_items AS MATERIALIZED (
+			SELECT fi.tweet_id, COALESCE(fi.quote_tweet_id, '') AS quote_tweet_id,
+			       fi.reposter_channel_id, fi.source_channel_id, fi.channel_id, fi.published_at
+			FROM asset_owners ao
+			JOIN feed_items fi ON fi.tweet_id = ao.owner_id
+
+			UNION
+
+			SELECT fi.tweet_id, COALESCE(fi.quote_tweet_id, '') AS quote_tweet_id,
+			       fi.reposter_channel_id, fi.source_channel_id, fi.channel_id, fi.published_at
+			FROM asset_owners ao
+			JOIN feed_items fi INDEXED BY idx_feed_items_quote ON fi.quote_tweet_id = ao.owner_id
+			WHERE fi.quote_tweet_id IS NOT NULL AND fi.quote_tweet_id != ''
+		), followed_base AS MATERIALIZED (
+			SELECT ci.tweet_id, ci.quote_tweet_id,
+			       COALESCE(NULLIF(ci.reposter_channel_id, ''), NULLIF(ci.source_channel_id, ''), ci.channel_id) AS retention_source,
+			       ci.published_at,
+			       CASE WHEN EXISTS (SELECT 1 FROM bookmarks b WHERE b.video_id = ci.tweet_id)
+			              OR EXISTS (SELECT 1 FROM feed_likes fl WHERE fl.tweet_id = ci.tweet_id)
+			            THEN 1 ELSE 0 END AS protected,
+			       CASE WHEN ? > 0 THEN ?
+			            WHEN COALESCE(cs.media_download_limit, 0) > 0 THEN cs.media_download_limit
+			            ELSE ? END AS retention_limit
+			FROM candidate_items ci
+			JOIN channel_follows cf
+			  ON cf.channel_id = COALESCE(NULLIF(ci.reposter_channel_id, ''), NULLIF(ci.source_channel_id, ''), ci.channel_id)
+			LEFT JOIN channel_settings cs ON cs.channel_id = cf.channel_id
+		), followed_ranked AS (
+			SELECT followed_base.*,
+			       SUM(CASE WHEN protected = 0 THEN 1 ELSE 0 END) OVER (
+			         PARTITION BY retention_source
+			         ORDER BY published_at DESC, tweet_id DESC
+			         ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+			       ) AS retention_position
+			FROM followed_base
+		), retained_tweets AS MATERIALIZED (
+			SELECT tweet_id, quote_tweet_id
+			FROM followed_ranked
+			WHERE protected = 1 OR retention_position <= retention_limit
+		)
+		SELECT tweet_id FROM retained_tweets
+		UNION
+		SELECT quote_tweet_id FROM retained_tweets WHERE quote_tweet_id != ''
+	`, []any{followedOverride, followedOverride, feedLimit}, retained); err != nil {
+		return nil, err
+	}
+
+	var retainedTweets []string
+	feedSources, err := db.ListFeedSources("twitter")
+	if err != nil {
+		return nil, err
+	}
+	for _, source := range feedSources {
+		if !source.Enabled {
+			continue
+		}
+		items, err := db.xFeedSourceRetentionItems(source.SourceID)
+		if err != nil {
+			return nil, err
+		}
+		retainedTweets = append(retainedTweets, retainedXMediaTweetIDs(items, feedLimit)...)
+	}
+	serverOwners, err := db.xAssetOwnerIDsForTweets(retainedTweets)
+	if err != nil {
+		return nil, err
+	}
+	for _, ownerID := range serverOwners {
+		retained[ownerID] = struct{}{}
+	}
+	rows, err := db.conn.Query(`
+		SELECT video_id AS owner_id FROM bookmarks
+		UNION
+		SELECT tweet_id AS owner_id FROM feed_likes
+		UNION
+		SELECT DISTINCT owner_id
+		FROM assets
+		WHERE owner_kind = 'tweet'
+		  AND asset_kind IN ('post_audio', 'post_media', 'post_thumbnail')
+		  AND required_reason IN ('bookmark', 'like', 'manual')
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var ownerID string
+		if err := rows.Scan(&ownerID); err != nil {
+			return nil, err
+		}
+		retained[ownerID] = struct{}{}
+	}
+	return retained, rows.Err()
+}
+
+func (db *DB) addCandidateServerXMediaOwners(retained, candidates map[string]struct{}, followedOverride int) error {
+	parentIDs := map[string]struct{}{}
+	sourceIDs := map[string]struct{}{}
+	for _, chunk := range stringChunks(sortedKeys(candidates), 300) {
+		args := append(stringsToAny(chunk), stringsToAny(chunk)...)
+		rows, err := db.conn.Query(`
+			SELECT tweet_id,
+			       COALESCE(NULLIF(reposter_channel_id, ''), NULLIF(source_channel_id, ''), channel_id)
+			FROM feed_items
+			WHERE tweet_id IN (`+placeholders(len(chunk))+`)
+			   OR quote_tweet_id IN (`+placeholders(len(chunk))+`)
+		`, args...)
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var parentID, sourceID string
+			if err := rows.Scan(&parentID, &sourceID); err != nil {
+				_ = rows.Close()
+				return err
+			}
+			parentIDs[parentID] = struct{}{}
+			if sourceID != "" {
+				sourceIDs[sourceID] = struct{}{}
+			}
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		_ = rows.Close()
+	}
+
+	followed := map[string]struct{}{}
+	for _, chunk := range stringChunks(sortedKeys(sourceIDs), 400) {
+		rows, err := db.conn.Query(`
+			SELECT channel_id FROM channel_follows
+			WHERE channel_id IN (`+placeholders(len(chunk))+`)
+		`, stringsToAny(chunk)...)
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var sourceID string
+			if err := rows.Scan(&sourceID); err != nil {
+				_ = rows.Close()
+				return err
+			}
+			followed[sourceID] = struct{}{}
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		_ = rows.Close()
+	}
+	var retainedTweets []string
+	for _, sourceID := range sortedKeys(followed) {
+		source, ok := xRetentionSourceFromChannelID(sourceID)
+		if !ok {
+			continue
+		}
+		limit, err := db.xRetentionLimit(source, followedOverride)
+		if err != nil {
+			return err
+		}
+		items, err := db.xMediaRetentionItems(sourceID)
+		if err != nil {
+			return err
+		}
+		retainedTweets = append(retainedTweets, retainedXMediaTweetIDs(items, limit)...)
+	}
+
+	feedSourceIDs := map[string]struct{}{}
+	for _, chunk := range stringChunks(sortedKeys(parentIDs), 400) {
+		rows, err := db.conn.Query(`
+			SELECT DISTINCT fis.source_id
+			FROM feed_item_sources fis
+			JOIN feed_sources fs ON fs.source_id = fis.source_id AND fs.enabled = 1
+			WHERE fis.tweet_id IN (`+placeholders(len(chunk))+`)
+		`, stringsToAny(chunk)...)
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var sourceID string
+			if err := rows.Scan(&sourceID); err != nil {
+				_ = rows.Close()
+				return err
+			}
+			feedSourceIDs[sourceID] = struct{}{}
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		_ = rows.Close()
+	}
+	feedLimit := db.IntSetting("media_download_limit_default")
+	if feedLimit < 1 {
+		feedLimit = 1
+	}
+	for _, sourceID := range sortedKeys(feedSourceIDs) {
+		items, err := db.xFeedSourceRetentionItems(sourceID)
+		if err != nil {
+			return err
+		}
+		retainedTweets = append(retainedTweets, retainedXMediaTweetIDs(items, feedLimit)...)
+	}
+	ownerIDs, err := db.xAssetOwnerIDsForTweets(retainedTweets)
+	if err != nil {
+		return err
+	}
+	for _, ownerID := range ownerIDs {
+		if _, ok := candidates[ownerID]; ok {
+			retained[ownerID] = struct{}{}
+		}
+	}
+	for _, chunk := range stringChunks(sortedKeys(candidates), 400) {
+		args := stringsToAny(chunk)
+		rows, err := db.conn.Query(`
+			SELECT video_id AS owner_id
+			FROM bookmarks
+			WHERE video_id IN (`+placeholders(len(chunk))+`)
+			UNION
+			SELECT tweet_id AS owner_id
+			FROM feed_likes
+			WHERE tweet_id IN (`+placeholders(len(chunk))+`)
+			UNION
+			SELECT DISTINCT owner_id
+			FROM assets
+			WHERE owner_kind = 'tweet'
+			  AND owner_id IN (`+placeholders(len(chunk))+`)
+			  AND asset_kind IN ('post_audio', 'post_media', 'post_thumbnail')
+			  AND required_reason IN ('bookmark', 'like', 'manual')
+		`, append(append(append([]any{}, args...), args...), args...)...)
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var ownerID string
+			if err := rows.Scan(&ownerID); err != nil {
+				_ = rows.Close()
+				return err
+			}
+			retained[ownerID] = struct{}{}
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		_ = rows.Close()
+	}
+	return nil
+}
+
+func (db *DB) reconcileXMediaOwnerSet(result XMediaRetentionResult, retained map[string]struct{}, candidates []string, pruneAll bool, nowMs int64) (XMediaRetentionResult, error) {
+	if !result.DryRun {
+		restored, err := db.restorePrunedXMediaOwners(sortedKeys(retained), nowMs)
+		if err != nil {
+			return result, err
+		}
+		result.AssetsRestored += restored
+	}
+	var err error
+	if pruneAll {
+		candidates, err = db.activeXMediaOwnerIDs()
+		if err != nil {
+			return result, err
+		}
+	}
+	candidates = ownersOutsideSet(candidates, retained)
+	pathSizes, bytes, err := db.xContentAssetPaths(candidates)
 	if err != nil {
 		return result, err
 	}
 	result.CandidateFileBytes += bytes
-	if result.DryRun {
+	if result.DryRun || len(candidates) == 0 {
 		return result, nil
 	}
-	pruned, err := db.markXContentAssetsPruned(assetOwnerIDs, nowMs)
+	pruned, err := db.markXContentAssetsPruned(candidates, nowMs)
 	if err != nil {
 		return result, err
 	}
 	result.AssetsPruned += pruned
-	for _, path := range sortedInt64Keys(pathSizes) {
-		result.FileRemoval.Considered++
-		removed, err := db.RemoveAssetFileIfUnreferenced(path)
-		if err != nil {
-			result.FileRemoval.RemoveErrors++
-			continue
-		}
-		if removed {
-			result.FileRemoval.Removed++
-			result.FileRemoval.RemovedBytes += pathSizes[path]
-			continue
-		}
-		var refs int
-		if err := db.conn.QueryRow(`
-			SELECT COUNT(*) FROM assets a JOIN media_objects mo ON mo.object_id = a.object_id
-			WHERE a.lifecycle_state = 'active' AND mo.file_path = ? AND mo.published_revision > 0
-		`, path).Scan(&refs); err == nil && refs > 0 {
-			result.FileRemoval.StillReferenced++
-		} else {
-			result.FileRemoval.Missing++
+	db.removeXContentPaths(pathSizes, &result.FileRemoval)
+	return result, nil
+}
+
+func ownersOutsideSet(ownerIDs []string, retained map[string]struct{}) []string {
+	ownerIDs = uniqueStrings(ownerIDs)
+	out := ownerIDs[:0]
+	for _, ownerID := range ownerIDs {
+		if _, ok := retained[ownerID]; !ok {
+			out = append(out, ownerID)
 		}
 	}
-	return result, nil
+	return out
+}
+
+func (db *DB) activeXMediaOwnerIDs() ([]string, error) {
+	rows, err := db.conn.Query(`
+		SELECT DISTINCT owner_id
+		FROM assets
+		WHERE owner_kind = 'tweet' AND lifecycle_state = 'active'
+		  AND asset_kind IN ('post_audio', 'post_media', 'post_thumbnail')
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var out []string
+	for rows.Next() {
+		var ownerID string
+		if err := rows.Scan(&ownerID); err != nil {
+			return nil, err
+		}
+		out = append(out, ownerID)
+	}
+	return out, rows.Err()
 }
 
 func (db *DB) followedXMediaRetentionSources() ([]xRetentionSource, error) {
@@ -204,21 +589,63 @@ func xRetentionSourceFromChannelID(channelID string) (xRetentionSource, bool) {
 	return xRetentionSource{channelID: channelID, handle: handle}, true
 }
 
+func (db *DB) xRetentionLimit(source xRetentionSource, override int) (int, error) {
+	if override > 0 {
+		return override, nil
+	}
+	settings, err := db.GetChannelSettings(source.channelID)
+	if err != nil || settings == nil {
+		return 0, err
+	}
+	return settings.MediaDownloadLimit, nil
+}
+
 func (db *DB) xMediaRetentionItems(channelID string) ([]xRetentionItem, error) {
 	rows, err := db.conn.Query(`
-		SELECT fi.tweet_id,
-		       CASE WHEN EXISTS (SELECT 1 FROM bookmarks b WHERE b.video_id = fi.tweet_id)
-		              OR EXISTS (SELECT 1 FROM feed_likes fl WHERE fl.tweet_id = fi.tweet_id)
+		WITH source_items AS (
+			SELECT fi.tweet_id, fi.published_at
+			FROM feed_items fi INDEXED BY idx_feed_items_reposter_channel
+			WHERE fi.reposter_channel_id IS NOT NULL
+			  AND fi.reposter_channel_id != ''
+			  AND fi.reposter_channel_id = ?
+			  AND (
+			    COALESCE(fi.media_json, '') NOT IN ('', '[]')
+			    OR COALESCE(fi.quote_media_json, '') NOT IN ('', '[]')
+			    OR EXISTS (SELECT 1 FROM assets a WHERE a.owner_kind = 'tweet' AND a.owner_id = fi.tweet_id)
+			  )
+
+			UNION ALL
+
+			SELECT fi.tweet_id, fi.published_at
+			FROM feed_items fi INDEXED BY idx_feed_items_source_channel
+			WHERE COALESCE(fi.reposter_channel_id, '') = ''
+			  AND fi.source_channel_id = ?
+			  AND (
+			    COALESCE(fi.media_json, '') NOT IN ('', '[]')
+			    OR COALESCE(fi.quote_media_json, '') NOT IN ('', '[]')
+			    OR EXISTS (SELECT 1 FROM assets a WHERE a.owner_kind = 'tweet' AND a.owner_id = fi.tweet_id)
+			  )
+
+			UNION ALL
+
+			SELECT fi.tweet_id, fi.published_at
+			FROM feed_items fi INDEXED BY idx_feed_items_channel
+			WHERE COALESCE(fi.reposter_channel_id, '') = ''
+			  AND COALESCE(fi.source_channel_id, '') = ''
+			  AND fi.channel_id = ?
+			  AND (
+			    COALESCE(fi.media_json, '') NOT IN ('', '[]')
+			    OR COALESCE(fi.quote_media_json, '') NOT IN ('', '[]')
+			    OR EXISTS (SELECT 1 FROM assets a WHERE a.owner_kind = 'tweet' AND a.owner_id = fi.tweet_id)
+			  )
+		)
+		SELECT si.tweet_id,
+		       CASE WHEN EXISTS (SELECT 1 FROM bookmarks b WHERE b.video_id = si.tweet_id)
+		              OR EXISTS (SELECT 1 FROM feed_likes fl WHERE fl.tweet_id = si.tweet_id)
 		            THEN 1 ELSE 0 END
-		FROM feed_items fi
-		WHERE COALESCE(NULLIF(fi.reposter_channel_id, ''), NULLIF(fi.source_channel_id, ''), fi.channel_id) = ?
-		  AND (
-		    COALESCE(fi.media_json, '') NOT IN ('', '[]')
-		    OR COALESCE(fi.quote_media_json, '') NOT IN ('', '[]')
-		    OR EXISTS (SELECT 1 FROM assets a WHERE a.owner_kind = 'tweet' AND a.owner_id = fi.tweet_id)
-		  )
-		ORDER BY COALESCE(fi.published_at, 0) DESC, fi.tweet_id DESC
-	`, channelID)
+		FROM source_items si
+		ORDER BY COALESCE(si.published_at, 0) DESC, si.tweet_id DESC
+	`, channelID, channelID, channelID)
 	if err != nil {
 		return nil, err
 	}
@@ -234,108 +661,6 @@ func (db *DB) xMediaRetentionItems(channelID string) ([]xRetentionItem, error) {
 		out = append(out, item)
 	}
 	return out, rows.Err()
-}
-
-// xPrunableAssetOwners includes quote owners only when every parent is being
-// pruned, and excludes direct owners still referenced by a retained quote.
-func (db *DB) xPrunableAssetOwners(tweetIDs []string) ([]string, error) {
-	tweetIDs = uniqueStrings(tweetIDs)
-	if len(tweetIDs) == 0 {
-		return nil, nil
-	}
-	pruneSet := make(map[string]struct{}, len(tweetIDs))
-	for _, id := range tweetIDs {
-		pruneSet[id] = struct{}{}
-	}
-	owners := make(map[string]struct{}, len(tweetIDs))
-	for _, id := range tweetIDs {
-		owners[id] = struct{}{}
-	}
-	for _, chunk := range stringChunks(tweetIDs, 400) {
-		rows, err := db.conn.Query(`
-			SELECT tweet_id, COALESCE(quote_tweet_id, '')
-			FROM feed_items
-			WHERE tweet_id IN (`+placeholders(len(chunk))+`)
-		`, stringsToAny(chunk)...)
-		if err != nil {
-			return nil, err
-		}
-		for rows.Next() {
-			var parentID, quoteID string
-			if err := rows.Scan(&parentID, &quoteID); err != nil {
-				_ = rows.Close()
-				return nil, err
-			}
-			if quoteID != "" {
-				owners[quoteID] = struct{}{}
-			}
-		}
-		if err := rows.Err(); err != nil {
-			_ = rows.Close()
-			return nil, err
-		}
-		_ = rows.Close()
-	}
-	ownerIDs := sortedKeys(owners)
-	for _, chunk := range stringChunks(ownerIDs, 400) {
-		rows, err := db.conn.Query(`
-			SELECT quote_tweet_id, tweet_id
-			FROM feed_items
-			WHERE quote_tweet_id IN (`+placeholders(len(chunk))+`)
-		`, stringsToAny(chunk)...)
-		if err != nil {
-			return nil, err
-		}
-		for rows.Next() {
-			var ownerID, parentID string
-			if err := rows.Scan(&ownerID, &parentID); err != nil {
-				_ = rows.Close()
-				return nil, err
-			}
-			if _, pruning := pruneSet[parentID]; !pruning {
-				delete(owners, ownerID)
-			}
-		}
-		if err := rows.Err(); err != nil {
-			_ = rows.Close()
-			return nil, err
-		}
-		_ = rows.Close()
-	}
-	for _, chunk := range stringChunks(sortedKeys(owners), 400) {
-		args := stringsToAny(chunk)
-		rows, err := db.conn.Query(`
-			SELECT video_id
-			FROM bookmarks
-			WHERE video_id IN (`+placeholders(len(chunk))+`)
-			UNION
-			SELECT tweet_id
-			FROM feed_likes
-			WHERE tweet_id IN (`+placeholders(len(chunk))+`)
-			UNION
-			SELECT owner_id
-			FROM assets
-			WHERE owner_id IN (`+placeholders(len(chunk))+`)
-			  AND owner_kind = 'tweet' AND required_reason = 'like'
-		`, append(append(append([]any{}, args...), args...), args...)...)
-		if err != nil {
-			return nil, err
-		}
-		for rows.Next() {
-			var protectedOwnerID string
-			if err := rows.Scan(&protectedOwnerID); err != nil {
-				_ = rows.Close()
-				return nil, err
-			}
-			delete(owners, protectedOwnerID)
-		}
-		if err := rows.Err(); err != nil {
-			_ = rows.Close()
-			return nil, err
-		}
-		_ = rows.Close()
-	}
-	return sortedKeys(owners), nil
 }
 
 func (db *DB) xContentAssetPaths(ownerIDs []string) (map[string]int64, int64, error) {
@@ -377,23 +702,37 @@ func (db *DB) xContentAssetPaths(ownerIDs []string) (map[string]int64, int64, er
 	return seen, total, nil
 }
 
+func (db *DB) removeXContentPaths(pathSizes map[string]int64, result *DataFileRemovalResult) {
+	for _, path := range sortedInt64Keys(pathSizes) {
+		result.Considered++
+		removed, err := db.RemoveAssetFileIfUnreferenced(path)
+		if err != nil {
+			result.RemoveErrors++
+			continue
+		}
+		if removed {
+			result.Removed++
+			result.RemovedBytes += pathSizes[path]
+			continue
+		}
+		var refs int
+		if err := db.conn.QueryRow(`
+			SELECT COUNT(*) FROM assets a JOIN media_objects mo ON mo.object_id = a.object_id
+			WHERE a.lifecycle_state = 'active' AND mo.file_path = ? AND mo.published_revision > 0
+		`, path).Scan(&refs); err == nil && refs > 0 {
+			result.StillReferenced++
+		} else {
+			result.Missing++
+		}
+	}
+}
+
 func (db *DB) markXContentAssetsPruned(ownerIDs []string, nowMs int64) (int, error) {
 	changed := 0
 	for _, chunk := range stringChunks(uniqueStrings(ownerIDs), 400) {
 		err := db.WithWrite(func(tx *sql.Tx) error {
-			res, err := tx.Exec(`
-				UPDATE assets
-				SET lifecycle_state = 'pruned', revision = revision + 1, updated_at_ms = ?
-				WHERE owner_kind = 'tweet'
-				  AND owner_id IN (`+placeholders(len(chunk))+`)
-				  AND asset_kind IN ('post_audio', 'post_media', 'post_thumbnail')
-				  AND lifecycle_state != 'pruned'
-			`, append([]any{nowMs}, stringsToAny(chunk)...)...)
-			if err != nil {
-				return err
-			}
-			n, err := res.RowsAffected()
-			changed += int(n)
+			n, err := markXContentAssetsPrunedTx(tx, chunk, nowMs)
+			changed += n
 			return err
 		})
 		if err != nil {
@@ -401,6 +740,25 @@ func (db *DB) markXContentAssetsPruned(ownerIDs []string, nowMs int64) (int, err
 		}
 	}
 	return changed, nil
+}
+
+func markXContentAssetsPrunedTx(tx *sql.Tx, ownerIDs []string, nowMs int64) (int, error) {
+	res, err := tx.Exec(`
+		UPDATE assets
+		SET lifecycle_state = 'pruned', revision = revision + 1, updated_at_ms = ?
+		WHERE owner_kind = 'tweet'
+		  AND owner_id IN (`+placeholders(len(ownerIDs))+`)
+		  AND asset_kind IN ('post_audio', 'post_media', 'post_thumbnail')
+		  AND lifecycle_state != 'pruned'
+	`, append([]any{nowMs}, stringsToAny(ownerIDs)...)...)
+	if err != nil {
+		return 0, err
+	}
+	if err := retireUndesiredXContentObjectsTx(tx, ownerIDs, nowMs); err != nil {
+		return 0, err
+	}
+	n, err := res.RowsAffected()
+	return int(n), err
 }
 
 func uniqueStrings(values []string) []string {
@@ -421,14 +779,9 @@ func uniqueStrings(values []string) []string {
 }
 
 func sortedInt64Keys(values map[string]int64) []string {
-	keys := make([]string, 0, len(values))
+	set := make(map[string]struct{}, len(values))
 	for key := range values {
-		keys = append(keys, key)
-	}
-	set := make(map[string]struct{}, len(keys))
-	for _, key := range keys {
 		set[key] = struct{}{}
 	}
-	keys = sortedKeys(set)
-	return keys
+	return sortedKeys(set)
 }

@@ -99,7 +99,7 @@ printf '{"_type":"video","id":"source","filename":"%s"}\n' "$file"
 	t.Setenv("GALLERY_MARKER", marker)
 
 	outDir := t.TempDir()
-	paths, err := NewDownloader("").Download(context.Background(), "https://www.instagram.com/reel/sample/", "video", Opts{
+	paths, err := NewDownloader("").Download(context.Background(), MediaLaneBulkForeground, "https://www.instagram.com/reel/sample/", "video", Opts{
 		OutputDir: outDir,
 		ID:        "sample",
 	})

@@ -519,11 +519,6 @@ func (s *Server) handleServerStatus(w http.ResponseWriter, r *http.Request) {
 	copy(memHistCopy, memoryHistory)
 	memoryHistoryMu.Unlock()
 
-	// Patch preview_queue.pending with live in-memory queue depth.
-	if pq, ok := dbStats["preview_queue"].(map[string]int); ok {
-		pq["pending"] = s.workers.PreviewQueueLen()
-	}
-
 	// Extract db_size_mb, wal_size_mb, table_count from dbStats for top-level exposure
 	dbSizeMB := dbStats["db_size_mb"]
 	walSizeMB := dbStats["wal_size_mb"]

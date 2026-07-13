@@ -370,12 +370,8 @@ func (g *GalleryDLWrapper) DownloadCompleted(ctx context.Context, rawURL, destDi
 	result := g.Run(ctx, "media.gallerydl", platformFromURL(rawURL), rawURL, args, cookiesFile, CommandOptions{Timeout: galleryDLDefaultTimeout}, browser)
 	output := result.CombinedOutput()
 	err = result.Err
-	// TikTok posts that are deleted, private, or geo-restricted surface as
-	// "Requested post not available" (exit 0, empty tmpdir). Without this
-	// check we'd fall through to yt-dlp, which reports a misleading "IP
-	// blocked" error and never prunes the job.
 	if strings.Contains(string(output), "Requested post not available") {
-		return CompletedDownload{}, contextErr(&HTTPStatusError{StatusCode: 404, URL: rawURL})
+		return CompletedDownload{}, contextErr(fmt.Errorf("gallery-dl: %s", RedactText(string(output))))
 	}
 	if err != nil {
 		return CompletedDownload{}, contextErr(fmt.Errorf("gallery-dl: %w: %s", err, RedactText(string(output))))

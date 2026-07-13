@@ -52,7 +52,7 @@ func TestDownloaderSerializesMediaRootWriters(t *testing.T) {
 	errs := make(chan error, 2)
 	start := func(id string) {
 		go func() {
-			_, err := d.Download(context.Background(), srv.URL+"/"+id+".jpg", "photo", Opts{
+			_, err := d.Download(context.Background(), MediaLaneBulkForeground, srv.URL+"/"+id+".jpg", "photo", Opts{
 				OutputDir: t.TempDir(),
 				ID:        id,
 			})
@@ -168,7 +168,7 @@ func TestDownloadTwimgQualityFallback(t *testing.T) {
 		HTTP: &HTTPDownloader{Client: client, AllowPrivateHosts: true},
 	}
 	dir := t.TempDir()
-	paths, err := d.Download(context.Background(),
+	paths, err := d.Download(context.Background(), MediaLaneBulkForeground,
 		"https://pbs.twimg.com/media/test?format=jpg&name=orig", "photo",
 		Opts{OutputDir: dir, ID: "test_0"})
 	if err != nil {
@@ -195,7 +195,7 @@ func TestDownloadTwimgAllQualitiesFail(t *testing.T) {
 		HTTP: &HTTPDownloader{Client: client, AllowPrivateHosts: true},
 	}
 	dir := t.TempDir()
-	_, err := d.Download(context.Background(),
+	_, err := d.Download(context.Background(), MediaLaneBulkForeground,
 		"https://pbs.twimg.com/media/test?format=jpg&name=orig", "photo",
 		Opts{OutputDir: dir, ID: "test_0"})
 	if err == nil {
@@ -226,7 +226,7 @@ func TestDownloadDirectTwitterVideoUsesLargeHTTPBudget(t *testing.T) {
 	}
 	dir := t.TempDir()
 
-	paths, err := d.Download(context.Background(),
+	paths, err := d.Download(context.Background(), MediaLaneBulkForeground,
 		"https://video.twimg.com/amplify_video/123/vid/avc1/3840x2160/video.mp4?tag=27", "video",
 		Opts{OutputDir: dir, ID: "tweet_0"})
 	if err != nil {
@@ -289,7 +289,7 @@ exit 1
 
 	d := NewDownloader("")
 	outDir := t.TempDir()
-	paths, err := d.Download(context.Background(), "https://www.instagram.com/p/sample/", "video", Opts{
+	paths, err := d.Download(context.Background(), MediaLaneBulkForeground, "https://www.instagram.com/p/sample/", "video", Opts{
 		OutputDir: outDir,
 		ID:        "sample",
 		CookieAlternates: []CookieSet{
@@ -359,7 +359,7 @@ exit 1
 
 	d := NewDownloader("")
 	outDir := t.TempDir()
-	paths, err := d.Download(context.Background(), "https://www.instagram.com/p/sample/", "video", Opts{
+	paths, err := d.Download(context.Background(), MediaLaneBulkForeground, "https://www.instagram.com/p/sample/", "video", Opts{
 		OutputDir: outDir,
 		ID:        "sample",
 		CookieAlternates: []CookieSet{
@@ -420,7 +420,7 @@ exit 1
 
 	d := NewDownloader("")
 	outDir := t.TempDir()
-	paths, err := d.Download(context.Background(), "https://www.instagram.com/p/sample/", "video", Opts{
+	paths, err := d.Download(context.Background(), MediaLaneBulkForeground, "https://www.instagram.com/p/sample/", "video", Opts{
 		OutputDir: outDir,
 		ID:        "sample",
 		CookieAlternates: []CookieSet{
@@ -449,7 +449,7 @@ exit 0
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	d := NewDownloader("")
-	paths, err := d.Download(context.Background(), "https://www.instagram.com/p/sample/", "video", Opts{
+	paths, err := d.Download(context.Background(), MediaLaneBulkForeground, "https://www.instagram.com/p/sample/", "video", Opts{
 		OutputDir: t.TempDir(),
 		ID:        "sample",
 	})

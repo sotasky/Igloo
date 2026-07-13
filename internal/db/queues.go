@@ -6,14 +6,15 @@ import (
 	"time"
 )
 
-// NextMediaWorkDelay returns the next due time across the two durable media
-// queues. Enqueue signals may wake the executor sooner.
-func (db *DB) NextMediaWorkDelay(nowMs int64) (time.Duration, error) {
+// NextMediaWorkDelay returns the next due time across durable content assets
+// and video work for the currently eligible download platforms. Enqueue
+// signals may wake the executor sooner.
+func (db *DB) NextMediaWorkDelay(nowMs int64, downloadPlatforms []string, includeTweets bool) (time.Duration, error) {
 	if nowMs <= 0 {
 		nowMs = time.Now().UnixMilli()
 	}
-	var due sql.NullInt64
-	err := db.reader().QueryRow(`
+	downloadPlatforms = normalizePlatforms(downloadPlatforms)
+	query := `
 		SELECT MIN(due_ms) FROM (
 			SELECT CASE
 			         WHEN mo.job_state = 'downloading' THEN mo.lease_until_ms
@@ -25,19 +26,38 @@ func (db *DB) NextMediaWorkDelay(nowMs int64) (time.Duration, error) {
 			  AND EXISTS (
 			    SELECT 1 FROM assets a
 			    WHERE a.desired_object_id = mo.object_id AND a.lifecycle_state = 'active'
-			      AND ((a.owner_kind = 'tweet' AND a.asset_kind IN ('post_audio', 'post_media', 'post_thumbnail'))
+			      AND ((? AND a.owner_kind = 'tweet' AND a.asset_kind IN ('post_audio', 'post_media', 'post_thumbnail'))
 			        OR (a.owner_kind = 'comment_author' AND a.asset_kind = 'avatar'))
-			  )
+			  )`
+	args := []any{nowMs, includeTweets}
+	if len(downloadPlatforms) > 0 {
+		query += `
 			UNION ALL
 			SELECT CASE
-			         WHEN status = 'processing' THEN lease_until_ms
-			         WHEN next_attempt_at_ms > 0 THEN next_attempt_at_ms
+			         WHEN dq.status = 'processing' THEN dq.lease_until_ms
+			         WHEN dq.next_attempt_at_ms > 0 THEN dq.next_attempt_at_ms
 			         ELSE ?
 			       END
-			FROM download_queue
-			WHERE status IN ('pending', 'processing')
-		)
-	`, nowMs, nowMs).Scan(&due)
+			FROM download_queue dq
+			WHERE dq.status IN ('pending', 'processing')
+			  AND EXISTS (SELECT 1 FROM video_desires d WHERE d.video_id = dq.video_id)
+			  AND EXISTS (
+			    SELECT 1 FROM channels owner_channel
+			    WHERE owner_channel.channel_id = dq.owner_channel_id
+			      AND ` + videoDownloadPlatformSQL("dq", "owner_channel") + ` IN (` + placeholders(len(downloadPlatforms)) + `)
+			  )
+			  AND NOT EXISTS (
+			    SELECT 1 FROM videos v
+			    WHERE v.video_id = dq.video_id
+			      AND ` + readyVideoMediaExistsSQL("v") + `
+			  )`
+		args = append(args, nowMs)
+		args = append(args, stringsToAny(downloadPlatforms)...)
+	}
+	query += `
+		)`
+	var due sql.NullInt64
+	err := db.reader().QueryRow(query, args...).Scan(&due)
 	if err != nil {
 		return 0, err
 	}
@@ -49,6 +69,23 @@ func (db *DB) NextMediaWorkDelay(nowMs int64) (time.Duration, error) {
 		return 0, nil
 	}
 	return delay, nil
+}
+
+func normalizePlatforms(platforms []string) []string {
+	seen := make(map[string]struct{}, len(platforms))
+	out := make([]string, 0, len(platforms))
+	for _, platform := range platforms {
+		platform = strings.ToLower(strings.TrimSpace(platform))
+		if platform == "" {
+			continue
+		}
+		if _, ok := seen[platform]; ok {
+			continue
+		}
+		seen[platform] = struct{}{}
+		out = append(out, platform)
+	}
+	return out
 }
 
 // XContentDownloadOwner is the compact owner-level status projection used by
@@ -105,6 +142,7 @@ func (db *DB) ListPendingXContentDownloads() (processing, pending []XContentDown
 		CROSS JOIN assets a INDEXED BY idx_assets_desired_object
 		LEFT JOIN feed_items_resolved fi ON fi.tweet_id = a.owner_id
 		WHERE a.desired_object_id = mo.object_id
+		  AND a.lifecycle_state = 'active'
 		  AND a.owner_kind = 'tweet'
 		  AND a.asset_kind IN ('post_audio', 'post_media', 'post_thumbnail')
 		  AND mo.job_state IN ('queued', 'downloading')
@@ -142,6 +180,7 @@ func (db *DB) CountPendingXContentDownloads() (queued int, processing int, err e
 			FROM media_objects mo
 			CROSS JOIN assets a INDEXED BY idx_assets_desired_object
 			WHERE a.desired_object_id = mo.object_id
+			  AND a.lifecycle_state = 'active'
 			  AND a.owner_kind = 'tweet'
 			  AND a.asset_kind IN ('post_audio', 'post_media', 'post_thumbnail')
 			  AND mo.job_state IN ('queued', 'downloading')

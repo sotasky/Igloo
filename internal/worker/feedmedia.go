@@ -18,16 +18,18 @@ import (
 const (
 	feedMediaBatchSize     = 1
 	feedMediaLeaseDuration = 5 * time.Minute
+	feedMediaRetryFloor    = 30 * time.Second
 )
 
-func (m *Manager) processFeedMediaBatch(ctx context.Context) bool {
+func (m *Manager) processFeedMediaBatch(ctx context.Context, lane db.DownloadLane) bool {
 	if m == nil || m.db == nil || m.cfg == nil || m.downloader == nil || ctx.Err() != nil {
 		return false
 	}
 	owner := feedMediaLeaseOwner()
+	includeTweets := m.cfg.PlatformEnabled("twitter")
 	assets, err := m.db.ClaimContentAssetDownloadBatch(db.LeaseOptions{
 		Owner: owner, LeaseMs: feedMediaLeaseDuration.Milliseconds(), Limit: feedMediaBatchSize,
-	})
+	}, includeTweets, lane)
 	if err != nil {
 		log.Printf("[feedmedia] ClaimContentAssetDownloadBatch: %v", err)
 		return false
@@ -40,12 +42,12 @@ func (m *Manager) processFeedMediaBatch(ctx context.Context) bool {
 			m.releaseContentAsset(asset)
 			continue
 		}
-		m.processContentAsset(ctx, asset)
+		m.processContentAsset(ctx, asset, lane)
 	}
 	return true
 }
 
-func (m *Manager) processContentAsset(ctx context.Context, asset db.Asset) {
+func (m *Manager) processContentAsset(ctx context.Context, asset db.Asset, workLane db.DownloadLane) {
 	stopRenew := m.startContentAssetLeaseRenewal(ctx, asset)
 	if stopRenew != nil {
 		defer stopRenew()
@@ -55,28 +57,29 @@ func (m *Manager) processContentAsset(ctx context.Context, asset db.Asset) {
 		return
 	}
 	oldPath := asset.FilePath
-	finalPath, contentType, err := m.downloadContentAsset(ctx, asset)
+	bulkLane := mediaLaneForDownloadWork(workLane)
+	finalPath, contentType, err := m.downloadContentAsset(ctx, asset, bulkLane)
 	if err != nil {
 		m.failContentAsset(asset, err)
 		return
 	}
 	key, err := m.cfg.Storage.Key(finalPath)
 	if err != nil {
-		m.removeMediaPaths(ctx, mediaLaneForAsset(asset), finalPath)
+		m.removeMediaPaths(ctx, mediaLaneForAsset(asset, bulkLane), finalPath)
 		m.failContentAsset(asset, err)
 		return
 	}
 	asset.FilePath = key
 	asset.ContentType = contentType
-	if err := m.db.CompleteAssetDownload(asset, asset.LeaseOwner, time.Now().UnixMilli()); err != nil {
-		m.removeMediaPaths(ctx, mediaLaneForAsset(asset), finalPath)
+	if err := m.db.CompleteAssetDownloadInLane(asset, asset.LeaseOwner, time.Now().UnixMilli(), bulkLane); err != nil {
+		m.removeMediaPaths(ctx, mediaLaneForAsset(asset, bulkLane), finalPath)
 		if !errors.Is(err, db.ErrQueueLeaseNotHeld) {
 			log.Printf("[feedmedia] CompleteAssetDownload %s: %v", asset.AssetID, err)
 		}
 		return
 	}
 	if asset.AssetKind == "post_media" && strings.HasPrefix(contentType, "video/") {
-		if err := m.publishContentVideoThumbnail(ctx, asset, finalPath); err != nil {
+		if err := m.publishContentVideoThumbnail(ctx, asset, finalPath, bulkLane); err != nil {
 			log.Printf("[feedmedia] publish thumbnail %s: %v", asset.AssetID, err)
 		}
 	}
@@ -88,9 +91,9 @@ func (m *Manager) processContentAsset(ctx context.Context, asset db.Asset) {
 	m.EmitFeed("feed_media", fmt.Sprintf("Downloaded %s for %s", asset.AssetKind, asset.OwnerID), "done")
 }
 
-func (m *Manager) publishContentVideoThumbnail(ctx context.Context, media db.Asset, videoPath string) error {
+func (m *Manager) publishContentVideoThumbnail(ctx context.Context, media db.Asset, videoPath string, lane download.MediaLane) error {
 	var path string
-	err := m.downloader.RunMedia(ctx, download.MediaLaneBulk, func() error {
+	err := m.downloader.RunMedia(ctx, lane, func() error {
 		var err error
 		path, err = m.materializeVideoThumbnail(ctx, "twitter", media.OwnerID, "", videoPath)
 		return err
@@ -114,7 +117,7 @@ func (m *Manager) publishContentVideoThumbnail(ctx context.Context, media db.Ass
 	}, time.Now().UnixMilli())
 }
 
-func (m *Manager) downloadContentAsset(ctx context.Context, asset db.Asset) (string, string, error) {
+func (m *Manager) downloadContentAsset(ctx context.Context, asset db.Asset, lane download.MediaLane) (string, string, error) {
 	ownerKey, err := safeProfileMediaKey(asset.OwnerID)
 	if err != nil {
 		return "", "", err
@@ -134,7 +137,7 @@ func (m *Manager) downloadContentAsset(ctx context.Context, asset db.Asset) (str
 		if err != nil {
 			return "", "", err
 		}
-		if err := m.downloader.RunMedia(ctx, download.MediaLaneBulk, func() error { return os.MkdirAll(dir, 0o755) }); err != nil {
+		if err := m.downloader.RunMedia(ctx, lane, func() error { return os.MkdirAll(dir, 0o755) }); err != nil {
 			return "", "", err
 		}
 		mediaType := "photo"
@@ -144,12 +147,12 @@ func (m *Manager) downloadContentAsset(ctx context.Context, asset db.Asset) (str
 			mediaType = "video"
 		}
 		opts := download.Opts{OutputDir: dir, ID: unique}
-		paths, err := m.downloader.Download(ctx, asset.SourceURL, mediaType, opts)
+		paths, err := m.downloader.Download(ctx, lane, asset.SourceURL, mediaType, opts)
 		if err != nil {
 			return "", "", err
 		}
 		if len(paths) != 1 {
-			m.removeMediaPaths(ctx, download.MediaLaneBulk, paths...)
+			m.removeMediaPaths(ctx, download.MediaLaneBulkBackground, paths...)
 			return "", "", fmt.Errorf("source produced %d files for one canonical asset", len(paths))
 		}
 		contentType := strings.TrimSpace(asset.ContentType)
@@ -162,11 +165,18 @@ func (m *Manager) downloadContentAsset(ctx context.Context, asset db.Asset) (str
 	}
 }
 
-func mediaLaneForAsset(asset db.Asset) download.MediaLane {
+func mediaLaneForAsset(asset db.Asset, bulkLane download.MediaLane) download.MediaLane {
 	if asset.AssetKind == "avatar" || asset.AssetKind == "post_thumbnail" {
 		return download.MediaLaneState
 	}
-	return download.MediaLaneBulk
+	return bulkLane
+}
+
+func mediaLaneForDownloadWork(lane db.DownloadLane) download.MediaLane {
+	if lane == db.DownloadLaneCurrent {
+		return download.MediaLaneBulkForeground
+	}
+	return download.MediaLaneBulkRegular
 }
 
 func (m *Manager) downloadSmallContentAsset(ctx context.Context, asset db.Asset, unique string) (string, string, error) {
@@ -208,7 +218,7 @@ func (m *Manager) failContentAsset(asset db.Asset, cause error) {
 	attempt := asset.Attempts + 1
 	classification := download.ClassifyFailure(cause, nil, attempt)
 	nowMs := time.Now().UnixMilli()
-	if classification.Kind == download.ErrorKindNotFound || classification.Permanent {
+	if classification.Kind == download.ErrorKindNotFound && terminalHTTPNotFound(cause) {
 		if err := m.db.MarkContentAssetPermanentMissing(
 			asset.AssetID, asset.AssetKind, asset.LeaseOwner, classification.Kind, cause.Error(), nowMs,
 		); err != nil {
@@ -216,9 +226,21 @@ func (m *Manager) failContentAsset(asset db.Asset, cause error) {
 		}
 		return
 	}
+	if classification.Permanent {
+		if err := m.db.MarkContentAssetFailed(
+			asset.AssetID, asset.AssetKind, asset.LeaseOwner, classification.Kind, cause.Error(), nowMs,
+		); err != nil {
+			log.Printf("[feedmedia] mark failed %s: %v", asset.AssetID, err)
+		}
+		return
+	}
+	retryDelay := classification.RetryDelay
+	if retryDelay <= 0 {
+		retryDelay = feedMediaRetryFloor
+	}
 	if err := m.db.RetryAssetDownload(
 		asset.AssetID, asset.AssetKind, asset.LeaseOwner,
-		classification.Kind, cause.Error(), classification.RetryDelay, nowMs,
+		classification.Kind, cause.Error(), retryDelay, nowMs,
 	); err != nil {
 		log.Printf("[feedmedia] retry %s: %v", asset.AssetID, err)
 	}

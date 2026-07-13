@@ -17,8 +17,10 @@ import (
 type MediaLane = storage.MediaLane
 
 const (
-	MediaLaneState = storage.MediaLaneState
-	MediaLaneBulk  = storage.MediaLaneBulk
+	MediaLaneState          = storage.MediaLaneState
+	MediaLaneBulkForeground = storage.MediaLaneBulkForeground
+	MediaLaneBulkRegular    = storage.MediaLaneBulkRegular
+	MediaLaneBulkBackground = storage.MediaLaneBulkBackground
 )
 
 const (
@@ -84,16 +86,16 @@ func (d *Downloader) SetMediaExecutor(executor *storage.MediaExecutor) {
 //     and carousels; Instagram reel URL → yt-dlp first
 //  2. Direct CDN (pbs.twimg.com, video.twimg.com, photo/image) → HTTP
 //  3. Default → yt-dlp
-func (d *Downloader) Download(ctx context.Context, rawURL string, mediaType string, opts Opts) ([]string, error) {
-	completed, err := d.DownloadCompleted(ctx, rawURL, mediaType, opts)
+func (d *Downloader) Download(ctx context.Context, lane MediaLane, rawURL string, mediaType string, opts Opts) ([]string, error) {
+	completed, err := d.DownloadCompleted(ctx, lane, rawURL, mediaType, opts)
 	return completed.MediaPaths, err
 }
 
 // DownloadCompleted routes the request while preserving every exact output
 // path returned by the selected producer.
-func (d *Downloader) DownloadCompleted(ctx context.Context, rawURL string, mediaType string, opts Opts) (CompletedDownload, error) {
+func (d *Downloader) DownloadCompleted(ctx context.Context, lane MediaLane, rawURL string, mediaType string, opts Opts) (CompletedDownload, error) {
 	var completed CompletedDownload
-	err := d.RunMedia(ctx, MediaLaneBulk, func() error {
+	err := d.RunMedia(ctx, lane, func() error {
 		var err error
 		completed, err = d.downloadCompletedAdmitted(ctx, rawURL, mediaType, opts)
 		return err
@@ -292,11 +294,9 @@ func (d *Downloader) downloadTikTok(ctx context.Context, rawURL string, opts Opt
 		return gdlResult, nil
 	}
 
-	// If gallery-dl reached the post and got a permanent 404/403 (deleted,
-	// private, geo-restricted), propagate it. yt-dlp would just emit a
-	// misleading "IP blocked" error and keep the job looping forever.
 	var httpErr *HTTPStatusError
-	if errors.As(gdlErr, &httpErr) && (httpErr.StatusCode == 404 || httpErr.StatusCode == 403) {
+	if ClassifyError(gdlErr, nil) == ErrorKindNotFound ||
+		(errors.As(gdlErr, &httpErr) && httpErr.StatusCode == 403) {
 		return CompletedDownload{}, gdlErr
 	}
 
@@ -317,7 +317,8 @@ func (d *Downloader) downloadGalleryDLFirst(ctx context.Context, rawURL string, 
 		return gdlResult, nil
 	}
 	var httpErr *HTTPStatusError
-	if errors.As(gdlErr, &httpErr) && (httpErr.StatusCode == 404 || httpErr.StatusCode == 403) {
+	if ClassifyError(gdlErr, nil) == ErrorKindNotFound ||
+		(errors.As(gdlErr, &httpErr) && httpErr.StatusCode == 403) {
 		return CompletedDownload{}, gdlErr
 	}
 	ytResult, ytErr := d.YtDlp.DownloadCompleted(ctx, rawURL, opts)

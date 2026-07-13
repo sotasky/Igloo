@@ -58,6 +58,47 @@ func TestGetSubscribedChannelsIncludesFollowWithoutChannelRow(t *testing.T) {
 	t.Fatalf("twitter_follow_only missing from subscribed channels")
 }
 
+func TestNextSubscribedChannelReturnsOldestAndPlatformCount(t *testing.T) {
+	d := openWritableTestDB(t)
+	if err := d.ExecRaw(`
+		INSERT INTO channels (channel_id, name, platform, last_checked, created_at)
+		VALUES
+			('youtube_sample_second', 'Zero', 'youtube', 0, 1),
+			('youtube_sample_old', 'Old', 'youtube', 100, 1),
+			('tiktok_sample_1', 'Other', 'tiktok', 0, 1);
+		INSERT INTO channel_follows (channel_id, followed_at)
+		VALUES
+			('youtube_sample_missing', 1),
+			('youtube_sample_second', 1),
+			('youtube_sample_old', 1),
+			('tiktok_sample_1', 1)
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	next, total, err := d.NextSubscribedChannel("youtube")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if next == nil || next.ChannelID != "youtube_sample_missing" || total != 3 || !next.IsSubscribed {
+		t.Fatalf("first next = %+v total=%d", next, total)
+	}
+	if err := d.ExecRaw(`DELETE FROM channel_follows WHERE channel_id = 'youtube_sample_missing'`); err != nil {
+		t.Fatal(err)
+	}
+	next, total, err = d.NextSubscribedChannel("youtube")
+	if err != nil || next == nil || next.ChannelID != "youtube_sample_second" || total != 2 {
+		t.Fatalf("zero next = %+v total=%d err=%v", next, total, err)
+	}
+	if err := d.ExecRaw(`UPDATE channels SET last_checked = 300 WHERE channel_id = 'youtube_sample_second'`); err != nil {
+		t.Fatal(err)
+	}
+	next, total, err = d.NextSubscribedChannel("youtube")
+	if err != nil || next == nil || next.ChannelID != "youtube_sample_old" || total != 2 {
+		t.Fatalf("old next = %+v total=%d err=%v", next, total, err)
+	}
+}
+
 func TestGetAllVideoCountsByChannel(t *testing.T) {
 	d := openTestDB(t)
 	counts, err := d.GetAllVideoCountsByChannel()
@@ -159,24 +200,24 @@ func TestResolveSubscribeURL(t *testing.T) {
 	}
 }
 
-func TestPurgeUnfollowedVideoChannelRetainsMetadataWhenNoBookmarkSurvives(t *testing.T) {
+func TestPurgeUnfollowedVideoChannelDefersCanonicalCleanupAndRetainsProfile(t *testing.T) {
 	d := openWritableTestDB(t)
 	if err := d.AddChannel(model.Channel{
-		ChannelID: "tiktok_drop", SourceID: "drop", Name: "Drop", Platform: "tiktok",
+		ChannelID: "tiktok_sample_reposter", SourceID: "sample_reposter", Name: "Sample Reposter", Platform: "tiktok",
 	}); err != nil {
 		t.Fatalf("AddChannel: %v", err)
 	}
-	if err := d.FollowChannel("tiktok_drop"); err != nil {
+	if err := d.FollowChannel("tiktok_sample_reposter"); err != nil {
 		t.Fatalf("FollowChannel: %v", err)
 	}
 	if err := d.UpsertChannelProfile(model.ChannelProfile{
-		ChannelID: "tiktok_drop", Platform: "tiktok", Handle: "drop", DisplayName: "Drop",
+		ChannelID: "tiktok_sample_reposter", Platform: "tiktok", Handle: "sample_reposter", DisplayName: "Sample Reposter",
 	}); err != nil {
 		t.Fatalf("UpsertChannelProfile: %v", err)
 	}
 	if _, err := d.conn.Exec(`
 		INSERT INTO videos (video_id, channel_id, owner_kind, title, published_at)
-		VALUES ('test_short', 'tiktok_drop', 'tiktok_video', 'Drop short', 10)
+		VALUES ('test_short', 'tiktok_sample_reposter', 'tiktok_video', 'Sample short', 10)
 	`); err != nil {
 		t.Fatalf("seed video: %v", err)
 	}
@@ -184,44 +225,70 @@ func TestPurgeUnfollowedVideoChannelRetainsMetadataWhenNoBookmarkSurvives(t *tes
 		{AssetID: BuildAssetID("tiktok", "tiktok_video", "test_short", "video_stream", 0), AssetKind: "video_stream", OwnerKind: "tiktok_video", OwnerID: "test_short", FilePath: "videos/drop.mp4", State: AssetStateReady},
 		{AssetID: BuildAssetID("tiktok", "tiktok_video", "test_short", "post_thumbnail", 0), AssetKind: "post_thumbnail", OwnerKind: "tiktok_video", OwnerID: "test_short", FilePath: "thumbs/drop.jpg", State: AssetStateReady},
 		{AssetID: BuildAssetID("tiktok", "tiktok_video", "test_short", "post_media", 0), AssetKind: "post_media", OwnerKind: "tiktok_video", OwnerID: "test_short", FilePath: "slides/drop_0.jpg", State: AssetStateReady},
-		{AssetID: BuildAssetID("tiktok", "channel", "tiktok_drop", "avatar", 0), AssetKind: "avatar", OwnerKind: "channel", OwnerID: "tiktok_drop", FilePath: "avatars/drop.jpg", State: AssetStateReady},
+		{AssetID: BuildAssetID("tiktok", "channel", "tiktok_sample_reposter", "avatar", 0), AssetKind: "avatar", OwnerKind: "channel", OwnerID: "tiktok_sample_reposter", FilePath: "avatars/sample_reposter.jpg", State: AssetStateReady},
 	} {
 		storeReadyAssetForTest(t, d, asset, 1)
 	}
+	if _, err := d.ReconcileVideoDesires(VideoDesireSnapshot{
+		SourceChannelID: "tiktok_sample_reposter", Component: "direct",
+		Items: []VideoDesire{{
+			VideoID: "test_short", OwnerChannelID: "tiktok_sample_reposter",
+			SourcePosition: 0, Lane: DownloadLaneCurrent,
+		}},
+	}); err != nil {
+		t.Fatalf("ReconcileVideoDesires: %v", err)
+	}
+	if err := d.ExecRaw(`
+		INSERT INTO video_repost_sources (
+			video_id, reposter_channel_id, reposted_at_ms, first_seen_at_ms, updated_at_ms
+		) VALUES ('test_short', 'tiktok_sample_reposter', 10, 10, 10)
+	`); err != nil {
+		t.Fatalf("seed source provenance: %v", err)
+	}
 
-	deleted, err := d.PurgeUnfollowedChannelContent("tiktok_drop")
+	deleted, err := d.PurgeUnfollowedChannelContent("tiktok_sample_reposter")
 	if err != nil {
 		t.Fatalf("PurgeUnfollowedChannelContent: %v", err)
 	}
-	deletedPaths := map[string]bool{}
-	for _, key := range deleted {
-		deletedPaths[key] = true
-	}
-	for _, path := range []string{"videos/drop.mp4", "thumbs/drop.jpg", "slides/drop_0.jpg"} {
-		if !deletedPaths[path] {
-			t.Fatalf("deleted paths missing %q: %+v", path, deletedPaths)
-		}
-	}
-	if deletedPaths["avatars/drop.jpg"] {
-		t.Fatalf("profile asset was retired while its profile row remains: %+v", deletedPaths)
+	if len(deleted) != 0 {
+		t.Fatalf("unfollow performed canonical cleanup: %+v", deleted)
 	}
 	var count int
+	if err := d.QueryRow(`SELECT COUNT(*) FROM video_repost_sources WHERE reposter_channel_id='tiktok_sample_reposter'`).Scan(&count); err != nil {
+		t.Fatalf("count source provenance: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("unfollow retained source provenance: %d", count)
+	}
 	if err := d.QueryRow(`SELECT COUNT(*) FROM videos WHERE video_id='test_short'`).Scan(&count); err != nil {
 		t.Fatalf("count video: %v", err)
 	}
-	if count != 0 {
-		t.Fatalf("video row survived purge")
+	if count != 1 {
+		t.Fatalf("video was removed before maintenance")
 	}
-	if err := d.QueryRow(`SELECT COUNT(*) FROM channels WHERE channel_id='tiktok_drop'`).Scan(&count); err != nil {
+	collected, err := d.MaintainVideoRetention(100)
+	if err != nil {
+		t.Fatalf("MaintainVideoRetention: %v", err)
+	}
+	if collected != 1 {
+		t.Fatalf("collected = %d, want 1", collected)
+	}
+	if err := d.QueryRow(`SELECT COUNT(*) FROM videos WHERE video_id='test_short'`).Scan(&count); err != nil {
+		t.Fatalf("count maintained video: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("unrooted video survived maintenance")
+	}
+	if err := d.QueryRow(`SELECT COUNT(*) FROM channels WHERE channel_id='tiktok_sample_reposter'`).Scan(&count); err != nil {
 		t.Fatalf("count channel: %v", err)
 	}
 	if count != 1 {
 		t.Fatalf("channel row was pruned on unfollow, count=%d", count)
 	}
-	if p, _ := d.GetChannelProfile("tiktok_drop"); p == nil {
+	if p, _ := d.GetChannelProfile("tiktok_sample_reposter"); p == nil {
 		t.Fatalf("profile row should survive unfollow purge")
 	}
-	if avatar, err := d.GetAssetByOwnerIdentity("avatar", "channel", "tiktok_drop", 0); err != nil || avatar == nil {
+	if avatar, err := d.GetAssetByOwnerIdentity("avatar", "channel", "tiktok_sample_reposter", 0); err != nil || avatar == nil {
 		t.Fatalf("profile avatar should survive unfollow purge: %+v / %v", avatar, err)
 	}
 }

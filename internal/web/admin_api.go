@@ -224,6 +224,14 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	previousLimits := map[string]int{
+		"youtube":   s.db.IntSetting("youtube_max_videos"),
+		"tiktok":    s.db.IntSetting("shorts_max_videos"),
+		"instagram": s.db.IntSetting("instagram_max_videos"),
+	}
+	previousXMediaLimit := s.db.IntSetting("media_download_limit_default")
+	previousTiktokReposts := s.db.MomentsIncludeRepostsEnabled()
+	previousInstagramTagged := s.db.InstagramIncludeTaggedEnabled()
 	if err := s.db.UpdateSettings(body); err != nil {
 		slog.Error("UpdateSettings", "err", err)
 		if isHTMX {
@@ -232,6 +240,41 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, 500, map[string]any{"error": "db error"})
 		}
 		return
+	}
+	if s.workers != nil {
+		changes := []struct {
+			platform, settingKey string
+			extraChanged         bool
+		}{
+			{"youtube", "youtube_max_videos", false},
+			{"tiktok", "shorts_max_videos", previousTiktokReposts != s.db.MomentsIncludeRepostsEnabled()},
+			{"instagram", "instagram_max_videos", previousInstagramTagged != s.db.InstagramIncludeTaggedEnabled()},
+		}
+		var refresh []string
+		for _, change := range changes {
+			currentLimit := s.db.IntSetting(change.settingKey)
+			if currentLimit < previousLimits[change.platform] {
+				if err := s.workers.EnforceVideoRetentionForPlatform(change.platform); err != nil {
+					slog.Error("EnforceVideoRetentionForPlatform", "platform", change.platform, "err", err)
+				}
+			}
+			if currentLimit != previousLimits[change.platform] || change.extraChanged {
+				refresh = append(refresh, change.platform)
+			}
+		}
+		for _, platform := range refresh {
+			s.workers.TriggerPlatformRefresh(platform)
+		}
+		currentXMediaLimit := s.db.IntSetting("media_download_limit_default")
+		if currentXMediaLimit < previousXMediaLimit {
+			if err := s.workers.EnforceXMediaRetention(); err != nil {
+				slog.Error("EnforceXMediaRetention", "err", err)
+			}
+		} else if currentXMediaLimit > previousXMediaLimit {
+			if err := s.workers.ExpandXMediaRetention(); err != nil {
+				slog.Error("ExpandXMediaRetention", "err", err)
+			}
+		}
 	}
 
 	if isHTMX {

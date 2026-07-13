@@ -50,8 +50,8 @@ type Server struct {
 	downloaderReportMu     sync.Mutex
 	downloaderReportLatest *downloaderReport
 
-	androidSyncBootstrapMu         sync.Mutex
-	androidSyncBootstraps          map[string]*androidSyncBootstrapSession
+	androidSyncSessionMu           sync.Mutex
+	androidSyncSessions            map[string]*androidSyncSession
 	androidSyncAssetServeSemOnce   sync.Once
 	androidSyncAssetServeSemaphore chan struct{}
 }

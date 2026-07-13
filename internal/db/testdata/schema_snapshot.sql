@@ -7,6 +7,9 @@ CREATE UNIQUE INDEX idx_android_sync_heads_revision ON android_sync_heads(revisi
 -- index: idx_android_sync_health_cursor on android_sync_health_reports
 CREATE INDEX idx_android_sync_health_cursor ON android_sync_health_reports(cursor, reported_at_ms DESC);
 
+-- index: idx_android_sync_health_reported on android_sync_health_reports
+CREATE INDEX idx_android_sync_health_reported ON android_sync_health_reports(reported_at_ms DESC, id DESC);
+
 -- index: idx_assets_desired_object on assets
 CREATE INDEX idx_assets_desired_object ON assets(desired_object_id);
 
@@ -37,8 +40,11 @@ CREATE INDEX idx_channel_profiles_twitter_handle ON channel_profiles(LOWER(COALE
 -- index: idx_channels_platform on channels
 CREATE INDEX idx_channels_platform ON channels(platform);
 
+-- index: idx_download_queue_lease on download_queue
+CREATE INDEX idx_download_queue_lease ON download_queue(status, lease_until_ms);
+
 -- index: idx_download_queue_ready on download_queue
-CREATE INDEX idx_download_queue_ready ON download_queue(status, next_attempt_at_ms, lease_until_ms, priority, added_at);
+CREATE INDEX idx_download_queue_ready ON download_queue(status, next_attempt_at_ms, lease_until_ms, added_at_ms);
 
 -- index: idx_downloader_operations_recent on downloader_operations
 CREATE INDEX idx_downloader_operations_recent ON downloader_operations(started_at_ms DESC, id DESC);
@@ -121,6 +127,12 @@ CREATE INDEX idx_profile_jobs_claim ON profile_jobs(completed_revision, requeste
 -- index: idx_translation_jobs_ready on translation_jobs
 CREATE INDEX idx_translation_jobs_ready ON translation_jobs(status, next_attempt_at, priority, updated_at);
 
+-- index: idx_video_desires_source_position on video_desires
+CREATE INDEX idx_video_desires_source_position ON video_desires(source_channel_id, source_component, source_position, video_id);
+
+-- index: idx_video_desires_video on video_desires
+CREATE INDEX idx_video_desires_video ON video_desires(video_id, lane, source_position);
+
 -- index: idx_video_repost_sources_reposter on video_repost_sources
 CREATE INDEX idx_video_repost_sources_reposter ON video_repost_sources(reposter_channel_id);
 
@@ -144,6 +156,9 @@ CREATE TABLE analytics_events ( event_id TEXT PRIMARY KEY, event_type TEXT NOT N
 
 -- table: analytics_rollups_daily on analytics_rollups_daily
 CREATE TABLE analytics_rollups_daily ( day TEXT NOT NULL, event_type TEXT NOT NULL, screen TEXT NOT NULL DEFAULT '', content_type TEXT NOT NULL DEFAULT '', count INTEGER DEFAULT 0, total_elapsed_ms INTEGER DEFAULT 0, PRIMARY KEY (day, event_type, screen, content_type) );
+
+-- table: android_feed_retention on android_feed_retention
+CREATE TABLE android_feed_retention ( id INTEGER PRIMARY KEY CHECK (id = 1), feed_days INTEGER NOT NULL, reconciled_at_ms INTEGER NOT NULL );
 
 -- table: android_sync_clock on android_sync_clock
 CREATE TABLE android_sync_clock ( id INTEGER PRIMARY KEY CHECK (id = 1), epoch TEXT NOT NULL, revision INTEGER NOT NULL DEFAULT 0 );
@@ -178,9 +193,6 @@ CREATE TABLE channel_follows ( channel_id TEXT PRIMARY KEY, followed_at INTEGER 
 -- table: channel_profiles on channel_profiles
 CREATE TABLE channel_profiles ( channel_id TEXT PRIMARY KEY, platform TEXT NOT NULL, handle TEXT, display_name TEXT, bio TEXT, website TEXT, followers INTEGER DEFAULT 0, following INTEGER DEFAULT 0, verified INTEGER DEFAULT 0, verified_type TEXT, protected INTEGER DEFAULT 0, observed_at_ms INTEGER NOT NULL DEFAULT 0, fetched_at INTEGER NOT NULL DEFAULT 0, tombstone INTEGER DEFAULT 0 );
 
--- table: channel_queue on channel_queue
-CREATE TABLE channel_queue ( channel_id TEXT PRIMARY KEY, status TEXT DEFAULT 'pending', priority INTEGER DEFAULT 0, added_at INTEGER NOT NULL DEFAULT 0, started_at INTEGER NOT NULL DEFAULT 0, completed_at INTEGER NOT NULL DEFAULT 0 );
-
 -- table: channel_settings on channel_settings
 CREATE TABLE channel_settings ( channel_id TEXT PRIMARY KEY, media_only INTEGER, include_reposts INTEGER, media_download_limit INTEGER, max_videos INTEGER, download_subtitles INTEGER, updated_at INTEGER NOT NULL DEFAULT 0 );
 
@@ -191,7 +203,7 @@ CREATE TABLE channel_stars ( channel_id TEXT PRIMARY KEY, starred_at INTEGER NOT
 CREATE TABLE channels ( id INTEGER PRIMARY KEY AUTOINCREMENT, channel_id TEXT UNIQUE NOT NULL, source_id TEXT, name TEXT NOT NULL, url TEXT, platform TEXT, quality TEXT, last_checked INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL DEFAULT 0 );
 
 -- table: download_queue on download_queue
-CREATE TABLE download_queue ( video_id TEXT PRIMARY KEY, channel_id TEXT NOT NULL, title TEXT DEFAULT '', published_at_ms INTEGER NOT NULL DEFAULT 0, status TEXT DEFAULT 'pending', priority INTEGER DEFAULT 0, error TEXT DEFAULT '', retry_count INTEGER DEFAULT 0, lease_owner TEXT NOT NULL DEFAULT '', lease_until_ms INTEGER NOT NULL DEFAULT 0, next_attempt_at_ms INTEGER NOT NULL DEFAULT 0, last_error_kind TEXT NOT NULL DEFAULT '', last_error_strategy TEXT NOT NULL DEFAULT '', tool TEXT NOT NULL DEFAULT '', cookie_label TEXT NOT NULL DEFAULT '', added_at INTEGER NOT NULL DEFAULT 0, started_at INTEGER NOT NULL DEFAULT 0, completed_at INTEGER NOT NULL DEFAULT 0 );
+CREATE TABLE download_queue ( video_id TEXT PRIMARY KEY, owner_channel_id TEXT NOT NULL, title TEXT NOT NULL DEFAULT '', published_at_ms INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'processing', 'blocked')), retry_count INTEGER NOT NULL DEFAULT 0, next_attempt_at_ms INTEGER NOT NULL DEFAULT 0, last_error_kind TEXT NOT NULL DEFAULT '', last_error TEXT NOT NULL DEFAULT '', lease_owner TEXT NOT NULL DEFAULT '', lease_until_ms INTEGER NOT NULL DEFAULT 0, added_at_ms INTEGER NOT NULL DEFAULT 0, started_at_ms INTEGER NOT NULL DEFAULT 0 );
 
 -- table: downloader_operations on downloader_operations
 CREATE TABLE downloader_operations ( id INTEGER PRIMARY KEY AUTOINCREMENT, operation TEXT NOT NULL, platform TEXT NOT NULL, subject TEXT NOT NULL DEFAULT '', tool TEXT NOT NULL, started_at_ms INTEGER NOT NULL, ended_at_ms INTEGER NOT NULL, status TEXT NOT NULL, error_kind TEXT NOT NULL DEFAULT '', error TEXT NOT NULL DEFAULT '', cookie_label TEXT NOT NULL DEFAULT '', elapsed_ms INTEGER NOT NULL DEFAULT 0, item_count INTEGER NOT NULL DEFAULT 0, media_count INTEGER NOT NULL DEFAULT 0, file_count INTEGER NOT NULL DEFAULT 0, bytes INTEGER NOT NULL DEFAULT 0, summary_json TEXT NOT NULL DEFAULT '' );
@@ -300,6 +312,9 @@ CREATE TABLE translations ( tweet_id TEXT NOT NULL, field TEXT NOT NULL, source_
 
 -- table: video_comments on video_comments
 CREATE TABLE video_comments ( video_id TEXT NOT NULL, comment_id TEXT NOT NULL, parent_id TEXT, author_name TEXT, author_id TEXT, text TEXT, like_count INTEGER, published_at INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(video_id, comment_id) ) WITHOUT ROWID;
+
+-- table: video_desires on video_desires
+CREATE TABLE video_desires ( source_channel_id TEXT NOT NULL, source_component TEXT NOT NULL, video_id TEXT NOT NULL, source_position INTEGER NOT NULL DEFAULT 0, lane TEXT NOT NULL CHECK(lane IN ('current', 'backfill')), PRIMARY KEY (source_channel_id, source_component, video_id) ) WITHOUT ROWID;
 
 -- table: video_repost_sources on video_repost_sources
 CREATE TABLE video_repost_sources ( video_id TEXT NOT NULL, reposter_channel_id TEXT NOT NULL, reposted_at_ms INTEGER NOT NULL DEFAULT 0, first_seen_at_ms INTEGER NOT NULL DEFAULT 0, updated_at_ms INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (video_id, reposter_channel_id) );

@@ -266,9 +266,6 @@ func (s *Server) handleAndroidSyncHealth(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *Server) androidSyncRetentionFallback() db.AndroidRetentionSettings {
-	if report, err := s.db.GetLatestAndroidSyncHealthReport(); err == nil && report != nil && report.HasRetention {
-		return report.Retention
-	}
 	return db.AndroidRetentionSettings{FeedDays: 7, YoutubeDays: 7, MomentsDays: 7, StoryHours: 48}
 }
 
@@ -621,9 +618,6 @@ func (s *Server) androidSyncAssetFromInventory(row db.Asset) model.AndroidSyncAs
 	if ready {
 		state = "ready"
 		contentType = row.ContentType
-		if contentType == "application/octet-stream" {
-			contentType = ""
-		}
 		sizeBytes = row.SizeBytes
 		sha256 = row.SHA256
 	}

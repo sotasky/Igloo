@@ -10,11 +10,9 @@ import androidx.core.app.NotificationCompat
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
 import androidx.work.ExistingPeriodicWorkPolicy
-import androidx.work.ExistingWorkPolicy
 import androidx.work.ForegroundInfo
 import androidx.work.ListenableWorker
 import androidx.work.NetworkType
-import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
@@ -107,7 +105,6 @@ class PeriodicSyncWorker(appContext: Context, params: WorkerParameters) :
 
     companion object {
         const val WORK_NAME = "igloo_periodic_sync"
-        const val CATCHUP_WORK_NAME = "igloo_sync_catchup"
         const val MIN_INTERVAL_MINUTES = 15L
 
         private const val NOTIFICATION_ID = 1002
@@ -131,24 +128,8 @@ class PeriodicSyncWorker(appContext: Context, params: WorkerParameters) :
             WorkManager.getInstance(context).enqueueUniquePeriodicWork(WORK_NAME, policy, request)
         }
 
-        suspend fun enqueueCatchup(context: Context, prefs: PreferencesRepo) {
-            if (!prefs.syncEnabled().first()) {
-                cancel(context)
-                return
-            }
-            val request =
-                OneTimeWorkRequestBuilder<PeriodicSyncWorker>()
-                    .setConstraints(constraintsFor(prefs.syncWifiOnly().first()))
-                    .build()
-            WorkManager.getInstance(context)
-                .enqueueUniqueWork(CATCHUP_WORK_NAME, ExistingWorkPolicy.REPLACE, request)
-        }
-
         fun cancel(context: Context) {
-            WorkManager.getInstance(context).apply {
-                cancelUniqueWork(WORK_NAME)
-                cancelUniqueWork(CATCHUP_WORK_NAME)
-            }
+            WorkManager.getInstance(context).cancelUniqueWork(WORK_NAME)
         }
 
         private fun constraintsFor(wifiOnly: Boolean): Constraints =
@@ -162,8 +143,6 @@ class PeriodicSyncWorker(appContext: Context, params: WorkerParameters) :
 
 interface PeriodicSyncScheduler {
     suspend fun applyPreferences()
-
-    suspend fun enqueueCatchup()
 }
 
 internal class WorkManagerPeriodicSyncScheduler(
@@ -172,10 +151,5 @@ internal class WorkManagerPeriodicSyncScheduler(
 ) : PeriodicSyncScheduler {
     override suspend fun applyPreferences() {
         PeriodicSyncWorker.enqueue(context, prefs, ExistingPeriodicWorkPolicy.CANCEL_AND_REENQUEUE)
-        PeriodicSyncWorker.enqueueCatchup(context, prefs)
-    }
-
-    override suspend fun enqueueCatchup() {
-        PeriodicSyncWorker.enqueueCatchup(context, prefs)
     }
 }

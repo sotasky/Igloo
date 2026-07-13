@@ -325,7 +325,7 @@ func (s *Server) handleFeedMediaRetry(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 500, map[string]any{"success": false, "error": "db error"})
 		return
 	}
-	s.workers.KickFeedMedia()
+	s.workers.KickMediaWork()
 	writeJSON(w, 200, map[string]any{"success": true})
 }
 

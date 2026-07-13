@@ -3,13 +3,13 @@ package worker
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
 	"regexp"
 	"strconv"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -18,9 +18,15 @@ import (
 	"github.com/screwys/igloo/internal/model"
 )
 
+const mediaNoWorkPollFloor = 5 * time.Second
+
+type mediaWorkClass uint8
+
 const (
-	downloadBatchSize  = 1
-	feedMediaBurstSize = 32
+	mediaWorkXCurrent mediaWorkClass = iota
+	mediaWorkVideoCurrent
+	mediaWorkXBackfill
+	mediaWorkVideoBackfill
 )
 
 var (
@@ -28,14 +34,7 @@ var (
 	downloadPoolLeaseRenewInterval = downloadPoolLeaseDuration / 2
 )
 
-// short-form downloads share one pacing clock to avoid rapid cross-platform bursts.
-var (
-	tiktokDlMu       sync.Mutex
-	tiktokDlLastTime time.Time
-)
-
 const downloadAuthBackoff = 3 * time.Hour
-const shortFormDownloadDelayFallback = 60 * time.Second
 
 type downloadPlatformBackoff struct {
 	Until time.Time
@@ -52,140 +51,270 @@ var qualityFormats = map[string]string{
 	"best":  "best",
 }
 
-func (m *Manager) runMediaExecutor(ctx context.Context) {
+type mediaWorkerKind uint8
+
+const (
+	mediaWorkerCurrent mediaWorkerKind = iota
+	mediaWorkerBackfill
+)
+
+func (m *Manager) runMediaCurrentLoop(ctx context.Context) {
+	m.runMediaWorkLoop(ctx, mediaWorkerCurrent)
+}
+
+func (m *Manager) runMediaBackfillLoop(ctx context.Context) {
+	m.runMediaWorkLoop(ctx, mediaWorkerBackfill)
+}
+
+func (m *Manager) runMediaWorkLoop(ctx context.Context, kind mediaWorkerKind) {
 	timer := time.NewTimer(0)
 	defer timer.Stop()
-	log.Printf("[media] executor started")
+	kick := m.mediaCurrentKick
+	label := "current"
+	if kind == mediaWorkerBackfill {
+		kick = m.mediaBackfillKick
+		label = "backfill"
+	}
+	log.Printf("[media] %s worker started", label)
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-m.downloadKick:
-		case <-m.feedMediaKick:
+		case <-kick:
 		case <-timer.C:
 		}
-		if !m.IsStopRequested() {
-			for i := 0; i < feedMediaBurstSize && m.processFeedMediaBatch(ctx); i++ {
-			}
-			m.processDownloadBatch(ctx)
+		if m.IsStopRequested() {
+			resetMediaTimer(timer, time.Hour)
+			continue
 		}
-		delay, err := m.db.NextMediaWorkDelay(time.Now().UnixMilli())
+		now := time.Now()
+		worked, previewDelay := m.processNextMediaWork(ctx, now, kind)
+		if worked {
+			resetMediaTimer(timer, 10*time.Millisecond)
+			continue
+		}
+		eligiblePlatforms, backoffDelay := m.downloadSchedulingState(now)
+		includeTweets := m.cfg == nil || m.cfg.PlatformEnabled("twitter")
+		delay, err := m.db.NextMediaWorkDelay(now.UnixMilli(), eligiblePlatforms, includeTweets)
 		if err != nil {
 			log.Printf("[media] next due: %v", err)
 			delay = time.Minute
 		}
-		if delay < 10*time.Millisecond {
-			delay = 10 * time.Millisecond
+		if backoffDelay > 0 && backoffDelay < delay {
+			delay = backoffDelay
 		}
-		if !timer.Stop() {
-			select {
-			case <-timer.C:
-			default:
-			}
+		if previewDelay > 0 && previewDelay < delay {
+			delay = previewDelay
 		}
-		timer.Reset(delay)
+		if delay < mediaNoWorkPollFloor {
+			delay = mediaNoWorkPollFloor
+		}
+		resetMediaTimer(timer, delay)
 	}
 }
 
-// processDownloadBatch claims one due video mutation for the media executor.
-func (m *Manager) processDownloadBatch(ctx context.Context) {
-	owner := downloadPoolLeaseOwner()
-	jobs, err := m.db.ClaimDownloadBatchWithLease(db.LeaseOptions{
-		Owner:   owner,
-		LeaseMs: downloadPoolLeaseDuration.Milliseconds(),
-		Limit:   downloadBatchSize,
-	})
-	if err != nil {
-		log.Printf("[downloadpool] ClaimDownloadBatchWithLease: %v", err)
-		return
-	}
-	if len(jobs) == 0 {
-		return
+func (m *Manager) processNextMediaWork(ctx context.Context, now time.Time, kind mediaWorkerKind) (bool, time.Duration) {
+	if kind == mediaWorkerCurrent {
+		order := mediaCurrentWorkOrder(m.mediaCurrentTurn)
+		for _, workClass := range order {
+			worked := false
+			switch workClass {
+			case mediaWorkXCurrent:
+				worked = m.processFeedMediaBatch(ctx, db.DownloadLaneCurrent)
+			case mediaWorkVideoCurrent:
+				worked = m.processDownloadBatch(ctx, db.DownloadLaneCurrent)
+			}
+			if worked {
+				m.mediaCurrentTurn++
+				return true, 0
+			}
+		}
+		return false, 0
 	}
 
-	log.Printf("[downloadpool] processing %d jobs", len(jobs))
+	var previewDelay time.Duration
+	if m.hasPreviewHint() {
+		worked, delay := m.processRequestedPreview(ctx, now)
+		previewDelay = delay
+		if worked {
+			return true, previewDelay
+		}
+	}
+	for _, workClass := range mediaBackfillPrimaryWorkOrder(m.mediaBackgroundTurn) {
+		worked := false
+		switch workClass {
+		case mediaWorkXBackfill:
+			worked = m.processFeedMediaBatch(ctx, db.DownloadLaneBackfill)
+		case mediaWorkVideoBackfill:
+			worked = m.processDownloadBatch(ctx, db.DownloadLaneBackfill)
+		}
+		if !worked {
+			continue
+		}
+		m.mediaBackgroundTurn++
+		return true, previewDelay
+	}
+	worked, delay := m.processPreviewBatch(ctx, now)
+	if previewDelay == 0 || delay > 0 && delay < previewDelay {
+		previewDelay = delay
+	}
+	return worked, previewDelay
+}
 
-	for _, job := range jobs {
+func mediaCurrentWorkOrder(currentTurn uint64) [2]mediaWorkClass {
+	order := [2]mediaWorkClass{mediaWorkXCurrent, mediaWorkVideoCurrent}
+	if currentTurn%2 == 1 {
+		order[0], order[1] = order[1], order[0]
+	}
+	return order
+}
+
+func mediaBackfillPrimaryWorkOrder(backgroundTurn uint64) [2]mediaWorkClass {
+	order := [2]mediaWorkClass{mediaWorkXBackfill, mediaWorkVideoBackfill}
+	if backgroundTurn%2 == 1 {
+		order[0], order[1] = order[1], order[0]
+	}
+	return order
+}
+
+func resetMediaTimer(timer *time.Timer, delay time.Duration) {
+	if !timer.Stop() {
 		select {
-		case <-ctx.Done():
-			return
+		case <-timer.C:
 		default:
 		}
-
-		ch, err := m.db.GetChannel(job.ChannelID)
-		if err != nil || ch == nil {
-			log.Printf("[downloadpool] GetChannel %s: %v", job.ChannelID, err)
-			m.failDownloadJob(job, fmt.Errorf("channel not found"))
-			continue
-		}
-		if m.cfg != nil && !m.cfg.PlatformEnabled(ch.Platform) {
-			reason := fmt.Sprintf("platform disabled: %s", ch.Platform)
-			log.Printf("[downloadpool] skip %s: %s", job.VideoID, reason)
-			if err := m.db.UpdateDownloadQueueStatus(job.VideoID, job.LeaseOwner, "failed", reason, job.RetryCount+1, download.ErrorKindPermanentHTTP, download.ErrorStrategyPermanent, 0, time.Now().UnixMilli()); err != nil {
-				log.Printf("[downloadpool] UpdateDownloadQueueStatus %s: %v", job.VideoID, err)
-			}
-			continue
-		}
-
-		// download_subtitles lives on channel_settings with global fallback;
-		// GetChannelSettings resolves the override chain.
-		subtitles := false
-		if s, sErr := m.db.GetChannelSettings(ch.ChannelID); sErr == nil && s != nil {
-			subtitles = s.DownloadSubtitles
-		}
-
-		m.downloadVideo(ctx, job, ch.Platform, ch.SourceID, ch.Quality, subtitles)
 	}
+	timer.Reset(delay)
+}
+
+// processDownloadBatch claims one due canonical video download.
+func (m *Manager) processDownloadBatch(ctx context.Context, lane db.DownloadLane) bool {
+	owner := downloadPoolLeaseOwner()
+	job, ok, err := m.claimDownloadWorkInLane(owner, lane, time.Now())
+	if err != nil {
+		log.Printf("[downloadpool] ClaimDownloadWork: %v", err)
+		return false
+	}
+	if !ok {
+		return false
+	}
+
+	ch, err := m.db.GetChannel(job.OwnerChannelID)
+	if err != nil || ch == nil {
+		log.Printf("[downloadpool] GetChannel %s: %v", job.OwnerChannelID, err)
+		m.failDownloadJob(job, fmt.Errorf("owner channel not found"))
+		return true
+	}
+	platform := job.Platform
+	if platform == "" {
+		platform = ch.Platform
+	}
+	if m.cfg != nil && !m.cfg.PlatformEnabled(platform) {
+		reason := fmt.Sprintf("platform disabled: %s", platform)
+		log.Printf("[downloadpool] postpone %s: %s", job.VideoID, reason)
+		if err := m.db.RetryDownloadWork(job.VideoID, job.LeaseOwner, "platform_disabled", reason, 6*time.Hour, time.Now().UnixMilli()); err != nil {
+			log.Printf("[downloadpool] RetryDownloadWork %s: %v", job.VideoID, err)
+		}
+		return true
+	}
+
+	quality := ch.Quality
+	subtitles := false
+	settingsChannelID := job.SourceChannelID
+	if settingsChannelID == "" {
+		settingsChannelID = job.OwnerChannelID
+	}
+	if settings, settingsErr := m.db.GetChannelSettings(settingsChannelID); settingsErr == nil && settings != nil {
+		subtitles = settings.DownloadSubtitles
+		if settings.Quality != "" {
+			quality = settings.Quality
+		}
+	}
+
+	m.downloadVideo(ctx, job, platform, ch.SourceID, quality, subtitles)
+	return true
+}
+
+func (m *Manager) claimDownloadWorkInLane(owner string, lane db.DownloadLane, now time.Time) (db.DownloadWork, bool, error) {
+	m.downloadPlatformMu.Lock()
+	defer m.downloadPlatformMu.Unlock()
+	platforms := m.enabledDownloadPlatforms()
+	if m.downloadPlatformAt == nil {
+		m.downloadPlatformAt = make(map[db.DownloadLane]int, 2)
+	}
+	start := m.downloadPlatformAt[lane]
+	for offset := 0; offset < len(platforms); offset++ {
+		index := (start + offset) % len(platforms)
+		platform := platforms[index]
+		if _, cooling := m.activeDownloadPlatformBackoff(platform, now); cooling {
+			continue
+		}
+		work, ok, err := m.db.ClaimDownloadWork(owner, lane, platform, now.UnixMilli(), downloadPoolLeaseDuration)
+		if err != nil {
+			return db.DownloadWork{}, false, err
+		}
+		if !ok {
+			continue
+		}
+		m.downloadPlatformAt[lane] = (index + 1) % len(platforms)
+		return work, true, nil
+	}
+	return db.DownloadWork{}, false, nil
 }
 
 // downloadVideo handles a single video download job.
-func (m *Manager) downloadVideo(ctx context.Context, job db.DownloadQueueRow, platform, sourceID, quality string, subtitles bool) {
-	if stopRenew := m.startDownloadQueueLeaseRenewal(ctx, job); stopRenew != nil {
+func (m *Manager) downloadVideo(ctx context.Context, job db.DownloadWork, platform, sourceID, quality string, subtitles bool) {
+	if stopRenew := m.startDownloadWorkLeaseRenewal(ctx, job); stopRenew != nil {
 		defer stopRenew()
 	}
 
-	if backoff, ok := m.activeDownloadPlatformBackoff(platform, time.Now()); ok {
-		m.postponeDownloadJobForPlatformBackoff(job, platform, backoff)
-		return
-	}
 	ownerKind, ok := db.VideoOwnerKindForPlatform(platform)
 	if !ok || ownerKind == "tweet" {
 		m.failDownloadJob(job, fmt.Errorf("unsupported download platform %q", platform))
 		return
 	}
-
-	// Short-form rate-limit pacing: enforce minimum gap between downloads,
-	// measured from the END of the previous download attempt.
-	if isShortFormDownloadPlatform(platform) {
-		downloadDelay := m.shortFormDownloadDelay(platform)
-		tiktokDlMu.Lock()
-		if elapsed := time.Since(tiktokDlLastTime); elapsed < downloadDelay {
-			time.Sleep(downloadDelay - elapsed)
-		}
-		tiktokDlMu.Unlock()
+	mediaLane := download.MediaLaneBulkRegular
+	if job.Lane == db.DownloadLaneCurrent {
+		mediaLane = download.MediaLaneBulkForeground
 	}
-	defer func() {
-		if isShortFormDownloadPlatform(platform) {
-			tiktokDlMu.Lock()
-			tiktokDlLastTime = time.Now()
-			tiktokDlMu.Unlock()
-		}
-	}()
+	isStory := job.SourceComponent == sourceComponentStories
 
 	start := time.Now()
-	m.EmitDownload(fmt.Sprintf("Downloading: %s", job.Title), "start", job.ChannelID, platform)
+	m.EmitDownload(fmt.Sprintf("Downloading: %s", job.Title), "start", job.SourceChannelID, platform)
 	safeSourceID := sourceID
 	if platform == "tiktok" {
-		if h := model.TikTokHandleFromChannelID(job.ChannelID); h != "" {
+		if h := model.TikTokHandleFromChannelID(job.OwnerChannelID); h != "" {
 			safeSourceID = h
 		}
 	}
-	videoDir, err := m.cfg.Storage.WritePath("media/" + platform + "/" + safeSourceID)
+	if isStory {
+		_, valid := nativeStoryID(platform, job.VideoID)
+		if !valid {
+			m.failDownloadJob(job, fmt.Errorf("invalid %s story id %q", platform, job.VideoID))
+			return
+		}
+		switch platform {
+		case "tiktok":
+			safeSourceID = model.TikTokHandleFromChannelID(job.OwnerChannelID)
+		case "instagram":
+			safeSourceID = model.InstagramHandleFromChannelID(job.OwnerChannelID)
+		}
+		if safeSourceID == "" {
+			m.failDownloadJob(job, fmt.Errorf("story owner %q has no valid %s handle", job.OwnerChannelID, platform))
+			return
+		}
+		subtitles = false
+	}
+	videoPath := "media/" + platform + "/" + safeSourceID
+	if isStory {
+		videoPath += "/stories"
+	}
+	videoDir, err := m.cfg.Storage.WritePath(videoPath)
 	if err != nil {
 		m.failDownloadJob(job, fmt.Errorf("storage path: %w", err))
 		return
 	}
-	if err := m.downloader.RunMedia(ctx, download.MediaLaneBulk, func() error { return os.MkdirAll(videoDir, 0o755) }); err != nil {
+	if err := m.downloader.RunMedia(ctx, mediaLane, func() error { return os.MkdirAll(videoDir, 0o755) }); err != nil {
 		log.Printf("[downloadpool] mkdir %s: %v", videoDir, err)
 		m.failDownloadJob(job, fmt.Errorf("mkdir: %w", err))
 		return
@@ -219,23 +348,23 @@ func (m *Manager) downloadVideo(ctx context.Context, job db.DownloadQueueRow, pl
 		SubtitleDir:        subtitleDir,
 	}
 
-	completed, reused, dlErr := m.reusableCompletedVideo(ctx, videoDir, job.VideoID, platform)
+	completed, reused, dlErr := m.reusableCompletedVideo(ctx, mediaLane, videoDir, job.VideoID, platform)
 	if dlErr == nil && !reused {
-		completed, dlErr = m.downloader.DownloadCompleted(ctx, sourceURL, "video", opts)
+		completed, dlErr = m.downloader.DownloadCompleted(ctx, mediaLane, sourceURL, "video", opts)
 	}
 
 	if dlErr != nil {
-		m.removeFailedAttempt(ctx, completedVideoFiles{}, completed)
+		m.removeFailedAttempt(ctx, mediaLane, completedVideoFiles{}, completed)
 		log.Printf("[downloadpool] download %s: %v", job.VideoID, dlErr)
-		m.EmitDownload(fmt.Sprintf("Failed: %s — %v", job.Title, dlErr), "error", job.ChannelID, platform)
+		m.EmitDownload(fmt.Sprintf("Failed: %s — %v", job.Title, dlErr), "error", job.SourceChannelID, platform)
 		m.failDownloadJob(job, fmt.Errorf("download: %w", dlErr))
 		return
 	}
 
 	if len(completed.MediaPaths) == 0 {
-		m.removeFailedAttempt(ctx, completedVideoFiles{}, completed)
+		m.removeFailedAttempt(ctx, mediaLane, completedVideoFiles{}, completed)
 		log.Printf("[downloadpool] no files returned for %s", job.VideoID)
-		m.EmitDownload(fmt.Sprintf("Failed: %s — no files returned", job.Title), "error", job.ChannelID, platform)
+		m.EmitDownload(fmt.Sprintf("Failed: %s — no files returned", job.Title), "error", job.SourceChannelID, platform)
 		m.failDownloadJob(job, fmt.Errorf("no files returned"))
 		return
 	}
@@ -244,10 +373,10 @@ func (m *Manager) downloadVideo(ctx context.Context, job db.DownloadQueueRow, pl
 	}
 
 	metadata := loadInfoJSONFile(completed.InfoJSONPath)
-	files, err := m.prepareCompletedVideoFiles(ctx, platform, attemptID, completed)
+	files, err := m.prepareCompletedVideoFiles(ctx, mediaLane, platform, attemptID, completed)
 	if err != nil {
 		if !reused {
-			m.removeFailedAttempt(ctx, files, completed)
+			m.removeFailedAttempt(ctx, mediaLane, files, completed)
 		}
 		m.failDownloadJob(job, fmt.Errorf("prepare completed outputs: %w", err))
 		return
@@ -265,6 +394,12 @@ func (m *Manager) downloadVideo(ctx context.Context, job db.DownloadQueueRow, pl
 		}
 		metadata["slides"] = slides
 		metadata["vcodec"] = "none"
+	}
+	if isStory {
+		if metadata == nil {
+			metadata = map[string]any{}
+		}
+		metadata["webpage_url"] = sourceURL
 	}
 
 	publishedAt := publishedAtForJob(metadata, job)
@@ -301,13 +436,17 @@ func (m *Manager) downloadVideo(ctx context.Context, job db.DownloadQueueRow, pl
 	// truncated social caption.
 	title := videoTitleFromMetadata(metadata, job.Title)
 
+	sourceKind := ""
+	if isStory {
+		sourceKind = "story"
+	}
 	if err := m.db.StoreCompletedVideo(db.CompletedVideo{
-		VideoID: job.VideoID, ChannelID: job.ChannelID, OwnerKind: ownerKind, Title: title, Description: description,
+		VideoID: job.VideoID, ChannelID: job.OwnerChannelID, OwnerKind: ownerKind, Title: title, Description: description,
 		Duration: duration, PublishedAtMs: publishedAt, MetadataJSON: metadataJSON,
-		MediaKind: mediaKind, SlideCount: slideCount, Assets: files.assets,
+		MediaKind: mediaKind, SlideCount: slideCount, SourceKind: sourceKind, MediaLane: mediaLane, Assets: files.assets,
 	}); err != nil {
 		if !reused {
-			m.removeFailedAttempt(ctx, files, completed)
+			m.removeFailedAttempt(ctx, mediaLane, files, completed)
 		}
 		log.Printf("[downloadpool] StoreCompletedVideo %s: %v", job.VideoID, err)
 		m.failDownloadJob(job, fmt.Errorf("db insert: %w", err))
@@ -317,15 +456,16 @@ func (m *Manager) downloadVideo(ctx context.Context, job db.DownloadQueueRow, pl
 		log.Printf("[downloadpool] StoreVideoSubtitleAssets %s: %v", job.VideoID, err)
 	}
 	if !reused {
-		m.removeTransientFiles(ctx, files)
+		m.removeTransientFiles(ctx, mediaLane, files)
 	}
 
-	// Remove from download queue.
-	if err := m.db.RemoveFromDownloadQueue(job.VideoID, job.LeaseOwner); err != nil {
-		log.Printf("[downloadpool] RemoveFromDownloadQueue %s: %v", job.VideoID, err)
+	if err := m.db.CompleteDownloadWork(job.VideoID, job.LeaseOwner); err != nil {
+		log.Printf("[downloadpool] CompleteDownloadWork %s: %v", job.VideoID, err)
 	}
 
-	m.enqueueCompletedVideoPreview(job.VideoID, platform, files.primaryPath, float64(duration))
+	if job.Lane == db.DownloadLaneCurrent {
+		m.RequestVideoPreview(job.VideoID)
+	}
 
 	// Fetch comments in background — only YouTube supports yt-dlp comment extraction.
 	if platform == "youtube" {
@@ -351,7 +491,7 @@ func (m *Manager) downloadVideo(ctx context.Context, job db.DownloadQueueRow, pl
 				log.Printf("[downloadpool] store comments for %s: %v", capturedID, err)
 				return
 			}
-			m.KickFeedMedia()
+			m.KickMediaWork()
 			log.Printf("[downloadpool] fetched %d comments for %s", inserted, capturedID)
 		}()
 	}
@@ -372,51 +512,44 @@ func (m *Manager) downloadVideo(ctx context.Context, job db.DownloadQueueRow, pl
 
 	elapsed := time.Since(start).Round(time.Millisecond)
 	log.Printf("[downloadpool] completed %s (%s, %s)", job.VideoID, title, elapsed)
-	m.EmitDownload(fmt.Sprintf("Completed: %s", title), "done", job.ChannelID, platform)
+	m.EmitDownload(fmt.Sprintf("Completed: %s", title), "done", job.SourceChannelID, platform)
 	atomic.AddInt32(&m.dlSessionCompleted, 1)
 	m.dlLastDownload.Store(&LastDownloadInfo{
-		Channel:   job.ChannelID,
+		Channel:   job.SourceChannelID,
 		Platform:  platform,
 		Timestamp: time.Now().Unix(),
 	})
 }
 
-// failDownloadJob increments retry count and either re-queues or fails permanently.
-func (m *Manager) failDownloadJob(job db.DownloadQueueRow, err error) {
+func (m *Manager) failDownloadJob(job db.DownloadWork, err error) {
 	if err == nil {
 		err = fmt.Errorf("unknown download error")
 	}
 	newRetry := job.RetryCount + 1
 	classification := download.ClassifyFailure(err, nil, newRetry)
-	tool, cookieLabel := download.ErrorOperationContext(err)
-	classification = retryShortFormAuthFailure(job, classification)
+	classification = retryCredentialFailure(classification)
 	m.recordDownloadPlatformBackoff(job, classification)
-	strategy := classification.Strategy
-	if classification.Permanent || newRetry >= 5 {
-		if strategy == "" {
-			strategy = download.ErrorStrategyPermanent
-		}
-		log.Printf("[downloadpool] job %s failed permanently after %d retries: %v", job.VideoID, newRetry, err)
-		if err := m.db.UpdateDownloadQueueStatusWithContext(job.VideoID, job.LeaseOwner, "failed", err.Error(), newRetry, classification.Kind, strategy, 0, time.Now().UnixMilli(), tool, cookieLabel); err != nil {
-			log.Printf("[downloadpool] UpdateDownloadQueueStatus %s: %v", job.VideoID, err)
+	if classification.Kind == download.ErrorKindNotFound && terminalHTTPNotFound(err) {
+		log.Printf("[downloadpool] blocking missing video %s: %v", job.VideoID, err)
+		if blockErr := m.db.BlockDownloadWork(job.VideoID, job.LeaseOwner, err.Error()); blockErr != nil {
+			log.Printf("[downloadpool] BlockDownloadWork %s: %v", job.VideoID, blockErr)
 		}
 		atomic.AddInt32(&m.dlSessionFailed, 1)
 		return
 	}
-	if strategy == "" {
-		strategy = download.ErrorStrategyRetry
-	}
 	log.Printf("[downloadpool] job %s queued for retry %d: %v", job.VideoID, newRetry, err)
-	if err := m.db.UpdateDownloadQueueStatusWithContext(job.VideoID, job.LeaseOwner, "pending", err.Error(), newRetry, classification.Kind, strategy, classification.RetryDelay, time.Now().UnixMilli(), tool, cookieLabel); err != nil {
-		log.Printf("[downloadpool] UpdateDownloadQueueStatus %s: %v", job.VideoID, err)
+	if retryErr := m.db.RetryDownloadWork(job.VideoID, job.LeaseOwner, classification.Kind, err.Error(), classification.RetryDelay, time.Now().UnixMilli()); retryErr != nil {
+		log.Printf("[downloadpool] RetryDownloadWork %s: %v", job.VideoID, retryErr)
 	}
 }
 
-func retryShortFormAuthFailure(job db.DownloadQueueRow, classification download.FailureClassification) download.FailureClassification {
+func terminalHTTPNotFound(err error) bool {
+	var statusErr *download.HTTPStatusError
+	return errors.As(err, &statusErr) && (statusErr.StatusCode == 404 || statusErr.StatusCode == 410)
+}
+
+func retryCredentialFailure(classification download.FailureClassification) download.FailureClassification {
 	if classification.Kind != download.ErrorKindAuth {
-		return classification
-	}
-	if !isShortFormDownloadPlatform(platformFromDownloadChannelID(job.ChannelID)) {
 		return classification
 	}
 	classification.Permanent = false
@@ -427,8 +560,11 @@ func retryShortFormAuthFailure(job db.DownloadQueueRow, classification download.
 	return classification
 }
 
-func (m *Manager) recordDownloadPlatformBackoff(job db.DownloadQueueRow, classification download.FailureClassification) {
-	platform := platformFromDownloadChannelID(job.ChannelID)
+func (m *Manager) recordDownloadPlatformBackoff(job db.DownloadWork, classification download.FailureClassification) {
+	platform := job.Platform
+	if platform == "" {
+		platform = platformFromDownloadChannelID(job.OwnerChannelID)
+	}
 	if platform == "" {
 		return
 	}
@@ -440,9 +576,6 @@ func (m *Manager) recordDownloadPlatformBackoff(job db.DownloadQueueRow, classif
 			delay = time.Hour
 		}
 	case download.ErrorKindAuth:
-		if !isShortFormDownloadPlatform(platform) {
-			return
-		}
 		delay = downloadAuthBackoff
 	default:
 		return
@@ -504,23 +637,56 @@ func (m *Manager) activeDownloadPlatformBackoff(platform string, now time.Time) 
 	return backoff, true
 }
 
-func (m *Manager) postponeDownloadJobForPlatformBackoff(job db.DownloadQueueRow, platform string, backoff downloadPlatformBackoff) {
-	if m == nil || m.db == nil {
+func (m *Manager) downloadSchedulingState(now time.Time) ([]string, time.Duration) {
+	platforms := m.enabledDownloadPlatforms()
+	if m == nil {
+		return platforms, 0
+	}
+	m.downloadBackoffMu.Lock()
+	defer m.downloadBackoffMu.Unlock()
+	ready := make([]string, 0, len(platforms))
+	var next time.Duration
+	for _, platform := range platforms {
+		backoff, cooling := m.downloadBackoff[platform]
+		if !cooling || backoff.Until.IsZero() || !now.Before(backoff.Until) {
+			delete(m.downloadBackoff, platform)
+			ready = append(ready, platform)
+			continue
+		}
+		remaining := backoff.Until.Sub(now)
+		if next == 0 || remaining < next {
+			next = remaining
+		}
+	}
+	return ready, next
+}
+
+func (m *Manager) enabledDownloadPlatforms() []string {
+	platforms := discoveryPlatforms()
+	if m == nil || m.cfg == nil {
+		return platforms
+	}
+	enabled := platforms[:0]
+	for _, platform := range platforms {
+		if m.cfg.PlatformEnabled(platform) {
+			enabled = append(enabled, platform)
+		}
+	}
+	return enabled
+}
+
+// ClearDownloadPlatformBackoff makes credential repairs effective immediately.
+func (m *Manager) ClearDownloadPlatformBackoff(platform string) {
+	if m == nil {
 		return
 	}
-	now := time.Now()
-	delay := backoff.Until.Sub(now)
-	if delay <= 0 {
-		delay = time.Second
+	platform = strings.ToLower(strings.TrimSpace(platform))
+	if platform == "" {
+		return
 	}
-	kind := backoff.Kind
-	if kind == "" {
-		kind = download.ErrorKindRateLimit
-	}
-	reason := fmt.Sprintf("%s download backoff active until %s", platform, backoff.Until.Format(time.RFC3339))
-	if err := m.db.UpdateDownloadQueueStatusWithContext(job.VideoID, job.LeaseOwner, "pending", reason, job.RetryCount, kind, download.ErrorStrategyRetry, delay, now.UnixMilli(), "", ""); err != nil {
-		log.Printf("[downloadpool] postpone %s during %s backoff: %v", job.VideoID, platform, err)
-	}
+	m.downloadBackoffMu.Lock()
+	delete(m.downloadBackoff, platform)
+	m.downloadBackoffMu.Unlock()
 }
 
 func downloadPoolLeaseOwner() string {
@@ -531,7 +697,7 @@ func downloadPoolLeaseOwner() string {
 	return fmt.Sprintf("downloadpool:%s:%d", host, os.Getpid())
 }
 
-func (m *Manager) startDownloadQueueLeaseRenewal(ctx context.Context, job db.DownloadQueueRow) func() {
+func (m *Manager) startDownloadWorkLeaseRenewal(ctx context.Context, job db.DownloadWork) func() {
 	if m == nil || m.db == nil || job.VideoID == "" || job.LeaseOwner == "" {
 		return nil
 	}
@@ -546,8 +712,8 @@ func (m *Manager) startDownloadQueueLeaseRenewal(ctx context.Context, job db.Dow
 			case <-renewCtx.Done():
 				return
 			case <-ticker.C:
-				if err := m.db.RenewDownloadQueueLease(job.VideoID, job.LeaseOwner, time.Now().UnixMilli(), downloadPoolLeaseDuration); err != nil {
-					log.Printf("[downloadpool] RenewDownloadQueueLease %s: %v", job.VideoID, err)
+				if err := m.db.RenewDownloadWorkLease(job.VideoID, job.LeaseOwner, time.Now().UnixMilli(), downloadPoolLeaseDuration); err != nil {
+					log.Printf("[downloadpool] RenewDownloadWorkLease %s: %v", job.VideoID, err)
 				}
 			}
 		}
@@ -602,23 +768,20 @@ func isShortFormDownloadPlatform(platform string) bool {
 	return platform == "tiktok" || platform == "instagram"
 }
 
-func (m *Manager) shortFormDownloadDelay(platform string) time.Duration {
-	if m != nil && m.db != nil {
-		if delay := m.platformFetchDelay(platform); delay > 0 {
-			return delay
-		}
-	}
-	return shortFormDownloadDelayFallback
-}
-
 // --- Pure helper functions (testable) ---
 
 // buildSourceURL constructs the video URL from platform, source ID, and video ID.
 func buildSourceURL(platform, sourceID, videoID string) string {
 	switch platform {
 	case "tiktok":
+		if nativeID, ok := nativeStoryID(platform, videoID); ok {
+			videoID = nativeID
+		}
 		return fmt.Sprintf("https://www.tiktok.com/@%s/video/%s", sourceID, videoID)
 	case "instagram":
+		if nativeID, ok := nativeStoryID(platform, videoID); ok {
+			return fmt.Sprintf("https://www.instagram.com/stories/%s/%s/", sourceID, nativeID)
+		}
 		raw := strings.TrimPrefix(videoID, "instagram_")
 		switch {
 		case strings.HasPrefix(raw, "post_"):
@@ -631,6 +794,12 @@ func buildSourceURL(platform, sourceID, videoID string) string {
 	default:
 		return fmt.Sprintf("https://www.youtube.com/watch?v=%s", videoID)
 	}
+}
+
+func nativeStoryID(platform, videoID string) (string, bool) {
+	prefix := platform + "_story_"
+	nativeID := strings.TrimPrefix(strings.TrimSpace(videoID), prefix)
+	return nativeID, nativeID != "" && nativeID != videoID
 }
 
 // resolveFormatString returns the yt-dlp format string for a platform and quality.
@@ -691,7 +860,7 @@ func extractPublishedAt(metadata map[string]any) int64 {
 	return 0
 }
 
-func publishedAtForJob(metadata map[string]any, job db.DownloadQueueRow) int64 {
+func publishedAtForJob(metadata map[string]any, job db.DownloadWork) int64 {
 	if publishedAt := extractPublishedAt(metadata); publishedAt > 0 {
 		return publishedAt
 	}

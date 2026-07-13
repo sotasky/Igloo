@@ -349,7 +349,8 @@ func (s *Server) addTikTokReportRows(ctx context.Context, dl *download.Downloade
 		if channelURL == "" {
 			channelURL = "https://www.tiktok.com/@" + handle
 		}
-		refs, err := dl.YtDlp.ChannelCheck(ctx, channelURL, 5)
+		snapshot, err := dl.YtDlp.ChannelCheck(ctx, channelURL, 5)
+		refs := snapshot.FlattenRefs(5)
 		if len(refs) > 0 {
 			if refs[0].URL != "" {
 				rawURL = refs[0].URL
@@ -357,7 +358,7 @@ func (s *Server) addTikTokReportRows(ctx context.Context, dl *download.Downloade
 				rawURL = fmt.Sprintf("https://www.tiktok.com/@%s/video/%s", handle, refs[0].VideoID)
 			}
 		}
-		return map[string]any{"item_count": len(refs), "media_candidate": rawURL != ""}, err
+		return map[string]any{"item_count": len(refs), "complete": sourceSnapshotComplete(snapshot), "media_candidate": rawURL != ""}, err
 	}))
 	if rawURL == "" && sample.VideoID != "" {
 		videoID := strings.TrimPrefix(sample.VideoID, "tiktok_story_")
@@ -367,7 +368,7 @@ func (s *Server) addTikTokReportRows(ctx context.Context, dl *download.Downloade
 		if rawURL == "" {
 			return map[string]any{"file_count": 0, "bytes": 0}, fmt.Errorf("no TikTok post URL candidate")
 		}
-		paths, err := dl.Download(ctx, rawURL, "video", opts)
+		paths, err := dl.Download(ctx, download.MediaLaneBulkForeground, rawURL, "video", opts)
 		if err != nil {
 			return nil, err
 		}
@@ -409,7 +410,8 @@ func (s *Server) addInstagramReportRows(ctx context.Context, dl *download.Downlo
 	opts := s.reportDownloadOpts("instagram", filepath.Join(tempDir, "instagram"), "instagram-demo")
 	var rawURL string
 	report.Rows = append(report.Rows, s.runReportCheck(ctx, "instagram post/reel dump", "instagram", "instagram.dump", func(ctx context.Context) (map[string]any, error) {
-		refs, err := dl.GalleryDL.InstagramChannel(ctx, handle, 10, opts.Cookies, opts.CookiesFromBrowser)
+		snapshot, err := dl.GalleryDL.InstagramChannel(ctx, handle, 10, opts.Cookies, opts.CookiesFromBrowser)
+		refs := snapshot.FlattenRefs(10)
 		for _, ref := range refs {
 			if ref.URL != "" {
 				rawURL = ref.URL
@@ -420,7 +422,7 @@ func (s *Server) addInstagramReportRows(ctx context.Context, dl *download.Downlo
 				break
 			}
 		}
-		return map[string]any{"item_count": len(refs)}, err
+		return map[string]any{"item_count": len(refs), "complete": sourceSnapshotComplete(snapshot)}, err
 	}))
 	if rawURL == "" && sample.VideoID != "" {
 		rawURL = instagramReportURL(sample.VideoID)
@@ -429,7 +431,7 @@ func (s *Server) addInstagramReportRows(ctx context.Context, dl *download.Downlo
 		if rawURL == "" {
 			return map[string]any{"file_count": 0, "bytes": 0}, fmt.Errorf("no Instagram post URL candidate")
 		}
-		paths, err := dl.Download(ctx, rawURL, "video", opts)
+		paths, err := dl.Download(ctx, download.MediaLaneBulkForeground, rawURL, "video", opts)
 		if err != nil {
 			return nil, err
 		}
@@ -502,11 +504,11 @@ func (s *Server) reportVideoSample(platform string) reportVideoSample {
 			LIMIT 1`, platform)
 		if err := row.Scan(&sample.VideoID, &sample.ChannelID, &sample.SourceID, &sample.ChannelURL); err != nil {
 			queueRow := conn.QueryRow(`
-				SELECT q.video_id, q.channel_id, COALESCE(c.source_id, ''), COALESCE(c.url, '')
+				SELECT q.video_id, q.owner_channel_id, COALESCE(c.source_id, ''), COALESCE(c.url, '')
 				FROM download_queue q
-				JOIN channels c ON c.channel_id = q.channel_id
+				JOIN channels c ON c.channel_id = q.owner_channel_id
 				WHERE c.platform = ?
-				ORDER BY q.added_at DESC
+				ORDER BY q.added_at_ms DESC
 				LIMIT 1`, platform)
 			if queueErr := queueRow.Scan(&sample.VideoID, &sample.ChannelID, &sample.SourceID, &sample.ChannelURL); queueErr != nil {
 				channelRow := conn.QueryRow(`
@@ -585,6 +587,18 @@ func instagramReportURL(videoID string) string {
 	default:
 		return "https://www.instagram.com/reel/" + raw + "/"
 	}
+}
+
+func sourceSnapshotComplete(snapshot download.SourceSnapshot) bool {
+	if len(snapshot.Windows) == 0 {
+		return false
+	}
+	for _, window := range snapshot.Windows {
+		if !window.Complete {
+			return false
+		}
+	}
+	return true
 }
 
 func writeAnyJSON(w http.ResponseWriter, status int, v any) {

@@ -171,33 +171,66 @@ class AndroidSyncMirror(
             val deletedAssets = mutableListOf<AndroidSyncAssetEntity>()
             val overlay = PendingMutationOverlay.capture(db.outboxDao().pendingRows())
 
+            var selectionExpanded = false
+            if (!bootstrap) {
+                for (change in page.changes) {
+                    if (change.isThinState() && expandsSelection(change)) {
+                        selectionExpanded = true
+                        break
+                    }
+                }
+            }
+
             page.changes.filter(AndroidSyncChangeDto::isThinState).forEach { change ->
                 applyThinState(change, deletedAssets)
             }
             overlay.restore(db)
 
-            val protectedContent = dao.protectedContentIds().toHashSet()
+            val protectedContent =
+                if (page.changes.any { it.isPrimaryContent() && it.operation == OP_DELETE }) {
+                    dao.protectedContentIds().toHashSet()
+                } else {
+                    emptySet()
+                }
             page.changes.filter(AndroidSyncChangeDto::isPrimaryContent).forEach { change ->
                 applyPrimary(change, protectedContent, deletedAssets)
             }
 
             page.changes.filter { it.owner_kind == "retweet_sources" }.forEach { change ->
-                applySecondary(change, emptySet(), emptySet(), deletedAssets)
+                applySecondary(change, emptySet(), emptySet(), false, deletedAssets)
             }
 
-            val protectedChannels = dao.protectedChannelIds().toHashSet()
+            val protectedChannels =
+                if (
+                    page.changes.any {
+                        it.owner_kind == "channel" && (!bootstrap || it.operation == OP_DELETE)
+                    }
+                ) {
+                    dao.protectedChannelIds().toHashSet()
+                } else {
+                    emptySet()
+                }
             page.changes
                 .filterNot {
                     it.isThinState() || it.isPrimaryContent() ||
                         it.owner_kind == "retweet_sources" || it.owner_kind == "asset"
                 }
                 .forEach { change ->
-                    applySecondary(change, protectedChannels, emptySet(), deletedAssets)
+                    applySecondary(change, protectedChannels, emptySet(), bootstrap, deletedAssets)
                 }
 
-            val retainedAssetOwners = dao.retainedAssetOwnerIds().toHashSet()
+            val retainedAssetOwners =
+                if (
+                    page.changes.any {
+                        it.owner_kind == "asset" && (!bootstrap || it.operation == OP_DELETE)
+                    }
+                ) {
+                    dao.retainedAssetOwnerIds().toHashSet()
+                } else {
+                    emptySet()
+                }
             page.changes.filter { it.owner_kind == "asset" }.forEach { change ->
-                applySecondary(change, protectedChannels, retainedAssetOwners, deletedAssets)
+                applySecondary(change, protectedChannels, retainedAssetOwners, bootstrap, deletedAssets)
             }
 
             if (bootstrap) {
@@ -216,8 +249,6 @@ class AndroidSyncMirror(
                 )
             }
 
-            val selectionChanged =
-                !bootstrap && page.changes.any(AndroidSyncChangeDto::changesSelection)
             val nextState =
                 if (bootstrap && page.end_of_stream) {
                     state.copy(
@@ -232,11 +263,26 @@ class AndroidSyncMirror(
                         youtubeDays = retention.youtubeDays,
                         momentsDays = retention.momentsDays,
                         storyHours = retention.storyHours,
-                        bootstrapRequired = state.bootstrapRequired || selectionChanged,
+                        bootstrapRequired = state.bootstrapRequired || selectionExpanded,
                     )
                 }
             if (nextState != state) dao.upsertSyncState(nextState)
             deletedAssets
+        }
+
+    private suspend fun expandsSelection(change: AndroidSyncChangeDto): Boolean =
+        when (change.owner_kind) {
+            "channel_follow" ->
+                change.operation == OP_UPSERT && !db.channelFollowDao().exists(change.owner_id)
+            "channel_setting" -> {
+                val previous = db.channelSettingDao().getById(change.owner_id)?.includeReposts
+                val next =
+                    if (change.operation == OP_DELETE) null
+                    else AndroidSyncChangeDecoder.channelSetting(change).includeReposts
+                (previous == 0 && next != 0) || (previous == null && next == 1)
+            }
+            "setting" -> change.owner_id in SELECTION_SETTING_KEYS
+            else -> false
         }
 
     private suspend fun sweepBootstrap(deletedAssets: MutableList<AndroidSyncAssetEntity>) {
@@ -335,6 +381,7 @@ class AndroidSyncMirror(
         change: AndroidSyncChangeDto,
         protectedChannels: Set<String>,
         retainedAssetOwners: Set<String>,
+        selectedSnapshot: Boolean,
         deletedAssets: MutableList<AndroidSyncAssetEntity>,
     ) {
         if (change.operation == OP_DELETE) {
@@ -351,7 +398,7 @@ class AndroidSyncMirror(
         val accepted =
             when (change.owner_kind) {
                 "channel" -> {
-                    if (change.owner_id !in protectedChannels) false
+                    if (!selectedSnapshot && change.owner_id !in protectedChannels) false
                     else {
                         applyChannelBundle(AndroidSyncChangeDecoder.channel(change))
                         true
@@ -373,7 +420,7 @@ class AndroidSyncMirror(
                 }
                 "asset" -> {
                     val asset = AndroidSyncChangeDecoder.asset(change)
-                    if (asset.owner_id !in retainedAssetOwners) false
+                    if (!selectedSnapshot && asset.owner_id !in retainedAssetOwners) false
                     else {
                         upsertAsset(asset, dao.asset(asset.asset_id))
                         true
@@ -614,9 +661,16 @@ class AndroidSyncMirror(
     private companion object {
         const val MODE_BOOTSTRAP = "bootstrap"
         const val MODE_CHANGES = "changes"
+        const val OP_UPSERT = "upsert"
         const val OP_DELETE = "delete"
         const val PRUNE_BATCH_SIZE = 400
         val METADATA_RETRY_DELAYS_MS = listOf(1_000L, 5_000L, 15_000L)
+        val SELECTION_SETTING_KEYS =
+            setOf(
+                "moments_include_reposts_default",
+                "instagram_include_tagged_default",
+                "include_reposts_default",
+            )
         val MIRRORED_THIN_STATE =
             listOf(
                 MirroredThinState("feed_like", "feed_likes", "feed_likes.tweet_id"),
@@ -698,9 +752,6 @@ private fun AndroidSyncChangeDto.validate() {
 private fun AndroidSyncChangeDto.isThinState(): Boolean = owner_kind in THIN_OWNER_KINDS
 
 private fun AndroidSyncChangeDto.isPrimaryContent(): Boolean = owner_kind == "feed" || owner_kind == "video"
-
-private fun AndroidSyncChangeDto.changesSelection(): Boolean =
-    owner_kind == "channel_follow" || owner_kind == "channel_setting" || owner_kind == "setting"
 
 private fun AndroidSyncChangeDto.releasesProtection(): Boolean =
     operation == "delete" && (owner_kind == "feed_like" || owner_kind == "bookmark")

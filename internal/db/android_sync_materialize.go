@@ -15,6 +15,7 @@ type androidSyncFeedRecencyNode struct {
 	parentID    string
 	contentHash string
 	publishedAt int64
+	exists      bool
 }
 
 func (db *DB) ListAndroidSyncFeedEffectiveRecency(tweetIDs []string) (map[string]int64, error) {
@@ -39,8 +40,9 @@ func (db *DB) ListAndroidSyncFeedEffectiveRecency(tweetIDs []string) (map[string
 		args := stringsToAny(chunk)
 		for _, query := range []string{
 			`SELECT content_hash, COALESCE(MAX(published_at), 0)
-			 FROM feed_items
-			 WHERE content_hash IN (` + placeholders(len(chunk)) + `)
+			 FROM feed_items INDEXED BY idx_feed_items_content_hash
+			 WHERE content_hash IS NOT NULL AND content_hash != ''
+			   AND content_hash IN (` + placeholders(len(chunk)) + `)
 			 GROUP BY content_hash`,
 			`SELECT content_hash, COALESCE(MAX(published_at), 0)
 			 FROM retweet_sources
@@ -65,8 +67,9 @@ func (db *DB) ListAndroidSyncFeedEffectiveRecency(tweetIDs []string) (map[string
 	for _, chunk := range stringChunks(uniqueStrings(nodeIDs), androidSyncProjectionChunkSize) {
 		rows, err := db.reader().Query(`
 			SELECT quote_tweet_id, COALESCE(MAX(published_at), 0)
-			FROM feed_items
-			WHERE quote_tweet_id IN (`+placeholders(len(chunk))+`)
+			FROM feed_items INDEXED BY idx_feed_items_quote
+			WHERE quote_tweet_id IS NOT NULL AND quote_tweet_id != ''
+			  AND quote_tweet_id IN (`+placeholders(len(chunk))+`)
 			GROUP BY quote_tweet_id
 		`, stringsToAny(chunk)...)
 		if err != nil {
@@ -114,7 +117,7 @@ func (db *DB) listAndroidSyncFeedRecencyNodes(roots []string) (map[string]androi
 		queued[id] = struct{}{}
 		nodes[id] = androidSyncFeedRecencyNode{}
 	}
-	for depth := 0; len(frontier) > 0 && depth <= 50; depth++ {
+	for len(frontier) > 0 {
 		var childIDs []string
 		for _, chunk := range stringChunks(frontier, androidSyncProjectionChunkSize) {
 			rows, err := db.reader().Query(`
@@ -133,6 +136,7 @@ func (db *DB) listAndroidSyncFeedRecencyNodes(roots []string) (map[string]androi
 					_ = rows.Close()
 					return nil, err
 				}
+				row.exists = true
 				nodes[id] = row
 			}
 			if err := rows.Err(); err != nil {
@@ -142,13 +146,12 @@ func (db *DB) listAndroidSyncFeedRecencyNodes(roots []string) (map[string]androi
 			if err := rows.Close(); err != nil {
 				return nil, err
 			}
-			if depth == 50 {
-				continue
-			}
 			rows, err = db.reader().Query(`
 				SELECT tweet_id
 				FROM feed_items
-				WHERE reply_to_status IN (`+placeholders(len(chunk))+`)
+				WHERE reply_to_status IS NOT NULL
+				  AND reply_to_status != ''
+				  AND reply_to_status IN (`+placeholders(len(chunk))+`)
 			`, stringsToAny(chunk)...)
 			if err != nil {
 				return nil, err
@@ -330,8 +333,10 @@ func (db *DB) ListAndroidSyncFeedIDsByContentHashes(contentHashes []string) ([]s
 	for _, chunk := range stringChunks(uniqueStrings(contentHashes), androidSyncProjectionChunkSize) {
 		rows, err := db.reader().Query(`
 			SELECT tweet_id
-			FROM feed_items
-			WHERE content_hash IN (`+placeholders(len(chunk))+`)
+			FROM feed_items INDEXED BY idx_feed_items_content_hash
+			WHERE content_hash IS NOT NULL
+			  AND content_hash != ''
+			  AND content_hash IN (`+placeholders(len(chunk))+`)
 			ORDER BY tweet_id
 		`, stringsToAny(chunk)...)
 		if err != nil {

@@ -30,34 +30,20 @@ func schemaQueueStatements() []string {
 			PRIMARY KEY (tweet_id, field, target_lang)
 		)`,
 
-		`CREATE TABLE IF NOT EXISTS channel_queue (
-			channel_id TEXT PRIMARY KEY,
-			status     TEXT    DEFAULT 'pending',
-			priority   INTEGER DEFAULT 0,
-			added_at   INTEGER NOT NULL DEFAULT 0,
-			started_at INTEGER NOT NULL DEFAULT 0,
-			completed_at INTEGER NOT NULL DEFAULT 0
-		)`,
-
 		`CREATE TABLE IF NOT EXISTS download_queue (
-			video_id    TEXT PRIMARY KEY,
-			channel_id  TEXT    NOT NULL,
-			title       TEXT    DEFAULT '',
-			published_at_ms INTEGER NOT NULL DEFAULT 0,
-			status      TEXT    DEFAULT 'pending',
-			priority    INTEGER DEFAULT 0,
-			error       TEXT    DEFAULT '',
-			retry_count INTEGER DEFAULT 0,
-			lease_owner TEXT    NOT NULL DEFAULT '',
-			lease_until_ms INTEGER NOT NULL DEFAULT 0,
+			video_id           TEXT PRIMARY KEY,
+			owner_channel_id   TEXT NOT NULL,
+			title              TEXT NOT NULL DEFAULT '',
+			published_at_ms    INTEGER NOT NULL DEFAULT 0,
+			status             TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'processing', 'blocked')),
+			retry_count        INTEGER NOT NULL DEFAULT 0,
 			next_attempt_at_ms INTEGER NOT NULL DEFAULT 0,
-			last_error_kind TEXT NOT NULL DEFAULT '',
-			last_error_strategy TEXT NOT NULL DEFAULT '',
-			tool        TEXT    NOT NULL DEFAULT '',
-			cookie_label TEXT   NOT NULL DEFAULT '',
-			added_at    INTEGER NOT NULL DEFAULT 0,
-			started_at  INTEGER NOT NULL DEFAULT 0,
-			completed_at INTEGER NOT NULL DEFAULT 0
+			last_error_kind    TEXT NOT NULL DEFAULT '',
+			last_error         TEXT NOT NULL DEFAULT '',
+			lease_owner        TEXT NOT NULL DEFAULT '',
+			lease_until_ms     INTEGER NOT NULL DEFAULT 0,
+			added_at_ms        INTEGER NOT NULL DEFAULT 0,
+			started_at_ms      INTEGER NOT NULL DEFAULT 0
 		)`,
 	}
 }

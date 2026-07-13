@@ -203,6 +203,7 @@ func (s *Server) handleChannelSettingsPost(w http.ResponseWriter, r *http.Reques
 		writeJSON(w, 200, map[string]any{"success": true, "noop": true})
 		return
 	}
+	previousSettings, _ := s.db.GetChannelSettings(channelID)
 
 	var body map[string]any
 
@@ -304,10 +305,10 @@ func (s *Server) handleChannelSettingsPost(w http.ResponseWriter, r *http.Reques
 		}
 		return
 	}
+	updated := s.applyChannelSettingEffects(channelID, previousSettings)
 
 	if isHTMX {
 		// Re-read settings and render updated form.
-		updated, _ := s.db.GetChannelSettings(channelID)
 		platform := r.URL.Query().Get("platform")
 		cs := components.ChannelSettingsData{}
 		if updated != nil {
@@ -327,6 +328,31 @@ func (s *Server) handleChannelSettingsPost(w http.ResponseWriter, r *http.Reques
 			"message": fmt.Sprintf("Settings updated for %s", channelID),
 		})
 	}
+}
+
+func (s *Server) applyChannelSettingEffects(channelID string, previous *db.ChannelSettings) *db.ChannelSettings {
+	updated, _ := s.db.GetChannelSettings(channelID)
+	if previous == nil || updated == nil || s.workers == nil {
+		return updated
+	}
+	if updated.MaxVideos < previous.MaxVideos {
+		if err := s.workers.EnforceVideoRetentionForChannel(channelID); err != nil {
+			slog.Error("EnforceVideoRetentionForChannel", "channel", channelID, "err", err)
+		}
+	}
+	if updated.MediaDownloadLimit < previous.MediaDownloadLimit {
+		if err := s.workers.EnforceXMediaRetentionForChannel(channelID); err != nil {
+			slog.Error("EnforceXMediaRetentionForChannel", "channel", channelID, "err", err)
+		}
+	}
+	if updated.MediaDownloadLimit > previous.MediaDownloadLimit {
+		if err := s.workers.ExpandXMediaRetentionForChannel(channelID); err != nil {
+			slog.Error("ExpandXMediaRetentionForChannel", "channel", channelID, "err", err)
+		}
+	} else if previous.MaxVideos != updated.MaxVideos || previous.IncludeReposts != updated.IncludeReposts {
+		s.workers.TriggerChannelCheck(channelID)
+	}
+	return updated
 }
 
 func (s *Server) handleChannelRefresh(w http.ResponseWriter, r *http.Request) {

@@ -172,8 +172,8 @@ func (db *DB) ExecRaw(query string, args ...any) error {
 }
 
 // VacuumInto creates a consistent snapshot of the database at dstPath.
-func (db *DB) VacuumInto(dstPath string) error {
-	_, err := db.conn.Exec(`VACUUM INTO ?`, dstPath)
+func (db *DB) VacuumInto(ctx context.Context, dstPath string) error {
+	_, err := db.conn.ExecContext(ctx, `VACUUM INTO ?`, dstPath)
 	return err
 }
 

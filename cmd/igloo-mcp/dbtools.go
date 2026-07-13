@@ -385,7 +385,6 @@ func dbSummary() (string, error) {
 	queueQueries := map[string]string{
 		"media_objects":  `SELECT job_state, COUNT(*) FROM media_objects GROUP BY job_state ORDER BY COUNT(*) DESC`,
 		"download_queue": `SELECT status, COUNT(*) FROM download_queue GROUP BY status ORDER BY COUNT(*) DESC`,
-		"channel_queue":  `SELECT status, COUNT(*) FROM channel_queue GROUP BY status ORDER BY COUNT(*) DESC`,
 	}
 	for table, q := range queueQueries {
 		qrows, err := conn.Query(q)

@@ -345,11 +345,14 @@ func upsertAssetTx(tx *sql.Tx, asset Asset) error {
 		return err
 	}
 	var objectID string
-	if err := tx.QueryRow(`SELECT object_id FROM media_objects WHERE object_key = ?`, asset.ObjectKey).Scan(&objectID); err != nil {
+	var objectPublishedRevision int64
+	if err := tx.QueryRow(`
+		SELECT object_id, published_revision FROM media_objects WHERE object_key = ?
+	`, asset.ObjectKey).Scan(&objectID, &objectPublishedRevision); err != nil {
 		return err
 	}
 	currentObjectID := objectID
-	if publishedRevision == 0 {
+	if objectPublishedRevision == 0 {
 		_ = tx.QueryRow(`
 			SELECT object_id FROM assets
 			WHERE asset_kind = ? AND owner_kind = ? AND owner_id = ? AND media_index = ?
@@ -382,7 +385,7 @@ func upsertAssetTx(tx *sql.Tx, asset Asset) error {
 			updated_at_ms = excluded.updated_at_ms
 	`, asset.AssetID, asset.AssetKind, asset.OwnerKind, asset.OwnerID, asset.MediaIndex,
 		currentObjectID, objectID, asset.IsAuto, asset.AudioLanguage, asset.RequiredReason,
-		asset.CreatedAtMs, asset.UpdatedAtMs, publishedRevision, publicationChanged)
+		asset.CreatedAtMs, asset.UpdatedAtMs, objectPublishedRevision, publicationChanged)
 	return err
 }
 
@@ -506,13 +509,17 @@ func readAssetTx(tx *sql.Tx, assetID string) (Asset, error) {
 // CompleteAssetDownload publishes a file for a content asset claimed by its
 // producer-owned queue.
 func (db *DB) CompleteAssetDownload(asset Asset, owner string, nowMs int64) error {
+	return db.CompleteAssetDownloadInLane(asset, owner, nowMs, "")
+}
+
+func (db *DB) CompleteAssetDownloadInLane(asset Asset, owner string, nowMs int64, bulkLane storage.MediaLane) error {
 	if nowMs == 0 {
 		nowMs = time.Now().UnixMilli()
 	}
 	asset.AssetID = strings.TrimSpace(asset.AssetID)
 	asset.AssetKind = strings.TrimSpace(asset.AssetKind)
 	var err error
-	asset, err = db.prepareReadyAssetMetadata(asset, nowMs)
+	asset, err = db.prepareReadyAssetMetadataInLane(asset, nowMs, bulkLane)
 	if err != nil {
 		return err
 	}
@@ -615,7 +622,7 @@ func (db *DB) RemoveAssetFileIfUnreferenced(key string) (bool, error) {
 	}
 	lane := storage.MediaLaneState
 	if strings.HasPrefix(key, "media/") {
-		lane = storage.MediaLaneBulk
+		lane = storage.MediaLaneBulkBackground
 	}
 	var removed bool
 	err := db.storage.MediaExecutor().Run(context.Background(), lane, func() error {
@@ -833,20 +840,125 @@ func scanAsset(row assetScanner) (Asset, error) {
 // prepareReadyAssetMetadata fingerprints a completed file once. Repeated
 // declarations reuse the stored checksum while path, size, and mtime agree.
 func (db *DB) prepareReadyAssetMetadata(asset Asset, nowMs int64) (Asset, error) {
-	lane := storage.MediaLaneState
-	if strings.HasPrefix(strings.TrimSpace(asset.FilePath), "media/") {
-		lane = storage.MediaLaneBulk
+	return db.prepareReadyAssetMetadataInLane(asset, nowMs, "")
+}
+
+func (db *DB) prepareReadyAssetMetadataInLane(asset Asset, nowMs int64, bulkLane storage.MediaLane) (Asset, error) {
+	lane := readyAssetLane(asset.FilePath)
+	if lane == storage.MediaLaneBulkRegular && bulkLane != "" {
+		switch bulkLane {
+		case storage.MediaLaneBulkForeground, storage.MediaLaneBulkRegular, storage.MediaLaneBulkBackground:
+			lane = bulkLane
+		default:
+			return asset, fmt.Errorf("invalid completed media lane %q", bulkLane)
+		}
+	}
+	durability := db.readyAssetDurability
+	if durability == nil {
+		durability = makeReadyAssetDurable
 	}
 	var prepared Asset
 	err := db.storage.MediaExecutor().Run(context.Background(), lane, func() error {
 		var err error
-		prepared, err = db.prepareReadyAssetMetadataAdmitted(asset, nowMs)
+		prepared, err = db.prepareReadyAssetMetadataAdmitted(asset, nowMs, durability)
 		return err
 	})
 	return prepared, err
 }
 
-func (db *DB) prepareReadyAssetMetadataAdmitted(asset Asset, nowMs int64) (Asset, error) {
+func readyAssetLane(key string) storage.MediaLane {
+	if strings.HasPrefix(strings.TrimSpace(key), "media/") {
+		return storage.MediaLaneBulkRegular
+	}
+	return storage.MediaLaneState
+}
+
+// prepareReadyAssetSetMetadata fingerprints one completed producer set under
+// one admission per storage lane. Files retain individual durability and
+// fingerprints; shared parent directories are synced once after the set is
+// prepared and before any caller can publish it.
+func (db *DB) prepareReadyAssetSetMetadata(assets []Asset, nowMs int64) ([]Asset, error) {
+	return db.prepareReadyAssetSetMetadataInLane(assets, nowMs, "")
+}
+
+func (db *DB) prepareReadyAssetSetMetadataInLane(assets []Asset, nowMs int64, bulkLane storage.MediaLane) ([]Asset, error) {
+	return db.prepareReadyAssetSetMetadataWithLane(
+		assets, nowMs, func(file *os.File) error { return file.Sync() }, storage.SyncDirectory,
+		bulkLane,
+	)
+}
+
+func (db *DB) prepareReadyAssetSetMetadataWith(
+	assets []Asset,
+	nowMs int64,
+	syncFile func(*os.File) error,
+	syncDirectory func(string) error,
+) ([]Asset, error) {
+	return db.prepareReadyAssetSetMetadataWithLane(assets, nowMs, syncFile, syncDirectory, "")
+}
+
+func (db *DB) prepareReadyAssetSetMetadataWithLane(
+	assets []Asset,
+	nowMs int64,
+	syncFile func(*os.File) error,
+	syncDirectory func(string) error,
+	bulkLane storage.MediaLane,
+) ([]Asset, error) {
+	if syncFile == nil || syncDirectory == nil {
+		return nil, fmt.Errorf("asset durability operations are required")
+	}
+	if bulkLane == "" {
+		bulkLane = storage.MediaLaneBulkRegular
+	}
+	switch bulkLane {
+	case storage.MediaLaneBulkForeground, storage.MediaLaneBulkRegular, storage.MediaLaneBulkBackground:
+	default:
+		return nil, fmt.Errorf("invalid completed media lane %q", bulkLane)
+	}
+	byLane := make(map[storage.MediaLane][]int, 2)
+	for i, asset := range assets {
+		lane := readyAssetLane(asset.FilePath)
+		if lane == storage.MediaLaneBulkRegular {
+			lane = bulkLane
+		}
+		byLane[lane] = append(byLane[lane], i)
+	}
+	prepared := make([]Asset, len(assets))
+	for _, lane := range []storage.MediaLane{bulkLane, storage.MediaLaneState} {
+		indexes := byLane[lane]
+		if len(indexes) == 0 {
+			continue
+		}
+		err := db.storage.MediaExecutor().Run(context.Background(), lane, func() error {
+			directories := make(map[string]struct{})
+			durability := func(path string) error {
+				return makeReadyAssetDurableWith(path, syncFile, func(dir string) error {
+					directories[dir] = struct{}{}
+					return nil
+				})
+			}
+			for _, index := range indexes {
+				ready, err := db.prepareReadyAssetMetadataAdmitted(assets[index], nowMs, durability)
+				if err != nil {
+					return err
+				}
+				prepared[index] = ready
+			}
+			for _, dir := range sortedSet(directories) {
+				if err := syncDirectory(dir); err != nil {
+					return fmt.Errorf("sync ready asset directory %q: %w", dir, err)
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+	return prepared, nil
+}
+
+func (db *DB) prepareReadyAssetMetadataAdmitted(asset Asset, nowMs int64, durability func(string) error) (Asset, error) {
 	asset = normalizeAsset(asset, nowMs)
 	path, err := db.storage.WritePath(asset.FilePath)
 	if err != nil {
@@ -888,10 +1000,6 @@ func (db *DB) prepareReadyAssetMetadataAdmitted(asset Asset, nowMs int64) (Asset
 		asset.ContentType = existing.ContentType
 		asset.SHA256 = existing.SHA256
 		return asset, nil
-	}
-	durability := db.readyAssetDurability
-	if durability == nil {
-		durability = makeReadyAssetDurable
 	}
 	if err := durability(path); err != nil {
 		return asset, fmt.Errorf("make ready asset durable %q: %w", asset.FilePath, err)

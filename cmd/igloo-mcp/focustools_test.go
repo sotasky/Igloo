@@ -198,6 +198,18 @@ func TestPipelineStatusIncludesCurrentQueuesAndRetryReadiness(t *testing.T) {
 	if err := d.ExecRaw(`UPDATE media_objects SET last_error_kind='download_failed', last_error='sample asset failure' WHERE object_id=(SELECT desired_object_id FROM assets WHERE asset_id='sample_asset_failed')`); err != nil {
 		t.Fatalf("set failed asset error: %v", err)
 	}
+	if err := d.ExecRaw(`
+		INSERT INTO download_queue (
+			video_id, owner_channel_id, status, retry_count, next_attempt_at_ms,
+			last_error_kind, last_error, added_at_ms
+		) VALUES
+			('sample_download', 'youtube_sample_channel', 'pending', 1, ?,
+			 'temporary', 'sample retry failure', ?),
+			('sample_blocked_download', 'youtube_sample_channel', 'blocked', 1, 0,
+			 'unsupported', 'sample terminal failure', ?)
+	`, now-1, now-5000, now-4000); err != nil {
+		t.Fatalf("insert download queue: %v", err)
+	}
 
 	report, err := pipelineStatus()
 	if err != nil {
@@ -205,6 +217,10 @@ func TestPipelineStatusIncludesCurrentQueuesAndRetryReadiness(t *testing.T) {
 	}
 	for _, want := range []string{
 		"=== Pipeline Status ===",
+		"Download Queue (download_queue):",
+		"counts: blocked=1, pending=1",
+		"error kinds: unsupported=1",
+		"sample terminal failure",
 		"Translation Jobs (translation_jobs):",
 		"ready to claim: 1",
 		"error kinds: provider_unavailable=1",

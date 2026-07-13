@@ -153,7 +153,7 @@ func (s *Server) handleMutationBookmark(w http.ResponseWriter, r *http.Request) 
 		if body.Action == "set" {
 			s.requestXStatusRecovery(result.CanonicalID, true)
 			if result.Affected > 0 {
-				s.startMutationBookmarkArchive(user, result.CanonicalID)
+				go s.startMutationBookmarkArchive(user, result.CanonicalID)
 			}
 		}
 		s.kickFeedOrderForTweetIDs(result.CanonicalID)
@@ -181,7 +181,7 @@ func (s *Server) startMutationBookmarkArchive(user *userInfo, videoID string) {
 	if bookmarkArchivePathsAllowed(user) {
 		archivePath = category.ArchivePath
 	}
-	s.startBookmarkArchive(videoID, archivePath, customTitle, accountHandles, parseBookmarkMediaIndices(mediaIndices))
+	s.archiveBookmark(videoID, archivePath, customTitle, accountHandles, parseBookmarkMediaIndices(mediaIndices))
 }
 
 func (s *Server) handleMutationFollow(w http.ResponseWriter, r *http.Request) {
@@ -346,12 +346,14 @@ func (s *Server) handleMutationChannelSetting(w http.ResponseWriter, r *http.Req
 		writeJSONError(w, 400, "invalid_body", err.Error())
 		return
 	}
+	previousSettings, _ := s.db.GetChannelSettings(body.ChannelID)
 	result, err := s.db.MutateChannelSetting(body.ChannelID, body.Field, body.Value, body.UpdatedAtMs)
 	if writeMutationError(w, "MutateChannelSetting", err) {
 		return
 	}
 	if result.Applied {
 		s.kickFeedOrderForChannelID(result.CanonicalID)
+		s.applyChannelSettingEffects(result.CanonicalID, previousSettings)
 	}
 	writeJSON(w, 200, map[string]any{})
 }

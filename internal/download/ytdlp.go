@@ -162,10 +162,39 @@ type VideoRef struct {
 	RepostedAtMs        int64
 }
 
+const (
+	SourceComponentDirect = "direct"
+	SourceComponentReels  = "reels"
+	SourceComponentPosts  = "posts"
+)
+
+// SourceWindow keeps authority scoped to the producer surface that was
+// actually observed. A failed sibling must not make a successful window
+// non-authoritative.
+type SourceWindow struct {
+	Component string
+	Refs      []VideoRef
+	Complete  bool
+}
+
+type SourceSnapshot struct {
+	Windows []SourceWindow
+}
+
+// FlattenRefs is for diagnostics that do not need component authority.
+func (s SourceSnapshot) FlattenRefs(limit int) []VideoRef {
+	var refs []VideoRef
+	for _, window := range s.Windows {
+		refs = append(refs, window.Refs...)
+	}
+	return mergeSourceRefs(refs, limit)
+}
+
 // ChannelCheck fetches recent video IDs from a channel URL.
 // Returns up to limit VideoRef entries.
-func (y *YtDlpWrapper) ChannelCheck(ctx context.Context, url string, limit int) ([]VideoRef, error) {
+func (y *YtDlpWrapper) ChannelCheck(ctx context.Context, url string, limit int) (SourceSnapshot, error) {
 	start := time.Now()
+	snapshot := SourceSnapshot{Windows: []SourceWindow{{Component: SourceComponentDirect}}}
 	result, err := ytdlp.New().
 		SkipDownload().
 		NoWarnings().
@@ -176,7 +205,7 @@ func (y *YtDlpWrapper) ChannelCheck(ctx context.Context, url string, limit int) 
 		// Try to parse partial results even on error
 		if result == nil {
 			y.recordYtDlpOperationWithCounts(ctx, "channel.check", url, start, err, Opts{}, 0, 0, 0)
-			return nil, fmt.Errorf("yt-dlp channel check: %w", err)
+			return snapshot, fmt.Errorf("yt-dlp channel check: %w", err)
 		}
 	}
 
@@ -184,10 +213,10 @@ func (y *YtDlpWrapper) ChannelCheck(ctx context.Context, url string, limit int) 
 	if parseErr != nil {
 		if err != nil {
 			y.recordYtDlpOperationWithCounts(ctx, "channel.check", url, start, err, Opts{}, 0, 0, 0)
-			return nil, fmt.Errorf("yt-dlp channel check: %w", err)
+			return snapshot, fmt.Errorf("yt-dlp channel check: %w", err)
 		}
 		y.recordYtDlpOperationWithCounts(ctx, "channel.check", url, start, parseErr, Opts{}, 0, 0, 0)
-		return nil, fmt.Errorf("parse yt-dlp channel check: %w", parseErr)
+		return snapshot, fmt.Errorf("parse yt-dlp channel check: %w", parseErr)
 	}
 
 	var refs []VideoRef
@@ -209,7 +238,12 @@ func (y *YtDlpWrapper) ChannelCheck(ctx context.Context, url string, limit int) 
 		refs = append(refs, r)
 	}
 	y.recordYtDlpOperationWithCounts(ctx, "channel.check", url, start, err, Opts{}, len(refs), 0, 0)
-	return refs, nil
+	snapshot.Windows[0].Refs = refs
+	snapshot.Windows[0].Complete = err == nil
+	if err != nil {
+		return snapshot, fmt.Errorf("yt-dlp channel check: %w", err)
+	}
+	return snapshot, nil
 }
 
 func firstOpts(opts []Opts) Opts {

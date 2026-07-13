@@ -238,7 +238,7 @@ func TestDownloaderRecordsDirectHTTPFailureOperation(t *testing.T) {
 	sink := &memoryOperationSink{}
 	d := NewDownloader("")
 	d.SetOperationSink(sink)
-	_, err := d.Download(context.Background(), "http://127.0.0.1/media.jpg", "photo", Opts{OutputDir: t.TempDir(), ID: "photo"})
+	_, err := d.Download(context.Background(), MediaLaneBulkForeground, "http://127.0.0.1/media.jpg", "photo", Opts{OutputDir: t.TempDir(), ID: "photo"})
 	if err == nil {
 		t.Fatal("expected blocked local host error")
 	}

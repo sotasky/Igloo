@@ -1,7 +1,9 @@
 package db
 
 import (
+	"context"
 	"database/sql"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -9,6 +11,21 @@ import (
 
 	"github.com/screwys/igloo/internal/model"
 )
+
+func TestVacuumIntoHonorsCanceledContext(t *testing.T) {
+	d := openWritableTestDB(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	dst := filepath.Join(t.TempDir(), "snapshot.db")
+
+	err := d.VacuumInto(ctx, dst)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("VacuumInto error = %v, want context canceled", err)
+	}
+	if _, err := os.Stat(dst); !os.IsNotExist(err) {
+		t.Fatalf("canceled VacuumInto created destination: %v", err)
+	}
+}
 
 func testDBPath() string {
 	home, _ := os.UserHomeDir()
