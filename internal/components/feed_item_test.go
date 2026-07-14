@@ -501,6 +501,37 @@ func TestFeedItemFollowActionsUseDisplayedAuthorState(t *testing.T) {
 	}
 }
 
+func TestFeedItemMuteActionUsesDisplayedAuthorFollowState(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		followed bool
+		wantMute bool
+	}{
+		{name: "unfollowed", wantMute: true},
+		{name: "followed", followed: true, wantMute: false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			item := model.FeedItem{
+				TweetID:              "sample_status",
+				ChannelID:            "twitter_sample_author",
+				AuthorHandle:         "sample_author",
+				AuthorDisplayName:    "Sample Author",
+				BodyText:             "body",
+				FollowTargetFollowed: tt.followed,
+			}
+
+			var buf bytes.Buffer
+			if err := FeedItem(PageProps{}, item).Render(context.Background(), &buf); err != nil {
+				t.Fatalf("render feed item: %v", err)
+			}
+			gotMute := strings.Contains(buf.String(), `hx-post="/api/feed/mute/sample_author"`)
+			if gotMute != tt.wantMute {
+				t.Fatalf("mute action present = %t, want %t: %s", gotMute, tt.wantMute, buf.String())
+			}
+		})
+	}
+}
+
 func TestFeedItemSeenTrackingIsPageGatedHTMX(t *testing.T) {
 	item := model.FeedItem{
 		TweetID:      "seen_1",

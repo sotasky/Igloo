@@ -2159,7 +2159,7 @@ func feedCardMenu(p PageProps, item model.FeedItem, authorLabel string) templ.Co
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		if item.IsRetweet && item.AuthorHandle != "" {
+		if item.AuthorHandle != "" && !item.FollowTargetFollowed {
 			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 157, "<button class=\"feed-card-menu-item\" type=\"button\" data-feed-mute-btn hx-post=\"")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err

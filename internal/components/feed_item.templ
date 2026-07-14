@@ -411,7 +411,7 @@ templ feedCardMenu(p PageProps, item model.FeedItem, authorLabel string) {
 				data-feed-channel-id={ item.ChannelID }
 				data-feed-label={ authorLabel }
 			>{ L(p, "feed_refresh_account", "Refresh account") }</button>
-			if item.IsRetweet && item.AuthorHandle != "" {
+			if item.AuthorHandle != "" && !item.FollowTargetFollowed {
 				<button
 					class="feed-card-menu-item"
 					type="button"
