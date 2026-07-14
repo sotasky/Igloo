@@ -3,10 +3,32 @@ package worker
 import (
 	"fmt"
 	"log"
+	"sort"
 	"time"
 
 	"github.com/screwys/igloo/internal/db"
 )
+
+func (m *Manager) reconcileXMediaRetentionChanges(changes map[string][]string) error {
+	if m == nil || m.db == nil || len(changes) == 0 {
+		return nil
+	}
+	channelIDs := make([]string, 0, len(changes))
+	for channelID := range changes {
+		channelIDs = append(channelIDs, channelID)
+	}
+	sort.Strings(channelIDs)
+	m.xRetentionMu.Lock()
+	defer m.xRetentionMu.Unlock()
+	for _, channelID := range channelIDs {
+		result, err := m.db.ReconcileXMediaRetentionChanges(channelID, changes[channelID], db.XMediaRetentionOptions{NowMs: time.Now().UnixMilli()})
+		if err != nil {
+			return fmt.Errorf("reconcile X media retention %s: %w", channelID, err)
+		}
+		m.finishXMediaRetention(result)
+	}
+	return nil
+}
 
 func (m *Manager) xMediaDownloadLimit() int {
 	if m == nil || m.db == nil {
@@ -62,9 +84,16 @@ func (m *Manager) EnforceXMediaRetention() error {
 }
 
 func (m *Manager) ExpandXMediaRetentionForChannel(channelID string) error {
-	if err := m.EnforceXMediaRetentionForChannel(channelID); err != nil {
+	if m == nil || m.db == nil {
+		return nil
+	}
+	m.xRetentionMu.Lock()
+	result, err := m.db.RestoreXMediaRetentionForChannel(channelID, time.Now().UnixMilli())
+	m.xRetentionMu.Unlock()
+	if err != nil {
 		return err
 	}
+	m.finishXMediaRetention(result)
 	m.TriggerChannelCheck(channelID)
 	return nil
 }

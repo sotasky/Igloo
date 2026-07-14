@@ -192,15 +192,6 @@
 		currentAnchor = anchor;
 	}
 
-	function subscribeURLFor(channelID, handle) {
-		const h = String(handle || '').replace(/^@+/, '');
-		if (channelID.startsWith('twitter_') || channelID.startsWith('x_')) return 'https://x.com/' + h;
-		if (channelID.startsWith('tiktok_'))  return 'https://www.tiktok.com/@' + h;
-		if (channelID.startsWith('instagram_'))  return 'https://www.instagram.com/' + h + '/';
-		if (channelID.startsWith('youtube_')) return 'https://www.youtube.com/channel/' + channelID.slice('youtube_'.length);
-		return '';
-	}
-
 	function syncProfileCardFollowState(channelID, following) {
 		const cid = String(channelID || '').trim();
 		if (!cid) return;
@@ -388,7 +379,7 @@
 				if (action === 'unfollow') {
 					const ok = await mpa.askConfirm({
 						title: i18nText('confirm_unfollow_channel_title', 'Unfollow Channel'),
-						body: i18nFormat('confirm_unfollow_channel_delete_media_body', 'Unfollow "%1$s" and delete local media? This cannot be undone.', label),
+						body: i18nFormat('confirm_unfollow_channel_body', 'Unfollow %1$s?', label),
 						confirmLabel: i18nText('action_unfollow', 'Unfollow'),
 						cancelLabel: i18nText('action_cancel', 'Cancel'),
 						danger: true,
@@ -396,7 +387,10 @@
 					if (!ok) return;
 					syncCardFollowButtons(channelID, false);
 					try {
-						await mpa.apiJson('/api/unsubscribe/' + encodeURIComponent(channelID) + '?delete_files=true', { method: 'DELETE' });
+						await mpa.apiJson('/api/mutations/follow', {
+							method: 'POST',
+							body: JSON.stringify({ channel_id: channelID, action: 'clear', updated_at_ms: Date.now() }),
+						});
 						mpa.showToast(i18nFormat('toast_unfollowed_channel', 'Unfollowed %1$s', label));
 					} catch (err) {
 						syncCardFollowButtons(channelID, true);
@@ -446,20 +440,24 @@
 				if (following) {
 					const ok = await mpa.askConfirm({
 						title: i18nText('confirm_unfollow_channel_title', 'Unfollow Channel'),
-						body: i18nFormat('confirm_unfollow_channel_delete_media_body', 'Unfollow "%1$s" and delete local media? This cannot be undone.', label),
+						body: i18nFormat('confirm_unfollow_channel_body', 'Unfollow %1$s?', label),
 						confirmLabel: i18nText('action_unfollow', 'Unfollow'),
 						cancelLabel: i18nText('action_cancel', 'Cancel'),
 						danger: true,
 					});
 					if (!ok) return;
 					syncCardFollowButtons(channelID, false);
-					await mpa.apiJson('/api/unsubscribe/' + encodeURIComponent(channelID) + '?delete_files=true', { method: 'DELETE' });
+					await mpa.apiJson('/api/mutations/follow', {
+						method: 'POST',
+						body: JSON.stringify({ channel_id: channelID, action: 'clear', updated_at_ms: Date.now() }),
+					});
 					mpa.showToast(i18nFormat('toast_unfollowed_channel', 'Unfollowed %1$s', label));
 				} else {
-					const url = subscribeURLFor(channelID, handle);
-					if (!url) { mpa.showToast(i18nText('error_follow_unknown_platform', 'Cannot follow: unknown platform')); return; }
-					await mpa.apiJson('/api/subscribe', { method: 'POST', body: JSON.stringify({ url }) });
 					syncCardFollowButtons(channelID, true);
+					await mpa.apiJson('/api/mutations/follow', {
+						method: 'POST',
+						body: JSON.stringify({ channel_id: channelID, action: 'set', updated_at_ms: Date.now() }),
+					});
 					mpa.showToast(i18nFormat('toast_followed_channel', 'Followed %1$s', label));
 				}
 			} catch (err) {
@@ -469,6 +467,7 @@
 						: i18nText('error_follow_failed', 'Failed to follow')
 				);
 				if (following) syncCardFollowButtons(channelID, true);
+				else syncCardFollowButtons(channelID, false);
 				mpa.showToast(msg);
 			} finally {
 				btn.disabled = false;

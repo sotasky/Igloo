@@ -11,10 +11,15 @@ import (
 	ytdlp "github.com/lrstanley/go-ytdlp"
 )
 
-func TestChannelCheckPreservesPartialOutputAsIncomplete(t *testing.T) {
+func TestChannelCheckUsesFlatPlaylistAndPreservesPartialOutput(t *testing.T) {
 	bin := t.TempDir()
 	writeExecutable(t, filepath.Join(bin, "yt-dlp"), `#!/bin/sh
-printf '{"_type":"video","id":"sample_partial","title":"Partial item","timestamp":1710000000}\n'
+case " $* " in
+  *" --flat-playlist "*) ;;
+  *) exit 2 ;;
+esac
+printf '{"_type":"url","id":"sample_first","title":"First item","duration":12,"webpage_url":"https://www.youtube.com/watch?v=sample_first","timestamp":null}\n'
+printf '{"_type":"url","id":"sample_second","title":"Second item","duration":34,"webpage_url":"https://www.youtube.com/watch?v=sample_second","timestamp":null}\n'
 printf 'source stopped before the full window was read\n' >&2
 exit 1
 `)
@@ -31,8 +36,14 @@ exit 1
 	if window.Complete {
 		t.Fatal("failed command returned a complete source window")
 	}
-	if len(window.Refs) != 1 || window.Refs[0].VideoID != "sample_partial" {
+	if len(window.Refs) != 2 || window.Refs[0].VideoID != "sample_first" || window.Refs[1].VideoID != "sample_second" {
 		t.Fatalf("partial refs = %#v", window.Refs)
+	}
+	if window.Refs[0].Title != "First item" || window.Refs[0].Duration != 12 || window.Refs[0].URL != "https://www.youtube.com/watch?v=sample_first" {
+		t.Fatalf("first ref = %#v", window.Refs[0])
+	}
+	if window.Refs[0].PublishedAtMs != 0 || window.Refs[1].PublishedAtMs != 0 {
+		t.Fatalf("flat rows invented publish times: %#v", window.Refs)
 	}
 }
 
@@ -56,24 +67,26 @@ exit 0
 func TestCompletedYtDlpOutputsReturnsOnlyExactProducerSidecars(t *testing.T) {
 	dir := t.TempDir()
 	for name, body := range map[string]string{
-		"sample.mp4":       "video",
-		"sample.info.json": `{}`,
-		"sample.jpg":       "exact thumbnail",
-		"sample.webp":      "stale sibling",
+		"sample.mp4":  "video",
+		"sample.jpg":  "exact thumbnail",
+		"sample.webp": "stale sibling",
 	} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
-	completed := completedYtDlpOutputs(Opts{OutputDir: dir, ID: "sample"}, []string{filepath.Join(dir, "sample.mp4")})
-	if completed.InfoJSONPath != filepath.Join(dir, "sample.info.json") {
-		t.Fatalf("info path = %q", completed.InfoJSONPath)
+	completed := completedYtDlpOutputs(Opts{OutputDir: dir, ID: "sample"}, []string{filepath.Join(dir, "sample.mp4")}, map[string]any{"id": "sample"})
+	if completed.InfoJSONPath != "" {
+		t.Fatalf("info path = %q, want no redundant metadata sidecar", completed.InfoJSONPath)
 	}
 	if completed.ThumbnailPath != filepath.Join(dir, "sample.jpg") {
 		t.Fatalf("thumbnail path = %q", completed.ThumbnailPath)
 	}
 	if len(completed.MediaPaths) != 1 || completed.MediaPaths[0] != filepath.Join(dir, "sample.mp4") {
 		t.Fatalf("media paths = %#v", completed.MediaPaths)
+	}
+	if completed.Metadata["id"] != "sample" {
+		t.Fatalf("metadata = %#v", completed.Metadata)
 	}
 }
 
@@ -85,12 +98,15 @@ printf '{"filename":"%s"}\n' "$1"
 `)
 
 	output := filepath.Join(t.TempDir(), "sample.mp4")
-	paths, err := runVideoDownload(context.Background(), ytdlp.New().SetExecutable(filepath.Join(bin, "yt-dlp")), output)
+	paths, metadata, err := runVideoDownload(context.Background(), ytdlp.New().SetExecutable(filepath.Join(bin, "yt-dlp")), output)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(paths) != 1 || paths[0] != output {
 		t.Fatalf("paths = %#v, want %q", paths, output)
+	}
+	if metadata["filename"] != output {
+		t.Fatalf("metadata = %#v", metadata)
 	}
 }
 

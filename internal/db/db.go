@@ -22,6 +22,8 @@ type EnsureSchemaOptions struct {
 	Phase PhaseFunc
 }
 
+const sqliteMaxOpenConnections = 8
+
 type DB struct {
 	conn    *sql.DB
 	readTx  *sql.Tx
@@ -33,6 +35,7 @@ type sqlReader interface {
 	Query(query string, args ...any) (*sql.Rows, error)
 	QueryRow(query string, args ...any) *sql.Row
 	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
 func (db *DB) reader() sqlReader {
@@ -99,6 +102,8 @@ func openPathWithOptions(path string, layout storage.Layout, opts OpenOptions) (
 	if err != nil {
 		return nil, fmt.Errorf("open db: %w", err)
 	}
+	conn.SetMaxOpenConns(sqliteMaxOpenConnections)
+	conn.SetMaxIdleConns(sqliteMaxOpenConnections)
 
 	phaseStart = time.Now()
 	if err := conn.Ping(); err != nil {
@@ -142,6 +147,8 @@ func OpenReadOnlyLayout(path string, layout storage.Layout) (*DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open db readonly: %w", err)
 	}
+	conn.SetMaxOpenConns(sqliteMaxOpenConnections)
+	conn.SetMaxIdleConns(sqliteMaxOpenConnections)
 	if err := conn.Ping(); err != nil {
 		_ = conn.Close()
 		return nil, fmt.Errorf("ping db: %w", err)

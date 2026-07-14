@@ -1,6 +1,9 @@
 package download
 
-import "os"
+import (
+	"encoding/json"
+	"os"
+)
 
 // CompletedDownload is the exact set of files published by one producer run.
 // Sidecars are separate from playable media so callers never rediscover them
@@ -10,6 +13,7 @@ type CompletedDownload struct {
 	ThumbnailPath string
 	InfoJSONPath  string
 	SubtitlePaths []string
+	Metadata      map[string]any
 }
 
 func regularPath(path string) string {
@@ -23,11 +27,10 @@ func regularPath(path string) string {
 	return path
 }
 
-func uniqueRegularPaths(paths []string) []string {
+func uniquePaths(paths []string) []string {
 	out := make([]string, 0, len(paths))
 	seen := make(map[string]struct{}, len(paths))
 	for _, path := range paths {
-		path = regularPath(path)
 		if path == "" {
 			continue
 		}
@@ -38,6 +41,18 @@ func uniqueRegularPaths(paths []string) []string {
 		out = append(out, path)
 	}
 	return out
+}
+
+func metadataFromFile(path string) map[string]any {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var metadata map[string]any
+	if json.Unmarshal(data, &metadata) != nil {
+		return nil
+	}
+	return metadata
 }
 
 func removeCompletedDownloadFiles(completed CompletedDownload) {

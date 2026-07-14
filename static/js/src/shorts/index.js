@@ -46,7 +46,10 @@ if (layout) {
     var upToDateOverlay = doc.getElementById('shorts-uptodate-overlay')
     var currentTab = normalizeShortsTab(layout.getAttribute('data-current-tab') || new URLSearchParams(window.location.search).get('tab') || 'all')
     var hydrateBatchSize = Math.max(1, parseInt(layout.getAttribute('data-hydrate-batch-size') || '96', 10) || 96)
-    var backgroundHydrationStarted = false
+    var gridSkeletonObserver = null
+    var gridHydrationPending = false
+    var observedGridSkeletons = new WeakSet()
+    var observedGridImages = new WeakSet()
     var tabGridCache = new Map()
     var switchingTabs = false
 
@@ -619,17 +622,22 @@ if (layout) {
     }
 
     function ensureGridThumbnails() {
-      if (state.gridImageObserver) return
-      state.gridImageObserver = new IntersectionObserver(function (entries) {
-        entries.forEach(function (e) {
-          if (!e.isIntersecting) return
-          var img = e.target
-          img.removeAttribute('loading')
-          state.gridImageObserver.unobserve(img)
-        })
-      }, { rootMargin: '300px' })
+      observeGridSkeletons()
+      if (!gridShell || gridShell.classList.contains('hidden')) return
+      if (!state.gridImageObserver) {
+        state.gridImageObserver = new IntersectionObserver(function (entries) {
+          entries.forEach(function (e) {
+            if (!e.isIntersecting) return
+            var img = e.target
+            img.removeAttribute('loading')
+            state.gridImageObserver.unobserve(img)
+          })
+        }, { rootMargin: '300px' })
+      }
       var imgs = gridShell ? gridShell.querySelectorAll('.video-thumbnail img[loading="lazy"]') : []
       for (var i = 0; i < imgs.length; i++) {
+        if (observedGridImages.has(imgs[i])) continue
+        observedGridImages.add(imgs[i])
         state.gridImageObserver.observe(imgs[i])
       }
     }
@@ -687,6 +695,13 @@ if (layout) {
         state.gridImageObserver.disconnect()
         state.gridImageObserver = null
       }
+      if (gridSkeletonObserver) {
+        gridSkeletonObserver.disconnect()
+        gridSkeletonObserver = null
+      }
+      gridHydrationPending = false
+      observedGridSkeletons = new WeakSet()
+      observedGridImages = new WeakSet()
       shortsContainer.replaceChildren()
       sourceContainer.innerHTML = snapshot.gridHTML
       replaceTabsHTML(snapshot.tabsHTML)
@@ -705,7 +720,6 @@ if (layout) {
       state.renderedEnd = -1
       state.lastVisibleId = ''
       state.activePlayPromise = null
-      backgroundHydrationStarted = false
       layout.setAttribute('data-current-tab', currentTab)
       layout.setAttribute('data-page-size', String(state.pageSizeHint))
       layout.setAttribute('data-hydrate-batch-size', String(hydrateBatchSize))
@@ -745,17 +759,14 @@ if (layout) {
             if (!isOpenRequestCurrent(openSeq)) return
             appendNewItemsFromGrid()
             if (!openOverlayByVideoId(restoreVideoId, true)) openOverlayAtIndex(0)
-            startBackgroundCardHydration(80)
           })
           return
         }
         if (restoreCard && openOverlayByVideoId(restoreVideoId, true)) {
-          startBackgroundCardHydration(80)
           return
         }
       }
       openOverlayAtIndex(0)
-      startBackgroundCardHydration(80)
     }
 
     function switchShortsTab(tab, options) {
@@ -779,7 +790,6 @@ if (layout) {
           openCurrentTabDefault()
         } else {
           showGrid()
-          startBackgroundCardHydration(80)
         }
         return true
       }).catch(function () {
@@ -832,29 +842,9 @@ if (layout) {
         var card = cards[i]
         if (!card || typeof card.getBoundingClientRect !== 'function') continue
         var rect = card.getBoundingClientRect()
-        if (rect.bottom >= 0 && rect.top <= viewportHeight) return card
+        if (rect.bottom >= -300 && rect.top <= viewportHeight + 300) return card
       }
       return null
-    }
-
-    function nextSkeletonCardForHydration() {
-      var cards = skeletonCards()
-      if (!cards.length) return null
-      var visible = visibleSkeletonCard(cards)
-      if (visible) return visible
-      if (state.currentIndex >= 0) {
-        var best = null
-        var bestDistance = Number.POSITIVE_INFINITY
-        for (var i = 0; i < cards.length; i++) {
-          var distance = Math.abs(cardOffset(cards[i]) - state.currentIndex)
-          if (distance < bestDistance) {
-            best = cards[i]
-            bestDistance = distance
-          }
-        }
-        if (best) return best
-      }
-      return cards[cards.length - 1]
     }
 
     function findCardByVideoId(videoId) {
@@ -930,28 +920,38 @@ if (layout) {
       return card._shortsHydratePromise
     }
 
-    function scheduleHydrationStep(delayMs) {
-      var run = function () {
-        var next = nextSkeletonCardForHydration()
-        if (!next) return
-        hydrateCardElement(next).then(function () {
-          if (skeletonCards().length > 0) scheduleHydrationStep(90)
-        })
-      }
-      if (delayMs && delayMs > 0) {
-        setTimeout(run, delayMs)
-      } else if (window.requestIdleCallback) {
-        requestIdleCallback(run, { timeout: 800 })
-      } else {
-        setTimeout(run, 120)
-      }
+    function hydrateVisibleGridWindow(card) {
+      if (gridHydrationPending || !isSkeletonCard(card)) return
+      if (!gridShell || gridShell.classList.contains('hidden')) return
+      gridHydrationPending = true
+      hydrateCardElement(card).then(function (hydratedCard) {
+        gridHydrationPending = false
+        if (!hydratedCard || isSkeletonCard(hydratedCard)) return
+        var next = visibleSkeletonCard(skeletonCards())
+        if (next) hydrateVisibleGridWindow(next)
+      }, function () {
+        gridHydrationPending = false
+      })
     }
 
-    function startBackgroundCardHydration(delayMs) {
+    function observeGridSkeletons() {
       if (currentTab === 'stories' || state.storyMode) return
-      if (backgroundHydrationStarted) return
-      backgroundHydrationStarted = true
-      scheduleHydrationStep(delayMs || 500)
+      if (!gridShell || gridShell.classList.contains('hidden')) return
+      if (!gridSkeletonObserver) {
+        gridSkeletonObserver = new IntersectionObserver(function (entries) {
+          for (var i = 0; i < entries.length; i++) {
+            if (!entries[i].isIntersecting || !isSkeletonCard(entries[i].target)) continue
+            hydrateVisibleGridWindow(entries[i].target)
+            return
+          }
+        }, { rootMargin: '300px' })
+      }
+      var cards = skeletonCards()
+      for (var i = 0; i < cards.length; i++) {
+        if (observedGridSkeletons.has(cards[i])) continue
+        observedGridSkeletons.add(cards[i])
+        gridSkeletonObserver.observe(cards[i])
+      }
     }
 
     function storyBuffer() {
@@ -1164,6 +1164,7 @@ if (layout) {
       if (String(detail.containerSelector || '') !== String(infiniteContainerSelector)) return
       var before = state.items.length
       var added = appendNewItemsFromGrid()
+      if (added > 0 && gridShell && !gridShell.classList.contains('hidden')) ensureGridThumbnails()
       if (added > 0 && state.overlayOpen && state.currentIndex >= before - 4) {
         requestMoreIfNeeded()
       }
@@ -1255,7 +1256,6 @@ if (layout) {
             try { hydratedCard.scrollIntoView({ behavior: 'auto', block: 'center' }) } catch (_) {}
           }
         })
-        startBackgroundCardHydration(400)
         return
       }
       appendNewItemsFromGrid()
@@ -1547,7 +1547,6 @@ if (layout) {
               if (!isOpenRequestCurrent(openSeq)) return
               appendNewItemsFromGrid()
               openOverlayByVideoId(videoId, immediate !== false)
-              startBackgroundCardHydration(80)
             })
             return false
           }
@@ -1590,7 +1589,7 @@ if (layout) {
       if (!autoOpenDefault) {
         if (gridShell) gridShell.classList.remove('hidden')
         layout.classList.add('hidden')
-        startBackgroundCardHydration(250)
+        ensureGridThumbnails()
         return
       }
       var initOpenSeq = beginOpenRequest()
@@ -1602,13 +1601,11 @@ if (layout) {
             if (!isOpenRequestCurrent(initOpenSeq)) return
             appendNewItemsFromGrid()
             if (!openOverlayByVideoId(restoreVideoId, true)) openOverlayAtIndex(0)
-            startBackgroundCardHydration(80)
           })
           return
         }
       }
       if (restoreVideoId && openOverlayByVideoId(restoreVideoId, true)) {
-        startBackgroundCardHydration(80)
         return
       }
       if (!explicitVideoId && restoreVideoId) {
@@ -1621,12 +1618,10 @@ if (layout) {
           } catch (_) { }
           try { localStorage.removeItem('shortsLastViewedIdV1') } catch (_) { }
           openOverlayAtIndex(0)
-          startBackgroundCardHydration(80)
         })
         return
       }
       openOverlayAtIndex(0)
-      startBackgroundCardHydration(80)
     }
 
     init()

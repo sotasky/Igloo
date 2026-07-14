@@ -188,6 +188,7 @@ internal fun momentSlideshowAdvanceDelayMs(): Long = MOMENT_SLIDESHOW_ADVANCE_DE
 fun MomentsPlayer(
     items: List<MomentItem>,
     startIndex: Int = 0,
+    startVideoId: String? = null,
     // Match PreferencesRepo.Defaults: auto-swipe OFF, mute ON. Every real caller
     // now passes a PreferencesRepo-backed value through — these defaults only
     // matter for previews and tests, but keeping them aligned avoids surprises
@@ -241,7 +242,7 @@ fun MomentsPlayer(
     LaunchedEffect(autoSwipeDefault) { autoSwipeState = autoSwipeDefault }
     val effectiveAutoSwipe = forceAutoSwipe || autoSwipeState
 
-    val safeStart = startIndex.coerceIn(0, items.lastIndex)
+    val safeStart = momentPagerStartIndex(items, startVideoId, startIndex)
     val pagerState = rememberPagerState(initialPage = safeStart, pageCount = { items.size })
     val currentIndex = pagerState.currentPage.coerceIn(0, items.lastIndex)
     val storyMode = exitOnEnd
@@ -279,17 +280,18 @@ fun MomentsPlayer(
     // Drive view-event + onIndexChange from the pager's selected page. The
     // platform pager owns drag/fling physics; the shared video player follows
     // the current page so swipes do not build and release a player per page.
-    var lastFiredPage by remember { mutableStateOf<Int?>(null) }
+    var lastFiredVideoId by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(pagerState, items) {
         snapshotFlow { pagerState.currentPage.coerceIn(0, items.lastIndex) }
             .distinctUntilChanged()
             .collect { page ->
                 if (page !in items.indices) return@collect
 
-                if (lastFiredPage != page) {
+                val videoId = items[page].videoId
+                if (lastFiredVideoId != videoId) {
                     onIndexChange(page)
-                    onViewEvent(items[page].videoId)
-                    lastFiredPage = page
+                    onViewEvent(videoId)
+                    lastFiredVideoId = videoId
                 }
             }
     }
@@ -505,4 +507,17 @@ fun MomentsPlayer(
             )
         }
     }
+}
+
+internal fun momentPagerStartIndex(
+    items: List<MomentItem>,
+    startVideoId: String?,
+    fallbackIndex: Int,
+): Int {
+    if (items.isEmpty()) return 0
+    val requested = startVideoId?.takeIf(String::isNotBlank)
+    if (requested != null) {
+        items.indexOfFirst { it.videoId == requested }.takeIf { it >= 0 }?.let { return it }
+    }
+    return fallbackIndex.coerceIn(0, items.lastIndex)
 }

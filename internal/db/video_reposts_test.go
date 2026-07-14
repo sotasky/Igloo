@@ -78,15 +78,18 @@ func TestVideoRepostSourcesReplaceAndMomentsTabs(t *testing.T) {
 	}
 }
 
-func TestMomentsRepostOrderingFallsBackToFirstSeenAt(t *testing.T) {
+func TestMomentsRepostOrderingUsesActualTimestampOrCanonicalPublishTime(t *testing.T) {
 	d := openWritableTestDB(t)
 
 	for _, stmt := range []string{
-		`INSERT INTO channels (channel_id, source_id, name, platform) VALUES ('tiktok_followed', 'followed', 'Followed', 'tiktok')`,
-		`INSERT INTO channels (channel_id, source_id, name, platform) VALUES ('tiktok_author', 'author', 'Author', 'tiktok')`,
-		`INSERT INTO channel_follows (channel_id, followed_at) VALUES ('tiktok_followed', 1)`,
-		`INSERT INTO videos (video_id, channel_id, owner_kind, title, duration, published_at) VALUES ('orig_newer', 'tiktok_followed', 'tiktok_video', 'Original newer', 0, 2000)`,
-		`INSERT INTO videos (video_id, channel_id, owner_kind, title, duration, published_at) VALUES ('repost_older', 'tiktok_author', 'tiktok_video', 'Repost older', 0, 1000)`,
+		`INSERT INTO channels (channel_id, source_id, name, platform) VALUES ('tiktok_sample_source', 'sample_source', 'Sample Source', 'tiktok')`,
+		`INSERT INTO channels (channel_id, source_id, name, platform) VALUES ('tiktok_sample_second_source', 'sample_second_source', 'Sample Second Source', 'tiktok')`,
+		`INSERT INTO channels (channel_id, source_id, name, platform) VALUES ('tiktok_sample_author', 'sample_author', 'Sample Author', 'tiktok')`,
+		`INSERT INTO channel_follows (channel_id, followed_at) VALUES ('tiktok_sample_source', 1)`,
+		`INSERT INTO channel_follows (channel_id, followed_at) VALUES ('tiktok_sample_second_source', 1)`,
+		`INSERT INTO videos (video_id, channel_id, owner_kind, title, duration, published_at) VALUES ('sample_orig_newer', 'tiktok_sample_source', 'tiktok_video', 'Sample original newer', 0, 2000)`,
+		`INSERT INTO videos (video_id, channel_id, owner_kind, title, duration, published_at) VALUES ('sample_repost_older', 'tiktok_sample_author', 'tiktok_video', 'Sample repost older', 0, 1000)`,
+		`INSERT INTO videos (video_id, channel_id, owner_kind, title, duration, published_at) VALUES ('sample_repost_dated', 'tiktok_sample_author', 'tiktok_video', 'Sample repost dated', 0, 500)`,
 	} {
 		if err := d.ExecRaw(stmt); err != nil {
 			t.Fatalf("seed: %v", err)
@@ -95,14 +98,33 @@ func TestMomentsRepostOrderingFallsBackToFirstSeenAt(t *testing.T) {
 	if err := d.SetSetting("moments_include_reposts_default", "true"); err != nil {
 		t.Fatalf("SetSetting moments_include_reposts_default: %v", err)
 	}
-	if _, err := d.UpsertVideoRepostSources([]model.VideoRepostSource{{
-		VideoID:             "repost_older",
-		ReposterChannelID:   "tiktok_followed",
-		ReposterHandle:      "followed",
-		ReposterDisplayName: "Followed",
-		FirstSeenAtMs:       5000,
-		UpdatedAtMs:         5000,
-	}}); err != nil {
+	if _, err := d.UpsertVideoRepostSources([]model.VideoRepostSource{
+		{
+			VideoID:             "sample_repost_older",
+			ReposterChannelID:   "tiktok_sample_source",
+			ReposterHandle:      "sample_source",
+			ReposterDisplayName: "Sample Source",
+			FirstSeenAtMs:       5000,
+			UpdatedAtMs:         5000,
+		},
+		{
+			VideoID:             "sample_repost_dated",
+			ReposterChannelID:   "tiktok_sample_source",
+			ReposterHandle:      "sample_source",
+			ReposterDisplayName: "Sample Source",
+			RepostedAtMs:        6000,
+			FirstSeenAtMs:       7000,
+			UpdatedAtMs:         7000,
+		},
+		{
+			VideoID:             "sample_repost_dated",
+			ReposterChannelID:   "tiktok_sample_second_source",
+			ReposterHandle:      "sample_second_source",
+			ReposterDisplayName: "Sample Second Source",
+			FirstSeenAtMs:       8000,
+			UpdatedAtMs:         8000,
+		},
+	}); err != nil {
 		t.Fatalf("UpsertVideoRepostSources: %v", err)
 	}
 
@@ -110,11 +132,23 @@ func TestMomentsRepostOrderingFallsBackToFirstSeenAt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetVideos all: %v", err)
 	}
-	if got := videoIDs(all); len(got) != 2 || got[0] != "orig_newer" || got[1] != "repost_older" {
-		t.Fatalf("all ids = %v, want [orig_newer repost_older]", got)
+	if got := videoIDs(all); len(got) != 3 || got[0] != "sample_repost_older" || got[1] != "sample_orig_newer" || got[2] != "sample_repost_dated" {
+		t.Fatalf("all ids = %v, want [sample_repost_older sample_orig_newer sample_repost_dated]", got)
 	}
-	if all[1].EffectiveMomentAtMs != 5000 {
-		t.Fatalf("repost effective time = %d, want first_seen_at_ms 5000", all[1].EffectiveMomentAtMs)
+	if all[0].EffectiveMomentAtMs != 1000 {
+		t.Fatalf("unknown-date repost effective time = %d, want canonical published_at 1000", all[0].EffectiveMomentAtMs)
+	}
+	if all[2].EffectiveMomentAtMs != 6000 || all[2].ReposterChannelID != "tiktok_sample_source" {
+		t.Fatalf("dated repost = %+v, want actual repost timestamp and dated source", all[2])
+	}
+	for i, videoID := range []string{"sample_repost_older", "sample_orig_newer", "sample_repost_dated"} {
+		ordinal, visible, err := d.GetShortsOrdinal(videoID, "all")
+		if err != nil {
+			t.Fatalf("GetShortsOrdinal %s: %v", videoID, err)
+		}
+		if !visible || ordinal != i+1 {
+			t.Fatalf("GetShortsOrdinal %s = %d, %v; want %d, true", videoID, ordinal, visible, i+1)
+		}
 	}
 }
 
@@ -325,6 +359,45 @@ func TestUpsertVideoRepostSourcesPreservesInstagramNumericHandle(t *testing.T) {
 	}
 	if len(rows) != 1 || rows[0].ReposterChannelID != "instagram_1234567890123456" || rows[0].ReposterHandle != "1234567890123456" {
 		t.Fatalf("rows = %+v", rows)
+	}
+}
+
+func TestUpsertVideoRepostSourcesPreservesKnownEventWhenObservationOmitsIt(t *testing.T) {
+	d := openWritableTestDB(t)
+	row := model.VideoRepostSource{
+		VideoID:           "sample_repost",
+		ReposterChannelID: "tiktok_sample_source",
+		ReposterHandle:    "sample_source",
+		RepostedAtMs:      2000,
+		FirstSeenAtMs:     1000,
+	}
+	if _, err := d.UpsertVideoRepostSources([]model.VideoRepostSource{row}); err != nil {
+		t.Fatalf("seed UpsertVideoRepostSources: %v", err)
+	}
+
+	row.RepostedAtMs = 0
+	row.FirstSeenAtMs = 0
+	if _, err := d.UpsertVideoRepostSources([]model.VideoRepostSource{row}); err != nil {
+		t.Fatalf("missing-event UpsertVideoRepostSources: %v", err)
+	}
+	rows, err := d.GetVideoRepostSources(row.VideoID)
+	if err != nil {
+		t.Fatalf("GetVideoRepostSources: %v", err)
+	}
+	if len(rows) != 1 || rows[0].RepostedAtMs != 2000 {
+		t.Fatalf("rows after missing event = %+v", rows)
+	}
+
+	row.RepostedAtMs = 3000
+	if _, err := d.UpsertVideoRepostSources([]model.VideoRepostSource{row}); err != nil {
+		t.Fatalf("new-event UpsertVideoRepostSources: %v", err)
+	}
+	rows, err = d.GetVideoRepostSources(row.VideoID)
+	if err != nil {
+		t.Fatalf("GetVideoRepostSources after new event: %v", err)
+	}
+	if len(rows) != 1 || rows[0].RepostedAtMs != 3000 {
+		t.Fatalf("rows after new event = %+v", rows)
 	}
 }
 

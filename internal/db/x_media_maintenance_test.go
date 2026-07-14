@@ -3,11 +3,39 @@ package db
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/screwys/igloo/internal/model"
 )
+
+func TestCandidateServerXMediaParentPlanUsesIdentityIndexes(t *testing.T) {
+	d := openFreshTestDB(t)
+	query, args := candidateServerXMediaParentsQuery([]string{"sample_owner"})
+	rows, err := d.conn.Query("EXPLAIN QUERY PLAN "+query, args...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rows.Close() }()
+	var details []string
+	for rows.Next() {
+		var id, parent, unused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+			t.Fatal(err)
+		}
+		details = append(details, detail)
+	}
+	plan := strings.Join(details, "\n")
+	if strings.Contains(plan, "SCAN feed_items") {
+		t.Fatalf("candidate owner plan scans feed_items: %s", plan)
+	}
+	if !strings.Contains(plan, "sqlite_autoindex_feed_items_1") ||
+		!strings.Contains(plan, "idx_feed_items_quote") {
+		t.Fatalf("candidate owner plan = %s", plan)
+	}
+}
 
 func TestPruneXMediaRetentionUsesAssetsAndKeepsProtectedItems(t *testing.T) {
 	d := openFreshTestDB(t)
@@ -176,9 +204,9 @@ func TestPruneXMediaRetentionKeepsAssetsInsideAndroidFeedWindow(t *testing.T) {
 	}
 }
 
-func TestPruneXMediaRetentionFailsClosedWhenAndroidRetentionCannotBeRead(t *testing.T) {
+func TestPruneXMediaRetentionOnlyNeedsAndroidOwnerWhenPruning(t *testing.T) {
 	d := openFreshTestDB(t)
-	channelID, sourceHandle := seedXRetentionChannel(t, d, 1)
+	channelID, sourceHandle := seedXRetentionChannel(t, d, 2)
 	items := []model.FeedItem{
 		xRetentionFeedItem("sample_fail_closed_new", sourceHandle, 200),
 		xRetentionFeedItem("sample_fail_closed_old", sourceHandle, 100),
@@ -192,11 +220,117 @@ func TestPruneXMediaRetentionFailsClosedWhenAndroidRetentionCannotBeRead(t *test
 	if err := d.ExecRaw(`DELETE FROM android_feed_retention`); err != nil {
 		t.Fatal(err)
 	}
+	if result, err := d.PruneXMediaRetentionForChannel(channelID, XMediaRetentionOptions{NowMs: 3000}); err != nil || result.PrunedItems != 0 {
+		t.Fatalf("no-op retention = %+v / %v", result, err)
+	}
+	if err := d.UpdateChannelSettings(channelID, map[string]any{"media_download_limit": 1}); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := d.PruneXMediaRetentionForChannel(channelID, XMediaRetentionOptions{NowMs: 3000}); err == nil {
 		t.Fatal("retention succeeded without the Android owner root")
 	}
 	if asset := readXRetentionAsset(t, d, "sample_fail_closed_old"); asset.State != AssetStateReady {
 		t.Fatalf("fail-open pruning changed asset: %+v", asset)
+	}
+}
+
+func TestRepeatedXMediaObservationPreservesPrunedWork(t *testing.T) {
+	d := openFreshTestDB(t)
+	channelID, sourceHandle := seedXRetentionChannel(t, d, 1)
+	items := []model.FeedItem{
+		xRetentionFeedItem("sample_repeat_new", sourceHandle, 200),
+		xRetentionFeedItem("sample_repeat_old", sourceHandle, 100),
+	}
+	if _, err := d.UpsertFeedItemsDetailed(items); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.PruneXMediaRetentionForChannel(channelID, XMediaRetentionOptions{NowMs: 3000}); err != nil {
+		t.Fatal(err)
+	}
+	result, err := d.UpsertFeedItemsDetailed([]model.FeedItem{items[1]})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.XMediaRetentionChanges) != 0 {
+		t.Fatalf("unchanged observation reported retention work: %+v", result.XMediaRetentionChanges)
+	}
+	changedItem := items[1]
+	changedItem.MediaJSON = `[{"url":"https://cdn.example/sample_repeat_old_changed.jpg","type":"photo"}]`
+	changedItem.Media = nil
+	changed, err := d.UpsertFeedItemsDetailed([]model.FeedItem{changedItem})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := changed.XMediaRetentionChanges[channelID]; len(got) != 1 || got[0] != changedItem.TweetID {
+		t.Fatalf("changed URL retention work = %+v", changed.XMediaRetentionChanges)
+	}
+	if asset := readXRetentionAsset(t, d, changedItem.TweetID); asset.State != AssetStatePruned {
+		t.Fatalf("changed URL reactivated pruned work: %+v", asset)
+	}
+	claimed, err := d.ClaimContentAssetDownloadBatch(LeaseOptions{
+		Owner: "current-worker", NowMs: time.Now().UnixMilli(), LeaseMs: 1000, Limit: 10,
+	}, true, DownloadLaneCurrent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(claimed) != 1 || claimed[0].OwnerID != items[0].TweetID {
+		t.Fatalf("current claim included pruned media: %+v", claimed)
+	}
+}
+
+func TestXMediaRetentionChangeReconcilesOnlyNewAndBoundaryOwners(t *testing.T) {
+	d := openFreshTestDB(t)
+	channelID, sourceHandle := seedXRetentionChannel(t, d, 2)
+	initial := []model.FeedItem{
+		xRetentionFeedItem("sample_window_first", sourceHandle, 300),
+		xRetentionFeedItem("sample_window_second", sourceHandle, 200),
+		xRetentionFeedItem("sample_historical_overflow", sourceHandle, 100),
+	}
+	if _, err := d.UpsertFeedItemsDetailed(initial); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.PruneXMediaRetentionForChannel(channelID, XMediaRetentionOptions{NowMs: 3000}); err != nil {
+		t.Fatal(err)
+	}
+	var historicalRevision, historicalUpdated int64
+	if err := d.QueryRow(`
+		SELECT revision, updated_at_ms FROM assets
+		WHERE asset_id = ?
+	`, BuildAssetID("twitter", "tweet", "sample_historical_overflow", "post_media", 0)).Scan(&historicalRevision, &historicalUpdated); err != nil {
+		t.Fatal(err)
+	}
+	newest := xRetentionFeedItem("sample_window_new", sourceHandle, 400)
+	upsert, err := d.UpsertFeedItemsDetailed([]model.FeedItem{newest})
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed := upsert.XMediaRetentionChanges[channelID]
+	if len(changed) != 1 || changed[0] != newest.TweetID {
+		t.Fatalf("retention changes = %+v", upsert.XMediaRetentionChanges)
+	}
+	result, err := d.ReconcileXMediaRetentionChanges(channelID, changed, XMediaRetentionOptions{NowMs: 4000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.PrunedItems != 1 || result.AssetsPruned != 1 {
+		t.Fatalf("bounded retention result = %+v", result)
+	}
+	if asset := readXRetentionAsset(t, d, newest.TweetID); asset.State == AssetStatePruned {
+		t.Fatalf("newest asset was pruned: %+v", asset)
+	}
+	if asset := readXRetentionAsset(t, d, "sample_window_second"); asset.State != AssetStatePruned {
+		t.Fatalf("displaced asset = %+v", asset)
+	}
+	var nextRevision, nextUpdated int64
+	if err := d.QueryRow(`
+		SELECT revision, updated_at_ms FROM assets
+		WHERE asset_id = ?
+	`, BuildAssetID("twitter", "tweet", "sample_historical_overflow", "post_media", 0)).Scan(&nextRevision, &nextUpdated); err != nil {
+		t.Fatal(err)
+	}
+	if nextRevision != historicalRevision || nextUpdated != historicalUpdated {
+		t.Fatalf("historical overflow was revisited: before=(%d,%d) after=(%d,%d)",
+			historicalRevision, historicalUpdated, nextRevision, nextUpdated)
 	}
 }
 

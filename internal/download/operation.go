@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"log"
-	"os"
 	"strings"
 	"time"
 
@@ -74,16 +73,6 @@ func SummaryJSON(fields map[string]any) string {
 		return s[:2000]
 	}
 	return s
-}
-
-func summarizePaths(paths []string) (int, int64) {
-	var bytes int64
-	for _, p := range paths {
-		if fi, err := os.Stat(p); err == nil && !fi.IsDir() {
-			bytes += fi.Size()
-		}
-	}
-	return len(paths), bytes
 }
 
 func platformFromURL(rawURL string) string {

@@ -1,61 +1,121 @@
 package worker
 
 import (
+	"context"
+	"net/http/httptest"
 	"testing"
 	"time"
 
-	"github.com/screwys/igloo/internal/db"
-	"github.com/screwys/igloo/internal/feed"
+	"github.com/screwys/igloo/internal/fxtwitter"
+	"github.com/screwys/igloo/internal/model"
 )
 
-func TestSnapshotTop10_Compact(t *testing.T) {
-	rows := []db.SnapshotRow{
-		{TweetID: "a", FinalScore: 9.99},
-		{TweetID: "b", FinalScore: 8.5},
+func TestRankSnapshotPublishesOnlyCompleteReplyChains(t *testing.T) {
+	d := newTestWorkerDB(t)
+	now := time.Now().UTC()
+	if _, err := d.MutateFollow("twitter_sample_source", "set", now.UnixMilli()); err != nil {
+		t.Fatal(err)
 	}
-	got := snapshotTop10(rows)
-	want := "[a(9.99),b(8.50)]"
-	if got != want {
-		t.Errorf("snapshotTop10 = %q, want %q", got, want)
+	items := []model.FeedItem{
+		{
+			TweetID: "sample_complete", SourceHandle: "sample_source", AuthorHandle: "sample_source",
+			BodyText: "complete", PublishedAt: &now, FetchedAt: now,
+			ContentHash: "sample_complete", CanonicalTweetID: "sample_complete",
+		},
+		{
+			TweetID: "sample_reply", SourceHandle: "sample_source", AuthorHandle: "sample_source",
+			BodyText: "reply", IsReply: true, ReplyToHandle: "sample_parent_author", ReplyToStatus: "sample_parent",
+			PublishedAt: &now, FetchedAt: now, ContentHash: "sample_reply", CanonicalTweetID: "sample_reply",
+		},
+	}
+	if _, err := d.UpsertFeedItems(items); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.UpdateAlgoInterest(map[string]float64{"sample_complete": 10, "sample_reply": 11}); err != nil {
+		t.Fatal(err)
+	}
+
+	failing := httptest.NewServer(fxtMockHandler(t, nil))
+	m := NewManager(d, testCfg(t.TempDir()))
+	m.replyResolver = NewReplyResolver(d, &fxtwitter.Client{BaseURL: failing.URL, HTTP: failing.Client(), Timeout: time.Second})
+	stats := m.runSnapshotPhaseStats(
+		context.Background(), []string{"sample_complete", "sample_reply"}, 0, false,
+	)
+	failing.Close()
+	if stats.replyAttempts != 1 || stats.replyBlocked != 1 {
+		t.Fatalf("reply readiness = %d attempts, %d blocked", stats.replyAttempts, stats.replyBlocked)
+	}
+	var snapshotIDs string
+	if err := d.QueryRow(`SELECT COALESCE(GROUP_CONCAT(tweet_id, ','), '') FROM feed_rank_snapshot`).Scan(&snapshotIDs); err != nil {
+		t.Fatal(err)
+	}
+	if snapshotIDs != "sample_complete" {
+		t.Fatalf("snapshot with unresolved reply = %q", snapshotIDs)
+	}
+
+	resolved := httptest.NewServer(fxtMockHandler(t, map[string]string{
+		"/sample_source/status/sample_parent": tweetFixture("sample_parent", "sample_parent_author", "parent", "", ""),
+	}))
+	defer resolved.Close()
+	m.replyResolver = NewReplyResolver(d, &fxtwitter.Client{BaseURL: resolved.URL, HTTP: resolved.Client(), Timeout: time.Second})
+	stats = m.runSnapshotPhaseStats(
+		context.Background(), []string{"sample_complete", "sample_reply"}, 0, false,
+	)
+	if stats.replyBlocked != 0 || stats.count != 2 {
+		parent, _ := d.GetFeedItemByTweetID("sample_parent")
+		t.Fatalf("resolved snapshot = %+v, parent = %+v", stats, parent)
+	}
+	chain, err := d.GetThreadChain("sample_reply")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(chain) != 2 || chain[0].TweetID != "sample_parent" || chain[1].TweetID != "sample_reply" {
+		t.Fatalf("resolved chain = %+v", chain)
 	}
 }
 
-func TestSnapshotTop10_Truncates(t *testing.T) {
-	rows := make([]db.SnapshotRow, 15)
-	for i := range rows {
-		rows[i] = db.SnapshotRow{TweetID: "x", FinalScore: float64(i)}
+func TestRankSnapshotContinuesAReplyChainThatMadeProgress(t *testing.T) {
+	d := newTestWorkerDB(t)
+	now := time.Now().UTC()
+	if _, err := d.MutateFollow("twitter_sample_source", "set", now.UnixMilli()); err != nil {
+		t.Fatal(err)
 	}
-	got := snapshotTop10(rows)
-	// 10 entries ⇒ 9 commas separating them inside the brackets.
-	commas := 0
-	for i := 0; i < len(got); i++ {
-		if got[i] == ',' {
-			commas++
-		}
+	if _, err := d.UpsertFeedItems([]model.FeedItem{{
+		TweetID: "sample_leaf", SourceHandle: "sample_source", AuthorHandle: "sample_source",
+		BodyText: "leaf", IsReply: true, ReplyToHandle: "sample_parent_1", ReplyToStatus: "sample_parent_1",
+		PublishedAt: &now, FetchedAt: now, ContentHash: "sample_leaf", CanonicalTweetID: "sample_leaf",
+	}}); err != nil {
+		t.Fatal(err)
 	}
-	if commas != 9 {
-		t.Errorf("expected 9 commas (10 entries), got %d in %q", commas, got)
+	if err := d.UpdateAlgoInterest(map[string]float64{"sample_leaf": 10}); err != nil {
+		t.Fatal(err)
 	}
-}
-
-func TestSnapshotTop10_Empty(t *testing.T) {
-	got := snapshotTop10(nil)
-	if got != "[]" {
-		t.Errorf("snapshotTop10(nil) = %q, want %q", got, "[]")
+	fixtures := map[string]string{
+		"/sample_parent_1/status/sample_parent_1": tweetFixture("sample_parent_1", "sample_parent_1", "one", "sample_parent_2", "sample_parent_2"),
+		"/sample_parent_2/status/sample_parent_2": tweetFixture("sample_parent_2", "sample_parent_2", "two", "sample_parent_3", "sample_parent_3"),
+		"/sample_parent_3/status/sample_parent_3": tweetFixture("sample_parent_3", "sample_parent_3", "three", "sample_parent_4", "sample_parent_4"),
+		"/sample_parent_4/status/sample_parent_4": tweetFixture("sample_parent_4", "sample_parent_4", "four", "sample_parent_5", "sample_parent_5"),
+		"/sample_parent_5/status/sample_parent_5": tweetFixture("sample_parent_5", "sample_parent_5", "five", "sample_parent_6", "sample_parent_6"),
 	}
-}
-
-// Smoke test: BuildSnapshot integrates cleanly with the db.SnapshotRow shape.
-func TestBuildSnapshot_ReturnsSnapshotRowType(t *testing.T) {
-	pre := []db.PreDiversitySnapshotRow{
-		{TweetID: "a", ChannelID: "twitter_sample_alpha", BaseScore: 3, DecayFactor: 1, FreshnessBonus: 1},
-		{TweetID: "b", ChannelID: "twitter_sample_beta", BaseScore: 2, DecayFactor: 1, FreshnessBonus: 1},
+	srv := httptest.NewServer(fxtMockHandler(t, fixtures))
+	defer srv.Close()
+	m := NewManager(d, testCfg(t.TempDir()))
+	m.replyResolver = NewReplyResolver(d, &fxtwitter.Client{BaseURL: srv.URL, HTTP: srv.Client(), Timeout: time.Second})
+	stats := m.runSnapshotPhaseStats(context.Background(), []string{"sample_leaf"}, 0, false)
+	if stats.replyAttempts != 1 || stats.replyBlocked != 1 || stats.count != 0 {
+		t.Fatalf("partial chain snapshot = %+v", stats)
 	}
-	got := feed.BuildSnapshot(pre, time.Unix(0, 0))
-	if len(got) != 2 {
-		t.Fatalf("expected 2 rows, got %d", len(got))
+	var scoredAt int64
+	if err := d.QueryRow(`SELECT algo_scored_at FROM feed_items WHERE tweet_id = 'sample_leaf'`).Scan(&scoredAt); err != nil {
+		t.Fatal(err)
 	}
-	if got[0].RankPosition != 1 || got[1].RankPosition != 2 {
-		t.Errorf("positions = %d, %d; want 1, 2", got[0].RankPosition, got[1].RankPosition)
+	if scoredAt != 0 {
+		incomplete, _ := d.ListIncompleteReplyChainsContext(context.Background(), []string{"sample_leaf"})
+		t.Fatalf("partial chain scored_at = %d, incomplete = %+v", scoredAt, incomplete)
+	}
+	select {
+	case <-m.feedScoringKick:
+	default:
+		t.Fatal("partial chain did not schedule its next bounded pass")
 	}
 }

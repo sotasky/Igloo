@@ -8,6 +8,9 @@ import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.ListAdapter
 import androidx.recyclerview.widget.RecyclerView
 import coil3.ImageLoader
+import com.screwy.igloo.data.entity.FeedRow
+import com.screwy.igloo.data.entity.ThreadedFeedRow
+import com.screwy.igloo.feed.SocialPostModel
 import com.screwy.igloo.media.MediaResolvers
 import com.screwy.igloo.net.IglooHostProvider
 import com.screwy.igloo.net.auth.AuthTokenProvider
@@ -72,6 +75,19 @@ internal class NativeFeedAdapter(
         }
     }
 
+    override fun onBindViewHolder(
+        holder: RecyclerView.ViewHolder,
+        position: Int,
+        payloads: MutableList<Any>,
+    ) {
+        val actionPayload = payloads.lastOrNull() as? LikeBookmarkPayload
+        if (actionPayload != null && holder is NativeFeedViewHolder) {
+            holder.bindLikeBookmarkState(actionPayload.item)
+            return
+        }
+        super.onBindViewHolder(holder, position, payloads)
+    }
+
     override fun onViewRecycled(holder: RecyclerView.ViewHolder) {
         when (holder) {
             is NativeFeedViewHolder -> holder.recycle()
@@ -104,6 +120,60 @@ internal class NativeFeedAdapter(
                     oldItem: NativeFeedAdapterItem,
                     newItem: NativeFeedAdapterItem,
                 ): Boolean = oldItem == newItem
+
+                override fun getChangePayload(
+                    oldItem: NativeFeedAdapterItem,
+                    newItem: NativeFeedAdapterItem,
+                ): Any? =
+                    if (nativeFeedLikeBookmarkOnlyChange(oldItem, newItem)) {
+                        LikeBookmarkPayload(newItem as NativeFeedAdapterItem.Post)
+                    } else {
+                        null
+                    }
             }
     }
 }
+
+private data class LikeBookmarkPayload(val item: NativeFeedAdapterItem.Post)
+
+internal fun nativeFeedLikeBookmarkOnlyChange(
+    oldItem: NativeFeedAdapterItem,
+    newItem: NativeFeedAdapterItem,
+): Boolean {
+    if (oldItem !is NativeFeedAdapterItem.Post || newItem !is NativeFeedAdapterItem.Post) {
+        return false
+    }
+    if (oldItem == newItem) return false
+    return oldItem.withoutLikeBookmarkState() == newItem.withoutLikeBookmarkState()
+}
+
+private fun NativeFeedAdapterItem.Post.withoutLikeBookmarkState(): NativeFeedAdapterItem.Post =
+    copy(
+        threaded = threaded.withoutLikeBookmarkState(),
+        post = post.withoutLikeBookmarkState(),
+        chainPosts = chainPosts.map(SocialPostModel::withoutLikeBookmarkState),
+    )
+
+private fun ThreadedFeedRow.withoutLikeBookmarkState(): ThreadedFeedRow =
+    copy(
+        row = row.withoutLikeBookmarkState(),
+        chain = chain.map(FeedRow::withoutLikeBookmarkState),
+    )
+
+private fun SocialPostModel.withoutLikeBookmarkState(): SocialPostModel =
+    copy(
+        row = row.withoutLikeBookmarkState(),
+        actions = actions.copy(isLiked = false, isBookmarked = false),
+    )
+
+private fun FeedRow.withoutLikeBookmarkState(): FeedRow =
+    copy(
+        isLiked = 0,
+        likedAt = null,
+        isBookmarked = 0,
+        bookmarkCategoryId = null,
+        bookmarkCustomTitle = null,
+        bookmarkedAt = null,
+        bookmarkAccountHandles = null,
+        bookmarkMediaIndices = null,
+    )

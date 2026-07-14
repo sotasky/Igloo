@@ -532,37 +532,6 @@ func TestFeedItemMuteActionUsesDisplayedAuthorFollowState(t *testing.T) {
 	}
 }
 
-func TestFeedItemSeenTrackingIsPageGatedHTMX(t *testing.T) {
-	item := model.FeedItem{
-		TweetID:      "seen_1",
-		AuthorHandle: "sample_author_a",
-		BodyText:     "body",
-	}
-
-	var off bytes.Buffer
-	if err := FeedItem(PageProps{}, item).Render(context.Background(), &off); err != nil {
-		t.Fatalf("render feed item without tracking: %v", err)
-	}
-	if strings.Contains(off.String(), `hx-post="/api/feed/seen`) {
-		t.Fatalf("seen HTMX should not render without TrackFeedSeen: %s", off.String())
-	}
-
-	var on bytes.Buffer
-	if err := FeedItem(PageProps{TrackFeedSeen: true}, item).Render(context.Background(), &on); err != nil {
-		t.Fatalf("render feed item with tracking: %v", err)
-	}
-	html := on.String()
-	if !strings.Contains(html, `hx-post="/api/feed/seen?tweet_id=seen_1"`) {
-		t.Fatalf("missing seen HTMX post: %s", html)
-	}
-	if !strings.Contains(html, `hx-trigger="intersect once threshold:0.15"`) {
-		t.Fatalf("missing valid intersect trigger: %s", html)
-	}
-	if strings.Contains(html, `data-feed-seen-url`) {
-		t.Fatalf("seen tracking should not use JS-only URL attribute: %s", html)
-	}
-}
-
 func TestFeedItemRendersIndependentBodyAndQuoteTranslatePills(t *testing.T) {
 	item := model.FeedItem{
 		TweetID:                "tweet_with_quote_translation",

@@ -14,6 +14,7 @@ func schemaMaintainedStateStatements() []string {
 			source_url           TEXT NOT NULL DEFAULT '',
 			published_source_url TEXT NOT NULL DEFAULT '',
 			storage_class        TEXT NOT NULL CHECK(storage_class IN ('state_ssd', 'bulk_hdd')),
+			download_lane        TEXT NOT NULL DEFAULT 'backfill' CHECK(download_lane IN ('current', 'backfill')),
 			desired_revision     INTEGER NOT NULL DEFAULT 1,
 			published_revision   INTEGER NOT NULL DEFAULT 0,
 			file_path            TEXT NOT NULL DEFAULT '',
@@ -31,7 +32,11 @@ func schemaMaintainedStateStatements() []string {
 			updated_at_ms        INTEGER NOT NULL DEFAULT 0
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_media_objects_claim
-		 ON media_objects(job_state, next_attempt_at_ms, lease_until_ms, storage_class, updated_at_ms)`,
+		 ON media_objects(download_lane, next_attempt_at_ms, attempts, updated_at_ms DESC, id DESC, lease_until_ms)
+		 WHERE job_state IN ('queued', 'downloading') AND source_url != ''`,
+		`CREATE INDEX IF NOT EXISTS idx_media_objects_lease
+		 ON media_objects(download_lane, lease_until_ms)
+		 WHERE job_state = 'downloading' AND source_url != ''`,
 		`CREATE INDEX IF NOT EXISTS idx_media_objects_ready_file_path
 		 ON media_objects(file_path) WHERE published_revision > 0`,
 		`CREATE TABLE IF NOT EXISTS assets (

@@ -119,6 +119,7 @@ func (s *Server) handleSubscribe(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	s.kickFeedOrderForChannelID(ch.ChannelID)
 
 	s.workers.Emit("system", fmt.Sprintf("Subscribed: %s (%s)", ch.Name, ch.Platform), "done")
 
@@ -149,13 +150,15 @@ func (s *Server) handleSubscribe(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleUnsubscribe(w http.ResponseWriter, r *http.Request) {
 	channelID := r.PathValue("channelID")
-	keys, err := s.db.PurgeUnfollowedChannelContent(channelID)
+	result, err := s.db.MutateFollow(channelID, "clear", 0)
 	if err != nil {
-		slog.Error("PurgeUnfollowedChannelContent", "channel", channelID, "err", err)
+		slog.Error("MutateFollow", "channel", channelID, "err", err)
 		writeJSON(w, 500, map[string]any{"error": "db error"})
 		return
 	}
-	s.removeCanonicalAssetFiles(keys)
+	if result.Applied {
+		s.kickFeedOrderForChannelID(result.CanonicalID)
+	}
 
 	s.workers.Emit("system", fmt.Sprintf("Unsubscribed: %s", channelID), "info")
 
@@ -164,5 +167,5 @@ func (s *Server) handleUnsubscribe(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		return
 	}
-	writeJSON(w, 200, map[string]any{"success": true, "deleted_files": len(keys)})
+	writeJSON(w, 200, map[string]any{"success": true})
 }

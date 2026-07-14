@@ -87,12 +87,7 @@ func (s *Server) handleChannelStar(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Invalidate feed scores for this channel's handle
-	handle := channelID
-	if idx := strings.Index(handle, "_"); idx >= 0 {
-		handle = handle[idx+1:]
-	}
-	_ = s.db.InvalidateAlgoScoreByHandle(handle)
+	_ = s.db.InvalidateFeedWindowByChannelID(channelID)
 	s.workers.KickFeedScoring()
 
 	// If HTMX request, return the updated star button HTML

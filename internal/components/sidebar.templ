@@ -100,7 +100,7 @@ templ Sidebar(p PageProps) {
 			<div class="sidebar-status"
 				id="sidebar-status"
 				hx-get="/api/sidebar-status"
-				hx-trigger="load, every 4s, poll"
+				hx-trigger="load, every 4s [!document.hidden], poll"
 				hx-swap="innerHTML"
 			>
 				<div class="status-activity">
@@ -222,11 +222,11 @@ templ SidebarChannelItem(p PageProps, ch model.Channel) {
 				hx-on::after-request="var b=this;b.textContent=event.detail.successful?'✓':'!';setTimeout(function(){b.textContent='↻';b.disabled=false},1200)"
 			>&#x21bb;</button>
 			<button class="channel-btn settings" type="button" title={ L(p, "action_channel_settings_short", "Settings") } data-i18n-title="action_channel_settings_short" data-action="settings" data-id={ ch.ChannelID }>&#x2699;</button>
-			<button class="channel-btn remove" type="button" title={ L(p, "action_remove_channel_and_files", "Remove Channel & Files") } data-i18n-title="action_remove_channel_and_files"
-				hx-delete={ "/api/unsubscribe/" + ch.ChannelID + "?delete_files=true" }
+			<button class="channel-btn remove" type="button" title={ L(p, "action_unfollow", "Unfollow") } data-i18n-title="action_unfollow" data-optimistic-unfollow
+				hx-delete={ "/api/unsubscribe/" + ch.ChannelID }
 				hx-target="closest .channel-item"
 				hx-swap="outerHTML"
-				hx-confirm={ fmt.Sprintf(L(p, "confirm_remove_channel_and_files", "Remove channel and files for %q?"), ch.Name) }
+				hx-confirm={ LF(p, "confirm_unfollow_channel_body", "Unfollow %1$s?", ch.Name) }
 				>&times;</button>
 		</div>
 	</div>

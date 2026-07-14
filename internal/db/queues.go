@@ -2,6 +2,7 @@ package db
 
 import (
 	"database/sql"
+	"fmt"
 	"strings"
 	"time"
 )
@@ -9,27 +10,48 @@ import (
 // NextMediaWorkDelay returns the next due time across durable content assets
 // and video work for the currently eligible download platforms. Enqueue
 // signals may wake the executor sooner.
-func (db *DB) NextMediaWorkDelay(nowMs int64, downloadPlatforms []string, includeTweets bool) (time.Duration, error) {
+func (db *DB) NextMediaWorkDelay(nowMs int64, downloadPlatforms []string, includeTweets bool, lane DownloadLane) (time.Duration, error) {
+	if !lane.valid() {
+		return 0, fmt.Errorf("invalid media work lane %q", lane)
+	}
 	if nowMs <= 0 {
 		nowMs = time.Now().UnixMilli()
 	}
 	downloadPlatforms = normalizePlatforms(downloadPlatforms)
 	query := `
-		SELECT MIN(due_ms) FROM (
-			SELECT CASE
-			         WHEN mo.job_state = 'downloading' THEN mo.lease_until_ms
-			         WHEN mo.next_attempt_at_ms > 0 THEN mo.next_attempt_at_ms
-			         ELSE ?
-			       END AS due_ms
-			FROM media_objects mo
+		WITH next_queued_content AS (
+			SELECT CASE WHEN mo.next_attempt_at_ms > 0 THEN mo.next_attempt_at_ms ELSE ? END AS due_ms
+			FROM media_objects mo INDEXED BY idx_media_objects_claim
 			WHERE mo.job_state IN ('queued', 'downloading')
+			  AND mo.job_state = 'queued'
+			  AND mo.download_lane = ?
+			  AND mo.source_url != ''
 			  AND EXISTS (
-			    SELECT 1 FROM assets a
+			    SELECT 1 FROM assets a INDEXED BY idx_assets_desired_object
 			    WHERE a.desired_object_id = mo.object_id AND a.lifecycle_state = 'active'
-			      AND ((? AND a.owner_kind = 'tweet' AND a.asset_kind IN ('post_audio', 'post_media', 'post_thumbnail'))
-			        OR (a.owner_kind = 'comment_author' AND a.asset_kind = 'avatar'))
-			  )`
-	args := []any{nowMs, includeTweets}
+			      AND ` + contentAssetWorkerOwnerSQL + `
+			  )
+			ORDER BY mo.next_attempt_at_ms, mo.attempts, mo.updated_at_ms DESC, mo.id DESC
+			LIMIT 1
+		), next_leased_content AS (
+			SELECT mo.lease_until_ms AS due_ms
+			FROM media_objects mo INDEXED BY idx_media_objects_lease
+			WHERE mo.job_state = 'downloading'
+			  AND mo.download_lane = ?
+			  AND mo.source_url != ''
+			  AND EXISTS (
+			    SELECT 1 FROM assets a INDEXED BY idx_assets_desired_object
+			    WHERE a.desired_object_id = mo.object_id AND a.lifecycle_state = 'active'
+			      AND ` + contentAssetWorkerOwnerSQL + `
+			  )
+			ORDER BY mo.lease_until_ms
+			LIMIT 1
+		)
+		SELECT MIN(due_ms) FROM (
+			SELECT due_ms FROM next_queued_content
+			UNION ALL
+			SELECT due_ms FROM next_leased_content`
+	args := []any{nowMs, lane, includeTweets, lane, includeTweets}
 	if len(downloadPlatforms) > 0 {
 		query += `
 			UNION ALL
@@ -40,7 +62,18 @@ func (db *DB) NextMediaWorkDelay(nowMs int64, downloadPlatforms []string, includ
 			       END
 			FROM download_queue dq
 			WHERE dq.status IN ('pending', 'processing')
-			  AND EXISTS (SELECT 1 FROM video_desires d WHERE d.video_id = dq.video_id)
+			  AND CASE WHEN EXISTS (
+			    SELECT 1
+			    FROM video_desires current_desire INDEXED BY idx_video_desires_video
+			    JOIN channel_follows current_follow ON current_follow.channel_id = current_desire.source_channel_id
+			    WHERE current_desire.video_id = dq.video_id AND current_desire.lane = 'current'
+			  ) THEN 'current' ELSE 'backfill' END = ?
+			  AND EXISTS (
+			    SELECT 1
+			    FROM video_desires desired INDEXED BY idx_video_desires_video
+			    JOIN channel_follows followed ON followed.channel_id = desired.source_channel_id
+			    WHERE desired.video_id = dq.video_id
+			  )
 			  AND EXISTS (
 			    SELECT 1 FROM channels owner_channel
 			    WHERE owner_channel.channel_id = dq.owner_channel_id
@@ -51,7 +84,7 @@ func (db *DB) NextMediaWorkDelay(nowMs int64, downloadPlatforms []string, includ
 			    WHERE v.video_id = dq.video_id
 			      AND ` + readyVideoMediaExistsSQL("v") + `
 			  )`
-		args = append(args, nowMs)
+		args = append(args, nowMs, lane)
 		args = append(args, stringsToAny(downloadPlatforms)...)
 	}
 	query += `
@@ -191,4 +224,23 @@ func (db *DB) CountPendingXContentDownloads() (queued int, processing int, err e
 		FROM owner_state
 	`).Scan(&queued, &processing)
 	return queued, processing, err
+}
+
+func (db *DB) HasPendingXContentDownloads() (bool, error) {
+	var pending bool
+	err := db.reader().QueryRow(`
+		SELECT EXISTS (
+			SELECT 1
+			FROM media_objects mo INDEXED BY idx_media_objects_claim
+			CROSS JOIN assets a INDEXED BY idx_assets_desired_object
+			WHERE a.desired_object_id = mo.object_id
+			  AND a.lifecycle_state = 'active'
+			  AND a.owner_kind = 'tweet'
+			  AND a.asset_kind IN ('post_audio', 'post_media', 'post_thumbnail')
+			  AND mo.job_state IN ('queued', 'downloading')
+			  AND mo.source_url != ''
+			LIMIT 1
+		)
+	`).Scan(&pending)
+	return pending, err
 }

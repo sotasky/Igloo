@@ -108,24 +108,47 @@ func (db *DB) GetBookmarks(opts GetBookmarksOpts) ([]model.Video, error) {
 	}
 
 	query := fmt.Sprintf(`
-		SELECT v.video_id, v.channel_id, v.owner_kind,
-		       CASE WHEN v.title LIKE 'X post %%' THEN COALESCE(fi.body_text,
-		           (SELECT fp.quote_body_text
-		            FROM feed_items fp
-		            WHERE fp.quote_tweet_id = v.video_id
-		              AND fp.quote_tweet_id IS NOT NULL
-		              AND fp.quote_tweet_id != ''
-		            LIMIT 1),
-		           '') ELSE v.title END,
+		WITH bookmark_page AS (
+			SELECT b.video_id, b.category_id, b.bookmarked_at
+			FROM bookmarks b
+			%s
+			ORDER BY b.bookmarked_at DESC
+			LIMIT ? OFFSET ?
+		),
+		feed_candidates AS (
+			SELECT bp.video_id AS action_id, fi.*,
+			       CASE WHEN NULLIF(TRIM(COALESCE(fi.body_text, '')), '') IS NOT NULL
+			                  OR NULLIF(TRIM(COALESCE(fi.media_json, '')), '') IS NOT NULL
+			                  OR NULLIF(TRIM(COALESCE(fi.quote_tweet_id, '')), '') IS NOT NULL
+			                  OR NULLIF(TRIM(COALESCE(fi.quote_body_text, '')), '') IS NOT NULL
+			            THEN 0 ELSE 2 END AS presentation_rank
+			FROM bookmark_page bp
+			JOIN feed_items fi ON fi.tweet_id = bp.video_id
+			UNION ALL
+			SELECT bp.video_id AS action_id, fi.*, 1 AS presentation_rank
+			FROM bookmark_page bp
+			JOIN feed_items fi ON fi.canonical_tweet_id = bp.video_id AND fi.tweet_id != bp.video_id
+			WHERE NULLIF(TRIM(COALESCE(fi.body_text, '')), '') IS NOT NULL
+			   OR NULLIF(TRIM(COALESCE(fi.media_json, '')), '') IS NOT NULL
+			   OR NULLIF(TRIM(COALESCE(fi.quote_tweet_id, '')), '') IS NOT NULL
+			   OR NULLIF(TRIM(COALESCE(fi.quote_body_text, '')), '') IS NOT NULL
+		),
+		ranked_feed AS (
+			SELECT feed_candidates.*,
+			       ROW_NUMBER() OVER (
+			           PARTITION BY action_id
+			           ORDER BY presentation_rank, COALESCE(is_retweet, 0), fetched_at, tweet_id
+			       ) AS presentation_row
+			FROM feed_candidates
+		),
+		resolved_feed AS (
+			SELECT * FROM ranked_feed WHERE presentation_row = 1
+		)
+		SELECT v.video_id, COALESCE(NULLIF(fi.channel_id, ''), v.channel_id), v.owner_kind,
+		       CASE WHEN v.title LIKE 'X post %%' THEN COALESCE(
+		           NULLIF(fi.body_text, ''), NULLIF(fi.quote_body_text, ''), '') ELSE v.title END,
 		       COALESCE(v.description,''),
-		       COALESCE(v.duration,0), COALESCE(NULLIF(v.published_at, 0), fi.published_at,
-		           (SELECT COALESCE(fp.quote_published_at, fp.published_at)
-		            FROM feed_items fp
-		            WHERE fp.quote_tweet_id = v.video_id
-		              AND fp.quote_tweet_id IS NOT NULL
-		              AND fp.quote_tweet_id != ''
-		            LIMIT 1)
-		       ), v.downloaded_at,
+		       COALESCE(v.duration,0), COALESCE(NULLIF(v.published_at, 0), fi.published_at), v.downloaded_at,
 		       CASE WHEN %s THEN 1 ELSE 0 END,
 		       COALESCE(v.is_temp,0), COALESCE(v.is_pinned,0),
 		       COALESCE(v.metadata_json,''),
@@ -139,7 +162,8 @@ func (db *DB) GetBookmarks(opts GetBookmarksOpts) ([]model.Video, error) {
 		               ELSE 'youtube'
 		           END),
 		       CASE WHEN cf.channel_id IS NOT NULL THEN 1 ELSE 0 END,
-		       b.category_id, COALESCE(fi.quote_tweet_id,''),
+		       bp.category_id, COALESCE(fi.quote_tweet_id,''),
+		       COALESCE(NULLIF(fi.tweet_id, ''), v.video_id),
 		       COALESCE((
 		           SELECT GROUP_CONCAT(media_type, ',')
 		           FROM (
@@ -149,7 +173,7 @@ func (db *DB) GetBookmarks(opts GetBookmarksOpts) ([]model.Video, error) {
 			               END AS media_type
 			               FROM assets a
 			               JOIN media_objects mo ON mo.object_id = a.object_id
-			               WHERE a.owner_id = v.video_id
+			               WHERE a.owner_id = COALESCE(NULLIF(fi.tweet_id, ''), v.video_id)
 			                 AND a.owner_kind = %s
 		                 AND mo.published_revision > 0 AND mo.file_path != ''
 		                 AND a.asset_kind IN ('post_media', 'video_stream')
@@ -172,16 +196,14 @@ func (db *DB) GetBookmarks(opts GetBookmarksOpts) ([]model.Video, error) {
 		               ORDER BY a.media_index, a.id
 		           )
 		       ), '')
-		FROM bookmarks b
-		JOIN videos v ON b.video_id = v.video_id
-		LEFT JOIN channels c ON v.channel_id = c.channel_id
-		LEFT JOIN channel_profiles cp ON cp.channel_id = v.channel_id
-		LEFT JOIN channel_follows cf ON cf.channel_id = v.channel_id
-		LEFT JOIN feed_items fi ON fi.tweet_id = v.video_id
-		%s
-		ORDER BY b.bookmarked_at DESC
-		LIMIT ? OFFSET ?
-	`, videoFullyWatchedSQL("v"), "v.owner_kind", whereClause)
+		FROM bookmark_page bp
+		JOIN videos v ON bp.video_id = v.video_id
+		LEFT JOIN resolved_feed fi ON fi.action_id = v.video_id
+		LEFT JOIN channels c ON c.channel_id = COALESCE(NULLIF(fi.channel_id, ''), v.channel_id)
+		LEFT JOIN channel_profiles cp ON cp.channel_id = COALESCE(NULLIF(fi.channel_id, ''), v.channel_id)
+		LEFT JOIN channel_follows cf ON cf.channel_id = COALESCE(NULLIF(fi.channel_id, ''), v.channel_id)
+		ORDER BY bp.bookmarked_at DESC
+	`, whereClause, videoFullyWatchedSQL("v"), "v.owner_kind")
 	args = append(args, opts.Limit, opts.Offset)
 
 	rows, err := db.conn.Query(query, args...)
@@ -197,14 +219,14 @@ func (db *DB) GetBookmarks(opts GetBookmarksOpts) ([]model.Video, error) {
 		var v model.Video
 		var pubAt, dlAt sql.NullInt64
 		var catID int64
-		var directMediaTypes, quoteMediaTypes, quoteTweetID string
+		var directMediaTypes, quoteMediaTypes, quoteTweetID, contentOwnerID string
 		err := rows.Scan(
 			&v.VideoID, &v.ChannelID, &v.OwnerKind, &v.Title, &v.Description,
 			&v.Duration, &pubAt, &dlAt,
 			&v.Watched, &v.IsTemp, &v.IsPinned,
 			&v.MetadataJSON,
 			&v.ChannelName, &v.Platform, &v.IsSubscribed,
-			&catID, &quoteTweetID,
+			&catID, &quoteTweetID, &contentOwnerID,
 			&directMediaTypes, &quoteMediaTypes,
 		)
 		if err != nil {
@@ -216,33 +238,20 @@ func (db *DB) GetBookmarks(opts GetBookmarksOpts) ([]model.Video, error) {
 		}
 		v.BookmarkCategoryID = &catID
 		v.Platform = detectPlatform(v.Platform, "")
-		v.EnrichForCard()
 
 		mediaTypes := splitBookmarkMediaTypes(directMediaTypes)
 		if len(mediaTypes) == 0 {
 			mediaTypes = splitBookmarkMediaTypes(quoteMediaTypes)
 		}
-		v.MediaTypes = mediaTypes
-		if len(mediaTypes) > 1 {
-			v.MediaKind = "slideshow"
-			v.MediaSlideCount = len(mediaTypes)
-		} else if len(mediaTypes) == 1 {
-			switch mediaTypes[0] {
-			case "image":
-				v.MediaKind = "image"
-				v.MediaSlideCount = 1
-			case "video":
-				v.MediaKind = "video"
-				v.MediaSlideCount = 0
-			}
-		}
+		applyVideoMediaTypes(&v, mediaTypes)
 		if v.OwnerKind == "tweet" {
-			thumbnailOwnerID := v.VideoID
+			v.MediaOwnerID = contentOwnerID
+			v.MediaOwnerKind = "tweet"
 			if len(directMediaTypes) == 0 && len(quoteMediaTypes) > 0 && quoteTweetID != "" {
-				thumbnailOwnerID = quoteTweetID
+				v.MediaOwnerID = quoteTweetID
 			}
-			v.ThumbnailURL = "/api/media/thumbnail/" + thumbnailOwnerID + "?owner_kind=tweet"
 		}
+		v.EnrichForCard()
 
 		videos = append(videos, v)
 	}

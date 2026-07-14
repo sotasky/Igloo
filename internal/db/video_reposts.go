@@ -270,6 +270,9 @@ func (db *DB) upsertVideoRepostSourceTx(tx *sql.Tx, row model.VideoRepostSource)
 		if inputFirstSeenAtMs <= 0 && oldFirstSeen.Valid {
 			row.FirstSeenAtMs = oldFirstSeen.Int64
 		}
+		if row.RepostedAtMs <= 0 && oldReposted.Valid && oldReposted.Int64 > 0 {
+			row.RepostedAtMs = oldReposted.Int64
+		}
 		if oldReposted.Int64 == row.RepostedAtMs &&
 			oldFirstSeen.Int64 == row.FirstSeenAtMs {
 			return false, nil
@@ -281,7 +284,10 @@ func (db *DB) upsertVideoRepostSourceTx(tx *sql.Tx, row model.VideoRepostSource)
 			video_id, reposter_channel_id, reposted_at_ms, first_seen_at_ms, updated_at_ms
 		) VALUES (?, ?, ?, ?, ?)
 		ON CONFLICT(video_id, reposter_channel_id) DO UPDATE SET
-			reposted_at_ms = excluded.reposted_at_ms,
+			reposted_at_ms = CASE
+				WHEN excluded.reposted_at_ms > 0 THEN excluded.reposted_at_ms
+				ELSE video_repost_sources.reposted_at_ms
+			END,
 			first_seen_at_ms = CASE
 				WHEN video_repost_sources.first_seen_at_ms > 0 THEN video_repost_sources.first_seen_at_ms
 				ELSE excluded.first_seen_at_ms

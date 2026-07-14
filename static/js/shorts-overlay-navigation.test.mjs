@@ -205,17 +205,19 @@ function card(id, skeleton = false) {
   });
 }
 
-function fakeVideo(currentTime = 0) {
-  return {
+function fakeVideo(currentTime = 0, options = {}) {
+  const video = {
     currentTime,
-    readyState: 4,
+    readyState: options.readyState ?? 4,
     paused: true,
-    preload: 'metadata',
+    preload: options.preload || 'none',
     playCalls: 0,
     loadCalls: 0,
+    loadModes: [],
     play() {
       this.playCalls += 1;
       this.paused = false;
+      if (options.onPlay) options.onPlay(this);
       return Promise.resolve();
     },
     pause() {
@@ -223,14 +225,17 @@ function fakeVideo(currentTime = 0) {
     },
     load() {
       this.loadCalls += 1;
+      this.loadModes.push(this.preload);
+      if (options.onLoad) options.onLoad(this, this.preload);
     },
   };
+  return video;
 }
 
 function entry(id, opts = {}) {
   const wrapper = new FakeElement('div');
   const refs = { wrapper };
-  if (opts.video) refs.video = fakeVideo(opts.currentTime || 0);
+  if (opts.video) refs.video = fakeVideo(opts.currentTime || 0, opts);
   if (opts.slideshow) {
     refs.slideshow = {
       index: opts.slideIndex || 0,
@@ -442,6 +447,47 @@ test('vertical deck starts target playback from zero immediately and persists on
     ['id', 'v2', undefined],
     ['resume', 'v2', 2],
   ]);
+});
+
+test('vertical deck keeps active media loads to the current item and immediate neighbors', async () => {
+  const overlay = await loadOverlay();
+  const activeStreams = new Set();
+  const videos = new Map();
+  let peakStreams = 0;
+  const { state } = initBasicOverlay(overlay, {
+    count: 9,
+    makeShortItem(data) {
+      const item = entry(data.id, {
+        video: true,
+        readyState: 0,
+        onLoad(_video, preload) {
+          if (preload === 'auto') activeStreams.add(data.id);
+          else activeStreams.delete(data.id);
+          peakStreams = Math.max(peakStreams, activeStreams.size);
+        },
+      });
+      videos.set(data.id, item.refs.video);
+      return item;
+    },
+  });
+
+  overlay.openOverlayAtIndex(4, true);
+
+  assert.equal(state.currentIndex, 4);
+  assert.equal(peakStreams, 3);
+  assert.deepEqual([...activeStreams].sort(), ['v3', 'v4', 'v5']);
+  assert.equal([...videos.values()].flatMap((video) => video.loadModes).filter((mode) => mode === 'auto').length, 3);
+  assert.deepEqual(
+    [...videos.entries()].filter(([, video]) => video.preload === 'auto').map(([id]) => id).sort(),
+    ['v3', 'v4', 'v5'],
+  );
+
+  overlay.scrollToIndex(5, 'instant');
+
+  assert.equal(state.currentIndex, 5);
+  assert.equal(peakStreams, 3);
+  assert.deepEqual([...activeStreams].sort(), ['v4', 'v5', 'v6']);
+  assert.equal([...videos.values()].flatMap((video) => video.loadModes).filter((mode) => mode === 'auto').length, 4);
 });
 
 test('vertical deck resets slideshow state when a rendered item becomes active', async () => {

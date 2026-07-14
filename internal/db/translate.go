@@ -89,207 +89,119 @@ func (db *DB) GetReusableTranslation(tweetID, field, targetLang string) (Transla
 	}
 }
 
+const reusableBodyTranslationSQL = `
+	WITH target AS MATERIALIZED (
+		SELECT tweet_id,
+		       TRIM(COALESCE(body_text, '')) AS body_text,
+		       NULLIF(TRIM(COALESCE(content_hash, '')), '') AS content_hash,
+		       NULLIF(TRIM(COALESCE(canonical_tweet_id, '')), '') AS canonical_tweet_id
+		FROM feed_items
+		WHERE tweet_id = ?
+	),
+	candidates(tweet_id, priority) AS MATERIALIZED (
+		SELECT f.tweet_id, 0
+		FROM target t
+		CROSS JOIN feed_items f
+		WHERE t.body_text != ''
+		  AND t.canonical_tweet_id IS NOT NULL
+		  AND f.tweet_id = t.canonical_tweet_id
+		  AND f.tweet_id != t.tweet_id
+		  AND TRIM(COALESCE(f.body_text, '')) = t.body_text
+
+		UNION ALL
+
+		SELECT f.tweet_id,
+		       CASE WHEN f.canonical_tweet_id = f.tweet_id THEN 1 ELSE 2 END
+		FROM target t
+		CROSS JOIN feed_items f INDEXED BY idx_feed_items_canonical_tweet
+		WHERE t.body_text != ''
+		  AND t.canonical_tweet_id IS NOT NULL
+		  AND f.canonical_tweet_id IS NOT NULL
+		  AND f.canonical_tweet_id != ''
+		  AND f.canonical_tweet_id = t.canonical_tweet_id
+		  AND f.tweet_id != t.tweet_id
+		  AND TRIM(COALESCE(f.body_text, '')) = t.body_text
+
+		UNION ALL
+
+		SELECT f.tweet_id,
+		       CASE WHEN f.canonical_tweet_id = f.tweet_id THEN 1 ELSE 2 END
+		FROM target t
+		CROSS JOIN feed_items f INDEXED BY idx_feed_items_content_hash
+		WHERE t.body_text != ''
+		  AND t.content_hash IS NOT NULL
+		  AND f.content_hash IS NOT NULL
+		  AND f.content_hash != ''
+		  AND f.content_hash = t.content_hash
+		  AND f.tweet_id != t.tweet_id
+		  AND TRIM(COALESCE(f.body_text, '')) = t.body_text
+	)
+	SELECT tr.translated_text, tr.source_lang
+	FROM candidates c
+	CROSS JOIN translations tr
+	WHERE tr.tweet_id = c.tweet_id
+	  AND tr.field = 'body'
+	  AND tr.target_lang = ?
+	  AND TRIM(COALESCE(tr.translated_text, '')) != ''
+	ORDER BY c.priority, tr.translated_at DESC
+	LIMIT 1`
+
 func (db *DB) getReusableBodyTranslation(tweetID, targetLang string) (TranslationEntry, error) {
 	var entry TranslationEntry
-	err := db.conn.QueryRow(`
-		WITH target AS (
-			SELECT tweet_id,
-			       TRIM(COALESCE(body_text, '')) AS body_text,
-			       TRIM(COALESCE(content_hash, '')) AS content_hash,
-			       TRIM(COALESCE(canonical_tweet_id, '')) AS canonical_tweet_id
-			FROM feed_items
-			WHERE tweet_id = ?
-		)
-		SELECT tr.translated_text, tr.source_lang
-		FROM target t
-		JOIN feed_items f
-		  ON f.tweet_id != t.tweet_id
-		 AND TRIM(COALESCE(f.body_text, '')) = t.body_text
-		 AND t.body_text != ''
-		 AND (
-			(t.canonical_tweet_id != '' AND (
-				f.tweet_id = t.canonical_tweet_id
-				OR TRIM(COALESCE(f.canonical_tweet_id, '')) = t.canonical_tweet_id
-			))
-			OR (t.content_hash != '' AND TRIM(COALESCE(f.content_hash, '')) = t.content_hash)
-		 )
-		JOIN translations tr
-		  ON tr.tweet_id = f.tweet_id
-		 AND tr.field = 'body'
-		 AND tr.target_lang = ?
-		WHERE TRIM(COALESCE(tr.translated_text, '')) != ''
-		ORDER BY
-			CASE
-				WHEN t.canonical_tweet_id != '' AND f.tweet_id = t.canonical_tweet_id THEN 0
-				WHEN TRIM(COALESCE(f.canonical_tweet_id, '')) = f.tweet_id THEN 1
-				ELSE 2
-			END,
-			tr.translated_at DESC
-		LIMIT 1
-	`, tweetID, targetLang).Scan(&entry.TranslatedText, &entry.SourceLang)
+	err := db.conn.QueryRow(reusableBodyTranslationSQL, tweetID, targetLang).Scan(&entry.TranslatedText, &entry.SourceLang)
 	if err == sql.ErrNoRows {
 		return TranslationEntry{}, sql.ErrNoRows
 	}
 	return entry, err
 }
+
+const reusableQuoteTranslationSQL = `
+	WITH wrapper AS MATERIALIZED (
+		SELECT tweet_id,
+		       NULLIF(TRIM(COALESCE(quote_tweet_id, '')), '') AS quote_tweet_id,
+		       TRIM(COALESCE(quote_body_text, '')) AS quote_body_text
+		FROM feed_items
+		WHERE tweet_id = ?
+	),
+	candidates(tweet_id, field, priority) AS MATERIALIZED (
+		SELECT quoted.tweet_id, 'body', 0
+		FROM wrapper w
+		CROSS JOIN feed_items quoted
+		WHERE w.quote_tweet_id IS NOT NULL
+		  AND w.quote_body_text != ''
+		  AND quoted.tweet_id = w.quote_tweet_id
+		  AND TRIM(COALESCE(quoted.body_text, '')) = w.quote_body_text
+
+		UNION ALL
+
+		SELECT sibling.tweet_id, 'quote', 1
+		FROM wrapper w
+		CROSS JOIN feed_items sibling INDEXED BY idx_feed_items_quote
+		WHERE w.quote_tweet_id IS NOT NULL
+		  AND w.quote_body_text != ''
+		  AND sibling.quote_tweet_id IS NOT NULL
+		  AND sibling.quote_tweet_id != ''
+		  AND sibling.quote_tweet_id = w.quote_tweet_id
+		  AND sibling.tweet_id != w.tweet_id
+		  AND TRIM(COALESCE(sibling.quote_body_text, '')) = w.quote_body_text
+	)
+	SELECT tr.translated_text, tr.source_lang
+	FROM candidates c
+	CROSS JOIN translations tr
+	WHERE tr.tweet_id = c.tweet_id
+	  AND tr.field = c.field
+	  AND tr.target_lang = ?
+	  AND TRIM(COALESCE(tr.translated_text, '')) != ''
+	ORDER BY c.priority, tr.translated_at DESC
+	LIMIT 1`
 
 func (db *DB) getReusableQuoteTranslation(tweetID, targetLang string) (TranslationEntry, error) {
 	var entry TranslationEntry
-	err := db.conn.QueryRow(`
-		WITH wrapper AS (
-			SELECT tweet_id,
-			       TRIM(COALESCE(quote_tweet_id, '')) AS quote_tweet_id,
-			       TRIM(COALESCE(quote_body_text, '')) AS quote_body_text
-			FROM feed_items
-			WHERE tweet_id = ?
-		),
-		candidates AS (
-			SELECT tr.translated_text, tr.source_lang, tr.translated_at, 0 AS priority
-			FROM wrapper w
-			JOIN feed_items quoted
-			  ON quoted.tweet_id = w.quote_tweet_id
-			 AND TRIM(COALESCE(quoted.body_text, '')) = w.quote_body_text
-			 AND w.quote_body_text != ''
-			JOIN translations tr
-			  ON tr.tweet_id = quoted.tweet_id
-			 AND tr.field = 'body'
-			 AND tr.target_lang = ?
-
-			UNION ALL
-
-			SELECT tr.translated_text, tr.source_lang, tr.translated_at, 1 AS priority
-			FROM wrapper w
-			JOIN feed_items sibling
-			  ON sibling.tweet_id != w.tweet_id
-			 AND TRIM(COALESCE(sibling.quote_tweet_id, '')) = w.quote_tweet_id
-			 AND TRIM(COALESCE(sibling.quote_body_text, '')) = w.quote_body_text
-			 AND w.quote_tweet_id != ''
-			 AND w.quote_body_text != ''
-			JOIN translations tr
-			  ON tr.tweet_id = sibling.tweet_id
-			 AND tr.field = 'quote'
-			 AND tr.target_lang = ?
-		)
-		SELECT translated_text, source_lang
-		FROM candidates
-		WHERE TRIM(COALESCE(translated_text, '')) != ''
-		ORDER BY priority ASC, translated_at DESC
-		LIMIT 1
-	`, tweetID, targetLang, targetLang).Scan(&entry.TranslatedText, &entry.SourceLang)
+	err := db.conn.QueryRow(reusableQuoteTranslationSQL, tweetID, targetLang).Scan(&entry.TranslatedText, &entry.SourceLang)
 	if err == sql.ErrNoRows {
 		return TranslationEntry{}, sql.ErrNoRows
 	}
 	return entry, err
-}
-
-// ListTranslationCandidates returns recent body and quote text fields missing a
-// cached translation. Known target/skip languages are filtered in SQL; unknown
-// language rows are returned after known foreign-language rows so callers can
-// apply text-based eligibility checks without blocking obvious candidates.
-func (db *DB) ListTranslationCandidates(targetLang string, skipLangs []string, limit int) ([]TranslationCandidate, error) {
-	targetLang = strings.ToLower(strings.TrimSpace(targetLang))
-	if targetLang == "" {
-		targetLang = "en"
-	}
-	if limit < 1 {
-		limit = 100
-	}
-
-	excluded := []string{targetLang}
-	seen := map[string]bool{targetLang: true}
-	for _, lang := range skipLangs {
-		lang = strings.ToLower(strings.TrimSpace(lang))
-		if lang == "" || seen[lang] {
-			continue
-		}
-		seen[lang] = true
-		excluded = append(excluded, lang)
-	}
-	excludePlaceholders := placeholders(len(excluded))
-
-	query := `
-		SELECT tweet_id, field, source_text, source_lang, body_text, quote_body_text
-		FROM (
-			SELECT
-				f.tweet_id,
-				'body' AS field,
-				COALESCE(f.body_text, '') AS source_text,
-				LOWER(TRIM(COALESCE(f.lang, ''))) AS source_lang,
-				COALESCE(f.body_text, '') AS body_text,
-				COALESCE(f.quote_body_text, '') AS quote_body_text,
-				f.published_at AS published_at,
-				f.fetched_at AS fetched_at
-			FROM feed_items f
-			LEFT JOIN translations tr
-				ON tr.tweet_id = f.tweet_id
-				AND tr.field = 'body'
-				AND tr.target_lang = ?
-			WHERE tr.tweet_id IS NULL
-				AND TRIM(COALESCE(f.body_text, '')) != ''
-				AND (
-					LOWER(TRIM(COALESCE(f.lang, ''))) = ''
-					OR LOWER(TRIM(COALESCE(f.lang, ''))) NOT IN (` + excludePlaceholders + `)
-				)
-
-			UNION ALL
-
-			SELECT
-				f.tweet_id,
-				'quote' AS field,
-				COALESCE(f.quote_body_text, '') AS source_text,
-				LOWER(TRIM(COALESCE(f.quote_lang, ''))) AS source_lang,
-				COALESCE(f.body_text, '') AS body_text,
-				COALESCE(f.quote_body_text, '') AS quote_body_text,
-				f.published_at AS published_at,
-				f.fetched_at AS fetched_at
-			FROM feed_items f
-			LEFT JOIN translations tr
-				ON tr.tweet_id = f.tweet_id
-				AND tr.field = 'quote'
-				AND tr.target_lang = ?
-			WHERE tr.tweet_id IS NULL
-				AND TRIM(COALESCE(f.quote_body_text, '')) != ''
-				AND (
-					LOWER(TRIM(COALESCE(f.quote_lang, ''))) = ''
-					OR LOWER(TRIM(COALESCE(f.quote_lang, ''))) NOT IN (` + excludePlaceholders + `)
-				)
-		) candidates
-		ORDER BY
-			CASE WHEN source_lang = '' THEN 1 ELSE 0 END,
-			published_at DESC,
-			fetched_at DESC,
-			tweet_id DESC,
-			field ASC
-		LIMIT ?`
-
-	args := make([]any, 0, 2+len(excluded)*2+1)
-	args = append(args, targetLang)
-	for _, lang := range excluded {
-		args = append(args, lang)
-	}
-	args = append(args, targetLang)
-	for _, lang := range excluded {
-		args = append(args, lang)
-	}
-	args = append(args, limit)
-
-	rows, err := db.conn.Query(query, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer func() {
-		_ = rows.Close()
-	}()
-
-	var candidates []TranslationCandidate
-	for rows.Next() {
-		var c TranslationCandidate
-		if err := rows.Scan(&c.TweetID, &c.Field, &c.SourceText, &c.SourceLang, &c.BodyText, &c.QuoteBodyText); err != nil {
-			return nil, err
-		}
-		candidates = append(candidates, c)
-	}
-	return candidates, rows.Err()
 }
 
 // SetTranslation inserts or replaces a translation cache entry.

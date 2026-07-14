@@ -65,16 +65,27 @@ func (s *Server) videoAssetOwner(videoID string) (db.AssetOwnerRef, bool) {
 	}
 	switch video.OwnerKind {
 	case "tweet", "youtube_video", "tiktok_video", "instagram_reel":
-		return db.AssetOwnerRef{OwnerKind: video.OwnerKind, OwnerID: video.VideoID}, true
+		ownerKind, ownerID := video.OwnerKind, video.VideoID
+		if video.MediaOwnerKind != "" {
+			ownerKind = video.MediaOwnerKind
+		}
+		if video.MediaOwnerID != "" {
+			ownerID = video.MediaOwnerID
+		}
+		return db.AssetOwnerRef{OwnerKind: ownerKind, OwnerID: ownerID}, true
 	default:
 		return db.AssetOwnerRef{}, false
 	}
 }
 
 func (s *Server) requestMediaAssetOwner(r *http.Request, id string) (db.AssetOwnerRef, bool) {
+	ownerID := strings.TrimSpace(r.URL.Query().Get("owner_id"))
+	if ownerID == "" {
+		ownerID = strings.TrimSpace(id)
+	}
 	switch r.URL.Query().Get("owner_kind") {
 	case "tweet":
-		return db.AssetOwnerRef{OwnerKind: "tweet", OwnerID: strings.TrimSpace(id)}, strings.TrimSpace(id) != ""
+		return db.AssetOwnerRef{OwnerKind: "tweet", OwnerID: ownerID}, ownerID != ""
 	case "":
 		return s.videoAssetOwner(id)
 	default:

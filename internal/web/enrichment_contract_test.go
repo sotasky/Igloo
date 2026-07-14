@@ -131,6 +131,9 @@ func TestFeedXExcludesSeenContent(t *testing.T) {
 	srv := newTestServer(t)
 	user := "alice"
 	now := time.Now().UnixMilli()
+	if err := srv.db.ExecRaw(`INSERT INTO channel_follows (channel_id, followed_at) VALUES ('twitter_sample_author', 1)`); err != nil {
+		t.Fatal(err)
+	}
 
 	for _, row := range []struct {
 		id        string

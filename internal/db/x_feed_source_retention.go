@@ -2,6 +2,7 @@ package db
 
 import (
 	"database/sql"
+	"fmt"
 	"strings"
 )
 
@@ -31,7 +32,7 @@ func (db *DB) PruneXFeedSourceRetention(sourceID string, limit int, nowMs int64)
 	if err := db.deleteXFeedSourceAttribution(sourceID, pruneIDs); err != nil {
 		return result, err
 	}
-	return db.reconcileXMediaOwnerSet(result, retained, candidates, false, nowMs)
+	return db.reconcileXMediaOwnerSet(result, retained, candidates, false, DownloadLaneBackfill, nowMs)
 }
 
 func (db *DB) xFeedSourceRetentionItems(sourceID string) ([]xRetentionItem, error) {
@@ -59,6 +60,36 @@ func (db *DB) xFeedSourceRetentionItems(sourceID string) ([]xRetentionItem, erro
 		}
 		item.protected = protected != 0
 		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (db *DB) xFeedSourceRetainedTweetIDs(sourceID string, limit int) ([]string, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	rows, err := db.conn.Query(`
+		SELECT fis.tweet_id
+		FROM feed_item_sources fis
+		LEFT JOIN feed_items fi ON fi.tweet_id = fis.tweet_id
+		WHERE fis.source_id = ?
+		  AND NOT EXISTS (SELECT 1 FROM bookmarks b WHERE b.video_id = fis.tweet_id)
+		  AND NOT EXISTS (SELECT 1 FROM feed_likes fl WHERE fl.tweet_id = fis.tweet_id)
+		ORDER BY COALESCE(NULLIF(fi.published_at, 0), fis.last_seen_at * 1000) DESC,
+		         fis.tweet_id DESC
+		LIMIT ?
+	`, sourceID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var out []string
+	for rows.Next() {
+		var tweetID string
+		if err := rows.Scan(&tweetID); err != nil {
+			return nil, err
+		}
+		out = append(out, tweetID)
 	}
 	return out, rows.Err()
 }
@@ -160,10 +191,13 @@ func (db *DB) xPrunedAssetOwnerIDs(ownerIDs []string) ([]string, error) {
 	return uniqueStrings(out), nil
 }
 
-func (db *DB) restorePrunedXMediaOwners(ownerIDs []string, nowMs int64) (int, error) {
+func (db *DB) restorePrunedXMediaOwners(ownerIDs []string, lane DownloadLane, nowMs int64) (int, error) {
 	ownerIDs, err := db.xPrunedAssetOwnerIDs(ownerIDs)
 	if err != nil || len(ownerIDs) == 0 {
 		return 0, err
+	}
+	if !lane.valid() {
+		return 0, fmt.Errorf("invalid restored X media lane %q", lane)
 	}
 	restored := 0
 	for _, chunk := range stringChunks(ownerIDs, 400) {
@@ -187,7 +221,14 @@ func (db *DB) restorePrunedXMediaOwners(ownerIDs []string, nowMs int64) (int, er
 			}
 			_, err = tx.Exec(`
 				UPDATE media_objects AS mo
-				SET job_state = 'queued', attempts = 0, next_attempt_at_ms = 0,
+				SET job_state = 'queued',
+				    download_lane = CASE WHEN EXISTS (
+				      SELECT 1 FROM assets required
+				      WHERE required.desired_object_id = mo.object_id
+				        AND required.lifecycle_state = 'active'
+				        AND required.required_reason IN ('bookmark', 'like', 'manual')
+				    ) THEN 'current' ELSE ? END,
+				    attempts = 0, next_attempt_at_ms = 0,
 				    last_error_kind = '', last_error = '', lease_owner = '', lease_until_ms = 0,
 				    updated_at_ms = ?
 				WHERE mo.job_state = 'pruned'
@@ -199,7 +240,7 @@ func (db *DB) restorePrunedXMediaOwners(ownerIDs []string, nowMs int64) (int, er
 				      AND a.owner_id IN (`+placeholders(len(chunk))+`)
 				      AND a.asset_kind IN ('post_audio', 'post_media', 'post_thumbnail')
 				  )
-			`, append([]any{nowMs}, stringsToAny(chunk)...)...)
+			`, append([]any{lane, nowMs}, stringsToAny(chunk)...)...)
 			return err
 		})
 		if err != nil {

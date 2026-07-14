@@ -408,7 +408,7 @@ func Sidebar(p PageProps) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 31, "\" data-i18n-title=\"action_download\">&#x2193;</button></div><div id=\"quick-dl-status\" class=\"quick-dl-status hidden\"></div></form><div class=\"sidebar-status\" id=\"sidebar-status\" hx-get=\"/api/sidebar-status\" hx-trigger=\"load, every 4s, poll\" hx-swap=\"innerHTML\"><div class=\"status-activity\"><div class=\"status-dot\"></div><div class=\"status-activity-lines\"><span class=\"status-secondary-text\" data-i18n=\"status_loading\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 31, "\" data-i18n-title=\"action_download\">&#x2193;</button></div><div id=\"quick-dl-status\" class=\"quick-dl-status hidden\"></div></form><div class=\"sidebar-status\" id=\"sidebar-status\" hx-get=\"/api/sidebar-status\" hx-trigger=\"load, every 4s [!document.hidden], poll\" hx-swap=\"innerHTML\"><div class=\"status-activity\"><div class=\"status-dot\"></div><div class=\"status-activity-lines\"><span class=\"status-secondary-text\" data-i18n=\"status_loading\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -1018,22 +1018,22 @@ func SidebarChannelItem(p PageProps, ch model.Channel) templ.Component {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var65 string
-		templ_7745c5c3_Var65, templ_7745c5c3_Err = templ.ResolveAttributeValue(L(p, "action_remove_channel_and_files", "Remove Channel & Files"))
+		templ_7745c5c3_Var65, templ_7745c5c3_Err = templ.ResolveAttributeValue(L(p, "action_unfollow", "Unfollow"))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/sidebar.templ`, Line: 225, Col: 125}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/sidebar.templ`, Line: 225, Col: 95}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var65)
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 77, "\" data-i18n-title=\"action_remove_channel_and_files\" hx-delete=\"")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 77, "\" data-i18n-title=\"action_unfollow\" data-optimistic-unfollow hx-delete=\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var66 string
-		templ_7745c5c3_Var66, templ_7745c5c3_Err = templ.ResolveAttributeValue("/api/unsubscribe/" + ch.ChannelID + "?delete_files=true")
+		templ_7745c5c3_Var66, templ_7745c5c3_Err = templ.ResolveAttributeValue("/api/unsubscribe/" + ch.ChannelID)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/sidebar.templ`, Line: 226, Col: 73}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/sidebar.templ`, Line: 226, Col: 50}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var66)
 		if templ_7745c5c3_Err != nil {
@@ -1044,9 +1044,9 @@ func SidebarChannelItem(p PageProps, ch model.Channel) templ.Component {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var67 string
-		templ_7745c5c3_Var67, templ_7745c5c3_Err = templ.ResolveAttributeValue(fmt.Sprintf(L(p, "confirm_remove_channel_and_files", "Remove channel and files for %q?"), ch.Name))
+		templ_7745c5c3_Var67, templ_7745c5c3_Err = templ.ResolveAttributeValue(LF(p, "confirm_unfollow_channel_body", "Unfollow %1$s?", ch.Name))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/sidebar.templ`, Line: 229, Col: 115}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/sidebar.templ`, Line: 229, Col: 82}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var67)
 		if templ_7745c5c3_Err != nil {

@@ -25,6 +25,7 @@ func (db *DB) GetFeedSnapshotHealth() (FeedSnapshotHealth, error) {
 
 	where := []string{
 		feedPrimaryItemPredicate("fi"),
+		feedActiveOwnerPredicate("fi"),
 		"fi.published_at > 0",
 		"(fi.canonical_tweet_id IS NULL OR fi.canonical_tweet_id = '' OR fi.canonical_tweet_id = fi.tweet_id)",
 		retweetFilterClause("fi"),

@@ -165,6 +165,22 @@ internal class NativeFeedViewHolder(
         bindThreadCapsule(adapterRow.threaded, colors, callbacks)
     }
 
+    fun bindLikeBookmarkState(adapterRow: NativeFeedAdapterItem.Post) {
+        if (boundRow?.id != adapterRow.id) {
+            bind(adapterRow)
+            return
+        }
+        boundRow = adapterRow
+        val row = adapterRow.threaded.row
+        bindActions(
+            row = row,
+            post = adapterRow.post,
+            shareUrl = feedShareUrl(row.item).trim(),
+            colors = getColors(),
+            callbacks = getCallbacks(),
+        )
+    }
+
     fun recycle() {
         videoSlots.forEach { inlineVideoManager.detachSlot(it.key) }
         videoSlots.clear()

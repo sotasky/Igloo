@@ -651,12 +651,17 @@ if (root && video) {
         var displayName = (channelLink && channelLink.textContent || '').trim() || channelId
         var doUnsub = function () {
           channelUnsubBtn.disabled = true
-          apiFetch('/api/unsubscribe/' + encodeURIComponent(channelId) + '?delete_files=true', { method: 'DELETE' })
+          channelUnsubBtn.style.visibility = 'hidden'
+          apiFetch('/api/mutations/follow', {
+            method: 'POST',
+            body: JSON.stringify({ channel_id: channelId, action: 'clear', updated_at_ms: Date.now() })
+          })
             .then(function (payload) {
               showToast((payload && payload.message) || t('player_channel_unsubscribed', 'Channel unsubscribed'))
               window.location.assign('/channels')
             })
             .catch(function (err) {
+              channelUnsubBtn.style.visibility = ''
               const msg = (err && err.payload && err.payload.error) ? err.payload.error : t('player_unsubscribe_failed', 'Failed to unsubscribe')
               showToast(msg)
             })
@@ -666,8 +671,8 @@ if (root && video) {
         }
         askConfirm({
           title: t('action_unsubscribe', 'Unsubscribe'),
-          body: tf('player_unsubscribe_channel_confirm_body', 'Remove channel and files for %1$s?', displayName),
-          confirmLabel: t('action_remove', 'Remove'),
+          body: tf('confirm_unfollow_channel_body', 'Unfollow %1$s?', displayName),
+          confirmLabel: t('action_unfollow', 'Unfollow'),
           cancelLabel: t('action_cancel', 'Cancel'),
           danger: true,
         }).then(function (confirmed) {

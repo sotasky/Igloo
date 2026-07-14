@@ -304,6 +304,7 @@ func TestHandleSlideUsesExactOwnerKind(t *testing.T) {
 	}{
 		{url: "/api/media/slide/" + contentID + "/0", want: "/x-accel/igloo-media/youtube/" + contentID + ".jpg"},
 		{url: "/api/media/slide/" + contentID + "/0?owner_kind=tweet", want: "/x-accel/igloo-media/twitter/" + contentID + ".jpg"},
+		{url: "/api/media/slide/sample_action/0?owner_kind=tweet&owner_id=" + contentID, want: "/x-accel/igloo-media/twitter/" + contentID + ".jpg"},
 	} {
 		req := httptest.NewRequest("GET", tc.url, nil)
 		req.Header.Set("X-Forwarded-Proto", "https")

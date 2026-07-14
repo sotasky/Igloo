@@ -205,7 +205,7 @@ func (m *Manager) DownloadTemp(ctx context.Context, rawURL string, saveChannel b
 	if err := m.publishCompletedVideoThumbnail(ctx, download.MediaLaneBulkForeground, videoID, platform, attemptID, files); err != nil {
 		log.Printf("[temp] thumbnail publish failed for %s: %v", videoID, err)
 	}
-	if err := m.storeCompletedSubtitles(ctx, videoID, files, completed, false); err != nil {
+	if err := m.storeCompletedSubtitles(ctx, videoID, files, completed); err != nil {
 		log.Printf("[temp] subtitle publish failed for %s: %v", videoID, err)
 	}
 	m.removeTransientFiles(ctx, download.MediaLaneBulkForeground, files)
@@ -314,13 +314,10 @@ func (m *Manager) downloadPlaylist(ctx context.Context, rawURL, playlistID strin
 			failed++
 			continue
 		}
-		metadata := loadInfoJSONFile(completed.InfoJSONPath)
+		metadata := completed.Metadata
 		publishedAt := extractPublishedAt(metadata)
 		description, _ := metadata["description"].(string)
-		duration := 0
-		if d, ok := metadata["duration"].(float64); ok {
-			duration = int(d)
-		}
+		duration := extractDurationFromMetadata(metadata)
 		metaJSON := ""
 		if b, err := json.Marshal(metadata); err == nil {
 			metaJSON = string(b)

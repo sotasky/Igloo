@@ -173,6 +173,38 @@ func TestMutationSeenUsesConversationOwner(t *testing.T) {
 	}
 }
 
+func TestMutationFollowChangesStateWithoutDeletingStoredContent(t *testing.T) {
+	srv := newTestServer(t)
+	if err := srv.db.ExecRaw(`
+		INSERT INTO channels (channel_id, source_id, name, platform)
+		VALUES ('twitter_sample_author', 'sample_author', 'Sample Author', 'twitter');
+		INSERT INTO feed_items (tweet_id, source_channel_id, channel_id, body_text, published_at)
+		VALUES ('sample_tweet', 'twitter_sample_author', 'twitter_sample_author', 'body', 1);
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	status, _ := mutationRequest(t, srv, "POST", "/api/mutations/follow", `{
+	  "channel_id":"twitter_sample_author", "action":"set", "updated_at_ms":100
+	}`)
+	if status != http.StatusOK || !srv.db.IsChannelFollowed("twitter_sample_author") {
+		t.Fatalf("follow status = %d followed = %t", status, srv.db.IsChannelFollowed("twitter_sample_author"))
+	}
+	status, _ = mutationRequest(t, srv, "POST", "/api/mutations/follow", `{
+	  "channel_id":"twitter_sample_author", "action":"clear", "updated_at_ms":200
+	}`)
+	if status != http.StatusOK || srv.db.IsChannelFollowed("twitter_sample_author") {
+		t.Fatalf("unfollow status = %d followed = %t", status, srv.db.IsChannelFollowed("twitter_sample_author"))
+	}
+	var stored int
+	if err := srv.db.QueryRow(`SELECT COUNT(*) FROM feed_items WHERE tweet_id = 'sample_tweet'`).Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored != 1 {
+		t.Fatalf("stored content after unfollow = %d", stored)
+	}
+}
+
 func TestMutationRejectsInvalidActionAndSettingField(t *testing.T) {
 	srv := newTestServer(t)
 	status, body := mutationRequest(t, srv, "POST", "/api/mutations/like", `{

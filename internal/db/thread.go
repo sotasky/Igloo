@@ -1,7 +1,9 @@
 package db
 
 import (
+	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -47,8 +49,10 @@ func (db *DB) UpsertGhostFeedItem(item model.FeedItem) error {
 func (db *DB) UpdateReplyToStatus(tweetID, parentTweetID string) error {
 	return db.WithWrite(func(tx *sql.Tx) error {
 		_, err := tx.Exec(
-			`UPDATE feed_items SET reply_to_status = ? WHERE tweet_id = ?`,
-			parentTweetID, tweetID,
+			`UPDATE feed_items
+			 SET reply_to_status = ?, is_reply = CASE WHEN ? = '' THEN 0 ELSE 1 END
+			 WHERE tweet_id = ?`,
+			parentTweetID, parentTweetID, tweetID,
 		)
 		return err
 	})
@@ -216,48 +220,69 @@ func (db *DB) GetThreadTree(tweetID string) ([]model.FeedItem, error) {
 	return out, nil
 }
 
-// FindUnresolvedReplies returns leaf reply rows that either still have empty
-// reply_to_status or point at a parent row missing from feed_items. Limit caps
-// the sweep size so a long-running outage doesn't produce a huge batch.
-func (db *DB) FindUnresolvedReplies(limit int) ([]model.FeedItem, error) {
-	const q = `
-		SELECT f.tweet_id, COALESCE(f.author_handle, ''), COALESCE(f.reply_to_handle, ''),
-		       COALESCE(f.reply_to_status, '')
-		FROM feed_items_resolved f
-		LEFT JOIN feed_items parent
-		  ON parent.tweet_id = f.reply_to_status
-		 AND COALESCE(f.reply_to_status, '') != ''
-		LEFT JOIN feed_rank_snapshot fr
-		  ON fr.tweet_id = f.tweet_id
-		WHERE COALESCE(f.is_reply, 0) = 1
-		  AND COALESCE(f.is_ghost, 0) = 0
-		  AND (
-		    COALESCE(f.reply_to_status, '') = ''
-		    OR parent.tweet_id IS NULL
-		  )
-		GROUP BY f.tweet_id
-		ORDER BY
-		  CASE WHEN MIN(fr.rank_position) IS NULL THEN 1 ELSE 0 END,
-		  MIN(fr.rank_position),
-		  f.published_at DESC
-		LIMIT ?`
+type IncompleteReplyChain struct {
+	SeedTweetID string
+	Item        model.FeedItem
+}
 
-	rows, err := db.conn.Query(q, limit)
-	if err != nil {
-		return nil, fmt.Errorf("FindUnresolvedReplies: %w", err)
+func (db *DB) ListIncompleteReplyChainsContext(ctx context.Context, tweetIDs []string) ([]IncompleteReplyChain, error) {
+	if len(tweetIDs) == 0 {
+		return nil, nil
 	}
-	defer func() {
-		_ = rows.Close()
-	}()
+	encoded, err := json.Marshal(tweetIDs)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := db.reader().QueryContext(ctx, `
+		WITH RECURSIVE
+		candidate_ids(seed_id, priority) AS MATERIALIZED (
+			SELECT TRIM(CAST(value AS TEXT)), CAST(key AS INTEGER)
+			FROM json_each(?)
+			WHERE TRIM(CAST(value AS TEXT)) != ''
+		),
+		chain(seed_id, tweet_id, priority, depth, path) AS (
+			SELECT seed_id, seed_id, priority, 0, ',' || seed_id || ','
+			FROM candidate_ids
+			UNION ALL
+			SELECT chain.seed_id, parent.tweet_id, chain.priority, chain.depth + 1,
+			       chain.path || parent.tweet_id || ','
+			FROM chain
+			JOIN feed_items current ON current.tweet_id = chain.tweet_id
+			JOIN feed_items parent ON parent.tweet_id = current.reply_to_status
+			WHERE COALESCE(current.reply_to_status, '') != ''
+			  AND chain.depth < 50
+			  AND INSTR(chain.path, ',' || parent.tweet_id || ',') = 0
+		)
+		SELECT chain.seed_id, current.tweet_id,
+		       COALESCE(current.author_handle, ''),
+		       COALESCE(current.reply_to_handle, ''),
+		       COALESCE(current.reply_to_status, '')
+		FROM chain
+		JOIN feed_items_resolved current ON current.tweet_id = chain.tweet_id
+		LEFT JOIN feed_items parent ON parent.tweet_id = current.reply_to_status
+		WHERE COALESCE(current.is_reply, 0) = 1
+		  AND (COALESCE(current.reply_to_status, '') = '' OR parent.tweet_id IS NULL)
+		ORDER BY chain.priority, chain.depth DESC
+	`, string(encoded))
+	if err != nil {
+		return nil, fmt.Errorf("list incomplete reply chains: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
 
-	var out []model.FeedItem
+	var out []IncompleteReplyChain
 	for rows.Next() {
-		var f model.FeedItem
-		if err := rows.Scan(&f.TweetID, &f.AuthorHandle, &f.ReplyToHandle, &f.ReplyToStatus); err != nil {
+		var row IncompleteReplyChain
+		if err := rows.Scan(
+			&row.SeedTweetID,
+			&row.Item.TweetID,
+			&row.Item.AuthorHandle,
+			&row.Item.ReplyToHandle,
+			&row.Item.ReplyToStatus,
+		); err != nil {
 			return nil, err
 		}
-		f.IsReply = true
-		out = append(out, f)
+		row.Item.IsReply = true
+		out = append(out, row)
 	}
 	return out, rows.Err()
 }

@@ -4,6 +4,9 @@ import "testing"
 
 func TestListSnapshotPageUsesRankCursor(t *testing.T) {
 	d := openWritableTestDB(t)
+	if err := d.ExecRaw(`INSERT INTO channel_follows (channel_id, followed_at) VALUES ('twitter_sample_author', 1)`); err != nil {
+		t.Fatal(err)
+	}
 	for _, id := range []string{"first", "second", "third"} {
 		if err := d.ExecRaw(`
 			INSERT INTO feed_items (tweet_id, channel_id, body_text, published_at, fetched_at)
@@ -42,6 +45,9 @@ func TestListSnapshotPageUsesRankCursor(t *testing.T) {
 
 func TestListSnapshotPageExcludesSeenAndGhostRows(t *testing.T) {
 	d := openWritableTestDB(t)
+	if err := d.ExecRaw(`INSERT INTO channel_follows (channel_id, followed_at) VALUES ('twitter_sample_author', 1)`); err != nil {
+		t.Fatal(err)
+	}
 	for _, row := range []struct {
 		id      string
 		isGhost int

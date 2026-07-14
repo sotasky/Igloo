@@ -63,6 +63,7 @@ type Manager struct {
 	downloadPlatformAt       map[db.DownloadLane]int
 	mediaCurrentTurn         uint64
 	mediaBackgroundTurn      uint64
+	youtubeEnrichmentSlots   chan struct{}
 	previewMu                sync.Mutex
 	previewHints             map[string]struct{}
 	previewRetry             map[string]previewRetryState
@@ -106,24 +107,25 @@ type sponsorblockFetcher interface {
 func NewManager(database *db.DB, cfg *config.Config) *Manager {
 	ctx, cancel := context.WithCancel(context.Background())
 	m := &Manager{
-		db:                database,
-		cfg:               cfg,
-		downloader:        download.NewDownloader(cfg.CookiesDir),
-		ctx:               ctx,
-		cancel:            cancel,
-		mediaCurrentKick:  make(chan struct{}, 1),
-		mediaBackfillKick: make(chan struct{}, 1),
-		discoveryKick:     make(chan struct{}, 1),
-		profileKick:       make(chan struct{}, 1),
-		xStatusEnrich:     make(chan xfeed.StatusEnrichmentRequest, 1024),
-		ingestKick:        make(chan struct{}, 1),
-		feedScoringKick:   make(chan struct{}, 1),
-		statuses:          make(map[string]*atomic.Value),
-		activity:          NewActivityRing(200),
-		dlActivity:        NewActivityRing(100),
-		feedActivity:      NewActivityRing(200),
-		xStatusQueued:     make(map[string]time.Time),
-		downloadBackoff:   make(map[string]downloadPlatformBackoff),
+		db:                     database,
+		cfg:                    cfg,
+		downloader:             download.NewDownloader(cfg.CookiesDir),
+		ctx:                    ctx,
+		cancel:                 cancel,
+		mediaCurrentKick:       make(chan struct{}, 1),
+		mediaBackfillKick:      make(chan struct{}, 1),
+		discoveryKick:          make(chan struct{}, 1),
+		profileKick:            make(chan struct{}, 1),
+		xStatusEnrich:          make(chan xfeed.StatusEnrichmentRequest, 1024),
+		ingestKick:             make(chan struct{}, 1),
+		feedScoringKick:        make(chan struct{}, 1),
+		statuses:               make(map[string]*atomic.Value),
+		activity:               NewActivityRing(200),
+		dlActivity:             NewActivityRing(100),
+		feedActivity:           NewActivityRing(200),
+		youtubeEnrichmentSlots: make(chan struct{}, 2),
+		xStatusQueued:          make(map[string]time.Time),
+		downloadBackoff:        make(map[string]downloadPlatformBackoff),
 		downloadPlatformAt: map[db.DownloadLane]int{
 			db.DownloadLaneCurrent:  0,
 			db.DownloadLaneBackfill: 0,
@@ -164,8 +166,7 @@ func (m *Manager) StartAll() {
 	m.launch("media_backfill", m.runMediaBackfillLoop)
 	m.launch("profile_refresh", m.runProfileJobLoop)
 	m.launch("scheduler", m.runScheduler)
-	m.startOnceDelayed("ranked_queue_warmup", 3*time.Minute, m.runRankedQueueWarmup)
-	m.launchDelayed("feed_scoring", 3*time.Minute, m.runFeedScoringWorker)
+	m.launch("feed_scoring", m.runFeedScoringWorker)
 	m.launchDelayed("downloader_operation_prune", 5*time.Minute, m.runDownloaderOperationPruner)
 	m.launchDelayed("backup", 5*time.Minute, m.runBackupWorker)
 

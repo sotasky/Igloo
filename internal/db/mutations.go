@@ -47,10 +47,9 @@ func IsStaleMutation(err error) bool {
 }
 
 type MutationResult struct {
-	CanonicalID     string
-	Applied         bool
-	Affected        int
-	DeletedFileKeys []string
+	CanonicalID string
+	Applied     bool
+	Affected    int
 }
 
 func mutationTimestamp(updatedAtMs int64) int64 {
@@ -371,11 +370,6 @@ func (db *DB) MutateFollow(channelID, action string, updatedAtMs int64) (Mutatio
 				result.Affected = int(n)
 			}
 		case "clear":
-			var platform string
-			err := tx.QueryRow(`SELECT COALESCE(platform, '') FROM channels WHERE channel_id = ?`, channelID).Scan(&platform)
-			if err != nil && err != sql.ErrNoRows {
-				return err
-			}
 			res, err := tx.Exec(`DELETE FROM channel_follows WHERE channel_id = ?`, channelID)
 			if err != nil {
 				return err
@@ -392,18 +386,6 @@ func (db *DB) MutateFollow(channelID, action string, updatedAtMs int64) (Mutatio
 				if _, err := tx.Exec(`DELETE FROM channel_stars WHERE channel_id = ?`, channelID); err != nil {
 					return err
 				}
-			}
-
-			if platform == "" {
-				_, _, _, platform = channelDefaultsFromID(channelID)
-			}
-			if strings.EqualFold(platform, "twitter") || strings.HasPrefix(strings.ToLower(channelID), "twitter_") {
-				result.DeletedFileKeys, err = db.purgeTwitterAfterUnfollowTx(tx, channelID)
-			} else {
-				result.DeletedFileKeys, err = db.purgeVideoChannelAfterUnfollowTx(tx, channelID)
-			}
-			if err != nil {
-				return err
 			}
 		}
 		return nil

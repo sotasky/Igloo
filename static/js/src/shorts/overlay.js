@@ -262,14 +262,21 @@ function playShortVideoFromStart(entry) {
   playShortVideo(entry, video)
 }
 
-function warmShortVideo(entry, eager) {
+function warmShortVideo(entry, active) {
   var video = entry && entry.refs && entry.refs.video
   if (!video) return
   try {
-    video.preload = eager ? 'auto' : 'metadata'
-    if (!eager || video._shortsPrewarmStarted || video.readyState >= 3) return
+    if (!active) {
+      video.preload = 'none'
+      if (!video._shortsPrewarmStarted || !video.paused || typeof video.load !== 'function') return
+      video._shortsPrewarmStarted = false
+      video.load()
+      return
+    }
+    video.preload = 'auto'
+    if (video._shortsPrewarmStarted || video.readyState >= 3) return
     var atStart = Math.abs(Number(video.currentTime || 0)) < 0.01
-    if (!video.paused || !atStart || typeof video.load !== 'function') return
+    if (!atStart || typeof video.load !== 'function') return
     video._shortsPrewarmStarted = true
     video.load()
   } catch (_) {}
@@ -277,15 +284,28 @@ function warmShortVideo(entry, eager) {
 
 function warmNearbyShortVideos(index) {
   if (!Number.isFinite(index) || !_state || !_state.items) return
-  var start = Math.max(0, index - 4)
-  var end = Math.min(_state.items.length - 1, index + 5)
-  var eagerStart = Math.max(0, index - 3)
-  var eagerEnd = Math.min(_state.items.length - 1, index + 4)
-  for (var i = start; i <= end; i += 1) {
-    var entry = _state.items[i]
-    if (!entry) continue
-    warmShortVideo(entry, i >= eagerStart && i <= eagerEnd)
+  var previous = Array.isArray(_state.warmVideoIndexes) ? _state.warmVideoIndexes : []
+  var next = []
+  for (var offset = -1; offset <= 1; offset += 1) {
+    var wanted = index + offset
+    if (wanted >= 0 && wanted < _state.items.length) next.push(wanted)
   }
+  var candidates = new Set(previous.concat(next))
+  candidates.forEach(function (i) {
+    var entry = _state.items[i]
+    if (!entry) return
+    warmShortVideo(entry, next.indexOf(i) >= 0)
+  })
+  _state.warmVideoIndexes = next
+}
+
+function releaseWarmShortVideos() {
+  if (!_state || !_state.items) return
+  var previous = Array.isArray(_state.warmVideoIndexes) ? _state.warmVideoIndexes : []
+  for (var i = 0; i < previous.length; i += 1) {
+    warmShortVideo(_state.items[previous[i]], false)
+  }
+  _state.warmVideoIndexes = []
 }
 
 export function setOverlayVisible(visible) {
@@ -297,6 +317,7 @@ export function setOverlayVisible(visible) {
   if (!_state.overlayOpen) {
     clearDeckTransition()
     pauseAllShorts()
+    releaseWarmShortVideos()
     _fns.closeBookmarkMenu()
     var card = _state.cards[_state.currentIndex]
     if (card && typeof card.scrollIntoView === 'function') {

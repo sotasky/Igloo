@@ -103,6 +103,26 @@ func (d *Downloader) DownloadCompleted(ctx context.Context, lane MediaLane, rawU
 	return completed, err
 }
 
+func (d *Downloader) DownloadSubtitles(ctx context.Context, lane MediaLane, rawURL string, opts Opts) ([]string, error) {
+	var paths []string
+	err := d.RunMedia(ctx, lane, func() error {
+		var err error
+		attempts := opts.cookieAttempts()
+		for index, auth := range attempts {
+			usedOpts := opts.withCookieSet(auth)
+			if index > 0 {
+				usedOpts.ID = fmt.Sprintf("%s-retry-%d", opts.ID, index+1)
+			}
+			paths, err = d.YtDlp.DownloadSubtitles(ctx, rawURL, usedOpts)
+			if err == nil || index+1 >= len(attempts) || !shouldTryNextCookieAttempt(err) {
+				return err
+			}
+		}
+		return err
+	})
+	return paths, err
+}
+
 func (d *Downloader) downloadCompletedAdmitted(ctx context.Context, rawURL string, mediaType string, opts Opts) (CompletedDownload, error) {
 	start := time.Now()
 	platform := platformFromURL(rawURL)
@@ -116,7 +136,7 @@ func (d *Downloader) downloadCompletedAdmitted(ctx context.Context, rawURL strin
 	var err error
 	usedOpts := opts
 	defer func() {
-		files, bytes := summarizePaths(completed.MediaPaths)
+		files := len(completed.MediaPaths)
 		recordOperation(ctx, d.sink, model.DownloaderOperation{
 			Operation:   "media.download",
 			Platform:    platform,
@@ -130,7 +150,6 @@ func (d *Downloader) downloadCompletedAdmitted(ctx context.Context, rawURL strin
 			CookieLabel: CookieLabel(usedOpts.Cookies, usedOpts.CookiesFromBrowser),
 			FileCount:   files,
 			MediaCount:  files,
-			Bytes:       bytes,
 		})
 	}()
 	attempts := opts.cookieAttempts()

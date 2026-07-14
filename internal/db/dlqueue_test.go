@@ -217,6 +217,60 @@ func TestClaimDownloadWorkDerivesLaneAndSource(t *testing.T) {
 	}
 }
 
+func TestVideoDesireFreshnessIgnoresObservationTime(t *testing.T) {
+	d := openWritableTestDB(t)
+	const source = "youtube_sample_source"
+	seedVideoDesireChannels(t, d, source)
+	for videoID, publishedAt := range map[string]int64{
+		"sample_canonical_old": 100,
+		"sample_canonical_new": 200,
+	} {
+		seedTestVideo(t, d, videoID, source)
+		if err := d.ExecRaw(`UPDATE videos SET published_at = ? WHERE video_id = ?`, publishedAt, videoID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := d.ReconcileVideoDesires(VideoDesireSnapshot{
+		SourceChannelID: source,
+		Component:       "direct",
+		Items: []VideoDesire{
+			{VideoID: "sample_canonical_old", OwnerChannelID: source, SourcePosition: 0, Lane: DownloadLaneBackfill},
+			{VideoID: "sample_canonical_new", OwnerChannelID: source, SourcePosition: 1, Lane: DownloadLaneBackfill},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.ExecRaw(`
+		INSERT INTO video_repost_sources
+			(video_id, reposter_channel_id, reposted_at_ms, first_seen_at_ms, updated_at_ms)
+		VALUES
+			('sample_canonical_old', ?, 0, 1000, 1000),
+			('sample_canonical_new', ?, 0, 1, 1)
+	`, source, source); err != nil {
+		t.Fatal(err)
+	}
+	window, err := d.GetVideoDesireWindow(source, "direct")
+	if err != nil {
+		t.Fatal(err)
+	}
+	freshness := make(map[string]int64, len(window))
+	for _, item := range window {
+		freshness[item.VideoID] = item.FreshnessAtMs
+	}
+	if freshness["sample_canonical_old"] != 100 || freshness["sample_canonical_new"] != 200 {
+		t.Fatalf("window freshness = %+v", freshness)
+	}
+	if err := d.EnforceVideoDesireLimit(source, 1); err != nil {
+		t.Fatal(err)
+	}
+	if got := testRowCount(t, d, `SELECT COUNT(*) FROM video_desires WHERE source_channel_id = ? AND video_id = 'sample_canonical_new'`, source); got != 1 {
+		t.Fatalf("newer canonical desire count = %d", got)
+	}
+	if got := testRowCount(t, d, `SELECT COUNT(*) FROM video_desires WHERE source_channel_id = ? AND video_id = 'sample_canonical_old'`, source); got != 0 {
+		t.Fatalf("older canonical desire count = %d", got)
+	}
+}
+
 func TestDownloadWorkLeaseRetryAndBlock(t *testing.T) {
 	d := openWritableTestDB(t)
 	const source = "instagram_sample_source"
@@ -423,6 +477,39 @@ func TestMaintainVideoRetentionOwnsQueueAndCanonicalCleanup(t *testing.T) {
 	}
 }
 
+func TestMaintainVideoRetentionDoesNotRewriteStableVideos(t *testing.T) {
+	d := openWritableTestDB(t)
+	const source = "youtube_sample_source"
+	seedVideoDesireChannels(t, d, source)
+	seedTestVideo(t, d, "sample_stable", source)
+	if _, err := d.ReconcileVideoDesires(VideoDesireSnapshot{
+		SourceChannelID: source,
+		Component:       "direct",
+		Items: []VideoDesire{{
+			VideoID: "sample_stable", OwnerChannelID: source,
+			SourcePosition: 0, Lane: DownloadLaneCurrent,
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.ExecRaw(`
+		CREATE TABLE video_update_audit (video_id TEXT NOT NULL);
+		CREATE TRIGGER test_video_update_audit
+		AFTER UPDATE ON videos
+		BEGIN
+			INSERT INTO video_update_audit(video_id) VALUES (new.video_id);
+		END
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.MaintainVideoRetention(time.Now().UnixMilli()); err != nil {
+		t.Fatal(err)
+	}
+	if got := testRowCount(t, d, `SELECT COUNT(*) FROM video_update_audit`); got != 0 {
+		t.Fatalf("stable retention rewrote %d videos", got)
+	}
+}
+
 func TestMaintainVideoRetentionExpiresStoryDesiresAndPendingWork(t *testing.T) {
 	d := openWritableTestDB(t)
 	const (
@@ -475,7 +562,7 @@ func TestMaintainVideoRetentionExpiresStoryDesiresAndPendingWork(t *testing.T) {
 	}
 }
 
-func TestUnfollowRemovesOnlyItsDesiresUntilMaintenance(t *testing.T) {
+func TestUnfollowStopsWorkAndKeepsHistoricalVideoOwnership(t *testing.T) {
 	d := openWritableTestDB(t)
 	const (
 		first  = "youtube_sample_first"
@@ -497,30 +584,45 @@ func TestUnfollowRemovesOnlyItsDesiresUntilMaintenance(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := d.PurgeUnfollowedChannelContent(first); err != nil {
+	if err := d.UnfollowChannel(first); err != nil {
 		t.Fatal(err)
 	}
-	if got := testRowCount(t, d, `SELECT COUNT(*) FROM video_desires WHERE video_id = ?`, video); got != 1 {
+	if _, err := d.MaintainVideoRetention(time.Now().UnixMilli()); err != nil {
+		t.Fatal(err)
+	}
+	if got := testRowCount(t, d, `SELECT COUNT(*) FROM video_desires WHERE video_id = ?`, video); got != 2 {
 		t.Fatalf("shared desires after first unfollow = %d", got)
 	}
-	if _, err := d.PurgeUnfollowedChannelContent(second); err != nil {
+	if err := d.UnfollowChannel(second); err != nil {
 		t.Fatal(err)
 	}
 	if got := testRowCount(t, d, `SELECT COUNT(*) FROM videos WHERE video_id = ?`, video); got != 1 {
 		t.Fatal("unfollow performed mutation-local canonical cleanup")
 	}
+	if delay, err := d.NextMediaWorkDelay(time.Now().UnixMilli(), []string{"youtube"}, false, DownloadLaneCurrent); err != nil || delay != 5*time.Minute {
+		t.Fatalf("unfollowed work delay=%v err=%v", delay, err)
+	}
+	if _, ok, err := d.ClaimDownloadWork("worker", DownloadLaneCurrent, "youtube", time.Now().UnixMilli(), time.Minute); err != nil || ok {
+		t.Fatalf("unfollowed work claim ok=%v err=%v", ok, err)
+	}
 	if _, err := d.MaintainVideoRetention(time.Now().UnixMilli()); err != nil {
 		t.Fatal(err)
 	}
-	if got := testRowCount(t, d, `SELECT COUNT(*) FROM videos WHERE video_id = ?`, video); got != 0 {
-		t.Fatalf("maintenance retained unrooted video: %d", got)
+	if got := testRowCount(t, d, `SELECT COUNT(*) FROM download_queue WHERE video_id = ?`, video); got != 0 {
+		t.Fatalf("maintenance retained inactive work: %d", got)
+	}
+	if got := testRowCount(t, d, `SELECT COUNT(*) FROM video_desires WHERE video_id = ?`, video); got != 2 {
+		t.Fatalf("maintenance removed historical desires: %d", got)
+	}
+	if got := testRowCount(t, d, `SELECT COUNT(*) FROM videos WHERE video_id = ?`, video); got != 1 {
+		t.Fatalf("maintenance removed historical video: %d", got)
 	}
 	added, err := d.ReconcileVideoDesires(VideoDesireSnapshot{
 		SourceChannelID: first,
 		Component:       "direct",
 		Items:           []VideoDesire{{VideoID: "sample_late", OwnerChannelID: owner, Lane: DownloadLaneCurrent}},
 	})
-	if err != nil || added != 0 || testRowCount(t, d, `SELECT COUNT(*) FROM video_desires WHERE source_channel_id = ?`, first) != 0 {
+	if err != nil || added != 0 || testRowCount(t, d, `SELECT COUNT(*) FROM video_desires WHERE source_channel_id = ?`, first) != 1 {
 		t.Fatalf("unfollowed reconcile added=%d err=%v", added, err)
 	}
 }
@@ -611,14 +713,14 @@ func TestNextMediaWorkDelayIncludesDownloadLeases(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	delay, err := d.NextMediaWorkDelay(1000, []string{"youtube"}, true)
+	delay, err := d.NextMediaWorkDelay(1000, []string{"youtube"}, true, DownloadLaneBackfill)
 	if err != nil || delay != 0 {
 		t.Fatalf("pending delay = %v, %v", delay, err)
 	}
 	if _, ok, err := d.ClaimDownloadWork("worker-a", DownloadLaneBackfill, "youtube", 1000, 500*time.Millisecond); err != nil || !ok {
 		t.Fatalf("claim ok=%v err=%v", ok, err)
 	}
-	delay, err = d.NextMediaWorkDelay(1100, []string{"youtube"}, true)
+	delay, err = d.NextMediaWorkDelay(1100, []string{"youtube"}, true, DownloadLaneBackfill)
 	if err != nil || delay != 400*time.Millisecond {
 		t.Fatalf("leased delay = %v, %v", delay, err)
 	}

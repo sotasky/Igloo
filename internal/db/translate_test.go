@@ -2,6 +2,7 @@ package db
 
 import (
 	"database/sql"
+	"strings"
 	"testing"
 	"time"
 
@@ -161,76 +162,108 @@ func TestGetReusableTranslationUsesQuotedTweetBody(t *testing.T) {
 	}
 }
 
-func TestListTranslationCandidates(t *testing.T) {
+func TestReusableTranslationQueriesUseIdentityIndexes(t *testing.T) {
 	d := openWritableTestDB(t)
-
-	base := time.Unix(1_700_000_000, 0)
-	items := []model.FeedItem{
+	tests := []struct {
+		name    string
+		query   string
+		args    []any
+		indexes []string
+	}{
 		{
-			TweetID:      "body-tr",
-			AuthorHandle: "author_tr",
-			BodyText:     "Merhaba dunya",
-			Lang:         "tr",
-			PublishedAt:  &base,
+			name:  "body",
+			query: reusableBodyTranslationSQL,
+			args:  []any{"sample_body", "en"},
+			indexes: []string{
+				"idx_feed_items_canonical_tweet",
+				"idx_feed_items_content_hash",
+			},
 		},
 		{
-			TweetID:       "quote-es",
-			AuthorHandle:  "author_es",
-			BodyText:      "wrapper",
-			Lang:          "en",
-			QuoteBodyText: "Hola cita",
-			QuoteLang:     "es",
-			PublishedAt:   timePtr(base.Add(-time.Hour)),
-		},
-		{
-			TweetID:      "cached",
-			AuthorHandle: "author_cached",
-			BodyText:     "Zaten cevrildi",
-			Lang:         "tr",
-			PublishedAt:  timePtr(base.Add(-2 * time.Hour)),
-		},
-		{
-			TweetID:      "target-en",
-			AuthorHandle: "author_en",
-			BodyText:     "Already English",
-			Lang:         "en",
-			PublishedAt:  timePtr(base.Add(-3 * time.Hour)),
-		},
-		{
-			TweetID:      "skip-ja",
-			AuthorHandle: "author_ja",
-			BodyText:     "サンプル本文",
-			Lang:         "ja",
-			PublishedAt:  timePtr(base.Add(-4 * time.Hour)),
+			name:    "quote",
+			query:   reusableQuoteTranslationSQL,
+			args:    []any{"sample_quote", "en"},
+			indexes: []string{"idx_feed_items_quote"},
 		},
 	}
-	if _, err := d.UpsertFeedItems(items); err != nil {
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rows, err := d.conn.Query("EXPLAIN QUERY PLAN "+tt.query, tt.args...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = rows.Close() }()
+
+			var details []string
+			for rows.Next() {
+				var id, parent, unused int
+				var detail string
+				if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+					t.Fatal(err)
+				}
+				details = append(details, detail)
+			}
+			if err := rows.Err(); err != nil {
+				t.Fatal(err)
+			}
+			plan := strings.Join(details, "\n")
+			for _, index := range tt.indexes {
+				if !strings.Contains(plan, "USING INDEX "+index) {
+					t.Fatalf("reuse plan does not use %s:\n%s", index, plan)
+				}
+			}
+			if strings.Contains(plan, "SCAN tr") {
+				t.Fatalf("reuse plan scans the translation cache:\n%s", plan)
+			}
+		})
+	}
+}
+
+func TestUpsertFeedItemsQueuesTranslationJobs(t *testing.T) {
+	d := openWritableTestDB(t)
+	if err := d.SetSetting("translate_target_lang", "tr"); err != nil {
+		t.Fatal(err)
+	}
+	base := time.Unix(1_700_000_000, 0)
+	if _, err := d.UpsertFeedItems([]model.FeedItem{{
+		TweetID:       "sample_queued",
+		AuthorHandle:  "sample_author",
+		BodyText:      "body text",
+		QuoteBodyText: "quote text",
+		PublishedAt:   &base,
+	}}); err != nil {
 		t.Fatalf("UpsertFeedItems: %v", err)
 	}
-	if err := d.SetTranslation("cached", "body", "tr", "en", "Already translated"); err != nil {
-		t.Fatalf("SetTranslation cached: %v", err)
-	}
 
-	got, err := d.ListTranslationCandidates("en", []string{"ja"}, 10)
+	rows, err := d.conn.Query(`
+		SELECT field, target_lang, source_hash, status, priority
+		FROM translation_jobs
+		WHERE tweet_id = 'sample_queued'
+		ORDER BY field
+	`)
 	if err != nil {
-		t.Fatalf("ListTranslationCandidates: %v", err)
+		t.Fatal(err)
 	}
-	if len(got) != 2 {
-		t.Fatalf("got %d candidates, want 2: %#v", len(got), got)
+	defer func() { _ = rows.Close() }()
+	wantHashes := map[string]string{
+		"body":  translationSourceHash("body text"),
+		"quote": translationSourceHash("quote text"),
 	}
-	want := []struct {
-		tweetID string
-		field   string
-		lang    string
-		text    string
-	}{
-		{"body-tr", "body", "tr", "Merhaba dunya"},
-		{"quote-es", "quote", "es", "Hola cita"},
-	}
-	for i, w := range want {
-		if got[i].TweetID != w.tweetID || got[i].Field != w.field || got[i].SourceLang != w.lang || got[i].SourceText != w.text {
-			t.Fatalf("candidate %d = %#v, want tweet=%s field=%s lang=%s text=%q", i, got[i], w.tweetID, w.field, w.lang, w.text)
+	seen := make(map[string]bool, len(wantHashes))
+	for rows.Next() {
+		var field, targetLang, sourceHash, status string
+		var priority int
+		if err := rows.Scan(&field, &targetLang, &sourceHash, &status, &priority); err != nil {
+			t.Fatal(err)
 		}
+		if targetLang != "tr" || sourceHash != wantHashes[field] || status != "queued" || priority != 1 {
+			t.Fatalf("job %s = target %q hash %q status %q priority %d", field, targetLang, sourceHash, status, priority)
+		}
+		seen[field] = true
+	}
+	if len(seen) != len(wantHashes) {
+		t.Fatalf("queued fields = %#v", seen)
 	}
 }
 
@@ -245,13 +278,6 @@ func TestTranslationJobsClaimAndComplete(t *testing.T) {
 		PublishedAt:  &base,
 	}}); err != nil {
 		t.Fatalf("UpsertFeedItems: %v", err)
-	}
-	n, err := d.EnqueueTranslationCandidates("en", nil, 10)
-	if err != nil {
-		t.Fatalf("EnqueueTranslationCandidates: %v", err)
-	}
-	if n == 0 {
-		t.Fatalf("EnqueueTranslationCandidates enqueued 0 rows")
 	}
 	job, err := d.ClaimTranslationJob("en", time.Now().UnixMilli())
 	if err != nil {
@@ -272,6 +298,135 @@ func TestTranslationJobsClaimAndComplete(t *testing.T) {
 	}
 	if next != nil {
 		t.Fatalf("next job = %#v, want nil", next)
+	}
+}
+
+func TestTranslationJobClaimUsesReadyOrderIndex(t *testing.T) {
+	d := openWritableTestDB(t)
+	rows, err := d.conn.Query(`EXPLAIN QUERY PLAN
+		SELECT tweet_id, field
+		FROM translation_jobs INDEXED BY idx_translation_jobs_ready
+		WHERE target_lang = ?
+		  AND status = 'queued'
+		  AND next_attempt_at <= ?
+		ORDER BY priority DESC, updated_at ASC, tweet_id ASC, field ASC
+		LIMIT ?`, "en", int64(1000), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rows.Close() }()
+	var details []string
+	for rows.Next() {
+		var id, parent, unused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+			t.Fatal(err)
+		}
+		details = append(details, detail)
+	}
+	plan := strings.Join(details, "\n")
+	if !strings.Contains(plan, "USING COVERING INDEX idx_translation_jobs_ready") {
+		t.Fatalf("translation claim plan = %s", plan)
+	}
+	if strings.Contains(plan, "TEMP B-TREE") {
+		t.Fatalf("translation claim sorts outside its queue index = %s", plan)
+	}
+}
+
+func TestUpsertFeedItemsUnchangedTranslationSourceKeepsCompletedJob(t *testing.T) {
+	d := openWritableTestDB(t)
+	now := time.Unix(1_700_000_000, 0)
+	item := model.FeedItem{
+		TweetID:      "sample_unchanged",
+		AuthorHandle: "sample_author",
+		BodyText:     "same source text",
+		Lang:         "ko",
+		Views:        1,
+		PublishedAt:  &now,
+	}
+	if _, err := d.UpsertFeedItems([]model.FeedItem{item}); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.SetTranslation(item.TweetID, "body", "ko", "en", "cached text"); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.CompleteTranslationJob(item.TweetID, "body", "en"); err != nil {
+		t.Fatal(err)
+	}
+
+	item.Views = 2
+	if _, err := d.UpsertFeedItems([]model.FeedItem{item}); err != nil {
+		t.Fatal(err)
+	}
+	var status, sourceHash string
+	var priority, views int
+	if err := d.QueryRow(`
+		SELECT tj.status, tj.source_hash, tj.priority, f.views
+		FROM translation_jobs tj
+		JOIN feed_items f ON f.tweet_id = tj.tweet_id
+		WHERE tj.tweet_id = ? AND tj.field = 'body' AND tj.target_lang = 'en'
+	`, item.TweetID).Scan(&status, &sourceHash, &priority, &views); err != nil {
+		t.Fatal(err)
+	}
+	if status != "done" || sourceHash != translationSourceHash(item.BodyText) || priority != 1 || views != 2 {
+		t.Fatalf("job = status %q hash %q priority %d views %d", status, sourceHash, priority, views)
+	}
+	if text, _, err := d.GetTranslation(item.TweetID, "body", "en"); err != nil || text != "cached text" {
+		t.Fatalf("translation = %q, %v", text, err)
+	}
+}
+
+func TestUpsertFeedItemsChangedTranslationSourceRequeuesJob(t *testing.T) {
+	d := openWritableTestDB(t)
+	now := time.Unix(1_700_000_000, 0)
+	items := []model.FeedItem{
+		{TweetID: "sample_done", AuthorHandle: "sample_author_done", BodyText: "old done text", Lang: "ko", PublishedAt: &now},
+		{TweetID: "sample_skipped", AuthorHandle: "sample_author_skipped", BodyText: "old skipped text", Lang: "ko", PublishedAt: &now},
+	}
+	if _, err := d.UpsertFeedItems(items); err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range items {
+		if err := d.SetTranslation(item.TweetID, "body", "ko", "en", "stale text"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := d.ExecRaw(`
+		UPDATE translation_jobs
+		SET status = CASE tweet_id WHEN 'sample_done' THEN 'done' ELSE 'skipped' END,
+		    priority = 0, attempts = 4, next_attempt_at = 999,
+		    last_error_kind = 'old', last_error = 'old error'
+		WHERE tweet_id IN ('sample_done', 'sample_skipped')
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	items[0].BodyText = "new done text"
+	items[1].BodyText = "new skipped text"
+	if _, err := d.UpsertFeedItems(items); err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range items {
+		var status, sourceHash, errorKind, errorText string
+		var priority, attempts int
+		var nextAttempt int64
+		if err := d.QueryRow(`
+			SELECT status, source_hash, priority, attempts, next_attempt_at,
+			       last_error_kind, last_error
+			FROM translation_jobs
+			WHERE tweet_id = ? AND field = 'body' AND target_lang = 'en'
+		`, item.TweetID).Scan(
+			&status, &sourceHash, &priority, &attempts, &nextAttempt, &errorKind, &errorText,
+		); err != nil {
+			t.Fatal(err)
+		}
+		if status != "queued" || sourceHash != translationSourceHash(item.BodyText) ||
+			priority != 1 || attempts != 0 || nextAttempt != 0 || errorKind != "" || errorText != "" {
+			t.Fatalf("job %s = %q %q %d %d %d %q %q", item.TweetID, status, sourceHash, priority, attempts, nextAttempt, errorKind, errorText)
+		}
+		if _, _, err := d.GetTranslation(item.TweetID, "body", "en"); err != sql.ErrNoRows {
+			t.Fatalf("translation %s err = %v", item.TweetID, err)
+		}
 	}
 }
 

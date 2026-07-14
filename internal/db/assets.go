@@ -40,6 +40,7 @@ type Asset struct {
 	DesiredObjectID    string
 	ObjectKey          string
 	StorageClass       string
+	DownloadLane       DownloadLane
 	SourceURL          string
 	PublishedSourceURL string
 	FilePath           string
@@ -63,7 +64,7 @@ type Asset struct {
 
 const assetProjectionSQL = `
 	a.id, a.asset_id, a.asset_kind, a.owner_kind, a.owner_id, a.media_index,
-	a.object_id, a.desired_object_id, desired.object_key, desired.storage_class,
+	a.object_id, a.desired_object_id, desired.object_key, desired.storage_class, desired.download_lane,
 	desired.source_url, current.published_source_url,
 	CASE WHEN current.published_revision > 0 THEN current.file_path ELSE '' END,
 	CASE WHEN current.published_revision > 0 THEN current.content_type ELSE desired.content_type END,
@@ -279,6 +280,20 @@ func (db *DB) DeclareAsset(asset Asset, nowMs int64) error {
 
 func upsertAssetTx(tx *sql.Tx, asset Asset) error {
 	asset = prepareAssetIdentity(asset)
+	if asset.State == AssetStateQueued && asset.RequiredReason != "bookmark" && asset.RequiredReason != "like" && asset.RequiredReason != "manual" {
+		var lifecycle string
+		err := tx.QueryRow(`
+			SELECT lifecycle_state
+			FROM assets
+			WHERE asset_kind = ? AND owner_kind = ? AND owner_id = ? AND media_index = ?
+		`, asset.AssetKind, asset.OwnerKind, asset.OwnerID, asset.MediaIndex).Scan(&lifecycle)
+		if err != nil && err != sql.ErrNoRows {
+			return err
+		}
+		if lifecycle == AssetStatePruned {
+			asset.State = AssetStatePruned
+		}
+	}
 	publishedRevision := int64(0)
 	publicationChanged := false
 	if asset.State == AssetStateReady {
@@ -297,16 +312,20 @@ func upsertAssetTx(tx *sql.Tx, asset Asset) error {
 	}
 	_, err := tx.Exec(`
 		INSERT INTO media_objects (
-			object_id, object_key, source_url, published_source_url, storage_class,
+			object_id, object_key, source_url, published_source_url, storage_class, download_lane,
 			desired_revision, published_revision,
 			file_path, content_type, size_bytes, file_mtime_ns,
 			job_state, last_error_kind, last_error, attempts,
 			next_attempt_at_ms, lease_owner, lease_until_ms, created_at_ms, updated_at_ms
-		) VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(object_key) DO UPDATE SET
 			source_url = excluded.source_url,
 			published_source_url = CASE WHEN excluded.published_revision > 0 THEN excluded.source_url ELSE media_objects.published_source_url END,
 			storage_class = excluded.storage_class,
+			download_lane = CASE
+				WHEN excluded.download_lane = 'current' AND media_objects.job_state != 'pruned' THEN 'current'
+				ELSE media_objects.download_lane
+			END,
 			desired_revision = CASE
 				WHEN media_objects.source_url != excluded.source_url THEN media_objects.desired_revision + 1
 				ELSE media_objects.desired_revision
@@ -322,18 +341,31 @@ func upsertAssetTx(tx *sql.Tx, asset Asset) error {
 			file_mtime_ns = CASE WHEN excluded.published_revision > 0 THEN excluded.file_mtime_ns ELSE media_objects.file_mtime_ns END,
 			job_state = CASE
 				WHEN excluded.published_revision > 0 THEN 'ready'
-				WHEN media_objects.source_url != excluded.source_url THEN 'queued'
-				WHEN excluded.job_state = 'queued' AND media_objects.job_state IN ('failed', 'server_missing', 'permanent_missing', 'stale', 'pruned') THEN 'queued'
+				WHEN media_objects.source_url != excluded.source_url AND media_objects.job_state != 'pruned' THEN 'queued'
+				WHEN excluded.job_state = 'queued' AND media_objects.job_state IN ('failed', 'server_missing', 'permanent_missing', 'stale') THEN 'queued'
 				ELSE media_objects.job_state
 			END,
-			last_error_kind = CASE WHEN excluded.published_revision > 0 OR media_objects.source_url != excluded.source_url OR (excluded.job_state = 'queued' AND media_objects.job_state IN ('failed', 'server_missing', 'permanent_missing', 'stale', 'pruned')) THEN '' ELSE media_objects.last_error_kind END,
-			last_error = CASE WHEN excluded.published_revision > 0 OR media_objects.source_url != excluded.source_url OR (excluded.job_state = 'queued' AND media_objects.job_state IN ('failed', 'server_missing', 'permanent_missing', 'stale', 'pruned')) THEN '' ELSE media_objects.last_error END,
-			attempts = CASE WHEN excluded.published_revision > 0 OR media_objects.source_url != excluded.source_url OR (excluded.job_state = 'queued' AND media_objects.job_state IN ('failed', 'server_missing', 'permanent_missing', 'stale', 'pruned')) THEN 0 ELSE media_objects.attempts END,
-			next_attempt_at_ms = CASE WHEN excluded.published_revision > 0 OR media_objects.source_url != excluded.source_url OR (excluded.job_state = 'queued' AND media_objects.job_state IN ('failed', 'server_missing', 'permanent_missing', 'stale', 'pruned')) THEN 0 ELSE media_objects.next_attempt_at_ms END,
-			lease_owner = CASE WHEN excluded.published_revision > 0 OR media_objects.source_url != excluded.source_url OR (excluded.job_state = 'queued' AND media_objects.job_state IN ('failed', 'server_missing', 'permanent_missing', 'stale', 'pruned')) THEN '' ELSE media_objects.lease_owner END,
-			lease_until_ms = CASE WHEN excluded.published_revision > 0 OR media_objects.source_url != excluded.source_url OR (excluded.job_state = 'queued' AND media_objects.job_state IN ('failed', 'server_missing', 'permanent_missing', 'stale', 'pruned')) THEN 0 ELSE media_objects.lease_until_ms END,
+			last_error_kind = CASE WHEN excluded.published_revision > 0 OR (media_objects.source_url != excluded.source_url AND media_objects.job_state != 'pruned') OR (excluded.job_state = 'queued' AND media_objects.job_state IN ('failed', 'server_missing', 'permanent_missing', 'stale')) THEN '' ELSE media_objects.last_error_kind END,
+			last_error = CASE WHEN excluded.published_revision > 0 OR (media_objects.source_url != excluded.source_url AND media_objects.job_state != 'pruned') OR (excluded.job_state = 'queued' AND media_objects.job_state IN ('failed', 'server_missing', 'permanent_missing', 'stale')) THEN '' ELSE media_objects.last_error END,
+			attempts = CASE WHEN excluded.published_revision > 0 OR (media_objects.source_url != excluded.source_url AND media_objects.job_state != 'pruned') OR (excluded.job_state = 'queued' AND media_objects.job_state IN ('failed', 'server_missing', 'permanent_missing', 'stale')) THEN 0 ELSE media_objects.attempts END,
+			next_attempt_at_ms = CASE WHEN excluded.published_revision > 0 OR (media_objects.source_url != excluded.source_url AND media_objects.job_state != 'pruned') OR (excluded.job_state = 'queued' AND media_objects.job_state IN ('failed', 'server_missing', 'permanent_missing', 'stale')) THEN 0 ELSE media_objects.next_attempt_at_ms END,
+			lease_owner = CASE WHEN excluded.published_revision > 0 OR (media_objects.source_url != excluded.source_url AND media_objects.job_state != 'pruned') OR (excluded.job_state = 'queued' AND media_objects.job_state IN ('failed', 'server_missing', 'permanent_missing', 'stale')) THEN '' ELSE media_objects.lease_owner END,
+			lease_until_ms = CASE WHEN excluded.published_revision > 0 OR (media_objects.source_url != excluded.source_url AND media_objects.job_state != 'pruned') OR (excluded.job_state = 'queued' AND media_objects.job_state IN ('failed', 'server_missing', 'permanent_missing', 'stale')) THEN 0 ELSE media_objects.lease_until_ms END,
 			updated_at_ms = excluded.updated_at_ms
-	`, asset.ObjectID, asset.ObjectKey, asset.SourceURL, asset.SourceURL, asset.StorageClass,
+		WHERE media_objects.source_url != excluded.source_url
+		   OR media_objects.storage_class != excluded.storage_class
+		   OR (excluded.download_lane = 'current' AND media_objects.download_lane != 'current' AND media_objects.job_state != 'pruned')
+		   OR (media_objects.content_type = '' AND excluded.content_type != '')
+		   OR (excluded.job_state = 'queued' AND media_objects.job_state IN ('failed', 'server_missing', 'permanent_missing', 'stale'))
+		   OR (excluded.published_revision > 0 AND (
+		       media_objects.job_state != 'ready'
+		       OR media_objects.published_source_url != excluded.source_url
+		       OR media_objects.file_path != excluded.file_path
+		       OR media_objects.content_type != excluded.content_type
+		       OR media_objects.size_bytes != excluded.size_bytes
+		       OR media_objects.file_mtime_ns != excluded.file_mtime_ns
+		   ))
+	`, asset.ObjectID, asset.ObjectKey, asset.SourceURL, asset.SourceURL, asset.StorageClass, asset.DownloadLane,
 		publishedRevision, asset.FilePath, asset.ContentType, asset.SizeBytes, asset.FileMtimeNs,
 		asset.State, asset.LastErrorKind, asset.LastError, asset.Attempts,
 		asset.NextAttemptAtMs, asset.LeaseOwner, asset.LeaseUntilMs, asset.CreatedAtMs, asset.UpdatedAtMs)
@@ -364,24 +396,24 @@ func upsertAssetTx(tx *sql.Tx, asset Asset) error {
 			asset_id = excluded.asset_id,
 			object_id = CASE WHEN ? > 0 THEN excluded.object_id ELSE assets.object_id END,
 			desired_object_id = excluded.desired_object_id,
-			lifecycle_state = 'active',
 			is_auto = excluded.is_auto,
 			audio_language = excluded.audio_language,
 			required_reason = CASE
-				WHEN assets.required_reason IN ('bookmark', 'like') THEN assets.required_reason
+				WHEN assets.required_reason IN ('bookmark', 'like', 'manual') THEN assets.required_reason
 				ELSE excluded.required_reason
 			END,
-			revision = CASE
-				WHEN assets.object_id != excluded.object_id OR assets.desired_object_id != excluded.desired_object_id
-				  OR assets.is_auto IS NOT excluded.is_auto OR assets.audio_language != excluded.audio_language
-				  OR assets.required_reason != excluded.required_reason
-				  OR assets.lifecycle_state != 'active'
-				  OR ?
-				THEN assets.revision + 1 ELSE assets.revision END,
+			revision = assets.revision + 1,
 			updated_at_ms = excluded.updated_at_ms
+		WHERE assets.asset_id != excluded.asset_id
+		   OR (? > 0 AND assets.object_id != excluded.object_id)
+		   OR assets.desired_object_id != excluded.desired_object_id
+		   OR assets.is_auto IS NOT excluded.is_auto
+		   OR assets.audio_language != excluded.audio_language
+		   OR (assets.required_reason NOT IN ('bookmark', 'like', 'manual') AND assets.required_reason != excluded.required_reason)
+		   OR ?
 	`, asset.AssetID, asset.AssetKind, asset.OwnerKind, asset.OwnerID, asset.MediaIndex,
 		currentObjectID, objectID, asset.IsAuto, asset.AudioLanguage, asset.RequiredReason,
-		asset.CreatedAtMs, asset.UpdatedAtMs, objectPublishedRevision, publicationChanged)
+		asset.CreatedAtMs, asset.UpdatedAtMs, objectPublishedRevision, objectPublishedRevision, publicationChanged)
 	return err
 }
 
@@ -403,6 +435,12 @@ func prepareAssetIdentity(asset Asset) Asset {
 			asset.StorageClass = "state_ssd"
 		default:
 			asset.StorageClass = "bulk_hdd"
+		}
+	}
+	if !asset.DownloadLane.valid() {
+		asset.DownloadLane = DownloadLaneBackfill
+		if asset.OwnerKind == "comment_author" || asset.RequiredReason == "bookmark" || asset.RequiredReason == "like" || asset.RequiredReason == "manual" {
+			asset.DownloadLane = DownloadLaneCurrent
 		}
 	}
 	asset.DesiredObjectID = asset.ObjectID
@@ -804,6 +842,7 @@ func scanAsset(row assetScanner) (Asset, error) {
 		&asset.DesiredObjectID,
 		&asset.ObjectKey,
 		&asset.StorageClass,
+		&asset.DownloadLane,
 		&asset.SourceURL,
 		&asset.PublishedSourceURL,
 		&asset.FilePath,
@@ -948,6 +987,35 @@ func BuildAssetID(platform, ownerKind, ownerID, assetKind string, index int) str
 		id = fmt.Sprintf("%s_%d", id, index)
 	}
 	return id
+}
+
+const videoThumbnailObjectKeyPrefix = "derived:video-thumbnail:"
+
+func VideoThumbnailObjectKey(sourceObjectID string) string {
+	return videoThumbnailObjectKeyPrefix + strings.TrimSpace(sourceObjectID)
+}
+
+func VideoThumbnailSourceObjectID(objectKey string) string {
+	objectKey = strings.TrimSpace(objectKey)
+	if !strings.HasPrefix(objectKey, videoThumbnailObjectKeyPrefix) {
+		return ""
+	}
+	return strings.TrimSpace(strings.TrimPrefix(objectKey, videoThumbnailObjectKeyPrefix))
+}
+
+func IsVideoThumbnailObjectKey(objectKey string) bool {
+	return strings.HasPrefix(strings.TrimSpace(objectKey), videoThumbnailObjectKeyPrefix) &&
+		VideoThumbnailSourceObjectID(objectKey) != ""
+}
+
+func (db *DB) ReadyMediaObjectFile(objectID string) (string, error) {
+	var filePath string
+	err := db.reader().QueryRow(`
+		SELECT file_path
+		FROM media_objects
+		WHERE object_id = ? AND published_revision > 0 AND file_path != ''
+	`, strings.TrimSpace(objectID)).Scan(&filePath)
+	return filePath, err
 }
 
 func contentTypeForMediaPath(path, mediaType, fallback string) string {

@@ -183,7 +183,7 @@ func TestRestoreXMediaRetentionForChannelReactivatesOnlyWidenedStoredWindow(t *t
 	if err := d.UpdateChannelSettings(channelID, map[string]any{"media_download_limit": 2}); err != nil {
 		t.Fatal(err)
 	}
-	result, err := d.PruneXMediaRetentionForChannel(channelID, XMediaRetentionOptions{NowMs: 4000})
+	result, err := d.RestoreXMediaRetentionForChannel(channelID, 4000)
 	if err != nil {
 		t.Fatal(err)
 	}

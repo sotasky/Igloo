@@ -7,8 +7,8 @@ import { initTextClamps } from './text-clamp.js'
 import { initDates } from './dates.js'
 import { handleTranslateAction, getTranslateObserver, queueBackgroundTranslations } from './translate.js'
 import { initRetweetersDialog, applyRepostMuteFilter } from './retweeters.js'
+import { initFeedSeenTracking } from './seen.js'
 
-// Observe cards for auto-translate. Seen tracking is handled by HTMX attrs on the cards.
 function observeTranslateCards(scope, translateObserver) {
   queueBackgroundTranslations(scope)
   if (!translateObserver) return
@@ -44,6 +44,7 @@ var feedRouteContent = document.querySelector('[data-feed-route-content]') || fe
 var activeThreadRoute = null
 var activeThreadAbort = null
 var lastFeedThreadRouteState = null
+var feedSeenTracking = null
 
 // ── State helpers ──
 
@@ -711,14 +712,14 @@ function unfollowChannel(channelId, label) {
   if (!cid) return Promise.resolve(false)
   return askConfirm({
     title: t('confirm_unfollow_channel_title', 'Unfollow Channel'),
-    body: tf('confirm_unfollow_channel_delete_media_body', 'Unfollow "%1$s" and delete local media? This cannot be undone.', String(label || cid)),
+    body: tf('confirm_unfollow_channel_body', 'Unfollow %1$s?', String(label || cid)),
     confirmLabel: t('action_unfollow', 'Unfollow'),
     cancelLabel: t('action_cancel', 'Cancel'),
     danger: true
   }).then(function (confirmed) {
     if (!confirmed) return false
     syncFollowButtons(cid, false)
-    return apiFetch('/api/unsubscribe/' + encodeURIComponent(cid) + '?delete_files=true', { method: 'DELETE' })
+    return mutateChannelFollow(cid, 'clear')
       .then(function (payload) {
         showToast((payload && payload.message) || tf('toast_unfollowed_channel', 'Unfollowed %1$s', String(label || cid)))
         return true
@@ -731,19 +732,26 @@ function unfollowChannel(channelId, label) {
   })
 }
 
-function followChannel(channelId, handle, label) {
-  var cid = String(channelId || '').trim()
-  var cleanHandle = String(handle || '').trim().replace(/^@+/, '')
-  if (!cid || !cleanHandle) return Promise.resolve(false)
-  return apiFetch('/api/subscribe', {
+function mutateChannelFollow(channelId, action) {
+  return apiFetch('/api/mutations/follow', {
     method: 'POST',
-    body: JSON.stringify({ url: 'https://x.com/' + cleanHandle })
-  }).then(function (payload) {
-    if (payload && payload.success === false) throw Object.assign(new Error('subscribe failed'), { payload: payload })
-    syncFollowButtons(cid, true)
-    showToast(tf('toast_followed_channel', 'Followed %1$s', String(label || cleanHandle)))
+    body: JSON.stringify({
+      channel_id: channelId,
+      action: action,
+      updated_at_ms: Date.now()
+    })
+  })
+}
+
+function followChannel(channelId, label) {
+  var cid = String(channelId || '').trim()
+  if (!cid) return Promise.resolve(false)
+  syncFollowButtons(cid, true)
+  return mutateChannelFollow(cid, 'set').then(function () {
+    showToast(tf('toast_followed_channel', 'Followed %1$s', String(label || cid)))
     return true
   }).catch(function (err) {
+    syncFollowButtons(cid, false)
     showToast((err && err.payload && err.payload.error) ? err.payload.error : t('error_follow_failed', 'Failed to follow'))
     return false
   })
@@ -754,10 +762,10 @@ function handleFeedFollowToggle(btn) {
   var channelId = String(btn.getAttribute('data-feed-channel-id') || '').trim()
   var handle = String(btn.getAttribute('data-feed-handle') || '').trim().replace(/^@+/, '')
   var label = String(btn.getAttribute('data-feed-label') || handle || channelId || 'account').trim()
-  if (!channelId || !handle) return
+  if (!channelId) return
   var following = String(btn.getAttribute('data-following') || '') === '1'
   btn.disabled = true
-  var op = following ? unfollowChannel(channelId, label) : followChannel(channelId, handle, label)
+  var op = following ? unfollowChannel(channelId, label) : followChannel(channelId, label)
   Promise.resolve(op).finally(function () { btn.disabled = false })
 }
 
@@ -1310,11 +1318,12 @@ document.addEventListener('click', function (e) {
   if (!btn || btn.disabled) return
   var handle = btn.getAttribute('data-handle')
   var channelId = btn.getAttribute('data-channel-id')
-  if (!handle) return
+  var label = handle || channelId
+  if (!channelId) return
   var isFollowing = btn.getAttribute('data-following') === '1'
   btn.disabled = true
-  var op = isFollowing ? unfollowChannel(channelId, handle) : followChannel(channelId, handle, handle)
-  op.then(function (ok) { if (ok) window.location.reload(); else btn.disabled = false })
+  var op = isFollowing ? unfollowChannel(channelId, label) : followChannel(channelId, label)
+  Promise.resolve(op).finally(function () { btn.disabled = false })
 })
 
 // ── HTMX event handlers ──
@@ -1357,6 +1366,7 @@ function initNewFeedCards() {
   applyRetweetMuteFilter(feedList)
   applyRepostMuteFilter(feedList)
   observeTranslateCards(feedList, getTranslateObserver())
+  if (feedSeenTracking) feedSeenTracking.observe()
 }
 
 if (feedList) {
@@ -1475,20 +1485,15 @@ if (feedPagination && document.querySelector('.feed-scroll-sentinel')) {
 // ── Init ──
 
 initFeedCards(feedList)
+feedSeenTracking = initFeedSeenTracking(feedList, function (tweetIds) {
+  return apiFetch('/api/feed/seen', {
+    method: 'POST',
+    keepalive: true,
+    body: JSON.stringify({ tweet_ids: tweetIds })
+  })
+})
 removeEmptyStateIfNeeded()
 observeSentinelEarly()
 initRetweetersDialog()
 restoreFeedThreadReturn()
 initThreadBackLink()
-
-// Boot-time sync: push any channels that are muted in localStorage but not
-// yet persisted on the server (channels toggled before the API call existed).
-;(function syncRetweetMutesToServer() {
-  var muted = Array.from(getRetweetMutedChannels())
-  muted.forEach(function(channelId) {
-    apiFetch('/api/channels/' + encodeURIComponent(channelId) + '/settings', {
-      method: 'POST',
-      body: JSON.stringify({ include_reposts: false })
-    }).catch(function() {})
-  })
-})()

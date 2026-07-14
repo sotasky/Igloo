@@ -4,9 +4,9 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -99,18 +99,18 @@ func (m *Manager) prepareCompletedVideoFilesAdmitted(completed download.Complete
 	}
 	out.thumbnailVideoSource = firstVideo
 
-	infoPath := completed.InfoJSONPath
 	subtitlePaths := append([]string(nil), completed.SubtitlePaths...)
 	sort.Strings(subtitlePaths)
 	videoStem := strings.TrimSuffix(filepath.Base(out.primaryPath), filepath.Ext(out.primaryPath))
-	audioLanguage := subtitlemeta.Language(infoPath)
+	audioLanguage := subtitlemeta.Language(completed.Metadata)
+	manualLangs := subtitlemeta.ManualLangs(completed.Metadata)
 	for index, path := range subtitlePaths {
 		key, err := m.cfg.Storage.Key(path)
 		if err != nil {
 			return out, err
 		}
 		lang := subtitlemeta.TrackLang(videoStem, filepath.Base(path))
-		isAuto := subtitlemeta.IsAuto(infoPath, lang)
+		isAuto := !manualLangs[lang]
 		out.subtitleAssets = append(out.subtitleAssets, db.Asset{
 			AssetKind:      "subtitle",
 			MediaIndex:     index,
@@ -173,6 +173,35 @@ func (m *Manager) publishCompletedVideoThumbnail(ctx context.Context, lane downl
 	}
 	m.removeStoredPaths(ctx, lane, []string{thumbnailPath})
 	return err
+}
+
+func (m *Manager) storeCompletedVideoOutputs(
+	ctx context.Context,
+	lane download.MediaLane,
+	platform string,
+	outputID string,
+	video db.CompletedVideo,
+	files completedVideoFiles,
+	completed download.CompletedDownload,
+	subtitleAsset *db.Asset,
+) error {
+	if err := m.db.StoreCompletedVideo(video); err != nil {
+		m.removeFailedAttempt(ctx, lane, files, completed)
+		return err
+	}
+	if subtitleAsset != nil {
+		if err := m.db.DeclareAsset(*subtitleAsset, 0); err != nil {
+			log.Printf("[downloadpool] DeclareSubtitleAsset %s: %v", video.VideoID, err)
+		}
+	}
+	if err := m.publishCompletedVideoThumbnail(ctx, lane, video.VideoID, platform, outputID, files); err != nil {
+		log.Printf("[downloadpool] StoreVideoThumbnailAsset %s: %v", video.VideoID, err)
+	}
+	if err := m.storeCompletedSubtitles(ctx, video.VideoID, files, completed); err != nil {
+		log.Printf("[downloadpool] StoreVideoSubtitleAssets %s: %v", video.VideoID, err)
+	}
+	m.removeTransientFiles(ctx, lane, files)
+	return nil
 }
 
 func completedMediaIdentity(path string) (kind, contentType string, priority int) {
@@ -255,7 +284,7 @@ func (m *Manager) materializeVideoThumbnail(ctx context.Context, platform, outpu
 		return "", err
 	}
 	defer func() { _ = os.Remove(tmpPath) }()
-	if err := extractFirstFrame(ctx, videoSource, tmpPath); err != nil {
+	if err := extractRepresentativeFrame(ctx, videoSource, tmpPath); err != nil {
 		return "", fmt.Errorf("extract thumbnail for %s: %w", outputID, err)
 	}
 	dest := filepath.Join(outDir, outputID+".jpg")
@@ -283,107 +312,6 @@ func newDownloadAttemptID(videoID string) (string, error) {
 		return "", err
 	}
 	return videoID + "-attempt-" + hex.EncodeToString(suffix[:]), nil
-}
-
-func (m *Manager) reusableCompletedVideo(ctx context.Context, lane download.MediaLane, dir, videoID, platform string) (download.CompletedDownload, bool, error) {
-	var completed download.CompletedDownload
-	lookup := func() error {
-		var err error
-		completed, err = reusableCompletedVideoAdmitted(dir, videoID, platform)
-		return err
-	}
-	if m != nil && m.downloader != nil {
-		if err := m.downloader.RunMedia(ctx, lane, lookup); err != nil {
-			return completed, false, err
-		}
-	} else if err := lookup(); err != nil {
-		return completed, false, err
-	}
-	return completed, len(completed.MediaPaths) > 0, nil
-}
-
-func reusableCompletedVideoAdmitted(dir, videoID, platform string) (download.CompletedDownload, error) {
-	var completed download.CompletedDownload
-	videoID, err := safeVideoFileName(videoID)
-	if err != nil {
-		return completed, err
-	}
-	if _, err := os.Stat(dir); err != nil {
-		return completed, err
-	}
-	completed = reusableCompletedVideoStem(dir, videoID, platform)
-	return completed, nil
-}
-
-func reusableCompletedVideoStem(dir, stem, platform string) download.CompletedDownload {
-	var completed download.CompletedDownload
-	playable := existingCanonicalFiles(dir, stem, []string{
-		".mp4", ".webm", ".mkv", ".mov", ".m4v", ".mp3", ".m4a", ".aac", ".ogg", ".wav",
-	})
-	baseImages := existingCanonicalFiles(dir, stem, []string{
-		".jpg", ".jpeg", ".image", ".png", ".webp", ".gif",
-	})
-	numberedImages := existingNumberedImages(dir, stem)
-	if path := existingNonemptyRegularFile(filepath.Join(dir, stem+".info.json")); path != "" {
-		completed.InfoJSONPath = path
-	}
-	for _, suffix := range []string{".en.vtt", ".en-orig.vtt", ".en-US.vtt", ".en-GB.vtt"} {
-		if path := existingNonemptyRegularFile(filepath.Join(dir, stem+suffix)); path != "" {
-			completed.SubtitlePaths = append(completed.SubtitlePaths, path)
-		}
-	}
-	sort.Strings(playable)
-	if len(playable) > 0 {
-		completed.MediaPaths = append(completed.MediaPaths, playable...)
-		if len(baseImages) > 0 {
-			completed.ThumbnailPath = baseImages[0]
-		}
-	} else if (platform == "tiktok" || platform == "instagram") && len(numberedImages) > 0 {
-		completed.MediaPaths = append(completed.MediaPaths, baseImages...)
-		completed.MediaPaths = append(completed.MediaPaths, numberedImages...)
-	}
-	sort.Strings(completed.SubtitlePaths)
-	return completed
-}
-
-func existingCanonicalFiles(dir, stem string, extensions []string) []string {
-	paths := make([]string, 0, len(extensions))
-	for _, ext := range extensions {
-		if path := existingNonemptyRegularFile(filepath.Join(dir, stem+ext)); path != "" {
-			paths = append(paths, path)
-		}
-	}
-	return paths
-}
-
-func existingNumberedImages(dir, videoID string) []string {
-	extensions := []string{".jpg", ".jpeg", ".image", ".png", ".webp", ".gif"}
-	start := 1
-	first := existingCanonicalFiles(dir, videoID+"_1", extensions)
-	if len(first) == 0 {
-		start = 2
-		first = existingCanonicalFiles(dir, videoID+"_2", extensions)
-	}
-	if len(first) == 0 {
-		return nil
-	}
-	paths := append([]string(nil), first...)
-	for index := start + 1; index <= 1000; index++ {
-		current := existingCanonicalFiles(dir, fmt.Sprintf("%s_%d", videoID, index), extensions)
-		if len(current) == 0 {
-			break
-		}
-		paths = append(paths, current...)
-	}
-	return paths
-}
-
-func existingNonemptyRegularFile(path string) string {
-	info, err := os.Stat(path)
-	if err != nil || !info.Mode().IsRegular() || info.Size() == 0 {
-		return ""
-	}
-	return path
 }
 
 func canonicalImageExtension(path string) string {
@@ -482,20 +410,16 @@ func (m *Manager) removeStoredPaths(ctx context.Context, bulkLane download.Media
 	m.removeMediaPaths(ctx, download.MediaLaneState, statePaths...)
 }
 
-func (m *Manager) storeCompletedSubtitles(ctx context.Context, videoID string, files completedVideoFiles, completed download.CompletedDownload, preserveOnError bool) error {
+func (m *Manager) storeCompletedSubtitles(ctx context.Context, videoID string, files completedVideoFiles, completed download.CompletedDownload) error {
 	if len(completed.SubtitlePaths) == 0 {
 		return nil
 	}
 	if len(files.subtitleAssets) == 0 {
-		if !preserveOnError {
-			m.removeMediaPaths(ctx, download.MediaLaneState, completed.SubtitlePaths...)
-		}
+		m.removeMediaPaths(ctx, download.MediaLaneState, completed.SubtitlePaths...)
 		return fmt.Errorf("subtitle producer returned no publishable outputs")
 	}
 	if err := m.db.StoreVideoSubtitleAssets(videoID, files.subtitleAssets, 0); err != nil {
-		if !preserveOnError {
-			m.removeMediaPaths(ctx, download.MediaLaneState, completed.SubtitlePaths...)
-		}
+		m.removeMediaPaths(ctx, download.MediaLaneState, completed.SubtitlePaths...)
 		return err
 	}
 	return nil
@@ -513,19 +437,4 @@ func removeExactPaths(paths []string) {
 		seen[path] = struct{}{}
 		_ = os.Remove(path)
 	}
-}
-
-func loadInfoJSONFile(path string) map[string]any {
-	if path == "" {
-		return nil
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil
-	}
-	var metadata map[string]any
-	if err := json.Unmarshal(data, &metadata); err != nil {
-		return nil
-	}
-	return metadata
 }

@@ -638,9 +638,70 @@ func TestGetBookmarksDerivesImageFromCanonicalQuoteAsset(t *testing.T) {
 	if got := bookmarks[0].ThumbnailURL; got != "/api/media/thumbnail/sample_quote_media?owner_kind=tweet" {
 		t.Fatalf("ThumbnailURL = %q", got)
 	}
+	if got := bookmarks[0].MediaOwnerID; got != quoteID {
+		t.Fatalf("MediaOwnerID = %q, want %q", got, quoteID)
+	}
 	wantTypes := []string{"image"}
 	if got := bookmarks[0].MediaTypes; strings.Join(got, ",") != strings.Join(wantTypes, ",") {
 		t.Fatalf("MediaTypes = %#v, want %#v", got, wantTypes)
+	}
+}
+
+func TestBookmarkProjectionKeepsActionIdentityAndResolvesCapturedContent(t *testing.T) {
+	d := openFreshTestDB(t)
+	const (
+		actionID  = "sample_saved_action"
+		contentID = "sample_captured_content"
+		channelID = "twitter_sample_author"
+	)
+	statements := []struct {
+		query string
+		args  []any
+	}{
+		{`INSERT INTO channels (channel_id, name, platform) VALUES (?, 'Captured Author', 'twitter')`, []any{channelID}},
+		{`INSERT INTO channel_follows (channel_id, followed_at) VALUES (?, 1)`, []any{channelID}},
+		{`INSERT INTO videos (video_id, channel_id, owner_kind, title, published_at)
+		  VALUES (?, 'twitter_sample_missing', 'tweet', 'X post sample_saved_action', 0)`, []any{actionID}},
+		{`INSERT INTO feed_items (tweet_id, published_at, fetched_at) VALUES (?, 1, 1)`, []any{actionID}},
+		{`INSERT INTO feed_items (
+			tweet_id, source_channel_id, channel_id, body_text, media_json,
+			canonical_tweet_id, is_retweet, published_at, fetched_at
+		  ) VALUES (?, ?, ?, 'captured body', '[{"type":"photo"}]', ?, 1, 2, 2)`,
+			[]any{contentID, channelID, channelID, actionID}},
+		{`INSERT INTO bookmarks (video_id, category_id, bookmarked_at) VALUES (?, 0, 3)`, []any{actionID}},
+	}
+	for _, statement := range statements {
+		if err := d.ExecRaw(statement.query, statement.args...); err != nil {
+			t.Fatalf("insert captured bookmark: %v", err)
+		}
+	}
+	storeBookmarkReadyAsset(t, d, "twitter", "tweet", contentID, "post_media", 0,
+		"media/twitter/sample_author/content.jpg", "image/jpeg")
+
+	bookmarks, err := d.GetBookmarks(GetBookmarksOpts{Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bookmarks) != 1 {
+		t.Fatalf("bookmarks = %d, want 1", len(bookmarks))
+	}
+	bookmark := bookmarks[0]
+	if bookmark.VideoID != actionID || bookmark.MediaOwnerID != contentID {
+		t.Fatalf("identity = action:%q media:%q", bookmark.VideoID, bookmark.MediaOwnerID)
+	}
+	if bookmark.Title != "captured body" || bookmark.ChannelID != channelID || !bookmark.IsSubscribed {
+		t.Fatalf("resolved content = title:%q channel:%q followed:%v", bookmark.Title, bookmark.ChannelID, bookmark.IsSubscribed)
+	}
+	if bookmark.ThumbnailURL != "/api/media/thumbnail/"+contentID+"?owner_kind=tweet" || bookmark.MediaKind != "image" {
+		t.Fatalf("resolved media = thumbnail:%q kind:%q", bookmark.ThumbnailURL, bookmark.MediaKind)
+	}
+
+	video, err := d.GetVideo(actionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if video == nil || video.VideoID != actionID || video.MediaOwnerID != contentID || video.Title != "captured body" {
+		t.Fatalf("player projection = %+v", video)
 	}
 }
 

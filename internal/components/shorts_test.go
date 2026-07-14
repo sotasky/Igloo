@@ -32,7 +32,7 @@ func TestShortsPageRendersFullSkeletonListWithoutPaging(t *testing.T) {
 		t.Fatal("shorts page should not use scroll pagination")
 	}
 	if !strings.Contains(html, `data-hydrate-batch-size="2"`) {
-		t.Fatalf("missing background hydration config: %s", html)
+		t.Fatalf("missing card window size: %s", html)
 	}
 	if !strings.Contains(html, `data-video-id="short_001"`) || !strings.Contains(html, `data-video-title="Short 001"`) {
 		t.Fatal("initial hydrated card missing")
@@ -392,33 +392,6 @@ func TestShortsArrowKeysPreferSlideshowSlidesBeforeStoryNavigation(t *testing.T)
 	}
 }
 
-func TestShortsOverlayPrewarmsNearbyVideosBeforeScrollActivation(t *testing.T) {
-	srcBytes, err := os.ReadFile("../../static/js/src/shorts/overlay.js")
-	if err != nil {
-		t.Fatal(err)
-	}
-	src := string(srcBytes)
-	checks := []string{
-		"function warmShortVideo(entry, eager)",
-		"function warmNearbyShortVideos(index)",
-		"video.preload = eager ? 'auto' : 'metadata'",
-		"var start = Math.max(0, index - 4)",
-		"var end = Math.min(_state.items.length - 1, index + 5)",
-		"var eagerStart = Math.max(0, index - 3)",
-		"var eagerEnd = Math.min(_state.items.length - 1, index + 4)",
-		"warmShortVideo(entry, i >= eagerStart && i <= eagerEnd)",
-		"video._shortsPrewarmStarted = true",
-		"warmNearbyShortVideos(index)",
-		"warmNearbyShortVideos(centerIndex)",
-		"warmNearbyShortVideos(_state.currentIndex)",
-	}
-	for _, check := range checks {
-		if !strings.Contains(src, check) {
-			t.Errorf("shorts overlay video prewarm wiring missing %q", check)
-		}
-	}
-}
-
 func TestShortsVerticalMomentsUseControlledDeckLayout(t *testing.T) {
 	cssBytes, err := os.ReadFile("../../static/style.css")
 	if err != nil {
@@ -588,7 +561,6 @@ func TestShortsVideoPlaybackStartsImmediatelyWithPosterUntilFirstFrame(t *testin
 		t.Fatal("shorts video items should render a poster layer for first-frame fallback")
 	}
 	for _, check := range []string{
-		"video.preload = 'metadata'",
 		"wrapper.classList.add('is-awaiting-first-frame')",
 		"function revealVideoFrame()",
 		"video.addEventListener('loadeddata', revealVideoFrame)",

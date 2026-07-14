@@ -196,6 +196,7 @@ func (y *YtDlpWrapper) ChannelCheck(ctx context.Context, url string, limit int) 
 	start := time.Now()
 	snapshot := SourceSnapshot{Windows: []SourceWindow{{Component: SourceComponentDirect}}}
 	result, err := ytdlp.New().
+		FlatPlaylist().
 		SkipDownload().
 		NoWarnings().
 		PlaylistItems(fmt.Sprintf(":%d", limit)).
@@ -231,6 +232,12 @@ func (y *YtDlpWrapper) ChannelCheck(ctx context.Context, url string, limit int) 
 		}
 		if info.Duration != nil {
 			r.Duration = int(*info.Duration)
+		}
+		if info.WebpageURL != nil {
+			r.URL = *info.WebpageURL
+		}
+		if r.URL == "" && info.URL != nil {
+			r.URL = *info.URL
 		}
 		if info.Timestamp != nil {
 			r.PublishedAtMs = int64(*info.Timestamp * 1000)
@@ -375,7 +382,6 @@ func (y *YtDlpWrapper) Download(ctx context.Context, url string, opts Opts) ([]s
 
 // DownloadCompleted returns every exact output owned by this yt-dlp run.
 func (y *YtDlpWrapper) DownloadCompleted(ctx context.Context, url string, opts Opts) (CompletedDownload, error) {
-	start := time.Now()
 	// Output template: {outputDir}/{id}.%(ext)s
 	// If the caller provided an ID, use it; otherwise let yt-dlp pick.
 	template := fmt.Sprintf("%s/%%(id)s.%%(ext)s", opts.OutputDir)
@@ -387,7 +393,6 @@ func (y *YtDlpWrapper) DownloadCompleted(ctx context.Context, url string, opts O
 		Output(template).
 		NoPlaylist().
 		PrintJSON().
-		WriteInfoJSON().
 		WriteThumbnail().
 		ConvertThumbnails("jpg")
 
@@ -404,14 +409,12 @@ func (y *YtDlpWrapper) DownloadCompleted(ctx context.Context, url string, opts O
 
 	cmd = applyCookieAuth(cmd, opts)
 
-	paths, err := runVideoDownload(ctx, cmd, url)
-	files, bytes := summarizePaths(paths)
-	y.recordYtDlpOperationWithCounts(ctx, "media.ytdlp", url, start, err, opts, 0, files, bytes)
+	paths, metadata, err := runVideoDownload(ctx, cmd, url)
 	if err != nil {
-		return completedYtDlpOutputs(opts, paths), WithOperationContext(err, "yt-dlp", CookieLabel(opts.Cookies, opts.CookiesFromBrowser))
+		return completedYtDlpOutputs(opts, paths, metadata), WithOperationContext(err, "yt-dlp", CookieLabel(opts.Cookies, opts.CookiesFromBrowser))
 	}
 
-	completed := completedYtDlpOutputs(opts, paths)
+	completed := completedYtDlpOutputs(opts, paths, metadata)
 	if opts.Subtitles && len(paths) > 0 {
 		subtitlePaths, subtitleErr := y.DownloadSubtitles(ctx, url, opts)
 		if subtitleErr != nil {
@@ -424,13 +427,12 @@ func (y *YtDlpWrapper) DownloadCompleted(ctx context.Context, url string, opts O
 	return completed, nil
 }
 
-func completedYtDlpOutputs(opts Opts, paths []string) CompletedDownload {
-	completed := CompletedDownload{MediaPaths: uniqueRegularPaths(paths)}
+func completedYtDlpOutputs(opts Opts, paths []string, metadata map[string]any) CompletedDownload {
+	completed := CompletedDownload{MediaPaths: uniquePaths(paths), Metadata: metadata}
 	base := completedOutputBase(opts, completed.MediaPaths)
 	if base == "" {
 		return completed
 	}
-	completed.InfoJSONPath = regularPath(base + ".info.json")
 	completed.ThumbnailPath = regularPath(base + ".jpg")
 	return completed
 }
@@ -447,9 +449,9 @@ func completedOutputBase(opts Opts, paths []string) string {
 
 // runVideoDownload executes the main yt-dlp download and extracts output paths,
 // with fallbacks for non-fatal exit codes and schema-mismatch parse errors.
-func runVideoDownload(ctx context.Context, cmd *ytdlp.Command, url string) ([]string, error) {
+func runVideoDownload(ctx context.Context, cmd *ytdlp.Command, url string) ([]string, map[string]any, error) {
 	result := CommandRunner{}.RunBuilt(ctx, cmd.BuildCommand(ctx, url))
-	paths := extractFilenamesFromJSON(result.Stdout)
+	paths, metadata := parseVideoDownloadOutput(result.Stdout)
 	if result.Err != nil {
 		// yt-dlp may exit non-zero for non-fatal errors while the video
 		// was written. Try to salvage filenames if the files exist.
@@ -460,23 +462,25 @@ func runVideoDownload(ctx context.Context, cmd *ytdlp.Command, url string) ([]st
 			}
 		}
 		if len(existing) > 0 {
-			return existing, nil
+			return existing, metadata, nil
 		}
-		return nil, fmt.Errorf("yt-dlp: %w: %s", result.Err, strings.TrimSpace(string(result.Stderr)))
+		return nil, metadata, fmt.Errorf("yt-dlp: %w: %s", result.Err, strings.TrimSpace(string(result.Stderr)))
 	}
-	return paths, nil
+	return paths, metadata, nil
 }
 
-func extractFilenamesFromJSON(output []byte) []string {
+func parseVideoDownloadOutput(output []byte) ([]string, map[string]any) {
 	var paths []string
+	var metadata map[string]any
 	for _, payload := range JSONPayloads(output) {
 		for _, raw := range FlattenJSONObjects(payload) {
 			if filename, _ := raw["filename"].(string); filename != "" {
 				paths = append(paths, filename)
+				metadata = raw
 			}
 		}
 	}
-	return paths
+	return paths, metadata
 }
 
 // DownloadSubtitles runs a skip-download pass and returns the exact VTT files
@@ -513,7 +517,7 @@ func (y *YtDlpWrapper) DownloadSubtitles(ctx context.Context, url string, opts O
 	}
 	tmpPath := regularPath(filepath.Join(tmpDir, "subtitle.en.vtt"))
 	if tmpPath == "" {
-		return nil, fmt.Errorf("yt-dlp produced no English VTT for %s", opts.ID)
+		return nil, fmt.Errorf("yt-dlp returned no English VTT for %s", opts.ID)
 	}
 	if err := os.Rename(tmpPath, outputPath); err != nil {
 		return nil, err

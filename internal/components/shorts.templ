@@ -79,7 +79,6 @@ templ StoryChannelList(p PageProps, stories []model.StoryChannel) {
 	}
 }
 
-// ShortsCardsPartial renders fully hydrated cards for background grid hydration.
 templ ShortsCardsPartial(p PageProps, videos []model.Video) {
 	for _, v := range videos {
 		@VideoCard(p, v)

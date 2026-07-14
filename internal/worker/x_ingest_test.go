@@ -3,16 +3,68 @@ package worker
 import (
 	"context"
 	"errors"
-	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/screwys/igloo/internal/db"
-	"github.com/screwys/igloo/internal/fxtwitter"
 	"github.com/screwys/igloo/internal/model"
 	"github.com/screwys/igloo/internal/xfeed"
 )
+
+func TestXIngestScheduleWaitsAfterCompletedCycleAndAcceptsKick(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	const interval = 100 * time.Millisecond
+	kick := make(chan struct{}, 1)
+	started := make(chan int, 4)
+	releaseFirst := make(chan struct{})
+	var calls atomic.Int32
+	go runXIngestSchedule(ctx, kick, interval, func() {
+		call := int(calls.Add(1))
+		started <- call
+		if call == 1 {
+			<-releaseFirst
+		}
+	})
+
+	select {
+	case call := <-started:
+		if call != 1 {
+			t.Fatalf("first scheduled call = %d", call)
+		}
+	case <-time.After(300 * time.Millisecond):
+		t.Fatal("first scheduled call did not start")
+	}
+
+	time.Sleep(150 * time.Millisecond)
+	close(releaseFirst)
+	select {
+	case call := <-started:
+		t.Fatalf("buffered timer started call %d immediately after a long cycle", call)
+	case <-time.After(interval / 2):
+	}
+	select {
+	case call := <-started:
+		if call != 2 {
+			t.Fatalf("second scheduled call = %d", call)
+		}
+	case <-time.After(2 * interval):
+		t.Fatal("next interval did not start a cycle")
+	}
+
+	kick <- struct{}{}
+	select {
+	case call := <-started:
+		if call != 3 {
+			t.Fatalf("kicked call = %d", call)
+		}
+	case <-time.After(interval / 2):
+		t.Fatal("ingest kick did not wake the schedule")
+	}
+}
 
 type fakeXFeedFetcher struct {
 	timeline func(context.Context, string, int) ([]model.FeedItem, error)
@@ -44,9 +96,14 @@ func TestUpsertFeedItemsDeclaresDirectAndQuoteAssetsWithoutLegacyJobs(t *testing
 		MediaJSON:      `[{"url":"https://cdn.example/direct.jpg","type":"photo"}]`,
 		QuoteTweetID:   "sample_quote",
 		QuoteMediaJSON: `[{"url":"https://cdn.example/quote.jpg","type":"photo"},{"url":"https://cdn.example/quote.mp4","type":"video","thumbnail_url":"https://cdn.example/quote-thumb.jpg"}]`,
+	}, {
+		TweetID:      "sample_second_owner",
+		SourceHandle: "sample_source",
+		AuthorHandle: "sample_author",
+		MediaJSON:    `[{"url":"https://cdn.example/quote.mp4","type":"video"}]`,
 	}}
-	if n, err := d.UpsertFeedItems(items); err != nil || n != 1 {
-		t.Fatalf("UpsertFeedItems = (%d, %v), want (1, nil)", n, err)
+	if n, err := d.UpsertFeedItems(items); err != nil || n != 2 {
+		t.Fatalf("UpsertFeedItems = (%d, %v), want (2, nil)", n, err)
 	}
 
 	for _, expected := range []struct {
@@ -58,6 +115,8 @@ func TestUpsertFeedItemsDeclaresDirectAndQuoteAssetsWithoutLegacyJobs(t *testing
 		{"sample_quote", "post_media", 0},
 		{"sample_quote", "post_media", 1},
 		{"sample_quote", "post_thumbnail", 0},
+		{"sample_second_owner", "post_media", 0},
+		{"sample_second_owner", "post_thumbnail", 0},
 	} {
 		asset, err := d.GetAsset(db.BuildAssetID("twitter", "tweet", expected.owner, expected.kind, expected.index), expected.kind)
 		if err != nil {
@@ -66,6 +125,16 @@ func TestUpsertFeedItemsDeclaresDirectAndQuoteAssetsWithoutLegacyJobs(t *testing
 		if asset == nil || asset.State != db.AssetStateQueued || asset.SourceURL == "" {
 			t.Fatalf("asset %s/%s/%d = %+v", expected.owner, expected.kind, expected.index, asset)
 		}
+	}
+	quoteVideo, _ := d.GetAssetByOwnerIdentity("post_media", "tweet", "sample_quote", 1)
+	quoteThumb, _ := d.GetAssetByOwnerIdentity("post_thumbnail", "tweet", "sample_quote", 0)
+	secondThumb, _ := d.GetAssetByOwnerIdentity("post_thumbnail", "tweet", "sample_second_owner", 0)
+	if quoteVideo == nil || quoteThumb == nil || secondThumb == nil {
+		t.Fatal("shared video thumbnail assets were not declared")
+	}
+	if quoteThumb.DesiredObjectID != secondThumb.DesiredObjectID ||
+		quoteThumb.ObjectKey != db.VideoThumbnailObjectKey(quoteVideo.DesiredObjectID) {
+		t.Fatalf("thumbnail objects were not shared by video object: video=%+v quote=%+v second=%+v", quoteVideo, quoteThumb, secondThumb)
 	}
 }
 
@@ -215,53 +284,44 @@ func TestFetchOneChannelRecordsFailureBackoff(t *testing.T) {
 	}
 }
 
-func TestRunIngestCycleDoesNotSweepHistoricalRepliesWhenNoChannelsDue(t *testing.T) {
+func TestRunIngestCyclePublishesOneSourceBeforeLaterSourceReturns(t *testing.T) {
 	d := newTestWorkerDB(t)
-	if err := d.AddChannel(model.Channel{
-		ChannelID:    "twitter_sample_source",
-		SourceID:     "sample_source",
-		Name:         "sample_source",
-		Platform:     "twitter",
-		IsSubscribed: true,
-	}); err != nil {
-		t.Fatalf("AddChannel: %v", err)
+	for _, channel := range []model.Channel{
+		{ChannelID: "twitter_sample_alpha", SourceID: "sample_alpha", Name: "Sample Alpha"},
+		{ChannelID: "twitter_sample_beta", SourceID: "sample_beta", Name: "Sample Beta"},
+	} {
+		channel.Platform = "twitter"
+		channel.IsSubscribed = true
+		if err := d.AddChannel(channel); err != nil {
+			t.Fatalf("AddChannel %s: %v", channel.SourceID, err)
+		}
 	}
+	if err := d.RecordIngestSuccess("twitter_sample_alpha", 1, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.RecordIngestSuccess("twitter_sample_beta", 2, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.SetSetting("x_feed_fetch_delay", "1"); err != nil {
+		t.Fatal(err)
+	}
+
+	secondStarted := make(chan struct{})
+	releaseSecond := make(chan struct{})
 	now := time.Now().UTC()
-	if err := d.RecordIngestSuccess("twitter_sample_source", float64(now.Unix()), 0); err != nil {
-		t.Fatalf("RecordIngestSuccess: %v", err)
-	}
-	if _, err := d.UpsertFeedItems([]model.FeedItem{{
-		TweetID:       "sample_known_leaf",
-		AuthorHandle:  "sample_alpha",
-		IsReply:       true,
-		ReplyToHandle: "sample_beta",
-		ReplyToStatus: "sample_missing_parent",
-		PublishedAt:   &now,
-		FetchedAt:     now,
-		ContentHash:   "sample-known-leaf",
-	}}); err != nil {
-		t.Fatalf("UpsertFeedItems: %v", err)
-	}
-	candidates, err := d.FindUnresolvedReplies(10)
-	if err != nil {
-		t.Fatalf("FindUnresolvedReplies: %v", err)
-	}
-	if len(candidates) != 1 || candidates[0].ReplyToHandle != "sample_beta" {
-		t.Fatalf("unresolved reply candidates = %#v", candidates)
-	}
-
-	fixtures := map[string]string{
-		"/sample_beta/status/sample_missing_parent": tweetFixture("sample_missing_parent", "sample_beta", "parent body", "", ""),
-	}
-	srv := httptest.NewServer(fxtMockHandler(t, fixtures))
-	defer srv.Close()
-
 	m := NewManager(d, testCfg(t.TempDir()))
-	m.replyResolver = NewReplyResolver(d, &fxtwitter.Client{BaseURL: srv.URL, HTTP: srv.Client(), Timeout: 2 * time.Second})
 	m.xFeedFetcher = fakeXFeedFetcher{
-		timeline: func(context.Context, string, int) ([]model.FeedItem, error) {
-			t.Fatal("timeline fetch should not be called when channel is not due")
-			return nil, nil
+		timeline: func(_ context.Context, handle string, _ int) ([]model.FeedItem, error) {
+			if handle == "sample_beta" {
+				close(secondStarted)
+				<-releaseSecond
+				return nil, nil
+			}
+			return []model.FeedItem{{
+				TweetID: "sample_source_item", SourceHandle: handle, AuthorHandle: handle,
+				BodyText: "source item", PublishedAt: &now, FetchedAt: now,
+				ContentHash: "sample_source_item", CanonicalTweetID: "sample_source_item",
+			}}, nil
 		},
 		source: func(context.Context, string, int) ([]model.FeedItem, error) {
 			t.Fatal("source fetch should not be called")
@@ -269,68 +329,54 @@ func TestRunIngestCycleDoesNotSweepHistoricalRepliesWhenNoChannelsDue(t *testing
 		},
 	}
 
-	m.runIngestCycle(context.Background())
+	cycleDone := make(chan struct{})
+	go func() {
+		m.runIngestCycle(context.Background())
+		close(cycleDone)
+	}()
 
-	parent, err := d.GetFeedItemByTweetID("sample_missing_parent")
-	if err != nil {
-		t.Fatalf("GetFeedItemByTweetID: %v", err)
-	}
-	if parent != nil {
-		t.Fatalf("historical reply was swept during an unrelated cycle: %+v", parent)
-	}
-}
+	scoreDone := make(chan struct{})
+	go func() {
+		<-m.feedScoringKick
+		m.scoreFeedItems(context.Background(), false, false)
+		close(scoreDone)
+	}()
 
-func TestRunIngestCycleDoesNotSweepHistoricalRepliesBeforeReadyChannels(t *testing.T) {
-	d := newTestWorkerDB(t)
-	if err := d.AddChannel(model.Channel{
-		ChannelID:    "twitter_sample_source",
-		SourceID:     "sample_source",
-		Name:         "sample_source",
-		Platform:     "twitter",
-		IsSubscribed: true,
-	}); err != nil {
-		t.Fatalf("AddChannel: %v", err)
+	select {
+	case <-secondStarted:
+	case <-time.After(5 * time.Second):
+		close(releaseSecond)
+		t.Fatal("later source did not start")
 	}
-	now := time.Now().UTC()
-	if _, err := d.UpsertFeedItems([]model.FeedItem{{
-		TweetID:       "sample_ready_leaf",
-		AuthorHandle:  "sample_alpha",
-		IsReply:       true,
-		ReplyToHandle: "sample_beta",
-		ReplyToStatus: "sample_ready_parent",
-		PublishedAt:   &now,
-		FetchedAt:     now,
-		ContentHash:   "sample-ready-leaf",
-	}}); err != nil {
-		t.Fatalf("UpsertFeedItems: %v", err)
+	select {
+	case <-scoreDone:
+	case <-time.After(5 * time.Second):
+		close(releaseSecond)
+		t.Fatal("first batch did not trigger feed scoring")
+	}
+	select {
+	case <-cycleDone:
+		close(releaseSecond)
+		t.Fatal("ingest cycle ended before the later source was released")
+	default:
 	}
 
-	fixtures := map[string]string{
-		"/sample_beta/status/sample_ready_parent": tweetFixture("sample_ready_parent", "sample_beta", "parent body", "", ""),
+	var ranked int
+	if err := d.QueryRow(`SELECT COUNT(*) FROM feed_rank_snapshot WHERE tweet_id = 'sample_source_item'`).Scan(&ranked); err != nil {
+		close(releaseSecond)
+		t.Fatal(err)
 	}
-	srv := httptest.NewServer(fxtMockHandler(t, fixtures))
-	defer srv.Close()
-
-	m := NewManager(d, testCfg(t.TempDir()))
-	m.replyResolver = NewReplyResolver(d, &fxtwitter.Client{BaseURL: srv.URL, HTTP: srv.Client(), Timeout: 2 * time.Second})
-	m.xFeedFetcher = fakeXFeedFetcher{
-		timeline: func(context.Context, string, int) ([]model.FeedItem, error) {
-			parent, err := d.GetFeedItemByTweetID("sample_ready_parent")
-			if err != nil {
-				t.Fatalf("GetFeedItemByTweetID: %v", err)
-			}
-			if parent != nil {
-				t.Fatal("historical reply sweep ran before ready channel fetch")
-			}
-			return nil, nil
-		},
-		source: func(context.Context, string, int) ([]model.FeedItem, error) {
-			t.Fatal("source fetch should not be called")
-			return nil, nil
-		},
+	if ranked == 0 {
+		close(releaseSecond)
+		t.Fatal("committed source item was absent from the ranked feed while the cycle continued")
 	}
 
-	m.runIngestCycle(context.Background())
+	close(releaseSecond)
+	select {
+	case <-cycleDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("ingest cycle did not finish")
+	}
 }
 
 func TestXStatusEnrichmentUpsertsMissingQuoteParent(t *testing.T) {
@@ -563,65 +609,6 @@ func TestFetchOneFeedSourceUsesGlobalLimitAndPrunesPreviousWindow(t *testing.T) 
 	}
 	if asset == nil || asset.State != db.AssetStatePruned {
 		t.Fatalf("old source asset = %+v", asset)
-	}
-}
-
-func TestEnforceXMediaLimitsForItemsOnlyTouchesEffectiveSources(t *testing.T) {
-	d := newTestWorkerDB(t)
-	if err := d.RecordAndroidFeedRetention(0, 1); err != nil {
-		t.Fatal(err)
-	}
-	for _, handle := range []string{"sample_alpha", "sample_beta", "sample_source", "sample_gamma"} {
-		channelID := model.TwitterChannelIDFromHandle(handle)
-		if err := d.AddChannel(model.Channel{
-			ChannelID: channelID, SourceID: handle, Name: "Sample Channel",
-			Platform: "twitter", IsSubscribed: true,
-		}); err != nil {
-			t.Fatal(err)
-		}
-		if err := d.UpdateChannelSettings(channelID, map[string]any{"media_download_limit": 1}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	item := func(tweetID, sourceHandle, reposterHandle string, isRetweet bool, publishedAtMs int64) model.FeedItem {
-		publishedAt := time.UnixMilli(publishedAtMs)
-		return model.FeedItem{
-			TweetID: tweetID, SourceHandle: sourceHandle, AuthorHandle: "sample_author",
-			IsRetweet: isRetweet, RetweetedByHandle: reposterHandle,
-			MediaJSON:   `[{"url":"https://cdn.example/` + tweetID + `.jpg","type":"photo"}]`,
-			PublishedAt: &publishedAt,
-		}
-	}
-	items := []model.FeedItem{
-		item("sample_alpha_new", "sample_alpha", "", false, 200),
-		item("sample_alpha_old", "sample_alpha", "", false, 100),
-		item("sample_beta_new", "sample_source", "sample_beta", true, 200),
-		item("sample_beta_old", "sample_source", "sample_beta", true, 100),
-		item("sample_source_new", "sample_source", "", false, 200),
-		item("sample_source_old", "sample_source", "", false, 100),
-		item("sample_gamma_new", "sample_gamma", "", true, 200),
-		item("sample_gamma_old", "sample_gamma", "", true, 100),
-	}
-	if n, err := d.UpsertFeedItems(items); err != nil || n != len(items) {
-		t.Fatalf("UpsertFeedItems = (%d, %v), want (%d, nil)", n, err, len(items))
-	}
-
-	m := &Manager{db: d}
-	m.enforceXMediaLimitsForItems([]model.FeedItem{items[0], items[1], items[2], items[6]})
-
-	for ownerID, wantState := range map[string]string{
-		"sample_alpha_old":  db.AssetStatePruned,
-		"sample_beta_old":   db.AssetStatePruned,
-		"sample_gamma_old":  db.AssetStatePruned,
-		"sample_source_old": db.AssetStateQueued,
-	} {
-		asset, err := d.GetAsset(db.BuildAssetID("twitter", "tweet", ownerID, "post_media", 0), "post_media")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if asset == nil || asset.State != wantState {
-			t.Fatalf("asset %s = %+v, want state %s", ownerID, asset, wantState)
-		}
 	}
 }
 

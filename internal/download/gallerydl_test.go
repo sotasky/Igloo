@@ -64,6 +64,9 @@ printf '{"id":"source"}' > "$out/slide.json"
 		t.Fatalf("info path = %q", completed.InfoJSONPath)
 	}
 	assertFileContent(t, completed.InfoJSONPath, `{"id":"source"}`)
+	if completed.Metadata["id"] != "source" {
+		t.Fatalf("metadata = %#v", completed.Metadata)
+	}
 }
 
 func TestGalleryDLDownloadCompletedReturnsExactVideoThumbnail(t *testing.T) {

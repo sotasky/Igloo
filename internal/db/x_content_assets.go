@@ -10,24 +10,33 @@ import (
 	"github.com/screwys/igloo/internal/model"
 )
 
+const contentAssetWorkerOwnerSQL = `(
+	(? AND a.owner_kind = 'tweet' AND a.asset_kind IN ('post_audio', 'post_media', 'post_thumbnail'))
+	OR (a.owner_kind = 'comment_author' AND a.asset_kind = 'avatar')
+	OR (a.owner_kind IN ('youtube_video', 'tiktok_video', 'instagram_reel') AND a.asset_kind = 'subtitle')
+)`
+
 const AssetStatePruned = "pruned"
 
-func declareXContentAssetsTx(tx *sql.Tx, item model.FeedItem, nowMs int64) error {
+func declareXContentAssetsTx(tx *sql.Tx, item model.FeedItem, nowMs int64) (bool, error) {
 	item.ParseMedia()
-	if err := declareXMediaRefsTx(tx, item.TweetID, item.Media, nowMs); err != nil {
-		return err
+	changed, err := declareXMediaRefsTx(tx, item.TweetID, item.Media, nowMs)
+	if err != nil {
+		return false, err
 	}
 	if item.QuoteTweetID != "" {
-		return declareXMediaRefsTx(tx, item.QuoteTweetID, item.QuoteMedia, nowMs)
+		quoteChanged, err := declareXMediaRefsTx(tx, item.QuoteTweetID, item.QuoteMedia, nowMs)
+		return changed || quoteChanged, err
 	}
-	return nil
+	return changed, nil
 }
 
-func declareXMediaRefsTx(tx *sql.Tx, ownerID string, refs []model.MediaRef, nowMs int64) error {
+func declareXMediaRefsTx(tx *sql.Tx, ownerID string, refs []model.MediaRef, nowMs int64) (bool, error) {
 	ownerID = strings.TrimSpace(ownerID)
 	if ownerID == "" {
-		return nil
+		return false, nil
 	}
+	changed := false
 	thumbnailDeclared := false
 	for index, ref := range refs {
 		sourceURL := strings.TrimSpace(ref.URL)
@@ -40,7 +49,7 @@ func declareXMediaRefsTx(tx *sql.Tx, ownerID string, refs []model.MediaRef, nowM
 			kind = "post_audio"
 			contentType = contentTypeForMediaPath(sourceURL, "audio", "audio/mpeg")
 		}
-		if err := declareSourceAssetTx(tx, Asset{
+		mediaAsset := Asset{
 			AssetID:        BuildAssetID("twitter", "tweet", ownerID, kind, index),
 			AssetKind:      kind,
 			OwnerKind:      "tweet",
@@ -49,28 +58,37 @@ func declareXMediaRefsTx(tx *sql.Tx, ownerID string, refs []model.MediaRef, nowM
 			SourceURL:      sourceURL,
 			ContentType:    contentType,
 			State:          AssetStateQueued,
+			DownloadLane:   DownloadLaneCurrent,
 			RequiredReason: "retention",
-		}, nowMs); err != nil {
-			return err
 		}
-		if thumbnailDeclared || (ref.Type != "video" && ref.Type != "gif") || !downloadableAssetSource(ref.ThumbnailURL) {
+		assetChanged, err := declareSourceAssetChangeTx(tx, mediaAsset, nowMs)
+		if err != nil {
+			return false, err
+		}
+		changed = changed || assetChanged
+		if thumbnailDeclared || !strings.HasPrefix(contentType, "video/") {
 			continue
 		}
 		thumbnailDeclared = true
-		if err := declareSourceAssetTx(tx, Asset{
+		mediaAsset = prepareAssetIdentity(normalizeAsset(mediaAsset, nowMs))
+		assetChanged, err = declareSourceAssetChangeTx(tx, Asset{
 			AssetID:        BuildAssetID("twitter", "tweet", ownerID, "post_thumbnail", 0),
 			AssetKind:      "post_thumbnail",
 			OwnerKind:      "tweet",
 			OwnerID:        ownerID,
-			SourceURL:      strings.TrimSpace(ref.ThumbnailURL),
+			ObjectKey:      VideoThumbnailObjectKey(mediaAsset.ObjectID),
+			SourceURL:      sourceURL,
 			ContentType:    "image/jpeg",
 			State:          AssetStateQueued,
+			DownloadLane:   DownloadLaneCurrent,
 			RequiredReason: "retention",
-		}, nowMs); err != nil {
-			return err
+		}, nowMs)
+		if err != nil {
+			return false, err
 		}
+		changed = changed || assetChanged
 	}
-	return nil
+	return changed, nil
 }
 
 func downloadableAssetSource(raw string) bool {
@@ -83,9 +101,14 @@ func downloadableAssetSource(raw string) bool {
 // successful capture stays authoritative instead of disappearing before a
 // network call succeeds.
 func declareSourceAssetTx(tx *sql.Tx, asset Asset, nowMs int64) error {
+	_, err := declareSourceAssetChangeTx(tx, asset, nowMs)
+	return err
+}
+
+func declareSourceAssetChangeTx(tx *sql.Tx, asset Asset, nowMs int64) (bool, error) {
 	asset = normalizeAsset(asset, nowMs)
 	if asset.SourceURL == "" {
-		return nil
+		return false, nil
 	}
 	var existingSource, existingState string
 	err := tx.QueryRow(`
@@ -95,18 +118,21 @@ func declareSourceAssetTx(tx *sql.Tx, asset Asset, nowMs int64) error {
 		WHERE a.asset_kind = ? AND a.owner_kind = ? AND a.owner_id = ? AND a.media_index = ?
 	`, asset.AssetKind, asset.OwnerKind, asset.OwnerID, asset.MediaIndex).Scan(&existingSource, &existingState)
 	if err != nil && err != sql.ErrNoRows {
-		return err
+		return false, err
 	}
+	changed := err == sql.ErrNoRows || existingSource != asset.SourceURL
 	if existingSource == asset.SourceURL && (existingState == AssetStateFailed || existingState == AssetStatePermanentMissing) {
 		asset.State = existingState
 	}
-	return upsertAssetTx(tx, asset)
+	return changed, upsertAssetTx(tx, asset)
 }
 
 // ClaimContentAssetDownloadBatch claims one scheduling class of content media
 // and non-profile comment avatars. Channel identity assets remain owned by the
 // profile pipeline.
 func (db *DB) ClaimContentAssetDownloadBatch(opts LeaseOptions, includeTweets bool, lane DownloadLane) ([]Asset, error) {
+	opts.StatusFrom = AssetStateQueued
+	opts.StatusTo = AssetStateDownloading
 	opts = normalizeLeaseOptions(opts, AssetStateQueued, AssetStateDownloading)
 	if lane != DownloadLaneCurrent && lane != DownloadLaneBackfill {
 		return nil, fmt.Errorf("invalid content asset lane %q", lane)
@@ -136,76 +162,39 @@ func (db *DB) ClaimContentAssetDownloadBatch(opts LeaseOptions, includeTweets bo
 }
 
 func contentAssetClaimQuery(opts LeaseOptions, includeTweets bool, lane DownloadLane) (string, []any) {
-	withClause := ""
-	currentJoin := `LEFT JOIN (
-		SELECT NULL AS owner_id, 2147483647 AS rank_position, 0 AS published_at
-	) current_ref ON 0`
-	currentRef := ""
-	args := make([]any, 0, 8)
-	ownerFilter := `(a.owner_kind = 'comment_author' AND a.asset_kind = 'avatar')`
-	if includeTweets {
-		withClause = `
-		WITH recent AS MATERIALIZED (
-			SELECT tweet_id, quote_tweet_id, published_at
-			FROM feed_items INDEXED BY idx_feed_items_published
-			WHERE published_at > ?
-			ORDER BY published_at DESC
-			LIMIT 10000
-		), current_refs AS MATERIALIZED (
-			SELECT owner_id, MIN(rank_position) AS rank_position, MAX(published_at) AS published_at
-			FROM (
-				SELECT tweet_id AS owner_id, rank_position, 0 AS published_at
-				FROM feed_rank_snapshot_history
-				UNION ALL
-				SELECT fi.quote_tweet_id, ranked.rank_position, 0
-				FROM feed_rank_snapshot_history ranked
-				JOIN feed_items fi ON fi.tweet_id = ranked.tweet_id
-				WHERE fi.quote_tweet_id != ''
-				UNION ALL
-				SELECT tweet_id, 2147483647, published_at FROM recent
-				UNION ALL
-				SELECT quote_tweet_id, 2147483647, published_at FROM recent WHERE quote_tweet_id != ''
-			)
-			WHERE owner_id != ''
-			GROUP BY owner_id
-		)`
-		currentJoin = `LEFT JOIN current_refs current_ref
-		  ON a.owner_kind = 'tweet' AND current_ref.owner_id = a.owner_id`
-		currentRef = ` OR current_ref.owner_id IS NOT NULL`
-		ownerFilter = `((a.owner_kind = 'tweet' AND a.asset_kind IN ('post_audio', 'post_media', 'post_thumbnail'))
-		    OR (a.owner_kind = 'comment_author' AND a.asset_kind = 'avatar'))`
-		args = append(args, opts.NowMs-(48*time.Hour).Milliseconds())
-	}
-	wantCurrent := 0
-	if lane == DownloadLaneCurrent {
-		wantCurrent = 1
-	}
-	query := withClause + `
+	query := `
 		SELECT desired.object_id
-		FROM media_objects desired
-		JOIN assets a ON a.desired_object_id = desired.object_id
-		` + currentJoin + `
-		WHERE ` + leaseEligibleSQLFor("desired.job_state", "desired.next_attempt_at_ms", "desired.lease_until_ms") + `
+		FROM media_objects desired INDEXED BY idx_media_objects_claim
+		WHERE desired.download_lane = ?
+		  AND desired.job_state IN ('queued', 'downloading')
 		  AND desired.source_url != ''
-		  AND a.lifecycle_state = 'active'
-		  AND ` + ownerFilter + `
-		GROUP BY desired.object_id
-		HAVING MAX(CASE
-		  WHEN a.required_reason IN ('bookmark', 'like', 'manual')
-		    OR a.owner_kind = 'comment_author'` + currentRef + ` THEN 1 ELSE 0 END) = ?
-		ORDER BY MIN(CASE
-		    WHEN a.required_reason IN ('bookmark', 'like', 'manual') THEN 0
-		    WHEN current_ref.rank_position < 2147483647 THEN 1
-		    WHEN current_ref.owner_id IS NOT NULL THEN 2
-		    WHEN a.owner_kind = 'comment_author' THEN 3
-		    ELSE 4 END),
-		  desired.attempts ASC, MIN(current_ref.rank_position),
-		  MAX(current_ref.published_at) DESC, desired.updated_at_ms DESC, desired.id DESC
+		  AND (
+		    desired.object_key NOT LIKE ?
+		    OR EXISTS (
+		      SELECT 1 FROM media_objects source
+		      WHERE source.object_id = substr(desired.object_key, ?)
+		        AND source.published_revision > 0 AND source.file_path != ''
+		    )
+		  )
+		  AND desired.next_attempt_at_ms <= ?
+		  AND (
+		    (desired.job_state = 'queued' AND (desired.lease_until_ms = 0 OR desired.lease_until_ms <= ?))
+		    OR (desired.job_state = 'downloading' AND desired.lease_until_ms <= ?)
+		  )
+		  AND EXISTS (
+		    SELECT 1
+		    FROM assets a INDEXED BY idx_assets_desired_object
+		    WHERE a.desired_object_id = desired.object_id
+		      AND a.lifecycle_state = 'active'
+		      AND ` + contentAssetWorkerOwnerSQL + `
+		  )
+		ORDER BY desired.next_attempt_at_ms ASC, desired.attempts ASC,
+		         desired.updated_at_ms DESC, desired.id DESC
 		LIMIT ?`
-	args = append(args,
-		opts.NowMs, opts.StatusFrom, opts.NowMs, opts.StatusTo, opts.NowMs,
-		wantCurrent, opts.Limit,
-	)
+	args := []any{
+		lane, videoThumbnailObjectKeyPrefix + "%", len(videoThumbnailObjectKeyPrefix) + 1,
+		opts.NowMs, opts.NowMs, opts.NowMs, includeTweets, opts.Limit,
+	}
 	return query, args
 }
 
@@ -237,6 +226,7 @@ func (db *DB) RequeueXContentAssets(ownerIDs []string, includePruned bool, reaso
 			res, err := tx.Exec(`
 				UPDATE media_objects
 				SET job_state = 'queued',
+				    download_lane = CASE WHEN ? IN ('bookmark', 'like', 'manual') THEN 'current' ELSE download_lane END,
 				    attempts = 0, next_attempt_at_ms = 0,
 				    last_error_kind = '', last_error = '',
 				    lease_owner = '', lease_until_ms = 0,
@@ -247,7 +237,7 @@ func (db *DB) RequeueXContentAssets(ownerIDs []string, includePruned bool, reaso
 				    WHERE owner_kind = 'tweet' AND owner_id IN (`+placeholders(len(chunk))+`)
 				      AND asset_kind IN ('post_audio', 'post_media', 'post_thumbnail')
 				  )
-			`, append([]any{nowMs}, stringsToAny(chunk)...)...)
+			`, append([]any{reason, nowMs}, stringsToAny(chunk)...)...)
 			if err != nil {
 				return err
 			}
@@ -263,8 +253,14 @@ func (db *DB) RequeueXContentAssets(ownerIDs []string, includePruned bool, reaso
 }
 
 func (db *DB) WakeContentAssetAuthRetriesForPlatform(platform string) (int, error) {
-	if !strings.EqualFold(strings.TrimSpace(platform), "twitter") {
+	platform = strings.ToLower(strings.TrimSpace(platform))
+	ownerKind, ok := VideoOwnerKindForPlatform(platform)
+	if !ok {
 		return 0, nil
+	}
+	assetKinds := []string{"subtitle"}
+	if ownerKind == "tweet" {
+		assetKinds = []string{"post_audio", "post_media", "post_thumbnail"}
 	}
 	var affected int
 	err := db.WithWrite(func(tx *sql.Tx) error {
@@ -278,10 +274,10 @@ func (db *DB) WakeContentAssetAuthRetriesForPlatform(platform string) (int, erro
 			    SELECT 1 FROM assets a
 			    WHERE a.desired_object_id = mo.object_id
 			      AND a.lifecycle_state = 'active'
-			      AND a.owner_kind = 'tweet'
-			      AND a.asset_kind IN ('post_audio', 'post_media', 'post_thumbnail')
+			      AND a.owner_kind = ?
+			      AND a.asset_kind IN (`+placeholders(len(assetKinds))+`)
 			  )
-		`, time.Now().UnixMilli())
+		`, append([]any{time.Now().UnixMilli(), ownerKind}, stringsToAny(assetKinds)...)...)
 		if err != nil {
 			return err
 		}
@@ -312,6 +308,7 @@ func retireUndesiredXContentObjectsTx(tx *sql.Tx, ownerIDs []string, nowMs int64
 		    WHERE active.desired_object_id = mo.object_id
 		      AND active.lifecycle_state = 'active'
 		  )
+		  AND mo.job_state != 'pruned'
 	`, append([]any{nowMs}, stringsToAny(ownerIDs)...)...)
 	return err
 }
@@ -334,8 +331,8 @@ func requireXContentAssetsForUserStateTx(tx *sql.Tx, tweetIDs []string, reason s
 			return err
 		}
 		_, err = tx.Exec(`
-			UPDATE media_objects
-			SET job_state = 'queued', attempts = 0, next_attempt_at_ms = 0,
+				UPDATE media_objects
+				SET job_state = 'queued', download_lane = 'current', attempts = 0, next_attempt_at_ms = 0,
 			    last_error_kind = '', last_error = '', lease_owner = '', lease_until_ms = 0,
 			    updated_at_ms = ?
 			WHERE source_url != ''

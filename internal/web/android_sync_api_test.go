@@ -237,13 +237,14 @@ func TestAndroidSyncChangesApplyCanonicalFeedRankCap(t *testing.T) {
 	const rows = androidSyncFeedRankMaxRows + 1
 	now := time.Now().UnixMilli()
 	if err := srv.db.ExecRaw(`
+		INSERT INTO channel_follows (channel_id, followed_at) VALUES ('twitter_sample_source', 1);
 		WITH RECURSIVE seq(n) AS (
 			VALUES (1)
 			UNION ALL
 			SELECT n + 1 FROM seq WHERE n < ?
 		)
-		INSERT INTO feed_items (tweet_id, published_at, fetched_at)
-		SELECT printf('sample_rank_%04d', n), ?, ? FROM seq;
+		INSERT INTO feed_items (tweet_id, source_channel_id, channel_id, published_at, fetched_at)
+		SELECT printf('sample_rank_%04d', n), 'twitter_sample_source', 'twitter_sample_source', ?, ? FROM seq;
 		WITH RECURSIVE seq(n) AS (
 			VALUES (1)
 			UNION ALL

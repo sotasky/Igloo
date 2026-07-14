@@ -19,73 +19,6 @@ type TranslationJob struct {
 	Attempts      int
 }
 
-func (db *DB) EnqueueTranslationCandidates(targetLang string, skipLangs []string, limit int) (int, error) {
-	candidates, err := db.ListTranslationCandidates(targetLang, skipLangs, limit)
-	if err != nil {
-		return 0, err
-	}
-	if len(candidates) == 0 {
-		return 0, nil
-	}
-	nowMs := time.Now().UnixMilli()
-	enqueued := 0
-	err = db.WithWrite(func(tx *sql.Tx) error {
-		stmt, err := tx.Prepare(`
-			INSERT INTO translation_jobs (
-				tweet_id, field, target_lang, source_hash, status, priority,
-				attempts, next_attempt_at, last_error_kind, last_error,
-				created_at, updated_at
-			) VALUES (?, ?, ?, ?, 'queued', 0, 0, 0, '', '', ?, ?)
-			ON CONFLICT(tweet_id, field, target_lang) DO UPDATE SET
-				source_hash = excluded.source_hash,
-				status = CASE
-					WHEN translation_jobs.source_hash != excluded.source_hash THEN 'queued'
-					WHEN translation_jobs.status = 'running' THEN 'queued'
-					ELSE translation_jobs.status
-				END,
-				attempts = CASE
-					WHEN translation_jobs.source_hash != excluded.source_hash THEN 0
-					ELSE translation_jobs.attempts
-				END,
-				next_attempt_at = CASE
-					WHEN translation_jobs.source_hash != excluded.source_hash THEN 0
-					WHEN translation_jobs.status = 'running' THEN 0
-					ELSE translation_jobs.next_attempt_at
-				END,
-				last_error_kind = CASE
-					WHEN translation_jobs.source_hash != excluded.source_hash THEN ''
-					ELSE translation_jobs.last_error_kind
-				END,
-				last_error = CASE
-					WHEN translation_jobs.source_hash != excluded.source_hash THEN ''
-					ELSE translation_jobs.last_error
-				END,
-				updated_at = excluded.updated_at
-			WHERE translation_jobs.status != 'done'
-		`)
-		if err != nil {
-			return err
-		}
-		defer func() {
-			_ = stmt.Close()
-		}()
-		for _, c := range candidates {
-			if strings.TrimSpace(c.TweetID) == "" || strings.TrimSpace(c.Field) == "" || strings.TrimSpace(c.SourceText) == "" {
-				continue
-			}
-			res, err := stmt.Exec(c.TweetID, c.Field, targetLang, translationSourceHash(c.SourceText), nowMs, nowMs)
-			if err != nil {
-				return err
-			}
-			if n, _ := res.RowsAffected(); n > 0 {
-				enqueued++
-			}
-		}
-		return nil
-	})
-	return enqueued, err
-}
-
 func (db *DB) ClaimTranslationJob(targetLang string, nowMs int64) (*TranslationJob, error) {
 	jobs, err := db.ClaimTranslationJobs(targetLang, nowMs, 1)
 	if err != nil || len(jobs) == 0 {
@@ -106,7 +39,7 @@ func (db *DB) ClaimTranslationJobs(targetLang string, nowMs int64, limit int) ([
 	err := db.WithWrite(func(tx *sql.Tx) error {
 		rows, err := tx.Query(`
 			SELECT tweet_id, field
-			FROM translation_jobs
+			FROM translation_jobs INDEXED BY idx_translation_jobs_ready
 			WHERE target_lang = ?
 			  AND status = 'queued'
 			  AND next_attempt_at <= ?

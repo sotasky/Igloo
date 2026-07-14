@@ -40,6 +40,7 @@ func (db *DB) ListFeedItemsPage(limit int, cursor *model.FeedCursor, excludeSeen
 	var where []string
 	var args []any
 	where = append(where, feedPrimaryItemPredicate("feed_items"))
+	where = append(where, feedActiveOwnerPredicate("feed_items"))
 
 	muted, _ := db.GetMutedChannelIDs()
 	if len(muted) > 0 {
@@ -904,16 +905,16 @@ func expandSeenConversationIDsTx(tx *sql.Tx, tweetIDs []string) ([]string, error
 			SELECT tweet_id FROM seed
 			UNION
 			SELECT fi.canonical_tweet_id
-			FROM feed_items fi
-			JOIN seed ON seed.tweet_id = fi.tweet_id
+			FROM seed
+			CROSS JOIN feed_items fi ON fi.tweet_id = seed.tweet_id
 			WHERE COALESCE(fi.is_retweet, 0) = 1
 			  AND COALESCE(fi.quote_tweet_id, '') = ''
 			  AND COALESCE(fi.canonical_tweet_id, '') != ''
 		),
 		up(seed_id, tweet_id, reply_to_status, depth) AS (
 			SELECT fi.tweet_id, fi.tweet_id, COALESCE(fi.reply_to_status, ''), 0
-			FROM feed_items fi
-			JOIN resolved_seed ON resolved_seed.tweet_id = fi.tweet_id
+			FROM resolved_seed
+			CROSS JOIN feed_items fi ON fi.tweet_id = resolved_seed.tweet_id
 			UNION
 			SELECT up.seed_id, parent.tweet_id, COALESCE(parent.reply_to_status, ''), up.depth + 1
 			FROM up
@@ -939,17 +940,22 @@ func expandSeenConversationIDsTx(tx *sql.Tx, tweetIDs []string) ([]string, error
 			SELECT child.tweet_id, down.depth + 1
 			FROM down
 			JOIN feed_items child ON child.reply_to_status = down.tweet_id
-			WHERE down.depth < 50
+			WHERE child.reply_to_status IS NOT NULL
+			  AND child.reply_to_status != ''
+			  AND down.depth < 50
 		)
 		SELECT tweet_id FROM seed
 		UNION
 		SELECT tweet_id FROM down
 		UNION
 		SELECT repost.tweet_id
-		FROM feed_items repost
-		JOIN down ON down.tweet_id = repost.canonical_tweet_id
+		FROM down
+		CROSS JOIN feed_items repost INDEXED BY idx_feed_items_canonical_tweet
+		  ON repost.canonical_tweet_id = down.tweet_id
 		WHERE COALESCE(repost.is_retweet, 0) = 1
 		  AND COALESCE(repost.quote_tweet_id, '') = ''
+		  AND repost.canonical_tweet_id IS NOT NULL
+		  AND repost.canonical_tweet_id != ''
 	`, args...)
 	if err != nil {
 		return nil, err
@@ -1004,11 +1010,21 @@ func (db *DB) UnmuteAccount(handle string) error {
 	return err
 }
 
+type FeedUpsertResult struct {
+	Processed              int
+	XMediaRetentionChanges map[string][]string
+}
+
 // UpsertFeedItems inserts or updates feed_items rows, matching the Python upsert logic.
 // Returns the number of items processed.
 func (db *DB) UpsertFeedItems(items []model.FeedItem) (int, error) {
+	result, err := db.UpsertFeedItemsDetailed(items)
+	return result.Processed, err
+}
+
+func (db *DB) UpsertFeedItemsDetailed(items []model.FeedItem) (FeedUpsertResult, error) {
 	if len(items) == 0 {
-		return 0, nil
+		return FeedUpsertResult{}, nil
 	}
 	normalizedItems := make([]model.FeedItem, 0, len(items))
 	for _, item := range items {
@@ -1021,11 +1037,66 @@ func (db *DB) UpsertFeedItems(items []model.FeedItem) (int, error) {
 		normalizedItems = append(normalizedItems, item)
 	}
 	if len(normalizedItems) == 0 {
-		return 0, nil
+		return FeedUpsertResult{}, nil
 	}
 
-	var total int
+	result := FeedUpsertResult{}
+	changedByChannel := make(map[string]map[string]struct{})
 	err := db.WithWrite(func(tx *sql.Tx) error {
+		var translationTargetLang string
+		if err := tx.QueryRow(`
+			SELECT COALESCE((
+				SELECT NULLIF(value, '')
+				FROM settings
+				WHERE key = 'translate_target_lang'
+			), 'en')
+		`).Scan(&translationTargetLang); err != nil {
+			return err
+		}
+		translationTargetLang = strings.ToLower(strings.TrimSpace(translationTargetLang))
+		if translationTargetLang == "" {
+			translationTargetLang = "en"
+		}
+
+		invalidateTranslationStmt, err := tx.Prepare(`
+			DELETE FROM translations
+			WHERE tweet_id = ? AND field = ? AND target_lang = ?
+			  AND EXISTS (
+				SELECT 1
+				FROM translation_jobs
+				WHERE translation_jobs.tweet_id = translations.tweet_id
+				  AND translation_jobs.field = translations.field
+				  AND translation_jobs.target_lang = translations.target_lang
+				  AND translation_jobs.source_hash != ?
+			  )
+		`)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = invalidateTranslationStmt.Close() }()
+
+		translationJobStmt, err := tx.Prepare(`
+			INSERT INTO translation_jobs (
+				tweet_id, field, target_lang, source_hash, status, priority,
+				attempts, next_attempt_at, last_error_kind, last_error,
+				created_at, updated_at
+			) VALUES (?, ?, ?, ?, 'queued', 1, 0, 0, '', '', ?, ?)
+			ON CONFLICT(tweet_id, field, target_lang) DO UPDATE SET
+				source_hash = excluded.source_hash,
+				status = 'queued',
+				priority = 1,
+				attempts = 0,
+				next_attempt_at = 0,
+				last_error_kind = '',
+				last_error = '',
+				updated_at = excluded.updated_at
+			WHERE translation_jobs.source_hash != excluded.source_hash
+		`)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = translationJobStmt.Close() }()
+
 		stmt, err := tx.Prepare(`
 			INSERT INTO feed_items (
 				tweet_id, source_channel_id, channel_id,
@@ -1139,6 +1210,61 @@ func (db *DB) UpsertFeedItems(items []model.FeedItem) (int, error) {
 					WHEN COALESCE(feed_items.reposter_channel_id, '') = '' THEN excluded.reposter_channel_id
 					ELSE feed_items.reposter_channel_id
 				END
+			WHERE (excluded.source_channel_id IS NOT NULL
+			       AND feed_items.source_channel_id IS NOT excluded.source_channel_id)
+			   OR (COALESCE(feed_items.channel_id, '') = ''
+			       AND feed_items.channel_id IS NOT excluded.channel_id)
+			   OR (excluded.body_text IS NOT NULL AND excluded.body_text != ''
+			       AND feed_items.body_text IS NOT excluded.body_text)
+			   OR (excluded.lang IS NOT NULL AND excluded.lang != ''
+			       AND (feed_items.lang IS NULL OR feed_items.lang = ''
+			            OR LOWER(feed_items.lang) IN ('und','unknown','qam','qct','qht','qme','qst','zxx')
+			            OR (LOWER(feed_items.lang) GLOB 'q??' AND length(feed_items.lang) = 3))
+			       AND feed_items.lang IS NOT excluded.lang)
+			   OR (excluded.media_json IS NOT NULL
+			       AND feed_items.media_json IS NOT excluded.media_json)
+			   OR (excluded.canonical_url IS NOT NULL AND excluded.canonical_url != ''
+			       AND (COALESCE(feed_items.canonical_url, '') = ''
+			            OR LOWER(feed_items.canonical_url) LIKE '%/unknown/status/%'
+			            OR LOWER(feed_items.canonical_url) LIKE '%/undefined/status/%')
+			       AND feed_items.canonical_url IS NOT excluded.canonical_url)
+			   OR (COALESCE(feed_items.quote_tweet_id, '') = ''
+			       AND feed_items.quote_tweet_id IS NOT excluded.quote_tweet_id)
+			   OR (COALESCE(feed_items.quote_channel_id, '') = ''
+			       AND feed_items.quote_channel_id IS NOT excluded.quote_channel_id)
+			   OR (COALESCE(feed_items.quote_body_text, '') = ''
+			       AND excluded.quote_body_text IS NOT NULL
+			       AND feed_items.quote_body_text IS NOT excluded.quote_body_text)
+			   OR (excluded.quote_lang IS NOT NULL AND excluded.quote_lang != ''
+			       AND (feed_items.quote_lang IS NULL OR feed_items.quote_lang = ''
+			            OR LOWER(feed_items.quote_lang) IN ('und','unknown','qam','qct','qht','qme','qst','zxx')
+			            OR (LOWER(feed_items.quote_lang) GLOB 'q??' AND length(feed_items.quote_lang) = 3))
+			       AND feed_items.quote_lang IS NOT excluded.quote_lang)
+			   OR (COALESCE(feed_items.quote_media_json, '') = ''
+			       AND excluded.quote_media_json IS NOT NULL
+			       AND feed_items.quote_media_json IS NOT excluded.quote_media_json)
+			   OR (excluded.views IS NOT NULL AND feed_items.views IS NOT excluded.views)
+			   OR (excluded.likes IS NOT NULL AND feed_items.likes IS NOT excluded.likes)
+			   OR (excluded.retweets IS NOT NULL AND feed_items.retweets IS NOT excluded.retweets)
+			   OR (COALESCE(feed_items.fetched_at, 0) <= 0
+			       AND feed_items.fetched_at IS NOT excluded.fetched_at)
+			   OR (excluded.content_hash IS NOT NULL
+			       AND feed_items.content_hash IS NOT excluded.content_hash)
+			   OR (feed_items.canonical_tweet_id IS NOT excluded.canonical_tweet_id
+			       AND ((COALESCE(excluded.is_retweet, 0) = 1
+			             AND COALESCE(excluded.quote_tweet_id, '') = ''
+			             AND COALESCE(excluded.canonical_tweet_id, '') != '')
+			            OR COALESCE(feed_items.canonical_tweet_id, '') = ''))
+			   OR (excluded.is_reply > 0 AND feed_items.is_reply IS NOT excluded.is_reply)
+			   OR (COALESCE(feed_items.is_ghost, 0) > 0
+			       AND COALESCE(excluded.is_ghost, 0) = 0)
+			   OR (excluded.reply_channel_id IS NOT NULL AND excluded.reply_channel_id != ''
+			       AND feed_items.reply_channel_id IS NOT excluded.reply_channel_id)
+			   OR (excluded.reply_to_status IS NOT NULL AND excluded.reply_to_status != ''
+			       AND feed_items.reply_to_status IS NOT excluded.reply_to_status)
+			   OR (COALESCE(feed_items.reposter_channel_id, '') = ''
+			       AND feed_items.reposter_channel_id IS NOT excluded.reposter_channel_id)
+			RETURNING tweet_id, COALESCE(body_text, ''), COALESCE(quote_body_text, '')
 		`)
 		if err != nil {
 			return err
@@ -1148,10 +1274,25 @@ func (db *DB) UpsertFeedItems(items []model.FeedItem) (int, error) {
 		}()
 
 		nowMs := time.Now().UnixMilli()
+		enqueueTranslation := func(tweetID, field, sourceText string) error {
+			if strings.TrimSpace(sourceText) == "" {
+				return nil
+			}
+			sourceHash := translationSourceHash(sourceText)
+			if _, err := invalidateTranslationStmt.Exec(
+				tweetID, field, translationTargetLang, sourceHash,
+			); err != nil {
+				return err
+			}
+			_, err := translationJobStmt.Exec(
+				tweetID, field, translationTargetLang, sourceHash, nowMs, nowMs,
+			)
+			return err
+		}
 		for _, item := range normalizedItems {
 			pubMs := timePtrToMillis(item.PublishedAt)
 			quotePubMs := timePtrToMillis(item.QuotePublishedAt)
-			_, err := stmt.Exec(
+			row := stmt.QueryRow(
 				item.TweetID,
 				nilIfEmpty(item.SourceChannelID),
 				nilIfEmpty(item.ChannelID),
@@ -1179,10 +1320,21 @@ func (db *DB) UpsertFeedItems(items []model.FeedItem) (int, error) {
 				nilIfEmpty(item.ContentHash),
 				nilIfEmpty(item.CanonicalTweetID),
 			)
-			if err != nil {
+			var storedTweetID, finalBodyText, finalQuoteBodyText string
+			err := row.Scan(&storedTweetID, &finalBodyText, &finalQuoteBodyText)
+			if err != nil && err != sql.ErrNoRows {
 				return err
 			}
-			total++
+			result.Processed++
+			if err == sql.ErrNoRows {
+				continue
+			}
+			if err := enqueueTranslation(storedTweetID, "body", finalBodyText); err != nil {
+				return err
+			}
+			if err := enqueueTranslation(storedTweetID, "quote", finalQuoteBodyText); err != nil {
+				return err
+			}
 		}
 
 		for _, observation := range collectFeedProfileObservations(normalizedItems, nowMs) {
@@ -1191,16 +1343,33 @@ func (db *DB) UpsertFeedItems(items []model.FeedItem) (int, error) {
 			}
 		}
 		for _, item := range normalizedItems {
-			if err := declareXContentAssetsTx(tx, item, nowMs); err != nil {
+			changed, err := declareXContentAssetsTx(tx, item, nowMs)
+			if err != nil {
 				return err
 			}
+			if !changed {
+				continue
+			}
+			channelID := xMediaRetentionChannelID(item)
+			if channelID == "" {
+				continue
+			}
+			if changedByChannel[channelID] == nil {
+				changedByChannel[channelID] = make(map[string]struct{})
+			}
+			changedByChannel[channelID][item.TweetID] = struct{}{}
 		}
 
 		// --- Populate retweet_sources for retweet items ---
 		rtStmt, err := tx.Prepare(`
-			INSERT OR REPLACE INTO retweet_sources
+			INSERT INTO retweet_sources
 				(content_hash, retweeter_channel_id, tweet_id, published_at)
 			VALUES (?, ?, ?, ?)
+			ON CONFLICT(content_hash, retweeter_channel_id) DO UPDATE SET
+				tweet_id = excluded.tweet_id,
+				published_at = excluded.published_at
+			WHERE retweet_sources.tweet_id IS NOT excluded.tweet_id
+			   OR retweet_sources.published_at IS NOT excluded.published_at
 		`)
 		if err != nil {
 			return err
@@ -1241,17 +1410,30 @@ func (db *DB) UpsertFeedItems(items []model.FeedItem) (int, error) {
 				hashArgs = append(hashArgs, h)
 			}
 			_, err := tx.Exec(`
+				WITH desired AS MATERIALIZED (
+					SELECT item.tweet_id,
+					       item.canonical_tweet_id AS stored_canonical,
+					       COALESCE((
+						SELECT f2.tweet_id FROM feed_items f2
+						WHERE f2.content_hash = item.content_hash
+						  AND f2.content_hash != ''
+						  AND COALESCE(f2.is_retweet, 0) = 0
+						ORDER BY f2.published_at ASC, f2.tweet_id ASC
+						LIMIT 1
+					       ), NULLIF(item.canonical_tweet_id, ''), item.tweet_id) AS desired_canonical
+					FROM feed_items item
+					WHERE item.content_hash IN (`+ph+`)
+					  AND item.content_hash != ''
+				)
 				UPDATE feed_items
-				SET canonical_tweet_id = COALESCE((
-					SELECT f2.tweet_id FROM feed_items f2
-					WHERE f2.content_hash = feed_items.content_hash
-					  AND f2.content_hash != ''
-					  AND COALESCE(f2.is_retweet, 0) = 0
-					ORDER BY f2.published_at ASC, f2.tweet_id ASC
-					LIMIT 1
-				), NULLIF(feed_items.canonical_tweet_id, ''), feed_items.tweet_id)
-				WHERE content_hash IN (`+ph+`)
-				  AND content_hash != ''
+				SET canonical_tweet_id = (
+					SELECT desired_canonical FROM desired
+					WHERE desired.tweet_id = feed_items.tweet_id
+				)
+				WHERE tweet_id IN (
+					SELECT tweet_id FROM desired
+					WHERE stored_canonical IS NOT desired_canonical
+				)
 			`, hashArgs...)
 			if err != nil {
 				return err
@@ -1261,9 +1443,25 @@ func (db *DB) UpsertFeedItems(items []model.FeedItem) (int, error) {
 		return nil
 	})
 	if err != nil {
-		return 0, err
+		return FeedUpsertResult{}, err
 	}
-	return total, nil
+	if len(changedByChannel) > 0 {
+		result.XMediaRetentionChanges = make(map[string][]string, len(changedByChannel))
+		for channelID, tweetIDs := range changedByChannel {
+			result.XMediaRetentionChanges[channelID] = sortedKeys(tweetIDs)
+		}
+	}
+	return result, nil
+}
+
+func xMediaRetentionChannelID(item model.FeedItem) string {
+	if item.IsRetweet && item.ReposterChannelID != "" {
+		return item.ReposterChannelID
+	}
+	if item.SourceChannelID != "" {
+		return item.SourceChannelID
+	}
+	return item.ChannelID
 }
 
 func normalizeFeedItemIdentity(item model.FeedItem) model.FeedItem {
@@ -1381,6 +1579,8 @@ func (db *DB) GetLatestFeedItem() (*model.FeedItem, error) {
 	rows, err := db.reader().Query(`
 		SELECT ` + feedItemSelectSQL("feed_items") + `
 		FROM feed_items_resolved AS feed_items
+		WHERE ` + feedPrimaryItemPredicate("feed_items") + `
+		  AND ` + feedActiveOwnerPredicate("feed_items") + `
 		ORDER BY published_at DESC, tweet_id DESC
 		LIMIT 1
 	`)
@@ -1406,6 +1606,7 @@ func (db *DB) GetLatestFetchedFeedItem() (*model.FeedItem, error) {
 		SELECT ` + feedItemSelectSQL("feed_items") + `
 		FROM feed_items_resolved AS feed_items
 		WHERE ` + feedPrimaryItemPredicate("feed_items") + `
+		  AND ` + feedActiveOwnerPredicate("feed_items") + `
 		  AND (canonical_tweet_id IS NULL OR canonical_tweet_id = '' OR canonical_tweet_id = tweet_id)
 		  AND ` + retweetFilterClause("feed_items") + `
 		ORDER BY fetched_at DESC, tweet_id DESC
@@ -1433,6 +1634,7 @@ func (db *DB) GetLatestFetchedFeedItemID() (string, error) {
 		SELECT tweet_id
 		FROM feed_items
 		WHERE ` + feedPrimaryItemPredicate("feed_items") + `
+		  AND ` + feedActiveOwnerPredicate("feed_items") + `
 		  AND (canonical_tweet_id IS NULL OR canonical_tweet_id = '' OR canonical_tweet_id = tweet_id)
 		  AND ` + retweetFilterClause("feed_items") + `
 		ORDER BY fetched_at DESC, tweet_id DESC
@@ -1507,7 +1709,9 @@ func (db *DB) GetNewPosterAvatars(knownHeadTweetID string, limit int) ([]model.N
 			FROM feed_rank_snapshot s
 			JOIN feed_items fi ON fi.tweet_id = s.tweet_id
 			` + profileJoin + `
-			WHERE fi.fetched_at > ?` + muteSQL + `
+			WHERE fi.fetched_at > ?
+			  AND ` + feedPrimaryItemPredicate("fi") + `
+			  AND ` + feedActiveOwnerPredicate("fi") + muteSQL + `
 			ORDER BY s.final_score DESC
 		`
 	snapArgs := append([]any{knownFetchedAt.Int64}, muteArgs...)
@@ -1529,7 +1733,9 @@ func (db *DB) GetNewPosterAvatars(knownHeadTweetID string, limit int) ([]model.N
 			SELECT fi.channel_id, COALESCE(cp.handle,''), COALESCE(cp.display_name,'')
 			FROM feed_items fi
 			` + profileJoin + `
-			WHERE fi.fetched_at > ?` + muteSQL + `
+			WHERE fi.fetched_at > ?
+			  AND ` + feedPrimaryItemPredicate("fi") + `
+			  AND ` + feedActiveOwnerPredicate("fi") + muteSQL + `
 			ORDER BY fi.fetched_at DESC, fi.tweet_id DESC
 			LIMIT 50
 		`
@@ -1587,6 +1793,7 @@ func (db *DB) ListFeedItemsFiltered(limit int, cursor *model.FeedCursor, sourceH
 	var where []string
 	var args []any
 	where = append(where, feedPrimaryItemPredicate("feed_items"))
+	where = append(where, feedActiveOwnerPredicate("feed_items"))
 
 	muted, _ := db.GetMutedChannelIDs()
 	if len(muted) > 0 {

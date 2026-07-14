@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"testing"
 )
 
@@ -194,9 +195,11 @@ func TestRetweetFilter_RankedPath_DedupAware(t *testing.T) {
 	fixtureRetweetSource(t, d, "hashR", "muted_a", "rt_ranked")
 	fixtureRetweetSource(t, d, "hashR", "open_b", "rt_ranked_b")
 
-	items, err := d.ListRankedFeedItems(100, 0)
+	items, err := d.ListPreDiversityRankedCandidatesContext(
+		context.Background(), []string{"rt_ranked"}, 0,
+	)
 	if err != nil {
-		t.Fatalf("ListRankedFeedItems: %v", err)
+		t.Fatalf("ListPreDiversityRankedCandidatesContext: %v", err)
 	}
 	found := false
 	for _, it := range items {

@@ -16,6 +16,12 @@ func seedFeedItem(t *testing.T, d *DB, tweetID, author string, published int64) 
 func seedFeedItemFetched(t *testing.T, d *DB, tweetID, author string, published, fetched int64) {
 	t.Helper()
 	if _, err := d.conn.Exec(`
+		INSERT OR IGNORE INTO channel_follows (channel_id, followed_at)
+		VALUES (?, ?)
+	`, "twitter_"+author, fetched); err != nil {
+		t.Fatalf("seed follow %s: %v", author, err)
+	}
+	if _, err := d.conn.Exec(`
 		INSERT OR IGNORE INTO channel_profiles (channel_id, platform, handle, observed_at_ms)
 		VALUES (?, 'twitter', ?, ?)
 	`, "twitter_"+author, author, fetched); err != nil {

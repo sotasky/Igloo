@@ -168,7 +168,18 @@ func videoRefFromGalleryDLObject(item map[string]any, reposterHandle string) Vid
 	ref.URL = firstString(item, "webpage_url", "post_url", "url", "permalink")
 	ref.AuthorHandle = tikTokAuthorHandleFromGalleryDLObject(item, ref.URL)
 	ref.AuthorDisplayName = firstString(item, "author_display_name", "nickname", "uploader")
-	ref.RepostedAtMs = firstMillis(item, "reposted_at", "repost_time", "date", "timestamp", "created_at")
+	ref.PublishedAtMs = firstMillis(item, "createTime", "date", "timestamp", "created_at")
+	if ref.PublishedAtMs == 0 {
+		if publishedAt := firstTime(item, "createTime", "date", "timestamp", "created_at"); publishedAt != nil {
+			ref.PublishedAtMs = publishedAt.UnixMilli()
+		}
+	}
+	ref.RepostedAtMs = firstMillis(item, "reposted_at", "repost_time", "repostedAt", "repostTime")
+	if ref.RepostedAtMs == 0 {
+		if repostedAt := firstTime(item, "reposted_at", "repost_time", "repostedAt", "repostTime"); repostedAt != nil {
+			ref.RepostedAtMs = repostedAt.UnixMilli()
+		}
+	}
 	if ref.VideoID == "" {
 		if _, id := parseTikTokPostURL(ref.URL); id != "" {
 			ref.VideoID = id
@@ -367,7 +378,7 @@ func (g *GalleryDLWrapper) DownloadCompleted(ctx context.Context, rawURL, destDi
 	}
 	args = appendCookieAuthArgs(args, cookiesFile, browser)
 	args = append(args, rawURL)
-	result := g.Run(ctx, "media.gallerydl", platformFromURL(rawURL), rawURL, args, cookiesFile, CommandOptions{Timeout: galleryDLDefaultTimeout}, browser)
+	result := g.Runner.Run(ctx, "gallery-dl", args, CommandOptions{Timeout: galleryDLDefaultTimeout})
 	output := result.CombinedOutput()
 	err = result.Err
 	if strings.Contains(string(output), "Requested post not available") {
@@ -406,6 +417,7 @@ func (g *GalleryDLWrapper) DownloadCompleted(ctx context.Context, rawURL, destDi
 		}
 		published = append(published, destPath)
 		completed.InfoJSONPath = destPath
+		completed.Metadata = metadataFromFile(destPath)
 	}
 
 	// Separate media. Videos win over images for reel-style posts; image-only

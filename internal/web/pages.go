@@ -1053,7 +1053,6 @@ func (s *Server) handlePageFeed(w http.ResponseWriter, r *http.Request) {
 	}
 
 	p := s.pageProps(w, r)
-	p.TrackFeedSeen = true
 
 	// HTMX infinite scroll — return just items + next sentinel
 	if isHTMX {

@@ -120,6 +120,12 @@ func (m *Manager) processPreviewBatchMode(ctx context.Context, now time.Time, al
 		log.Printf("[preview] list pending previews: %v", err)
 		return false, time.Minute
 	}
+	if len(candidates) == 0 {
+		m.previewMu.Lock()
+		m.previewBackfillNotBefore = now.Add(previewBackfillInterval)
+		m.previewMu.Unlock()
+		return false, previewBackfillInterval
+	}
 	var retryDelay time.Duration
 	for _, candidate := range candidates {
 		delay := m.previewRetryDelay(candidate, now)

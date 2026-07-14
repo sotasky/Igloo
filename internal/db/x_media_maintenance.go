@@ -67,6 +67,9 @@ func (db *DB) PruneXMediaRetentionForChannel(channelID string, opts XMediaRetent
 		return result, err
 	}
 	pruneIDs := addXRetentionStats(&result, items, limit)
+	if len(pruneIDs) == 0 {
+		return result, nil
+	}
 	candidates, err := db.xAssetOwnerIDsForTweets(pruneIDs)
 	if err != nil {
 		return result, err
@@ -75,7 +78,44 @@ func (db *DB) PruneXMediaRetentionForChannel(channelID string, opts XMediaRetent
 	if err != nil {
 		return result, err
 	}
-	return db.reconcileXMediaOwnerSet(result, retained, candidates, false, normalizeNowMs(opts.NowMs))
+	return db.reconcileXMediaOwnerSet(result, retained, candidates, false, DownloadLaneBackfill, normalizeNowMs(opts.NowMs))
+}
+
+func (db *DB) ReconcileXMediaRetentionChanges(channelID string, changedTweetIDs []string, opts XMediaRetentionOptions) (XMediaRetentionResult, error) {
+	result := XMediaRetentionResult{DryRun: opts.DryRun, Limit: 1, RetentionLimit: opts.RetentionLimit}
+	source, ok := xRetentionSourceFromChannelID(channelID)
+	if !ok {
+		return result, nil
+	}
+	changedTweetIDs = uniqueStrings(changedTweetIDs)
+	if len(changedTweetIDs) == 0 {
+		return result, nil
+	}
+	limit, err := db.xRetentionLimit(source, opts.RetentionLimit)
+	if err != nil || limit <= 0 {
+		return result, err
+	}
+	result.RetentionLimit = limit
+	result.SourcesScanned = 1
+	retainedTweets, displaced, err := db.xMediaRetentionWindowAndBoundary(channelID, limit, len(changedTweetIDs))
+	if err != nil {
+		return result, err
+	}
+	result.KeptItems = len(retainedTweets)
+	result.PrunedItems = len(displaced)
+	if len(displaced) > 0 {
+		result.SourcesOverLimit = 1
+	}
+	candidates, err := db.xAssetOwnerIDsForTweets(append(changedTweetIDs, displaced...))
+	if err != nil {
+		return result, err
+	}
+	nowMs := normalizeNowMs(opts.NowMs)
+	retained, err := db.xRetainedMediaOwnerSet(nowMs, opts.RetentionLimit, candidates)
+	if err != nil {
+		return result, err
+	}
+	return db.reconcileXMediaOwnerSet(result, retained, candidates, false, DownloadLaneCurrent, nowMs)
 }
 
 func (db *DB) PruneXMediaRetention(opts XMediaRetentionOptions) (XMediaRetentionResult, error) {
@@ -138,9 +178,38 @@ func (db *DB) PruneXMediaRetention(opts XMediaRetentionOptions) (XMediaRetention
 		if err != nil {
 			return result, err
 		}
-		return db.reconcileXMediaOwnerSet(result, retained, candidates, false, nowMs)
+		return db.reconcileXMediaOwnerSet(result, retained, candidates, false, DownloadLaneBackfill, nowMs)
 	}
-	return db.reconcileXMediaOwnerSet(result, retained, nil, true, nowMs)
+	return db.reconcileXMediaOwnerSet(result, retained, nil, true, DownloadLaneBackfill, nowMs)
+}
+
+func (db *DB) RestoreXMediaRetentionForChannel(channelID string, nowMs int64) (XMediaRetentionResult, error) {
+	result := XMediaRetentionResult{Limit: 1}
+	source, ok := xRetentionSourceFromChannelID(channelID)
+	if !ok {
+		return result, nil
+	}
+	limit, err := db.xRetentionLimit(source, 0)
+	if err != nil || limit <= 0 {
+		return result, err
+	}
+	result.RetentionLimit = limit
+	items, err := db.xMediaRetentionItems(channelID)
+	if err != nil {
+		return result, err
+	}
+	result.SourcesScanned = 1
+	candidates, err := db.xAssetOwnerIDsForTweets(retainedXMediaTweetIDs(items, limit))
+	if err != nil || len(candidates) == 0 {
+		return result, err
+	}
+	nowMs = normalizeNowMs(nowMs)
+	retained, err := db.xRetainedMediaOwnerSet(nowMs, 0, candidates)
+	if err != nil {
+		return result, err
+	}
+	result.AssetsRestored, err = db.restorePrunedXMediaOwners(sortedKeys(retained), DownloadLaneBackfill, nowMs)
+	return result, err
 }
 
 func (db *DB) RestoreXMediaForAndroidFeed(feedDays int, nowMs int64) (XMediaRetentionResult, error) {
@@ -153,7 +222,7 @@ func (db *DB) RestoreXMediaForAndroidFeed(feedDays int, nowMs int64) (XMediaRete
 	if err != nil {
 		return result, err
 	}
-	restored, err := db.restorePrunedXMediaOwners(sortedKeys(retained), nowMs)
+	restored, err := db.restorePrunedXMediaOwners(sortedKeys(retained), DownloadLaneBackfill, nowMs)
 	result.AssetsRestored = restored
 	return result, err
 }
@@ -337,14 +406,8 @@ func (db *DB) addCandidateServerXMediaOwners(retained, candidates map[string]str
 	parentIDs := map[string]struct{}{}
 	sourceIDs := map[string]struct{}{}
 	for _, chunk := range stringChunks(sortedKeys(candidates), 300) {
-		args := append(stringsToAny(chunk), stringsToAny(chunk)...)
-		rows, err := db.conn.Query(`
-			SELECT tweet_id,
-			       COALESCE(NULLIF(reposter_channel_id, ''), NULLIF(source_channel_id, ''), channel_id)
-			FROM feed_items
-			WHERE tweet_id IN (`+placeholders(len(chunk))+`)
-			   OR quote_tweet_id IN (`+placeholders(len(chunk))+`)
-		`, args...)
+		query, args := candidateServerXMediaParentsQuery(chunk)
+		rows, err := db.conn.Query(query, args...)
 		if err != nil {
 			return err
 		}
@@ -399,11 +462,11 @@ func (db *DB) addCandidateServerXMediaOwners(retained, candidates map[string]str
 		if err != nil {
 			return err
 		}
-		items, err := db.xMediaRetentionItems(sourceID)
+		items, _, err := db.xMediaRetentionWindowAndBoundary(sourceID, limit, 0)
 		if err != nil {
 			return err
 		}
-		retainedTweets = append(retainedTweets, retainedXMediaTweetIDs(items, limit)...)
+		retainedTweets = append(retainedTweets, items...)
 	}
 
 	feedSourceIDs := map[string]struct{}{}
@@ -436,11 +499,37 @@ func (db *DB) addCandidateServerXMediaOwners(retained, candidates map[string]str
 		feedLimit = 1
 	}
 	for _, sourceID := range sortedKeys(feedSourceIDs) {
-		items, err := db.xFeedSourceRetentionItems(sourceID)
+		items, err := db.xFeedSourceRetainedTweetIDs(sourceID, feedLimit)
 		if err != nil {
 			return err
 		}
-		retainedTweets = append(retainedTweets, retainedXMediaTweetIDs(items, feedLimit)...)
+		retainedTweets = append(retainedTweets, items...)
+	}
+	for _, chunk := range stringChunks(sortedKeys(parentIDs), 400) {
+		args := stringsToAny(chunk)
+		rows, err := db.conn.Query(`
+			SELECT video_id FROM bookmarks
+			WHERE video_id IN (`+placeholders(len(chunk))+`)
+			UNION
+			SELECT tweet_id FROM feed_likes
+			WHERE tweet_id IN (`+placeholders(len(chunk))+`)
+		`, append(append([]any{}, args...), args...)...)
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var tweetID string
+			if err := rows.Scan(&tweetID); err != nil {
+				_ = rows.Close()
+				return err
+			}
+			retainedTweets = append(retainedTweets, tweetID)
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		_ = rows.Close()
 	}
 	ownerIDs, err := db.xAssetOwnerIDsForTweets(retainedTweets)
 	if err != nil {
@@ -489,9 +578,27 @@ func (db *DB) addCandidateServerXMediaOwners(retained, candidates map[string]str
 	return nil
 }
 
-func (db *DB) reconcileXMediaOwnerSet(result XMediaRetentionResult, retained map[string]struct{}, candidates []string, pruneAll bool, nowMs int64) (XMediaRetentionResult, error) {
+func candidateServerXMediaParentsQuery(ownerIDs []string) (string, []any) {
+	ids := placeholders(len(ownerIDs))
+	query := `
+		SELECT tweet_id,
+		       COALESCE(NULLIF(reposter_channel_id, ''), NULLIF(source_channel_id, ''), channel_id)
+		FROM feed_items
+		WHERE tweet_id IN (` + ids + `)
+
+		UNION ALL
+
+		SELECT tweet_id,
+		       COALESCE(NULLIF(reposter_channel_id, ''), NULLIF(source_channel_id, ''), channel_id)
+		FROM feed_items INDEXED BY idx_feed_items_quote
+		WHERE quote_tweet_id IS NOT NULL AND quote_tweet_id != ''
+		  AND quote_tweet_id IN (` + ids + `)`
+	return query, append(stringsToAny(ownerIDs), stringsToAny(ownerIDs)...)
+}
+
+func (db *DB) reconcileXMediaOwnerSet(result XMediaRetentionResult, retained map[string]struct{}, candidates []string, pruneAll bool, restoreLane DownloadLane, nowMs int64) (XMediaRetentionResult, error) {
 	if !result.DryRun {
-		restored, err := db.restorePrunedXMediaOwners(sortedKeys(retained), nowMs)
+		restored, err := db.restorePrunedXMediaOwners(sortedKeys(retained), restoreLane, nowMs)
 		if err != nil {
 			return result, err
 		}
@@ -600,44 +707,47 @@ func (db *DB) xRetentionLimit(source xRetentionSource, override int) (int, error
 	return settings.MediaDownloadLimit, nil
 }
 
+const xMediaRetentionSourceItemsSQL = `
+	SELECT fi.tweet_id, fi.published_at
+	FROM feed_items fi INDEXED BY idx_feed_items_reposter_channel
+	WHERE fi.reposter_channel_id IS NOT NULL
+	  AND fi.reposter_channel_id != ''
+	  AND fi.reposter_channel_id = ?
+	  AND (
+	    COALESCE(fi.media_json, '') NOT IN ('', '[]')
+	    OR COALESCE(fi.quote_media_json, '') NOT IN ('', '[]')
+	    OR EXISTS (SELECT 1 FROM assets a WHERE a.owner_kind = 'tweet' AND a.owner_id = fi.tweet_id)
+	  )
+
+	UNION ALL
+
+	SELECT fi.tweet_id, fi.published_at
+	FROM feed_items fi INDEXED BY idx_feed_items_source_channel
+	WHERE COALESCE(fi.reposter_channel_id, '') = ''
+	  AND fi.source_channel_id = ?
+	  AND (
+	    COALESCE(fi.media_json, '') NOT IN ('', '[]')
+	    OR COALESCE(fi.quote_media_json, '') NOT IN ('', '[]')
+	    OR EXISTS (SELECT 1 FROM assets a WHERE a.owner_kind = 'tweet' AND a.owner_id = fi.tweet_id)
+	  )
+
+	UNION ALL
+
+	SELECT fi.tweet_id, fi.published_at
+	FROM feed_items fi INDEXED BY idx_feed_items_channel
+	WHERE COALESCE(fi.reposter_channel_id, '') = ''
+	  AND COALESCE(fi.source_channel_id, '') = ''
+	  AND fi.channel_id = ?
+	  AND (
+	    COALESCE(fi.media_json, '') NOT IN ('', '[]')
+	    OR COALESCE(fi.quote_media_json, '') NOT IN ('', '[]')
+	    OR EXISTS (SELECT 1 FROM assets a WHERE a.owner_kind = 'tweet' AND a.owner_id = fi.tweet_id)
+	  )`
+
 func (db *DB) xMediaRetentionItems(channelID string) ([]xRetentionItem, error) {
 	rows, err := db.conn.Query(`
 		WITH source_items AS (
-			SELECT fi.tweet_id, fi.published_at
-			FROM feed_items fi INDEXED BY idx_feed_items_reposter_channel
-			WHERE fi.reposter_channel_id IS NOT NULL
-			  AND fi.reposter_channel_id != ''
-			  AND fi.reposter_channel_id = ?
-			  AND (
-			    COALESCE(fi.media_json, '') NOT IN ('', '[]')
-			    OR COALESCE(fi.quote_media_json, '') NOT IN ('', '[]')
-			    OR EXISTS (SELECT 1 FROM assets a WHERE a.owner_kind = 'tweet' AND a.owner_id = fi.tweet_id)
-			  )
-
-			UNION ALL
-
-			SELECT fi.tweet_id, fi.published_at
-			FROM feed_items fi INDEXED BY idx_feed_items_source_channel
-			WHERE COALESCE(fi.reposter_channel_id, '') = ''
-			  AND fi.source_channel_id = ?
-			  AND (
-			    COALESCE(fi.media_json, '') NOT IN ('', '[]')
-			    OR COALESCE(fi.quote_media_json, '') NOT IN ('', '[]')
-			    OR EXISTS (SELECT 1 FROM assets a WHERE a.owner_kind = 'tweet' AND a.owner_id = fi.tweet_id)
-			  )
-
-			UNION ALL
-
-			SELECT fi.tweet_id, fi.published_at
-			FROM feed_items fi INDEXED BY idx_feed_items_channel
-			WHERE COALESCE(fi.reposter_channel_id, '') = ''
-			  AND COALESCE(fi.source_channel_id, '') = ''
-			  AND fi.channel_id = ?
-			  AND (
-			    COALESCE(fi.media_json, '') NOT IN ('', '[]')
-			    OR COALESCE(fi.quote_media_json, '') NOT IN ('', '[]')
-			    OR EXISTS (SELECT 1 FROM assets a WHERE a.owner_kind = 'tweet' AND a.owner_id = fi.tweet_id)
-			  )
+			`+xMediaRetentionSourceItemsSQL+`
 		)
 		SELECT si.tweet_id,
 		       CASE WHEN EXISTS (SELECT 1 FROM bookmarks b WHERE b.video_id = si.tweet_id)
@@ -661,6 +771,43 @@ func (db *DB) xMediaRetentionItems(channelID string) ([]xRetentionItem, error) {
 		out = append(out, item)
 	}
 	return out, rows.Err()
+}
+
+func (db *DB) xMediaRetentionWindowAndBoundary(channelID string, limit, boundary int) ([]string, []string, error) {
+	if limit <= 0 {
+		return nil, nil, nil
+	}
+	if boundary < 0 {
+		boundary = 0
+	}
+	rows, err := db.conn.Query(`
+		WITH source_items AS (
+			`+xMediaRetentionSourceItemsSQL+`
+		)
+		SELECT si.tweet_id
+		FROM source_items si
+		WHERE NOT EXISTS (SELECT 1 FROM bookmarks b WHERE b.video_id = si.tweet_id)
+		  AND NOT EXISTS (SELECT 1 FROM feed_likes fl WHERE fl.tweet_id = si.tweet_id)
+		ORDER BY COALESCE(si.published_at, 0) DESC, si.tweet_id DESC
+		LIMIT ?
+	`, channelID, channelID, channelID, limit+boundary)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var retained, displaced []string
+	for rows.Next() {
+		var tweetID string
+		if err := rows.Scan(&tweetID); err != nil {
+			return nil, nil, err
+		}
+		if len(retained) < limit {
+			retained = append(retained, tweetID)
+		} else {
+			displaced = append(displaced, tweetID)
+		}
+	}
+	return retained, displaced, rows.Err()
 }
 
 func (db *DB) xContentAssetPaths(ownerIDs []string) (map[string]int64, int64, error) {

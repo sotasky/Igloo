@@ -56,7 +56,6 @@ type PageProps struct {
 	Text                    map[string]string
 	SupportedLanguages      []LanguageChoice
 	Sidebar                 model.SidebarContext
-	TrackFeedSeen           bool
 	ShareEmbedFriendlyLinks bool
 	StaticV                 func(string) string
 	PageScripts             []string // JS files to include after base scripts.

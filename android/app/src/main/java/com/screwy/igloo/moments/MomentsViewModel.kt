@@ -312,6 +312,12 @@ class MomentsViewModel(
                 stored?.takeIf { it > 0L } ?: current
             }
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), null)
+
+    val startVideoId: StateFlow<String?> =
+        combine(activeCursor, scopedResumeVideoId, activeTab) { active, resumeId, tab ->
+                active?.takeIf { it.scope == tab }?.videoId ?: resumeId
+            }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), null)
     /**
      * Index of the active moments cursor inside the rows list. The in-memory cursor updates
      * immediately on page changes and grid taps; Room remains the durable fallback for cold start /

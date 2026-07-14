@@ -343,6 +343,45 @@ func TestClaimProfileJobsClaimsNewestDueRequestFirst(t *testing.T) {
 	}
 }
 
+func TestProfileJobPendingQueriesUsePartialIndex(t *testing.T) {
+	d := openWritableTestDB(t)
+	for name, query := range map[string]string{
+		"claim": profileJobClaimCandidatesSQL,
+		"delay": profileJobNextDelaySQL,
+	} {
+		t.Run(name, func(t *testing.T) {
+			args := []any{int64(1000)}
+			if name == "claim" {
+				args = []any{int64(1000), int64(1000), 4}
+			}
+			rows, err := d.conn.Query("EXPLAIN QUERY PLAN "+query, args...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = rows.Close() }()
+			var details []string
+			for rows.Next() {
+				var id, parent, unused int
+				var detail string
+				if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+					t.Fatal(err)
+				}
+				details = append(details, detail)
+			}
+			plan := strings.Join(details, "\n")
+			if !strings.Contains(plan, "USING INDEX idx_profile_jobs_claim") {
+				t.Fatalf("pending profile plan = %s", plan)
+			}
+			if strings.Contains(plan, "TEMP B-TREE") {
+				t.Fatalf("pending profile query sorts outside its index = %s", plan)
+			}
+			if strings.Contains(plan, "SCAN profile_jobs") && !strings.Contains(plan, "idx_profile_jobs_claim") {
+				t.Fatalf("pending profile query scans the table = %s", plan)
+			}
+		})
+	}
+}
+
 func TestProfileJobIngestObservationsCoalesceWhileRevisionIsInFlight(t *testing.T) {
 	d := openWritableTestDB(t)
 	now := time.Now().UTC().Truncate(time.Millisecond)

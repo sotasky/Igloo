@@ -45,6 +45,7 @@ fun MomentsRoute(
 
     val items by vm.playerItems.collectAsStateWithLifecycle()
     val startIndex by vm.startIndex.collectAsStateWithLifecycle()
+    val startVideoId by vm.startVideoId.collectAsStateWithLifecycle()
     val autoplayEnabled by vm.autoplayEnabled.collectAsStateWithLifecycle()
     val muted by vm.muted.collectAsStateWithLifecycle()
     val uiState by vm.playerUiState.collectAsStateWithLifecycle()
@@ -71,6 +72,7 @@ fun MomentsRoute(
             MomentsPlayer(
                 items = items,
                 startIndex = startIndex,
+                startVideoId = startVideoId,
                 autoSwipeDefault = autoplayEnabled,
                 muteDefault = muted,
                 onAutoSwipeChanged = vm::setAutoplayEnabled,

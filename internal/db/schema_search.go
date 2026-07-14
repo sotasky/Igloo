@@ -57,7 +57,12 @@ func schemaSearchStatements() []string {
 			FROM videos v
 			WHERE v.channel_id = new.channel_id;
 		END`,
-		`CREATE TRIGGER IF NOT EXISTS trg_search_channel_profiles_au AFTER UPDATE ON channel_profiles BEGIN
+		`CREATE TRIGGER IF NOT EXISTS trg_search_channel_profiles_au AFTER UPDATE ON channel_profiles
+		WHEN old.channel_id IS NOT new.channel_id
+		  OR old.display_name IS NOT new.display_name
+		  OR old.handle IS NOT new.handle
+		  OR old.tombstone IS NOT new.tombstone
+		BEGIN
 			DELETE FROM search_channels_fts WHERE rowid = (SELECT id FROM channels WHERE channel_id = new.channel_id);
 			INSERT INTO search_channels_fts(rowid, channel_id_pk, name, source_id, display_name, handle)
 			SELECT c.id, c.channel_id, COALESCE(c.name, ''), COALESCE(c.source_id, ''),

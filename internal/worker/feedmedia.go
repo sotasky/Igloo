@@ -21,7 +21,7 @@ const (
 	feedMediaRetryFloor    = 30 * time.Second
 )
 
-func (m *Manager) processFeedMediaBatch(ctx context.Context, lane db.DownloadLane) bool {
+func (m *Manager) processContentAssetBatch(ctx context.Context, lane db.DownloadLane) bool {
 	if m == nil || m.db == nil || m.cfg == nil || m.downloader == nil || ctx.Err() != nil {
 		return false
 	}
@@ -78,11 +78,6 @@ func (m *Manager) processContentAsset(ctx context.Context, asset db.Asset, workL
 		}
 		return
 	}
-	if asset.AssetKind == "post_media" && strings.HasPrefix(contentType, "video/") {
-		if err := m.publishContentVideoThumbnail(ctx, asset, finalPath, bulkLane); err != nil {
-			log.Printf("[feedmedia] publish thumbnail %s: %v", asset.AssetID, err)
-		}
-	}
 	if oldPath != "" && oldPath != key {
 		if _, err := m.db.RemoveAssetFileIfUnreferenced(oldPath); err != nil {
 			log.Printf("[feedmedia] remove replaced file %s: %v", oldPath, err)
@@ -91,33 +86,10 @@ func (m *Manager) processContentAsset(ctx context.Context, asset db.Asset, workL
 	m.EmitFeed("feed_media", fmt.Sprintf("Downloaded %s for %s", asset.AssetKind, asset.OwnerID), "done")
 }
 
-func (m *Manager) publishContentVideoThumbnail(ctx context.Context, media db.Asset, videoPath string, lane download.MediaLane) error {
-	var path string
-	err := m.downloader.RunMedia(ctx, lane, func() error {
-		var err error
-		path, err = m.materializeVideoThumbnail(ctx, "twitter", media.OwnerID, "", videoPath)
-		return err
-	})
-	if err != nil || path == "" {
-		return err
-	}
-	key, err := m.cfg.Storage.Key(path)
-	if err != nil {
-		m.removeMediaPaths(ctx, download.MediaLaneState, path)
-		return err
-	}
-	return m.db.StoreReadyAsset(db.Asset{
-		AssetID:        db.BuildAssetID("twitter", "tweet", media.OwnerID, "post_thumbnail", 0),
-		AssetKind:      "post_thumbnail",
-		OwnerKind:      "tweet",
-		OwnerID:        media.OwnerID,
-		FilePath:       key,
-		ContentType:    "image/jpeg",
-		RequiredReason: media.RequiredReason,
-	}, time.Now().UnixMilli())
-}
-
 func (m *Manager) downloadContentAsset(ctx context.Context, asset db.Asset, lane download.MediaLane) (string, string, error) {
+	if db.IsVideoThumbnailObjectKey(asset.ObjectKey) {
+		return m.materializeContentVideoThumbnail(ctx, asset)
+	}
 	ownerKey, err := safeProfileMediaKey(asset.OwnerID)
 	if err != nil {
 		return "", "", err
@@ -160,13 +132,70 @@ func (m *Manager) downloadContentAsset(ctx context.Context, asset db.Asset, lane
 			contentType = detected
 		}
 		return paths[0], contentType, nil
+	case "subtitle":
+		platform := subtitleOwnerPlatform(asset.OwnerKind)
+		if platform == "" {
+			return "", "", fmt.Errorf("unsupported subtitle owner kind: %s", asset.OwnerKind)
+		}
+		dir, err := m.cfg.Storage.WritePath(filepath.Join("subtitles", platform))
+		if err != nil {
+			return "", "", err
+		}
+		cookiesFile, cookiesBrowser := m.cookiesFor(platform)
+		paths, err := m.downloader.DownloadSubtitles(ctx, download.MediaLaneState, asset.SourceURL, download.Opts{
+			ID:                 unique,
+			SubtitleDir:        dir,
+			Cookies:            cookiesFile,
+			CookiesFromBrowser: cookiesBrowser,
+			CookieAlternates:   m.cookieSetsFor(platform),
+		})
+		if err != nil {
+			return "", "", err
+		}
+		if len(paths) != 1 {
+			m.removeMediaPaths(ctx, download.MediaLaneState, paths...)
+			return "", "", fmt.Errorf("subtitle source produced %d files", len(paths))
+		}
+		return paths[0], "text/vtt", nil
 	default:
 		return "", "", fmt.Errorf("unsupported content asset kind: %s", asset.AssetKind)
 	}
 }
 
+func (m *Manager) materializeContentVideoThumbnail(ctx context.Context, asset db.Asset) (string, string, error) {
+	sourceObjectID := db.VideoThumbnailSourceObjectID(asset.ObjectKey)
+	sourceKey, err := m.db.ReadyMediaObjectFile(sourceObjectID)
+	if err != nil {
+		return "", "", fmt.Errorf("resolve thumbnail source %s: %w", sourceObjectID, err)
+	}
+	sourcePath, err := m.cfg.Storage.Path(sourceKey)
+	if err != nil {
+		return "", "", err
+	}
+	var path string
+	err = m.downloader.RunMedia(ctx, download.MediaLaneState, func() error {
+		var materializeErr error
+		path, materializeErr = m.materializeVideoThumbnail(ctx, "twitter", sourceObjectID, "", sourcePath)
+		return materializeErr
+	})
+	return path, "image/jpeg", err
+}
+
+func subtitleOwnerPlatform(ownerKind string) string {
+	switch ownerKind {
+	case "youtube_video":
+		return "youtube"
+	case "tiktok_video":
+		return "tiktok"
+	case "instagram_reel":
+		return "instagram"
+	default:
+		return ""
+	}
+}
+
 func mediaLaneForAsset(asset db.Asset, bulkLane download.MediaLane) download.MediaLane {
-	if asset.AssetKind == "avatar" || asset.AssetKind == "post_thumbnail" {
+	if asset.AssetKind == "avatar" || asset.AssetKind == "post_thumbnail" || asset.AssetKind == "subtitle" {
 		return download.MediaLaneState
 	}
 	return bulkLane

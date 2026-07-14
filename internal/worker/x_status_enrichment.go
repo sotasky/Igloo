@@ -132,13 +132,15 @@ func (m *Manager) upsertXStatusEnrichmentItems(ctx context.Context, items []mode
 	for i := range items {
 		items[i].ParseMedia()
 	}
-	n, err := m.upsertFeedItemsBatch(ctx, items, "status_enrichment")
+	result, err := m.upsertFeedItemsBatch(items)
 	if err != nil {
 		log.Printf("[x_status_enrichment] upsert: %v", err)
 		return
 	}
-	m.KickMediaWork()
-	if n > 0 {
-		m.KickFeedScoring()
+	if err := m.reconcileXMediaRetentionChanges(result.XMediaRetentionChanges); err != nil {
+		log.Printf("[x_status_enrichment] %v", err)
+		return
 	}
+	m.KickMediaWork()
+	m.KickFeedScoring()
 }

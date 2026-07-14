@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -179,46 +180,22 @@ func TestGetThreadTreeReturnsRootAndAllReplyBranches(t *testing.T) {
 	}
 }
 
-func TestFindUnresolvedReplies(t *testing.T) {
+func TestListIncompleteReplyChainsFindsMissingAncestor(t *testing.T) {
 	d := openWritableTestDB(t)
 	now := time.Now().UTC()
-	parentAt := now.Add(-3 * time.Second)
-	knownMissingAt := now.Add(-1 * time.Second)
-	nonReplyAt := now.Add(-2 * time.Second)
 	_, _ = d.UpsertFeedItems([]model.FeedItem{
-		{TweetID: "u_1", AuthorHandle: "user_alpha", IsReply: true, ReplyToHandle: "user_beta", ReplyToStatus: "", PublishedAt: &now, FetchedAt: now, ContentHash: "h_u1"},
-		{TweetID: "u_2", AuthorHandle: "user_alpha", IsReply: true, ReplyToHandle: "user_beta", ReplyToStatus: "sample_existing_parent", PublishedAt: &knownMissingAt, FetchedAt: knownMissingAt, ContentHash: "h_u2"},
-		{TweetID: "u_3", AuthorHandle: "user_alpha", IsReply: false, PublishedAt: &nonReplyAt, FetchedAt: nonReplyAt, ContentHash: "h_u3"},
-		{TweetID: "sample_existing_parent", AuthorHandle: "sample_author_beta", PublishedAt: &parentAt, FetchedAt: parentAt, ContentHash: "h_u4"},
-		{TweetID: "sample_unresolved_missing", AuthorHandle: "sample_author_alpha", IsReply: true, ReplyToHandle: "sample_author_beta", ReplyToStatus: "sample_missing_parent", PublishedAt: &knownMissingAt, FetchedAt: knownMissingAt, ContentHash: "h_u5"},
+		{TweetID: "sample_leaf", AuthorHandle: "sample_author", IsReply: true, ReplyToHandle: "sample_parent", ReplyToStatus: "sample_parent", PublishedAt: &now, FetchedAt: now, ContentHash: "sample_leaf"},
+		{TweetID: "sample_parent", AuthorHandle: "sample_parent", IsReply: true, ReplyToHandle: "sample_root", ReplyToStatus: "", PublishedAt: &now, FetchedAt: now, ContentHash: "sample_parent"},
+		{TweetID: "sample_user", AuthorHandle: "sample_user", IsReply: false, PublishedAt: &now, FetchedAt: now, ContentHash: "sample_user"},
 	})
-	if err := d.ExecRaw(`
-		INSERT INTO feed_rank_snapshot (
-			tweet_id, rank_position, base_score, decay_factor,
-			freshness_bonus, jitter, diversity_demoted_by, final_score, computed_at
-		)
-		VALUES ('sample_unresolved_missing', 1, 0, 0, 0, 0, 0, 1, 123)
-	`); err != nil {
-		t.Fatalf("rank snapshot: %v", err)
-	}
-	got, err := d.FindUnresolvedReplies(10)
+	got, err := d.ListIncompleteReplyChainsContext(
+		context.Background(), []string{"sample_leaf", "sample_user"},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	gotIDs := make(map[string]string, len(got))
-	for _, item := range got {
-		gotIDs[item.TweetID] = item.ReplyToStatus
-	}
-	if len(gotIDs) != 2 || gotIDs["u_1"] != "" || gotIDs["sample_unresolved_missing"] != "sample_missing_parent" {
-		t.Errorf("unresolved replies = %+v, want empty-parent and missing-parent replies", got)
-	}
-
-	limited, err := d.FindUnresolvedReplies(1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(limited) != 1 || limited[0].TweetID != "sample_unresolved_missing" {
-		t.Errorf("ranked unresolved reply should be prioritized, got %+v", limited)
+	if len(got) != 1 || got[0].SeedTweetID != "sample_leaf" || got[0].Item.TweetID != "sample_parent" {
+		t.Fatalf("incomplete chains = %+v", got)
 	}
 }
 

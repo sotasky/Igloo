@@ -14,6 +14,23 @@ const (
 	defaultProfileJobLease            = 15 * time.Minute
 )
 
+const profileJobClaimCandidatesSQL = `
+	SELECT channel_id
+	FROM profile_jobs INDEXED BY idx_profile_jobs_claim
+	WHERE requested_revision > completed_revision
+	  AND next_attempt_at_ms <= ?
+	  AND (lease_owner = '' OR lease_until_ms <= ?)
+	ORDER BY requested_at_ms DESC, channel_id
+	LIMIT ?`
+
+const profileJobNextDelaySQL = `
+	SELECT MIN(CASE
+		WHEN lease_owner != '' THEN lease_until_ms
+		WHEN next_attempt_at_ms > 0 THEN next_attempt_at_ms
+		ELSE ? END)
+	FROM profile_jobs INDEXED BY idx_profile_jobs_claim
+	WHERE requested_revision > completed_revision`
+
 type profileObservation struct {
 	channelID   string
 	platform    string
@@ -98,6 +115,23 @@ func observeProfileTx(tx *sql.Tx, observation profileObservation) error {
 				WHEN excluded.observed_at_ms >= channel_profiles.fetched_at THEN 0
 				ELSE channel_profiles.tombstone
 			END
+		WHERE channel_profiles.platform IS NOT excluded.platform
+		   OR channel_profiles.handle IS NOT CASE
+			  WHEN COALESCE(channel_profiles.handle, '') = '' THEN excluded.handle
+			  ELSE channel_profiles.handle
+		   END
+		   OR channel_profiles.display_name IS NOT CASE
+			  WHEN COALESCE(excluded.display_name, '') = '' THEN channel_profiles.display_name
+			  WHEN COALESCE(channel_profiles.display_name, '') = '' THEN excluded.display_name
+			  WHEN channel_profiles.fetched_at = 0
+			   AND excluded.observed_at_ms >= channel_profiles.observed_at_ms THEN excluded.display_name
+			  ELSE channel_profiles.display_name
+		   END
+		   OR channel_profiles.observed_at_ms IS NOT MAX(channel_profiles.observed_at_ms, excluded.observed_at_ms)
+		   OR channel_profiles.tombstone IS NOT CASE
+			  WHEN excluded.observed_at_ms >= channel_profiles.fetched_at THEN 0
+			  ELSE channel_profiles.tombstone
+		   END
 	`, observation.channelID, observation.platform, nilIfEmpty(observation.handle), nilIfEmpty(observation.displayName), observation.observedAt); err != nil {
 		return err
 	}
@@ -284,15 +318,7 @@ func (db *DB) ClaimProfileJobs(opts LeaseOptions) ([]model.ProfileJob, error) {
 
 	var claimed []model.ProfileJob
 	err := db.WithWrite(func(tx *sql.Tx) error {
-		rows, err := tx.Query(`
-			SELECT channel_id
-			FROM profile_jobs
-			WHERE requested_revision > completed_revision
-			  AND next_attempt_at_ms <= ?
-			  AND (lease_owner = '' OR lease_until_ms <= ?)
-			ORDER BY requested_at_ms DESC, channel_id
-			LIMIT ?
-		`, opts.NowMs, opts.NowMs, opts.Limit)
+		rows, err := tx.Query(profileJobClaimCandidatesSQL, opts.NowMs, opts.NowMs, opts.Limit)
 		if err != nil {
 			return err
 		}
@@ -641,14 +667,7 @@ func (db *DB) NextProfileJobDelay(nowMs int64) (time.Duration, error) {
 		nowMs = time.Now().UnixMilli()
 	}
 	var due sql.NullInt64
-	err := db.reader().QueryRow(`
-		SELECT MIN(CASE
-			WHEN lease_owner != '' THEN lease_until_ms
-			WHEN next_attempt_at_ms > 0 THEN next_attempt_at_ms
-			ELSE ? END)
-		FROM profile_jobs
-		WHERE completed_revision < requested_revision
-	`, nowMs).Scan(&due)
+	err := db.reader().QueryRow(profileJobNextDelaySQL, nowMs).Scan(&due)
 	if err != nil {
 		return 0, err
 	}

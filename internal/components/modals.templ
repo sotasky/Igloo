@@ -1920,11 +1920,11 @@ templ FeedDashboard(p PageProps, d FeedDashboardData) {
 													hx-on::after-request="this.textContent=(window.IglooI18n&&window.IglooI18n.t?window.IglooI18n.t('action_probe','Probe'):'Probe');this.disabled=false;if(event.detail.successful&&window.MpaSiteBase)MpaSiteBase.showToast(window.IglooI18n&&window.IglooI18n.t?window.IglooI18n.t('toast_probe_done','Probe done'):'Probe done')"
 												>{ L(p, "action_probe", "Probe") }</button>
 												{ " " }
-												<button class="feed-unfollow-link" type="button"
-													hx-delete={ "/api/unsubscribe/twitter_" + s.Handle + "?delete_files=true" }
+												<button class="feed-unfollow-link" type="button" data-optimistic-unfollow
+													hx-delete={ "/api/unsubscribe/twitter_" + s.Handle }
 													hx-target="closest tr"
 													hx-swap="outerHTML"
-													hx-confirm={ LF(p, "confirm_unfollow_channel_delete_media_body", "Unfollow \"%1$s\" and delete local media? This cannot be undone.", "@" + s.Handle) }
+													hx-confirm={ LF(p, "confirm_unfollow_channel_body", "Unfollow %1$s?", "@" + s.Handle) }
 													hx-on::before-request="this.textContent='...';this.disabled=true"
 													hx-on::after-request="this.textContent=(window.IglooI18n&&window.IglooI18n.t?window.IglooI18n.t('action_unfollow','Unfollow'):'Unfollow');this.disabled=false;if(event.detail.successful&&window.MpaSiteBase)MpaSiteBase.showToast(window.IglooI18n&&window.IglooI18n.t?window.IglooI18n.t('toast_unfollowed','Unfollowed'):'Unfollowed')"
 												>{ L(p, "action_unfollow", "Unfollow") }</button>

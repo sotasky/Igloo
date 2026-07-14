@@ -99,7 +99,125 @@ func (db *DB) GetVideo(videoID string) (*model.Video, error) {
 		v.DownloadedAt = *t
 	}
 	hydrateVideoPlatform(&v)
+	if err := db.resolveTweetVideoPresentation(&v); err != nil {
+		return nil, err
+	}
 	return &v, nil
+}
+
+func (db *DB) resolveTweetVideoPresentation(v *model.Video) error {
+	if v == nil || v.OwnerKind != "tweet" || strings.TrimSpace(v.VideoID) == "" {
+		return nil
+	}
+	row := db.reader().QueryRow(`
+		SELECT fi.tweet_id, COALESCE(fi.channel_id, ''), COALESCE(fi.body_text, ''),
+		       COALESCE(fi.quote_tweet_id, ''), COALESCE(fi.quote_body_text, ''),
+		       COALESCE(fi.published_at, 0), COALESCE(cp.display_name, ''),
+		       COALESCE(c.platform, 'twitter'), CASE WHEN cf.channel_id IS NOT NULL THEN 1 ELSE 0 END
+		FROM feed_items fi
+		LEFT JOIN channels c ON c.channel_id = fi.channel_id
+		LEFT JOIN channel_profiles cp ON cp.channel_id = fi.channel_id
+		LEFT JOIN channel_follows cf ON cf.channel_id = fi.channel_id
+		WHERE fi.tweet_id = ? OR fi.canonical_tweet_id = ?
+		ORDER BY CASE
+			WHEN fi.tweet_id = ? AND (
+				NULLIF(TRIM(COALESCE(fi.body_text, '')), '') IS NOT NULL
+				OR NULLIF(TRIM(COALESCE(fi.media_json, '')), '') IS NOT NULL
+				OR NULLIF(TRIM(COALESCE(fi.quote_tweet_id, '')), '') IS NOT NULL
+				OR NULLIF(TRIM(COALESCE(fi.quote_body_text, '')), '') IS NOT NULL
+			) THEN 0
+			WHEN NULLIF(TRIM(COALESCE(fi.body_text, '')), '') IS NOT NULL
+				OR NULLIF(TRIM(COALESCE(fi.media_json, '')), '') IS NOT NULL
+				OR NULLIF(TRIM(COALESCE(fi.quote_tweet_id, '')), '') IS NOT NULL
+				OR NULLIF(TRIM(COALESCE(fi.quote_body_text, '')), '') IS NOT NULL THEN 1
+			ELSE 2
+		END, COALESCE(fi.is_retweet, 0), fi.fetched_at, fi.tweet_id
+		LIMIT 1
+	`, v.VideoID, v.VideoID, v.VideoID)
+	var contentID, channelID, body, quoteID, quoteBody, channelName, platform string
+	var publishedAt int64
+	var followed bool
+	if err := row.Scan(&contentID, &channelID, &body, &quoteID, &quoteBody, &publishedAt, &channelName, &platform, &followed); err != nil {
+		if err == sql.ErrNoRows {
+			return nil
+		}
+		return err
+	}
+	if channelID != "" {
+		v.ChannelID = channelID
+		v.ChannelName = channelName
+		v.Platform = detectPlatform(platform, "")
+		v.IsSubscribed = followed
+	}
+	if strings.HasPrefix(v.Title, "X post ") {
+		v.Title = body
+		if v.Title == "" {
+			v.Title = quoteBody
+		}
+	}
+	if (v.PublishedAt == nil || v.PublishedAt.IsZero()) && publishedAt > 0 {
+		t := time.UnixMilli(publishedAt)
+		v.PublishedAt = &t
+	}
+	directTypes, err := db.readyTweetMediaTypes(contentID)
+	if err != nil {
+		return err
+	}
+	v.MediaOwnerID, v.MediaOwnerKind = contentID, "tweet"
+	mediaTypes := directTypes
+	if len(mediaTypes) == 0 && quoteID != "" {
+		mediaTypes, err = db.readyTweetMediaTypes(quoteID)
+		if err != nil {
+			return err
+		}
+		if len(mediaTypes) > 0 {
+			v.MediaOwnerID = quoteID
+		}
+	}
+	applyVideoMediaTypes(v, mediaTypes)
+	return nil
+}
+
+func (db *DB) readyTweetMediaTypes(ownerID string) ([]string, error) {
+	rows, err := db.reader().Query(`
+		SELECT CASE WHEN a.asset_kind = 'video_stream' OR mo.content_type LIKE 'video/%'
+		            THEN 'video' ELSE 'image' END
+		FROM assets a
+		JOIN media_objects mo ON mo.object_id = a.object_id
+		WHERE a.owner_kind = 'tweet' AND a.owner_id = ?
+		  AND a.asset_kind IN ('post_media', 'video_stream')
+		  AND a.lifecycle_state = 'active'
+		  AND mo.published_revision > 0 AND mo.file_path != ''
+		ORDER BY a.media_index, a.id
+	`, strings.TrimSpace(ownerID))
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var mediaTypes []string
+	for rows.Next() {
+		var mediaType string
+		if err := rows.Scan(&mediaType); err != nil {
+			return nil, err
+		}
+		mediaTypes = append(mediaTypes, mediaType)
+	}
+	return mediaTypes, rows.Err()
+}
+
+func applyVideoMediaTypes(v *model.Video, mediaTypes []string) {
+	v.MediaTypes = mediaTypes
+	v.MediaKind = ""
+	v.MediaSlideCount = 0
+	if len(mediaTypes) > 1 {
+		v.MediaKind = "slideshow"
+		v.MediaSlideCount = len(mediaTypes)
+	} else if len(mediaTypes) == 1 {
+		v.MediaKind = mediaTypes[0]
+		if mediaTypes[0] == "image" {
+			v.MediaSlideCount = 1
+		}
+	}
 }
 
 // GetNextVideo returns the video with the closest earlier published_at,
@@ -246,7 +364,8 @@ func (db *DB) GetVideos(opts GetVideosOpts) ([]model.Video, error) {
 			       COUNT(*) OVER (PARTITION BY vrs.video_id) AS repost_count,
 			       ROW_NUMBER() OVER (
 			           PARTITION BY vrs.video_id
-			           ORDER BY COALESCE(NULLIF(vrs.reposted_at_ms, 0), vrs.first_seen_at_ms) DESC,
+			           ORDER BY CASE WHEN COALESCE(vrs.reposted_at_ms, 0) > 0 THEN 0 ELSE 1 END,
+			                    COALESCE(vrs.reposted_at_ms, 0) DESC,
 			                    vrs.reposter_channel_id ASC
 			       ) AS rn
 			FROM video_repost_sources_resolved vrs
@@ -269,7 +388,7 @@ func (db *DB) GetVideos(opts GetVideosOpts) ([]model.Video, error) {
 		       COALESCE(mr.repost_count, 0) AS repost_count,
 		       CASE WHEN mr.video_id IS NOT NULL THEN 1 ELSE 0 END AS repost_introduced,
 		       CASE WHEN mr.video_id IS NOT NULL
-		            THEN COALESCE(NULLIF(mr.reposted_at_ms, 0), NULLIF(mr.first_seen_at_ms, 0), v.published_at, 0)
+		            THEN COALESCE(NULLIF(mr.reposted_at_ms, 0), v.published_at, 0)
 		            ELSE COALESCE(v.published_at, 0)
 		        END AS effective_moment_at_ms`
 		orderExpr = "effective_moment_at_ms"
@@ -627,7 +746,8 @@ func (db *DB) GetShortsOrdinal(videoID, momentsMode string) (int, bool, error) {
 			       COUNT(*) OVER (PARTITION BY vrs.video_id) AS repost_count,
 			       ROW_NUMBER() OVER (
 			           PARTITION BY vrs.video_id
-			           ORDER BY COALESCE(NULLIF(vrs.reposted_at_ms, 0), vrs.first_seen_at_ms) DESC,
+			           ORDER BY CASE WHEN COALESCE(vrs.reposted_at_ms, 0) > 0 THEN 0 ELSE 1 END,
+			                    COALESCE(vrs.reposted_at_ms, 0) DESC,
 			                    vrs.reposter_channel_id ASC
 			       ) AS rn
 			FROM video_repost_sources vrs
@@ -645,7 +765,7 @@ func (db *DB) GetShortsOrdinal(videoID, momentsMode string) (int, bool, error) {
 		visible AS (
 			SELECT v.video_id,
 			       CASE WHEN mr.video_id IS NOT NULL
-			            THEN COALESCE(NULLIF(mr.reposted_at_ms, 0), NULLIF(mr.first_seen_at_ms, 0), v.published_at, 0)
+			            THEN COALESCE(NULLIF(mr.reposted_at_ms, 0), v.published_at, 0)
 			            ELSE COALESCE(v.published_at, 0)
 			        END AS effective_moment_at_ms
 			FROM videos v
@@ -788,7 +908,8 @@ func (db *DB) shortsVisibleCTE(momentsMode string) string {
 			       COUNT(*) OVER (PARTITION BY vrs.video_id) AS repost_count,
 			       ROW_NUMBER() OVER (
 			           PARTITION BY vrs.video_id
-			           ORDER BY COALESCE(NULLIF(vrs.reposted_at_ms, 0), vrs.first_seen_at_ms) DESC,
+			           ORDER BY CASE WHEN COALESCE(vrs.reposted_at_ms, 0) > 0 THEN 0 ELSE 1 END,
+			                    COALESCE(vrs.reposted_at_ms, 0) DESC,
 			                    vrs.reposter_channel_id ASC
 			       ) AS rn
 			FROM video_repost_sources vrs
@@ -806,7 +927,7 @@ func (db *DB) shortsVisibleCTE(momentsMode string) string {
 		visible AS (
 			SELECT v.video_id,
 			       CASE WHEN mr.video_id IS NOT NULL
-			            THEN COALESCE(NULLIF(mr.reposted_at_ms, 0), NULLIF(mr.first_seen_at_ms, 0), v.published_at, 0)
+			            THEN COALESCE(NULLIF(mr.reposted_at_ms, 0), v.published_at, 0)
 			            ELSE COALESCE(v.published_at, 0)
 			        END AS effective_moment_at_ms
 			FROM videos v

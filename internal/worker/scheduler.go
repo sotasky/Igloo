@@ -293,7 +293,7 @@ func (m *Manager) checkChannel(ctx context.Context, channel model.Channel) (down
 		url = strings.TrimRight(url, "/") + "/videos"
 	}
 	snapshot, channelErr := m.downloader.YtDlp.ChannelCheck(ctx, url, limit)
-	if channelErr != nil && channel.Platform == "youtube" && strings.HasSuffix(url, "/videos") {
+	if channelErr != nil && channel.Platform == "youtube" && strings.HasSuffix(url, "/videos") && len(snapshot.FlattenRefs(1)) == 0 {
 		fallback, fallbackErr := m.downloader.YtDlp.ChannelCheck(ctx, strings.TrimSuffix(url, "/videos"), limit)
 		if fallbackErr == nil {
 			snapshot, channelErr = fallback, nil

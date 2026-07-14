@@ -30,6 +30,9 @@ func TestListFeedItemsPage(t *testing.T) {
 func TestListFeedItemsPageExcludesGhostRows(t *testing.T) {
 	d := openWritableTestDB(t)
 	now := time.Now().UTC()
+	if err := d.ExecRaw(`INSERT INTO channel_follows (channel_id, followed_at) VALUES ('twitter_sample_author', 1)`); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := d.UpsertFeedItems([]model.FeedItem{
 		{TweetID: "visible_item", AuthorHandle: "sample_author", BodyText: "visible", PublishedAt: &now, FetchedAt: now, ContentHash: "hash_visible"},
 		{TweetID: "context_parent", AuthorHandle: "sample_parent", BodyText: "context", IsGhost: true, PublishedAt: &now, FetchedAt: now, ContentHash: "hash_context"},
@@ -49,6 +52,9 @@ func TestListFeedItemsPageExcludesGhostRows(t *testing.T) {
 func TestGetLatestFetchedFeedItemExcludesGhostRows(t *testing.T) {
 	d := openWritableTestDB(t)
 	base := time.Now().UTC()
+	if err := d.ExecRaw(`INSERT INTO channel_follows (channel_id, followed_at) VALUES ('twitter_sample_author', 1)`); err != nil {
+		t.Fatal(err)
+	}
 	visibleFetched := base.Add(-time.Minute)
 	ghostFetched := base
 	if _, err := d.UpsertFeedItems([]model.FeedItem{

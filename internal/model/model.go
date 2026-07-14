@@ -122,19 +122,21 @@ type Flash struct {
 // Video represents stored video/post metadata. Binary availability and storage
 // details belong to canonical assets.
 type Video struct {
-	ID           int64
-	VideoID      string
-	ChannelID    string
-	OwnerKind    string
-	Title        string
-	Description  string
-	Duration     int // seconds
-	PublishedAt  *time.Time
-	DownloadedAt time.Time
-	Watched      bool
-	IsTemp       bool
-	IsPinned     bool
-	MetadataJSON string
+	ID             int64
+	VideoID        string
+	ChannelID      string
+	OwnerKind      string
+	MediaOwnerID   string
+	MediaOwnerKind string
+	Title          string
+	Description    string
+	Duration       int // seconds
+	PublishedAt    *time.Time
+	DownloadedAt   time.Time
+	Watched        bool
+	IsTemp         bool
+	IsPinned       bool
+	MetadataJSON   string
 	// Joined/computed fields
 	ChannelName        string
 	Platform           string
@@ -329,7 +331,18 @@ func (v *Video) ParseMetadata() *VideoMetadata {
 
 // EnrichForCard populates computed fields for template rendering.
 func (v *Video) EnrichForCard() {
-	v.ThumbnailURL = "/api/media/thumbnail/" + v.VideoID
+	mediaOwnerID := v.VideoID
+	mediaOwnerKind := v.OwnerKind
+	if v.MediaOwnerID != "" {
+		mediaOwnerID = v.MediaOwnerID
+	}
+	if v.MediaOwnerKind != "" {
+		mediaOwnerKind = v.MediaOwnerKind
+	}
+	v.ThumbnailURL = "/api/media/thumbnail/" + mediaOwnerID
+	if mediaOwnerKind == "tweet" {
+		v.ThumbnailURL += "?owner_kind=tweet"
+	}
 	if v.ChannelID != "" {
 		v.AvatarURL = "/api/media/avatar/" + v.ChannelID
 	}

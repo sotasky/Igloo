@@ -1620,18 +1620,31 @@ func (p PrefsData) VideoThumbURL(v model.Video) string {
 }
 
 func videoMediaURL(route string, v model.Video) string {
-	url := "/api/media/" + route + "/" + v.VideoID
-	if v.OwnerKind == "tweet" {
+	ownerID, ownerKind := videoMediaOwner(v)
+	url := "/api/media/" + route + "/" + ownerID
+	if ownerKind == "tweet" {
 		url += "?owner_kind=tweet"
 	}
 	return url
 }
 
 func videoSlideURLSuffix(v model.Video) string {
-	if v.OwnerKind == "tweet" {
-		return "?owner_kind=tweet"
+	ownerID, ownerKind := videoMediaOwner(v)
+	if ownerKind == "tweet" {
+		return "?owner_kind=tweet&owner_id=" + url.QueryEscape(ownerID)
 	}
 	return ""
+}
+
+func videoMediaOwner(v model.Video) (string, string) {
+	ownerID, ownerKind := v.VideoID, v.OwnerKind
+	if v.MediaOwnerID != "" {
+		ownerID = v.MediaOwnerID
+	}
+	if v.MediaOwnerKind != "" {
+		ownerKind = v.MediaOwnerKind
+	}
+	return ownerID, ownerKind
 }
 
 // fallbackVideoTitle replicates the existing videoTitle's behavior for the

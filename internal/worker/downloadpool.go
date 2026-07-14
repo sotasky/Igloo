@@ -16,6 +16,7 @@ import (
 	"github.com/screwys/igloo/internal/db"
 	"github.com/screwys/igloo/internal/download"
 	"github.com/screwys/igloo/internal/model"
+	"github.com/screwys/igloo/internal/subtitlemeta"
 )
 
 const mediaNoWorkPollFloor = 5 * time.Second
@@ -23,9 +24,9 @@ const mediaNoWorkPollFloor = 5 * time.Second
 type mediaWorkClass uint8
 
 const (
-	mediaWorkXCurrent mediaWorkClass = iota
+	mediaWorkAssetCurrent mediaWorkClass = iota
 	mediaWorkVideoCurrent
-	mediaWorkXBackfill
+	mediaWorkAssetBackfill
 	mediaWorkVideoBackfill
 )
 
@@ -95,7 +96,11 @@ func (m *Manager) runMediaWorkLoop(ctx context.Context, kind mediaWorkerKind) {
 		}
 		eligiblePlatforms, backoffDelay := m.downloadSchedulingState(now)
 		includeTweets := m.cfg == nil || m.cfg.PlatformEnabled("twitter")
-		delay, err := m.db.NextMediaWorkDelay(now.UnixMilli(), eligiblePlatforms, includeTweets)
+		lane := db.DownloadLaneCurrent
+		if kind == mediaWorkerBackfill {
+			lane = db.DownloadLaneBackfill
+		}
+		delay, err := m.db.NextMediaWorkDelay(now.UnixMilli(), eligiblePlatforms, includeTweets, lane)
 		if err != nil {
 			log.Printf("[media] next due: %v", err)
 			delay = time.Minute
@@ -119,8 +124,8 @@ func (m *Manager) processNextMediaWork(ctx context.Context, now time.Time, kind 
 		for _, workClass := range order {
 			worked := false
 			switch workClass {
-			case mediaWorkXCurrent:
-				worked = m.processFeedMediaBatch(ctx, db.DownloadLaneCurrent)
+			case mediaWorkAssetCurrent:
+				worked = m.processContentAssetBatch(ctx, db.DownloadLaneCurrent)
 			case mediaWorkVideoCurrent:
 				worked = m.processDownloadBatch(ctx, db.DownloadLaneCurrent)
 			}
@@ -143,8 +148,8 @@ func (m *Manager) processNextMediaWork(ctx context.Context, now time.Time, kind 
 	for _, workClass := range mediaBackfillPrimaryWorkOrder(m.mediaBackgroundTurn) {
 		worked := false
 		switch workClass {
-		case mediaWorkXBackfill:
-			worked = m.processFeedMediaBatch(ctx, db.DownloadLaneBackfill)
+		case mediaWorkAssetBackfill:
+			worked = m.processContentAssetBatch(ctx, db.DownloadLaneBackfill)
 		case mediaWorkVideoBackfill:
 			worked = m.processDownloadBatch(ctx, db.DownloadLaneBackfill)
 		}
@@ -162,7 +167,7 @@ func (m *Manager) processNextMediaWork(ctx context.Context, now time.Time, kind 
 }
 
 func mediaCurrentWorkOrder(currentTurn uint64) [2]mediaWorkClass {
-	order := [2]mediaWorkClass{mediaWorkXCurrent, mediaWorkVideoCurrent}
+	order := [2]mediaWorkClass{mediaWorkAssetCurrent, mediaWorkVideoCurrent}
 	if currentTurn%2 == 1 {
 		order[0], order[1] = order[1], order[0]
 	}
@@ -170,7 +175,7 @@ func mediaCurrentWorkOrder(currentTurn uint64) [2]mediaWorkClass {
 }
 
 func mediaBackfillPrimaryWorkOrder(backgroundTurn uint64) [2]mediaWorkClass {
-	order := [2]mediaWorkClass{mediaWorkXBackfill, mediaWorkVideoBackfill}
+	order := [2]mediaWorkClass{mediaWorkAssetBackfill, mediaWorkVideoBackfill}
 	if backgroundTurn%2 == 1 {
 		order[0], order[1] = order[1], order[0]
 	}
@@ -324,15 +329,6 @@ func (m *Manager) downloadVideo(ctx context.Context, job db.DownloadWork, platfo
 		m.failDownloadJob(job, fmt.Errorf("allocate download attempt: %w", err))
 		return
 	}
-	subtitleDir := ""
-	if subtitles {
-		subtitleDir, err = m.cfg.Storage.WritePath("subtitles/" + platform)
-		if err != nil {
-			m.failDownloadJob(job, fmt.Errorf("subtitle storage path: %w", err))
-			return
-		}
-	}
-
 	sourceURL := buildSourceURL(platform, safeSourceID, job.VideoID)
 	formatStr := resolveFormatString(platform, quality)
 
@@ -344,14 +340,10 @@ func (m *Manager) downloadVideo(ctx context.Context, job db.DownloadWork, platfo
 		CookiesFromBrowser: cookiesBrowser,
 		CookieAlternates:   m.cookieSetsFor(platform),
 		Format:             formatStr,
-		Subtitles:          subtitles,
-		SubtitleDir:        subtitleDir,
+		Subtitles:          false,
 	}
 
-	completed, reused, dlErr := m.reusableCompletedVideo(ctx, mediaLane, videoDir, job.VideoID, platform)
-	if dlErr == nil && !reused {
-		completed, dlErr = m.downloader.DownloadCompleted(ctx, mediaLane, sourceURL, "video", opts)
-	}
+	completed, dlErr := m.downloader.DownloadCompleted(ctx, mediaLane, sourceURL, "video", opts)
 
 	if dlErr != nil {
 		m.removeFailedAttempt(ctx, mediaLane, completedVideoFiles{}, completed)
@@ -368,16 +360,10 @@ func (m *Manager) downloadVideo(ctx context.Context, job db.DownloadWork, platfo
 		m.failDownloadJob(job, fmt.Errorf("no files returned"))
 		return
 	}
-	if reused {
-		log.Printf("[downloadpool] reusing existing media for %s", job.VideoID)
-	}
-
-	metadata := loadInfoJSONFile(completed.InfoJSONPath)
+	metadata := completed.Metadata
 	files, err := m.prepareCompletedVideoFiles(ctx, mediaLane, completed)
 	if err != nil {
-		if !reused {
-			m.removeFailedAttempt(ctx, mediaLane, files, completed)
-		}
+		m.removeFailedAttempt(ctx, mediaLane, files, completed)
 		m.failDownloadJob(job, fmt.Errorf("prepare completed outputs: %w", err))
 		return
 	}
@@ -440,26 +426,31 @@ func (m *Manager) downloadVideo(ctx context.Context, job db.DownloadWork, platfo
 	if isStory {
 		sourceKind = "story"
 	}
-	if err := m.db.StoreCompletedVideo(db.CompletedVideo{
+	video := db.CompletedVideo{
 		VideoID: job.VideoID, ChannelID: job.OwnerChannelID, OwnerKind: ownerKind, Title: title, Description: description,
 		Duration: duration, PublishedAtMs: publishedAt, MetadataJSON: metadataJSON,
 		MediaKind: mediaKind, SlideCount: slideCount, SourceKind: sourceKind, Assets: files.assets,
-	}); err != nil {
-		if !reused {
-			m.removeFailedAttempt(ctx, mediaLane, files, completed)
+	}
+	var subtitleAsset *db.Asset
+	if subtitles {
+		isAuto := subtitlemeta.IsAuto(metadata, "en")
+		subtitleAsset = &db.Asset{
+			AssetID:        db.BuildAssetID(platform, ownerKind, job.VideoID, "subtitle", 0),
+			AssetKind:      "subtitle",
+			OwnerKind:      ownerKind,
+			OwnerID:        job.VideoID,
+			SourceURL:      sourceURL,
+			ContentType:    "text/vtt",
+			DownloadLane:   db.DownloadLaneBackfill,
+			IsAuto:         &isAuto,
+			AudioLanguage:  subtitlemeta.Language(metadata),
+			RequiredReason: "retention",
 		}
+	}
+	if err := m.storeCompletedVideoOutputs(ctx, mediaLane, platform, attemptID, video, files, completed, subtitleAsset); err != nil {
 		log.Printf("[downloadpool] StoreCompletedVideo %s: %v", job.VideoID, err)
 		m.failDownloadJob(job, fmt.Errorf("db insert: %w", err))
 		return
-	}
-	if err := m.publishCompletedVideoThumbnail(ctx, mediaLane, job.VideoID, platform, attemptID, files); err != nil {
-		log.Printf("[downloadpool] StoreVideoThumbnailAsset %s: %v", job.VideoID, err)
-	}
-	if err := m.storeCompletedSubtitles(ctx, job.VideoID, files, completed, reused); err != nil {
-		log.Printf("[downloadpool] StoreVideoSubtitleAssets %s: %v", job.VideoID, err)
-	}
-	if !reused {
-		m.removeTransientFiles(ctx, mediaLane, files)
 	}
 
 	if err := m.db.CompleteDownloadWork(job.VideoID, job.LeaseOwner); err != nil {
@@ -468,49 +459,6 @@ func (m *Manager) downloadVideo(ctx context.Context, job db.DownloadWork, platfo
 
 	if job.Lane == db.DownloadLaneCurrent {
 		m.RequestVideoPreview(job.VideoID)
-	}
-
-	// Fetch comments in background — only YouTube supports yt-dlp comment extraction.
-	if platform == "youtube" {
-		capturedURL := sourceURL
-		capturedID := job.VideoID
-		capturedOpts := opts
-		m.wg.Add(1)
-		go func() {
-			defer m.wg.Done()
-			parent := m.ctx
-			if parent == nil {
-				parent = context.Background()
-			}
-			bgCtx, cancel := context.WithTimeout(parent, 2*time.Minute)
-			defer cancel()
-			comments, err := m.downloader.YtDlp.FetchComments(bgCtx, capturedURL, download.DefaultCommentFetchLimit, capturedOpts)
-			if err != nil {
-				log.Printf("[downloadpool] comments fetch failed for %s: %v", capturedID, err)
-				return
-			}
-			inserted, err := m.db.AddComments(capturedID, comments)
-			if err != nil {
-				log.Printf("[downloadpool] store comments for %s: %v", capturedID, err)
-				return
-			}
-			m.KickMediaWork()
-			log.Printf("[downloadpool] fetched %d comments for %s", inserted, capturedID)
-		}()
-	}
-
-	// Fetch DeArrow branding + SponsorBlock segments in background — YouTube only.
-	if platform == "youtube" {
-		capturedID := job.VideoID
-		capturedPath := files.primaryKey
-		capturedPlatform := platform
-		m.wg.Add(1)
-		go func() {
-			defer m.wg.Done()
-			bgCtx, cancel := context.WithTimeout(m.ctx, 60*time.Second)
-			defer cancel()
-			m.triggerYoutubeEnrichFetch(bgCtx, capturedID, capturedPath, capturedPlatform)
-		}()
 	}
 
 	elapsed := time.Since(start).Round(time.Millisecond)
@@ -522,6 +470,48 @@ func (m *Manager) downloadVideo(ctx context.Context, job db.DownloadWork, platfo
 		Platform:  platform,
 		Timestamp: time.Now().Unix(),
 	})
+	if platform == "youtube" {
+		m.startYoutubePostDownloadEnrichment(sourceURL, job.VideoID, files.primaryKey, opts)
+	}
+}
+
+func (m *Manager) startYoutubePostDownloadEnrichment(sourceURL, videoID, videoPath string, opts download.Opts) {
+	if m == nil || m.youtubeEnrichmentSlots == nil {
+		return
+	}
+	parent := m.ctx
+	if parent == nil {
+		parent = context.Background()
+	}
+	m.wg.Add(1)
+	go func() {
+		defer m.wg.Done()
+		select {
+		case m.youtubeEnrichmentSlots <- struct{}{}:
+		case <-parent.Done():
+			return
+		}
+		defer func() { <-m.youtubeEnrichmentSlots }()
+
+		enrichCtx, enrichCancel := context.WithTimeout(parent, time.Minute)
+		m.triggerYoutubeEnrichFetch(enrichCtx, videoID, videoPath, "youtube")
+		enrichCancel()
+
+		commentsCtx, commentsCancel := context.WithTimeout(parent, 2*time.Minute)
+		comments, err := m.downloader.YtDlp.FetchComments(commentsCtx, sourceURL, download.DefaultCommentFetchLimit, opts)
+		commentsCancel()
+		if err != nil {
+			log.Printf("[downloadpool] comments fetch failed for %s: %v", videoID, err)
+			return
+		}
+		inserted, err := m.db.AddComments(videoID, comments)
+		if err != nil {
+			log.Printf("[downloadpool] store comments for %s: %v", videoID, err)
+			return
+		}
+		m.KickMediaWork()
+		log.Printf("[downloadpool] fetched %d comments for %s", inserted, videoID)
+	}()
 }
 
 func (m *Manager) failDownloadJob(job db.DownloadWork, err error) {
@@ -836,6 +826,8 @@ func extractPublishedAt(metadata map[string]any) int64 {
 				ts = n
 			case int:
 				ts = int64(n)
+			case json.Number:
+				ts, _ = n.Int64()
 			case string:
 				// gallery-dl stores createTime as a string
 				if parsed, err := strconv.ParseInt(n, 10, 64); err == nil {
@@ -953,6 +945,10 @@ func extractDurationFromMetadata(metadata map[string]any) int {
 			return int(v)
 		case int:
 			return v
+		case json.Number:
+			if n, err := v.Float64(); err == nil {
+				return int(n)
+			}
 		case string:
 			if n, err := strconv.Atoi(v); err == nil {
 				return n

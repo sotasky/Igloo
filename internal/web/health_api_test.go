@@ -147,6 +147,12 @@ func healthCheckBody(t *testing.T, body map[string]any, name string) map[string]
 func insertFeedItemAt(t *testing.T, srv *testServer, tweetID, channelID string, fetchedAt int64, publishedAt int64) {
 	t.Helper()
 	if err := srv.db.ExecRaw(`
+		INSERT OR IGNORE INTO channel_follows (channel_id, followed_at)
+		VALUES (?, ?)
+	`, channelID, fetchedAt); err != nil {
+		t.Fatal(err)
+	}
+	if err := srv.db.ExecRaw(`
 		INSERT INTO feed_items (tweet_id, channel_id, published_at, fetched_at)
 		VALUES (?, ?, ?, ?)
 	`, tweetID, channelID, publishedAt, fetchedAt); err != nil {

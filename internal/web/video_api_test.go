@@ -288,7 +288,7 @@ func TestHandleShortsHistoryUsesStoredSortWhenRepostCursorBecomesFollowed(t *tes
 	if err := srv.db.ExecRaw(
 		`INSERT INTO video_repost_sources (
 			video_id, reposter_channel_id, reposted_at_ms, first_seen_at_ms, updated_at_ms
-		 ) VALUES (?, ?, 0, 1000, 1000)`,
+		 ) VALUES (?, ?, 1000, 1100, 1100)`,
 		"old_tagged_cursor", "instagram_reposter",
 	); err != nil {
 		t.Fatal(err)

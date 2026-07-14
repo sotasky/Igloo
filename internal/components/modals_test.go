@@ -28,7 +28,7 @@ func TestFeedDashboardUnfollowButtonRemovesRowAndFormatsConfirm(t *testing.T) {
 
 	for _, want := range []string{
 		`class="feed-unfollow-link"`,
-		`hx-delete="/api/unsubscribe/twitter_sample_handle?delete_files=true"`,
+		`hx-delete="/api/unsubscribe/twitter_sample_handle"`,
 		`hx-target="closest tr"`,
 		`hx-swap="outerHTML"`,
 		`@sample_handle`,

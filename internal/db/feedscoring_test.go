@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"testing"
 	"time"
 )
@@ -36,9 +37,41 @@ func TestUpdateAlgoInterestStoresScoredAtInMilliseconds(t *testing.T) {
 	}
 }
 
-func TestListRankedFeedItemsExcludesGhostRows(t *testing.T) {
+func TestGetUnscoredFeedItemsReturnsNewestBoundedBatch(t *testing.T) {
+	d := openWritableTestDB(t)
+	if _, err := d.MutateFollow("twitter_sample_author", "set", 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.ExecRaw(`
+		INSERT INTO feed_items (
+			tweet_id, channel_id, body_text, published_at, fetched_at, algo_scored_at
+		) VALUES
+			('sample_unscored_old', 'twitter_sample_author', 'old', 1, 1, 0),
+			('sample_unscored_middle', 'twitter_sample_author', 'middle', 2, 2, 0),
+			('sample_unscored_new', 'twitter_sample_author', 'new', 3, 3, 0)
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	items, err := d.GetUnscoredFeedItems(2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("unscored batch length = %d, want 2", len(items))
+	}
+	got := map[string]bool{items[0].TweetID: true, items[1].TweetID: true}
+	if !got["sample_unscored_new"] || !got["sample_unscored_middle"] || got["sample_unscored_old"] {
+		t.Fatalf("unscored batch = %#v", got)
+	}
+}
+
+func TestRankCandidatesExcludeGhostRows(t *testing.T) {
 	d := openWritableTestDB(t)
 	publishedAt := time.Now().UnixMilli()
+	if err := d.ExecRaw(`INSERT INTO channel_follows (channel_id, followed_at) VALUES ('twitter_sample_author', 1)`); err != nil {
+		t.Fatal(err)
+	}
 
 	for _, row := range []struct {
 		id      string
@@ -57,9 +90,11 @@ func TestListRankedFeedItemsExcludesGhostRows(t *testing.T) {
 		}
 	}
 
-	items, err := d.ListRankedFeedItems(10, 0)
+	items, err := d.ListPreDiversityRankedCandidatesContext(
+		context.Background(), []string{"visible_item", "context_parent"}, 0,
+	)
 	if err != nil {
-		t.Fatalf("ListRankedFeedItems: %v", err)
+		t.Fatalf("ListPreDiversityRankedCandidatesContext: %v", err)
 	}
 	if len(items) != 1 || items[0].TweetID != "visible_item" {
 		t.Fatalf("items = %+v, want only visible_item", items)

@@ -100,9 +100,11 @@ func (s *Server) handleSidebarStatus(w http.ResponseWriter, r *http.Request) {
 		activityMsg = recent[0].Message
 	}
 
-	// Queue
-	queued, processing, _ := s.db.CountPendingXContentDownloads()
-	queueTotal := queued + processing
+	pending, _ := s.db.HasPendingXContentDownloads()
+	queueTotal := 0
+	if pending {
+		queueTotal = 1
+	}
 
 	data := components.SidebarStatusData{
 		ActivityMsg:   activityMsg,
@@ -202,10 +204,9 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleFeedHead(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Query().Get("fmt") == "html" {
-		item, err := s.db.GetLatestFetchedFeedItem()
 		currentHead := ""
-		if err == nil && item != nil {
-			currentHead = item.TweetID
+		if headID, err := s.db.GetLatestFetchedFeedItemID(); err == nil {
+			currentHead = headID
 		}
 		knownHead := strings.TrimSpace(r.URL.Query().Get("known_head"))
 		hasNew := knownHead != "" && currentHead != "" && knownHead != currentHead

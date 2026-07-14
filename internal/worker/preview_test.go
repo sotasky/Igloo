@@ -174,6 +174,28 @@ func TestRequestedPreviewDoesNotConsumeHistoricalFill(t *testing.T) {
 	}
 }
 
+func TestEmptyPreviewBackfillAdvancesOnlyBackgroundGate(t *testing.T) {
+	root := t.TempDir()
+	m := NewManager(newTestWorkerDBAt(t, root), testCfg(root))
+	now := time.Now()
+	m.previewBackfillNotBefore = time.Time{}
+
+	worked, delay := m.processPreviewBatch(context.Background(), now)
+	if worked || delay != previewBackfillInterval {
+		t.Fatalf("empty backfill = worked %v delay %s", worked, delay)
+	}
+	worked, delay = m.processPreviewBatch(context.Background(), now.Add(previewMinimumInterval))
+	if worked || delay != previewBackfillInterval-previewMinimumInterval {
+		t.Fatalf("paced empty backfill = worked %v delay %s", worked, delay)
+	}
+
+	m.RequestVideoPreview("sample_missing")
+	worked, delay = m.processRequestedPreview(context.Background(), now.Add(previewMinimumInterval))
+	if worked || delay != 0 || m.hasPreviewHint() {
+		t.Fatalf("requested hint was delayed by backfill gate: worked %v delay %s queued %v", worked, delay, m.hasPreviewHint())
+	}
+}
+
 func TestPreviewHistoricalFillIsPaced(t *testing.T) {
 	root := t.TempDir()
 	m := NewManager(newTestWorkerDBAt(t, root), testCfg(root))

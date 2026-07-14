@@ -588,7 +588,6 @@
     if (open) closeModal(open);
   });
 
-  // Status polling — now HTMX-driven via #sidebar-status (hx-trigger="every 4s")
   // Kick an immediate poll after actions (refresh, star, etc.)
   function schedulePoll() {
     var el = doc.getElementById('sidebar-status');
@@ -2252,8 +2251,30 @@
     });
   });
 
-  // Channel page unsubscribe button
-  // Channel page unsubscribe — now HTMX-driven
+  doc.body.addEventListener('htmx:beforeRequest', function (event) {
+    var btn = event.detail && event.detail.elt;
+    if (!btn || !btn.matches || !btn.matches('[data-optimistic-unfollow]')) return;
+    var target = btn;
+    var hxTarget = String(btn.getAttribute('hx-target') || '');
+    if (hxTarget.indexOf('closest ') === 0) {
+      target = btn.closest(hxTarget.slice(8)) || btn;
+    }
+    btn._optimisticUnfollow = {
+      target: target,
+      display: target.style.display
+    };
+    target.style.display = 'none';
+  });
+
+  doc.body.addEventListener('htmx:afterRequest', function (event) {
+    var btn = event.detail && event.detail.elt;
+    var pending = btn && btn._optimisticUnfollow;
+    if (!pending) return;
+    delete btn._optimisticUnfollow;
+    if (!event.detail.successful && pending.target && pending.target.isConnected) {
+      pending.target.style.display = pending.display;
+    }
+  });
 
   var _confirmModal = q('#confirm-modal');
   var _confirmTitle = q('#confirm-title');
@@ -2337,6 +2358,12 @@
     doc.querySelectorAll('[data-feed-menu-action="unfollow"][data-feed-channel-id]').forEach(function (btn) {
       if (String(btn.getAttribute('data-feed-channel-id') || '').trim() !== cid) return;
       btn.style.display = isFollowing ? '' : 'none';
+    });
+    doc.querySelectorAll('.js-follow-from-channel[data-channel-id]').forEach(function (btn) {
+      if (String(btn.getAttribute('data-channel-id') || '').trim() !== cid) return;
+      btn.setAttribute('data-following', isFollowing ? '1' : '0');
+      btn.classList.toggle('following', isFollowing);
+      btn.textContent = isFollowing ? t('action_following', 'Following') : t('action_follow', 'Follow');
     });
     doc.querySelectorAll('[data-profile-card-menu-action="unfollow"][data-profile-card-channel-id]').forEach(function (btn) {
       if (String(btn.getAttribute('data-profile-card-channel-id') || '').trim() !== cid) return;

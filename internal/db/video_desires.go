@@ -80,7 +80,7 @@ func (db *DB) GetVideoDesireWindow(sourceChannelID, component string) ([]VideoDe
 		       COALESCE(NULLIF(queued.owner_channel_id, ''), stored.channel_id, ''),
 		       COALESCE(NULLIF(queued.title, ''), stored.title, ''),
 		       COALESCE(NULLIF(queued.published_at_ms, 0), stored.published_at, 0),
-		       COALESCE(NULLIF(provenance.reposted_at_ms, 0), NULLIF(provenance.first_seen_at_ms, 0),
+		       COALESCE(NULLIF(provenance.reposted_at_ms, 0),
 		                NULLIF(queued.published_at_ms, 0), stored.published_at, 0),
 		       desired.source_position, desired.lane
 		FROM video_desires desired
@@ -314,7 +314,7 @@ func (db *DB) EnforceVideoDesireLimit(sourceChannelID string, limit int) error {
 		_, err := tx.Exec(`
 			WITH introduced AS (
 				SELECT video_id,
-				       MAX(COALESCE(NULLIF(reposted_at_ms, 0), first_seen_at_ms, 0)) AS freshness_at_ms
+				       MAX(COALESCE(NULLIF(reposted_at_ms, 0), 0)) AS freshness_at_ms
 				FROM video_repost_sources
 				WHERE reposter_channel_id = ?
 				GROUP BY video_id
@@ -443,15 +443,6 @@ func reconcileVideoOwnerTx(tx *sql.Tx, item VideoDesire, sourceComponent string)
 	return false, queueStatus, canonicalOwner, nil
 }
 
-func removeVideoDesiresForSourceTx(tx *sql.Tx, sourceChannelID string) ([]string, error) {
-	sourceChannelID = strings.TrimSpace(sourceChannelID)
-	if _, err := tx.Exec(`DELETE FROM video_desires WHERE source_channel_id = ?`, sourceChannelID); err != nil {
-		return nil, err
-	}
-	_, err := tx.Exec(`DELETE FROM video_repost_sources WHERE reposter_channel_id = ?`, sourceChannelID)
-	return nil, err
-}
-
 func queryVideoIDsTx(tx *sql.Tx, query string, args ...any) ([]string, error) {
 	rows, err := tx.Query(query, args...)
 	if err != nil {
@@ -467,6 +458,25 @@ func queryVideoIDsTx(tx *sql.Tx, query string, args ...any) ([]string, error) {
 		ids = append(ids, id)
 	}
 	return ids, rows.Err()
+}
+
+func queryAssetFileKeysTx(tx *sql.Tx, query string, args ...any) ([]string, error) {
+	rows, err := tx.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var keys []string
+	for rows.Next() {
+		var key string
+		if err := rows.Scan(&key); err != nil {
+			return nil, err
+		}
+		if key = strings.TrimSpace(key); key != "" {
+			keys = append(keys, key)
+		}
+	}
+	return keys, rows.Err()
 }
 
 func isReadyVideoTx(tx *sql.Tx, videoID string) (bool, error) {
@@ -512,15 +522,25 @@ func (db *DB) ClaimDownloadWork(owner string, lane DownloadLane, platform string
 			FROM download_queue dq
 			LEFT JOIN channels owner_channel ON owner_channel.channel_id = dq.owner_channel_id
 			WHERE CASE WHEN EXISTS (
-				SELECT 1 FROM video_desires current_desire
+				SELECT 1
+				FROM video_desires current_desire
+				JOIN channel_follows current_follow
+				  ON current_follow.channel_id = current_desire.source_channel_id
 				WHERE current_desire.video_id = dq.video_id AND current_desire.lane = 'current'
 			) THEN 'current' ELSE 'backfill' END = ?
 			  AND ` + leaseEligibleSQL() + `
 			  AND ` + videoDownloadPlatformSQL("dq", "owner_channel") + ` = ?
-			  AND EXISTS (SELECT 1 FROM video_desires desired WHERE desired.video_id = dq.video_id)
+			  AND EXISTS (
+				SELECT 1
+				FROM video_desires desired
+				JOIN channel_follows followed ON followed.channel_id = desired.source_channel_id
+				WHERE desired.video_id = dq.video_id
+			  )
 			ORDER BY (
 				SELECT MIN(position_desire.source_position)
 				FROM video_desires position_desire
+				JOIN channel_follows position_follow
+				  ON position_follow.channel_id = position_desire.source_channel_id
 				WHERE position_desire.video_id = dq.video_id
 			) ASC,
 			dq.published_at_ms DESC, dq.added_at_ms DESC, dq.video_id ASC
@@ -545,11 +565,12 @@ func readDownloadWorkTx(tx *sql.Tx, videoID string, lane DownloadLane) (Download
 	work := DownloadWork{Lane: lane}
 	err := tx.QueryRow(`
 		WITH chosen AS (
-			SELECT source_channel_id, source_component
-			FROM video_desires
-			WHERE video_id = ?
+			SELECT desired.source_channel_id, desired.source_component
+			FROM video_desires desired
+			JOIN channel_follows followed ON followed.channel_id = desired.source_channel_id
+			WHERE desired.video_id = ?
 			ORDER BY CASE WHEN lane = 'current' THEN 0 ELSE 1 END,
-			         source_position, source_channel_id, source_component
+			         source_position, desired.source_channel_id, desired.source_component
 			LIMIT 1
 		)
 		SELECT dq.video_id,
@@ -754,14 +775,24 @@ func (db *DB) MaintainVideoRetention(nowMs int64) (int, error) {
 			      WHEN ? > 0 AND COALESCE(source_kind, '') = 'story' AND published_at < ? THEN ''
 			      ELSE source_kind END
 			WHERE COALESCE(is_pinned, 0) = 0
-		`, tempCutoffMs, storyCutoffMs, storyCutoffMs); err != nil {
+			  AND (
+			    (COALESCE(is_temp, 0) = 1 AND downloaded_at > 0 AND downloaded_at < ?)
+			    OR (? > 0 AND COALESCE(source_kind, '') = 'story' AND published_at < ?)
+			  )
+		`, tempCutoffMs, storyCutoffMs, storyCutoffMs,
+			tempCutoffMs, storyCutoffMs, storyCutoffMs); err != nil {
 			return err
 		}
 		if _, err := tx.Exec(`
 			DELETE FROM download_queue
 			WHERE (status != 'processing' OR lease_until_ms <= ?)
 			  AND (
-			    NOT EXISTS (SELECT 1 FROM video_desires d WHERE d.video_id = download_queue.video_id)
+			    NOT EXISTS (
+			      SELECT 1
+			      FROM video_desires desired
+			      JOIN channel_follows followed ON followed.channel_id = desired.source_channel_id
+			      WHERE desired.video_id = download_queue.video_id
+			    )
 			    OR EXISTS (
 			      SELECT 1 FROM videos v
 			      WHERE v.video_id = download_queue.video_id AND `+readyVideoMediaExistsSQL("v")+`
@@ -770,34 +801,65 @@ func (db *DB) MaintainVideoRetention(nowMs int64) (int, error) {
 		`, nowMs); err != nil {
 			return err
 		}
-		var err error
-		retiredKeys, err = queryAssetFileKeysTx(tx, `
-			SELECT DISTINCT current.file_path
-			FROM assets a
-			JOIN media_objects current ON current.object_id = a.object_id
-			JOIN videos v ON v.video_id = a.owner_id AND v.owner_kind = a.owner_kind
-			WHERE current.published_revision > 0 AND current.file_path != ''
-			  AND `+collectibleVideoWhereSQL, nowMs)
+		rows, err := tx.Query(`
+			SELECT v.video_id, v.owner_kind
+			FROM videos v
+			WHERE `+collectibleVideoWhereSQL, nowMs)
 		if err != nil {
 			return err
 		}
-		if _, err := tx.Exec(`
-			DELETE FROM assets
-			WHERE EXISTS (
-				SELECT 1 FROM videos v
-				WHERE v.video_id = assets.owner_id AND v.owner_kind = assets.owner_kind
-				  AND `+collectibleVideoWhereSQL+`
-			)
-		`, nowMs); err != nil {
+		type collectibleVideo struct {
+			videoID   string
+			ownerKind string
+		}
+		var collectible []collectibleVideo
+		for rows.Next() {
+			var item collectibleVideo
+			if err := rows.Scan(&item.videoID, &item.ownerKind); err != nil {
+				_ = rows.Close()
+				return err
+			}
+			collectible = append(collectible, item)
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
 			return err
 		}
-		res, err := tx.Exec(`DELETE FROM videos AS v WHERE `+collectibleVideoWhereSQL, nowMs)
-		if err != nil {
+		if err := rows.Close(); err != nil {
 			return err
 		}
-		n, err := res.RowsAffected()
-		collected = int(n)
-		return err
+		for _, item := range collectible {
+			keys, err := queryAssetFileKeysTx(tx, `
+				SELECT DISTINCT current.file_path
+				FROM assets a INDEXED BY idx_assets_owner
+				JOIN media_objects current ON current.object_id = a.object_id
+				WHERE a.owner_kind = ? AND a.owner_id = ?
+				  AND current.published_revision > 0 AND current.file_path != ''
+			`, item.ownerKind, item.videoID)
+			if err != nil {
+				return err
+			}
+			retiredKeys = append(retiredKeys, keys...)
+			if _, err := tx.Exec(`
+				DELETE FROM assets
+				WHERE owner_kind = ? AND owner_id = ?
+			`, item.ownerKind, item.videoID); err != nil {
+				return err
+			}
+			res, err := tx.Exec(`
+				DELETE FROM videos
+				WHERE video_id = ? AND owner_kind = ?
+			`, item.videoID, item.ownerKind)
+			if err != nil {
+				return err
+			}
+			n, err := res.RowsAffected()
+			if err != nil {
+				return err
+			}
+			collected += int(n)
+		}
+		return nil
 	})
 	if err != nil {
 		return 0, err

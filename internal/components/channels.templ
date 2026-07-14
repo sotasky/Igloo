@@ -91,11 +91,11 @@ templ ChannelSection(p PageProps, sec ChannelWithVideos) {
 					hx-on::after-request="var b=this;b.textContent=event.detail.successful?'✓':'!';setTimeout(function(){b.textContent='↻';b.disabled=false},1200)"
 				>&#x21BB;</button>
 				<button class="channel-action-btn" type="button" data-action="settings" data-id={ sec.Channel.ChannelID } title={ L(p, "action_channel_settings_short", "Settings") }>&#x2699;</button>
-				<button class="channel-action-btn" type="button" title={ L(p, "action_remove_channel_and_files", "Remove Channel & Files") }
-					hx-delete={ "/api/unsubscribe/" + sec.Channel.ChannelID + "?delete_files=true" }
+				<button class="channel-action-btn" type="button" title={ L(p, "action_unfollow", "Unfollow") } data-optimistic-unfollow
+					hx-delete={ "/api/unsubscribe/" + sec.Channel.ChannelID }
 					hx-target="closest .channel-section"
 					hx-swap="outerHTML"
-					hx-confirm={ fmt.Sprintf(L(p, "confirm_remove_channel_and_files", "Remove channel and files for %q?"), sec.Channel.Name) }
+					hx-confirm={ LF(p, "confirm_unfollow_channel_body", "Unfollow %1$s?", sec.Channel.Name) }
 				>&#x2715;</button>
 			</div>
 		</div>
@@ -167,11 +167,11 @@ templ ChannelListItem(p PageProps, ch model.Channel) {
 					hx-on::after-request="var b=this;b.textContent=event.detail.successful?'✓':'!';setTimeout(function(){b.textContent='↻';b.disabled=false},1200)"
 				>&#x21BB;</button>
 				<button class="channel-action-btn" type="button" data-action="settings" data-id={ ch.ChannelID } title={ L(p, "action_channel_settings_short", "Settings") }>&#x2699;</button>
-				<button class="channel-action-btn" type="button" title={ L(p, "action_remove_channel_and_files", "Remove Channel & Files") }
-					hx-delete={ "/api/unsubscribe/" + ch.ChannelID + "?delete_files=true" }
+				<button class="channel-action-btn" type="button" title={ L(p, "action_unfollow", "Unfollow") } data-optimistic-unfollow
+					hx-delete={ "/api/unsubscribe/" + ch.ChannelID }
 					hx-target="closest .channel-row"
 					hx-swap="outerHTML"
-					hx-confirm={ fmt.Sprintf(L(p, "confirm_remove_channel_and_files", "Remove channel and files for %q?"), ch.Name) }
+					hx-confirm={ LF(p, "confirm_unfollow_channel_body", "Unfollow %1$s?", ch.Name) }
 				>&#x2715;</button>
 			</div>
 		</div>

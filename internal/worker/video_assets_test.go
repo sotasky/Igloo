@@ -2,6 +2,9 @@ package worker
 
 import (
 	"context"
+	"image"
+	"image/color"
+	"image/jpeg"
 	"os"
 	"path/filepath"
 	"testing"
@@ -124,7 +127,7 @@ func TestPrepareCompletedVideoFilesKeepsMediaExternalAndDefersExactThumbnail(t *
 	}
 }
 
-func TestDownloadVideoPublishesPrimaryBeforeBlockedThumbnail(t *testing.T) {
+func TestDownloadVideoPublishesPrimaryAndQueuesSubtitleBeforeBlockedThumbnail(t *testing.T) {
 	root := t.TempDir()
 	database := newTestWorkerDBAt(t, root)
 	cfg := testCfg(root)
@@ -137,11 +140,29 @@ func TestDownloadVideoPublishesPrimaryBeforeBlockedThumbnail(t *testing.T) {
 	}
 	started := filepath.Join(root, "ffmpeg-started")
 	release := filepath.Join(root, "ffmpeg-release")
+	frame := filepath.Join(root, "frame.jpg")
+	frameFile, err := os.Create(frame)
+	if err != nil {
+		t.Fatal(err)
+	}
+	frameImage := image.NewRGBA(image.Rect(0, 0, 2, 2))
+	for y := 0; y < 2; y++ {
+		for x := 0; x < 2; x++ {
+			frameImage.Set(x, y, color.White)
+		}
+	}
+	if err := jpeg.Encode(frameFile, frameImage, nil); err != nil {
+		_ = frameFile.Close()
+		t.Fatal(err)
+	}
+	if err := frameFile.Close(); err != nil {
+		t.Fatal(err)
+	}
 	script := `#!/bin/sh
 : > "$IGLOO_FFMPEG_STARTED"
 while [ ! -e "$IGLOO_FFMPEG_RELEASE" ]; do sleep 0.01; done
 for output in "$@"; do :; done
-printf thumbnail > "$output"
+cp "$IGLOO_FFMPEG_FRAME" "$output"
 `
 	if err := os.WriteFile(filepath.Join(binDir, "ffmpeg"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
@@ -149,6 +170,7 @@ printf thumbnail > "$output"
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("IGLOO_FFMPEG_STARTED", started)
 	t.Setenv("IGLOO_FFMPEG_RELEASE", release)
+	t.Setenv("IGLOO_FFMPEG_FRAME", frame)
 	defer func() { _ = os.WriteFile(release, nil, 0o644) }()
 
 	mediaDir, err := cfg.Storage.WritePath("media/instagram/sample_author")
@@ -159,22 +181,48 @@ printf thumbnail > "$output"
 		t.Fatal(err)
 	}
 	const videoID = "sample_video"
-	if err := os.WriteFile(filepath.Join(mediaDir, videoID+".mp4"), []byte("video"), 0o644); err != nil {
+	const attemptID = "sample_attempt"
+	videoPath := filepath.Join(mediaDir, attemptID+".mp4")
+	if err := os.WriteFile(videoPath, []byte("video"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	completed := download.CompletedDownload{MediaPaths: []string{videoPath}}
+	files, err := m.prepareCompletedVideoFiles(context.Background(), download.MediaLaneBulkRegular, completed)
+	if err != nil {
 		t.Fatal(err)
 	}
 
-	done := make(chan struct{})
+	done := make(chan error, 1)
+	isAuto := true
+	subtitle := db.Asset{
+		AssetID:        db.BuildAssetID("instagram", "instagram_reel", videoID, "subtitle", 0),
+		AssetKind:      "subtitle",
+		OwnerKind:      "instagram_reel",
+		OwnerID:        videoID,
+		SourceURL:      "https://example.test/post/sample_video",
+		ContentType:    "text/vtt",
+		DownloadLane:   db.DownloadLaneBackfill,
+		IsAuto:         &isAuto,
+		RequiredReason: "retention",
+	}
 	go func() {
-		defer close(done)
-		m.downloadVideo(context.Background(), db.DownloadWork{
-			VideoID: videoID, OwnerChannelID: "instagram_sample_author",
-			SourceChannelID: "instagram_sample_author", Lane: db.DownloadLaneBackfill,
-		}, "instagram", "sample_author", "best", false)
+		done <- m.storeCompletedVideoOutputs(
+			context.Background(), download.MediaLaneBulkRegular, "instagram", attemptID,
+			db.CompletedVideo{
+				VideoID: videoID, ChannelID: "instagram_sample_author", OwnerKind: "instagram_reel", Assets: files.assets,
+			},
+			files, completed, &subtitle,
+		)
 	}()
 	deadline := time.Now().Add(2 * time.Second)
 	for {
 		if _, err := os.Stat(started); err == nil {
 			break
+		}
+		select {
+		case err := <-done:
+			t.Fatalf("publication finished before thumbnail extraction: %v", err)
+		default:
 		}
 		if time.Now().After(deadline) {
 			t.Fatal("thumbnail extraction did not start")
@@ -185,6 +233,10 @@ printf thumbnail > "$output"
 	if err != nil || primary == nil {
 		t.Fatalf("primary media was not published before thumbnail extraction: %+v %v", primary, err)
 	}
+	queuedSubtitle, err := database.GetAsset(subtitle.AssetID, subtitle.AssetKind)
+	if err != nil || queuedSubtitle == nil || queuedSubtitle.State != db.AssetStateQueued || queuedSubtitle.IsAuto == nil {
+		t.Fatalf("subtitle was not queued after primary publication: %+v %v", queuedSubtitle, err)
+	}
 	thumbnail, err := database.GetAssetByOwnerIdentity("post_thumbnail", "instagram_reel", videoID, 0)
 	if err != nil || thumbnail != nil {
 		t.Fatalf("thumbnail was published while extraction was blocked: %+v %v", thumbnail, err)
@@ -193,84 +245,16 @@ printf thumbnail > "$output"
 		t.Fatal(err)
 	}
 	select {
-	case <-done:
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("download did not finish after thumbnail extraction was released")
 	}
 	thumbnail, err = database.GetAssetByOwnerIdentity("post_thumbnail", "instagram_reel", videoID, 0)
 	if err != nil || thumbnail == nil || thumbnail.State != db.AssetStateReady {
 		t.Fatalf("thumbnail was not published after extraction: %+v %v", thumbnail, err)
-	}
-}
-
-func TestReusableCompletedVideoUsesOnlyCanonicalFiles(t *testing.T) {
-	dir := t.TempDir()
-	for name, body := range map[string]string{
-		"sample.mp4":                   "video",
-		"sample.webp":                  "thumbnail",
-		"sample.info.json":             `{}`,
-		"sample.en.vtt":                "WEBVTT\n",
-		"sample-attempt-deadbeef.mp4":  "partial",
-		"sample.f137.mp4":              "format fragment",
-		"sample_other-not-indexed.jpg": "not canonical",
-		"sample2.mp4":                  "another video",
-	} {
-		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	completed, err := reusableCompletedVideoAdmitted(dir, "sample", "youtube")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(completed.MediaPaths) != 1 || filepath.Base(completed.MediaPaths[0]) != "sample.mp4" {
-		t.Fatalf("media paths = %v", completed.MediaPaths)
-	}
-	if filepath.Base(completed.ThumbnailPath) != "sample.webp" {
-		t.Fatalf("thumbnail path = %q", completed.ThumbnailPath)
-	}
-	if filepath.Base(completed.InfoJSONPath) != "sample.info.json" {
-		t.Fatalf("info path = %q", completed.InfoJSONPath)
-	}
-	if len(completed.SubtitlePaths) != 1 || filepath.Base(completed.SubtitlePaths[0]) != "sample.en.vtt" {
-		t.Fatalf("subtitle paths = %v", completed.SubtitlePaths)
-	}
-}
-
-func TestReusableCompletedVideoRejectsLoneThumbnail(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "sample.webp"), []byte("thumbnail"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	completed, err := reusableCompletedVideoAdmitted(dir, "sample", "youtube")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(completed.MediaPaths) != 0 {
-		t.Fatalf("lone thumbnail was adopted as media: %v", completed.MediaPaths)
-	}
-}
-
-func TestReusableCompletedVideoRecognizesNumberedSlideshow(t *testing.T) {
-	dir := t.TempDir()
-	for _, name := range []string{"sample.jpg", "sample_2.jpg", "sample_3.webp", "sample_note.jpg"} {
-		if err := os.WriteFile(filepath.Join(dir, name), []byte(name), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	completed, err := reusableCompletedVideoAdmitted(dir, "sample", "tiktok")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(completed.MediaPaths) != 3 {
-		t.Fatalf("media paths = %v", completed.MediaPaths)
-	}
-	for _, path := range completed.MediaPaths {
-		if filepath.Base(path) == "sample_note.jpg" {
-			t.Fatalf("non-indexed sibling was adopted: %v", completed.MediaPaths)
-		}
 	}
 }
 

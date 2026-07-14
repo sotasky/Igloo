@@ -319,7 +319,7 @@ export function makeShortItem(entryData, existingEl) {
       slide.className = slideType === 'video' ? 'slide-image slide-video' : 'slide-image'
       slide.dataset.slideType = slideType
       if (slideType === 'video') {
-        slide.preload = 'metadata'
+        slide.preload = 'none'
         slide.playsInline = true
         slide.controls = false
         slide.muted = _state.muted
@@ -366,7 +366,7 @@ export function makeShortItem(entryData, existingEl) {
     }
     video = doc.createElement('video')
     video.className = 'native-short-video'
-    video.preload = 'metadata'
+    video.preload = 'none'
     video.playsInline = true
     video.controls = false
     video.setAttribute('playsinline', '')
@@ -747,21 +747,6 @@ export function makeShortItem(entryData, existingEl) {
   return entryObj
 }
 
-function subscribeURLForShort(entryData, channelId) {
-  var handle = channelId.replace(/^(tiktok|instagram|youtube|twitter|x)_/, '')
-  var platform = String(entryData.platform || '').trim().toLowerCase()
-  if (platform === 'tiktok' || channelId.indexOf('tiktok_') === 0) {
-    return 'https://www.tiktok.com/@' + handle
-  } else if (platform === 'instagram' || channelId.indexOf('instagram_') === 0) {
-    return 'https://www.instagram.com/' + handle + '/'
-  } else if (platform === 'youtube' || channelId.indexOf('youtube_') === 0) {
-    return 'https://www.youtube.com/@' + handle
-  } else if (platform === 'twitter' || platform === 'x' || channelId.indexOf('twitter_') === 0 || channelId.indexOf('x_') === 0) {
-    return 'https://x.com/' + handle
-  }
-  return ''
-}
-
 function syncShortAuthorFollow(channelId, following) {
   var cid = String(channelId || '').trim()
   if (!cid) return
@@ -799,45 +784,40 @@ function followShortAuthor(entryData, btn) {
   var handle = channelId.replace(/^(tiktok|instagram|youtube|twitter|x)_/, '')
   var label = entryData.channelName || handle || channelId
   var following = btn.getAttribute('data-following') === '1' || !!entryData.channelFollowed
-  var url = subscribeURLForShort(entryData, channelId)
-  if (!following && !url) return
   btn.disabled = true
   var op
   if (following) {
     op = askConfirm({
       title: t('confirm_unfollow_channel_title', 'Unfollow Channel'),
-      body: tf('confirm_unfollow_channel_delete_media_body', 'Unfollow "%1$s" and delete local media? This cannot be undone.', label),
+      body: tf('confirm_unfollow_channel_body', 'Unfollow %1$s?', label),
       confirmLabel: t('action_unfollow', 'Unfollow'),
       cancelLabel: t('action_cancel', 'Cancel'),
       danger: true
     }).then(function (confirmed) {
       if (!confirmed) return null
       syncShortAuthorFollow(channelId, false)
-      return apiFetch('/api/unsubscribe/' + encodeURIComponent(channelId) + '?delete_files=true', { method: 'DELETE' })
+      return apiFetch('/api/mutations/follow', {
+        method: 'POST',
+        body: JSON.stringify({ channel_id: channelId, action: 'clear', updated_at_ms: Date.now() })
+      })
     }).then(function (payload) {
       if (!payload) return false
       showToast((payload && payload.message) || tf('toast_unfollowed_channel', 'Unfollowed %1$s', label))
       return true
     })
   } else {
-    op = apiFetch('/api/subscribe', {
+    syncShortAuthorFollow(channelId, true)
+    op = apiFetch('/api/mutations/follow', {
       method: 'POST',
-      body: JSON.stringify({ url: url })
-    }).then(function (payload) {
-      if (payload && payload.success === false) throw Object.assign(new Error('subscribe failed'), { payload: payload })
-      syncShortAuthorFollow(channelId, true)
+      body: JSON.stringify({ channel_id: channelId, action: 'set', updated_at_ms: Date.now() })
+    }).then(function () {
       showToast(tf('toast_followed_channel', 'Followed %1$s', label))
       return true
     })
   }
   op.catch(function (err) {
-    var payload = err && err.payload
-    if (!following && payload && payload.error === 'already subscribed') {
-      syncShortAuthorFollow(channelId, true)
-      showToast(tf('toast_followed_channel', 'Followed %1$s', label))
-      return
-    }
     if (following) syncShortAuthorFollow(channelId, true)
+    else syncShortAuthorFollow(channelId, false)
     showToast((err && err.payload && err.payload.error) ? err.payload.error : (following ? t('error_unfollow_failed', 'Failed to unfollow') : t('error_follow_failed', 'Failed to follow')))
   }).finally(function () {
     btn.disabled = false

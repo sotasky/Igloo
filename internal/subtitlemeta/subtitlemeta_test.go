@@ -1,8 +1,7 @@
 package subtitlemeta
 
 import (
-	"os"
-	"path/filepath"
+	"encoding/json"
 	"testing"
 )
 
@@ -27,35 +26,28 @@ func TestTrackLang(t *testing.T) {
 }
 
 func TestManualLangsAndIsAuto(t *testing.T) {
-	dir := t.TempDir()
-	infoPath := filepath.Join(dir, "video.info.json")
-	body := `{"subtitles":{"en":[{"url":"https://example.test/manual.vtt"}],"fr":[]},"automatic_captions":{"fr":[{"url":"https://example.test/auto.vtt"}]}}`
-	if err := os.WriteFile(infoPath, []byte(body), 0o644); err != nil {
-		t.Fatalf("write info: %v", err)
-	}
+	info := testMetadata(t, `{"subtitles":{"en":[{"url":"https://example.test/manual.vtt"}],"fr":[]},"automatic_captions":{"fr":[{"url":"https://example.test/auto.vtt"}]}}`)
 
-	langs := ManualLangs(infoPath)
+	langs := ManualLangs(info)
 	if !langs["en"] {
 		t.Fatal("expected en to be manual")
 	}
 	if langs["fr"] {
 		t.Fatal("expected empty fr subtitles to be non-manual")
 	}
-	if IsAuto(infoPath, "en") {
+	if IsAuto(info, "en") {
 		t.Fatal("manual en subtitles should not be auto")
 	}
-	if !IsAuto(infoPath, "fr") {
+	if !IsAuto(info, "fr") {
 		t.Fatal("empty manual subtitles should fall back to auto")
 	}
-	if !IsAuto(filepath.Join(dir, "missing.info.json"), "en") {
-		t.Fatal("missing info.json should be treated as auto")
+	if !IsAuto(nil, "en") {
+		t.Fatal("missing metadata should be treated as auto")
 	}
 }
 
 func TestManualLangsTreatsYouTubeASRSubtitleEntriesAsAuto(t *testing.T) {
-	dir := t.TempDir()
-	infoPath := filepath.Join(dir, "video.info.json")
-	body := `{
+	info := testMetadata(t, `{
 		"subtitles": {
 			"en": [
 				{"ext":"vtt","url":"https://www.youtube.com/api/timedtext?v=sample&caps=asr&lang=en&fmt=vtt","name":"English"}
@@ -69,30 +61,25 @@ func TestManualLangsTreatsYouTubeASRSubtitleEntriesAsAuto(t *testing.T) {
 				{"ext":"vtt","url":"https://www.youtube.com/api/timedtext?v=sample&kind=asr&lang=en&fmt=vtt","name":"English"}
 			]
 		}
-	}`
-	if err := os.WriteFile(infoPath, []byte(body), 0o644); err != nil {
-		t.Fatalf("write info: %v", err)
-	}
+	}`)
 
-	langs := ManualLangs(infoPath)
+	langs := ManualLangs(info)
 	if langs["en"] {
 		t.Fatal("ASR-marked subtitles.en should not be treated as manual")
 	}
 	if !langs["tr"] {
 		t.Fatal("non-ASR subtitles.tr should be treated as manual")
 	}
-	if !IsAuto(infoPath, "en") {
+	if !IsAuto(info, "en") {
 		t.Fatal("ASR-marked subtitles.en should be auto")
 	}
-	if IsAuto(infoPath, "tr") {
+	if IsAuto(info, "tr") {
 		t.Fatal("non-ASR subtitles.tr should be manual")
 	}
 }
 
 func TestManualLangsKeepsCapsASRSubtitleManualWithoutASRAutomaticTrack(t *testing.T) {
-	dir := t.TempDir()
-	infoPath := filepath.Join(dir, "video.info.json")
-	body := `{
+	info := testMetadata(t, `{
 		"subtitles": {
 			"en": [
 				{"ext":"vtt","url":"https://www.youtube.com/api/timedtext?v=sample&caps=asr&lang=en&fmt=vtt","name":"English"}
@@ -103,37 +90,34 @@ func TestManualLangsKeepsCapsASRSubtitleManualWithoutASRAutomaticTrack(t *testin
 				{"ext":"vtt","protocol":"m3u8_native","url":"https://manifest.googlevideo.com/api/manifest/hls_timedtext_playlist/tts_params/caps%3Dasr%26lang%3Den/playlist/index.m3u8"}
 			]
 		}
-	}`
-	if err := os.WriteFile(infoPath, []byte(body), 0o644); err != nil {
-		t.Fatalf("write info: %v", err)
-	}
+	}`)
 
-	langs := ManualLangs(infoPath)
+	langs := ManualLangs(info)
 	if !langs["en"] {
 		t.Fatal("caps=asr subtitles.en without a same-language kind=asr automatic track should be manual")
 	}
-	if IsAuto(infoPath, "en") {
+	if IsAuto(info, "en") {
 		t.Fatal("caps=asr subtitles.en without a same-language kind=asr automatic track should not be auto")
 	}
 }
 
 func TestLanguage(t *testing.T) {
-	dir := t.TempDir()
-	infoPath := filepath.Join(dir, "video.info.json")
-	if err := os.WriteFile(infoPath, []byte(`{"language":"tr"}`), 0o644); err != nil {
-		t.Fatalf("write info: %v", err)
-	}
-	if got := Language(infoPath); got != "tr" {
+	if got := Language(map[string]any{"language": "tr"}); got != "tr" {
 		t.Fatalf("Language = %q, want %q", got, "tr")
 	}
-	if got := Language(filepath.Join(dir, "missing.info.json")); got != "" {
-		t.Fatalf("Language(missing) = %q, want empty", got)
+	if got := Language(nil); got != "" {
+		t.Fatalf("Language(nil) = %q, want empty", got)
 	}
-	noLangPath := filepath.Join(dir, "nolang.info.json")
-	if err := os.WriteFile(noLangPath, []byte(`{"id":"abc"}`), 0o644); err != nil {
-		t.Fatalf("write nolang: %v", err)
-	}
-	if got := Language(noLangPath); got != "" {
+	if got := Language(map[string]any{"id": "sample"}); got != "" {
 		t.Fatalf("Language(no-language) = %q, want empty", got)
 	}
+}
+
+func testMetadata(t *testing.T, raw string) map[string]any {
+	t.Helper()
+	var metadata map[string]any
+	if err := json.Unmarshal([]byte(raw), &metadata); err != nil {
+		t.Fatal(err)
+	}
+	return metadata
 }

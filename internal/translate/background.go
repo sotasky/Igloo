@@ -2,6 +2,7 @@ package translate
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"log/slog"
 	"regexp"
@@ -20,7 +21,6 @@ const (
 	translateBackgroundIdleDelay      = 30 * time.Second
 	translateBackgroundErrorDelay     = time.Minute
 	translateBackgroundRateLimitDelay = kagiProviderCooldownDuration
-	translateBackgroundScanLimit      = 500
 	translateBackgroundBatchSize      = 10
 	translateBackgroundMaxErrors      = translateBackgroundBatchSize
 	translateBackgroundProviderDelay  = 1500 * time.Millisecond
@@ -182,10 +182,6 @@ func runTranslateBackgroundBatch(ctx context.Context, database *db.DB, cfg trans
 		return 0, nil
 	}
 
-	if _, err := database.EnqueueTranslationCandidates(cfg.target, cfg.skip, translateBackgroundScanLimit); err != nil {
-		return 0, err
-	}
-
 	translated := 0
 	failures := 0
 	attempted := 0
@@ -207,6 +203,13 @@ func runTranslateBackgroundBatch(ctx context.Context, database *db.DB, cfg trans
 		var groupOrder []string
 		for _, job := range jobs {
 			if err := ctx.Err(); err != nil {
+				return translated, err
+			}
+			if _, _, err := database.GetTranslation(job.TweetID, job.Field, job.TargetLang); err == nil {
+				_ = database.CompleteTranslationJob(job.TweetID, job.Field, job.TargetLang)
+				continue
+			} else if err != sql.ErrNoRows {
+				_ = database.RetryTranslationJob(job.TweetID, job.Field, job.TargetLang, "cache_read", err.Error(), translateBackgroundErrorDelay)
 				return translated, err
 			}
 

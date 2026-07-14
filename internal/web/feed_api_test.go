@@ -168,15 +168,18 @@ func TestHandleFeedLikePublishesItsStateOwners(t *testing.T) {
 	}
 }
 
-func TestHandleFeedSeenDoesNotInvalidateFeedRanking(t *testing.T) {
+func TestHandleFeedSeenBatchDoesNotInvalidateFeedRanking(t *testing.T) {
 	srv := newTestServer(t)
 	if err := srv.db.ExecRaw(`INSERT INTO feed_items
 		(tweet_id, source_channel_id, channel_id, body_text, published_at, algo_interest, algo_scored_at)
-		VALUES ('tw_seen_ranked', 'twitter_sample_seen', 'twitter_sample_seen', 'body', 1000, 1.0, 12345)`); err != nil {
+		VALUES
+		  ('tw_seen_ranked_a', 'twitter_sample_seen', 'twitter_sample_seen', 'body', 1000, 1.0, 12345),
+		  ('tw_seen_ranked_b', 'twitter_sample_seen', 'twitter_sample_seen', 'body', 1001, 1.0, 12346)`); err != nil {
 		t.Fatal(err)
 	}
 
-	seenReq := httptest.NewRequest("POST", "/api/feed/seen?tweet_id=tw_seen_ranked", nil)
+	seenReq := httptest.NewRequest("POST", "/api/feed/seen", strings.NewReader(`{"tweet_ids":["tw_seen_ranked_a","tw_seen_ranked_b"]}`))
+	seenReq.Header.Set("Content-Type", "application/json")
 	seenReq = attachTestAuth(seenReq, "alice")
 	seenRec := httptest.NewRecorder()
 	srv.mux.ServeHTTP(seenRec, seenReq)
@@ -184,8 +187,15 @@ func TestHandleFeedSeenDoesNotInvalidateFeedRanking(t *testing.T) {
 		t.Fatalf("seen status: got %d - %s", seenRec.Code, seenRec.Body.String())
 	}
 
+	var seenCount int
+	if err := srv.db.QueryRow(`SELECT COUNT(*) FROM feed_seen WHERE tweet_id IN ('tw_seen_ranked_a', 'tw_seen_ranked_b')`).Scan(&seenCount); err != nil {
+		t.Fatal(err)
+	}
+	if seenCount != 2 {
+		t.Fatalf("seen rows = %d, want 2", seenCount)
+	}
 	var scoredAt int64
-	if err := srv.db.QueryRow(`SELECT algo_scored_at FROM feed_items WHERE tweet_id='tw_seen_ranked'`).Scan(&scoredAt); err != nil {
+	if err := srv.db.QueryRow(`SELECT algo_scored_at FROM feed_items WHERE tweet_id='tw_seen_ranked_a'`).Scan(&scoredAt); err != nil {
 		t.Fatal(err)
 	}
 	if scoredAt != 12345 {

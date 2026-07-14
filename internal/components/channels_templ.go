@@ -402,22 +402,22 @@ func ChannelSection(p PageProps, sec ChannelWithVideos) templ.Component {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var23 string
-		templ_7745c5c3_Var23, templ_7745c5c3_Err = templ.ResolveAttributeValue(L(p, "action_remove_channel_and_files", "Remove Channel & Files"))
+		templ_7745c5c3_Var23, templ_7745c5c3_Err = templ.ResolveAttributeValue(L(p, "action_unfollow", "Unfollow"))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/channels.templ`, Line: 94, Col: 126}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/channels.templ`, Line: 94, Col: 96}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var23)
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 24, "\" hx-delete=\"")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 24, "\" data-optimistic-unfollow hx-delete=\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var24 string
-		templ_7745c5c3_Var24, templ_7745c5c3_Err = templ.ResolveAttributeValue("/api/unsubscribe/" + sec.Channel.ChannelID + "?delete_files=true")
+		templ_7745c5c3_Var24, templ_7745c5c3_Err = templ.ResolveAttributeValue("/api/unsubscribe/" + sec.Channel.ChannelID)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/channels.templ`, Line: 95, Col: 83}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/channels.templ`, Line: 95, Col: 60}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var24)
 		if templ_7745c5c3_Err != nil {
@@ -428,9 +428,9 @@ func ChannelSection(p PageProps, sec ChannelWithVideos) templ.Component {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var25 string
-		templ_7745c5c3_Var25, templ_7745c5c3_Err = templ.ResolveAttributeValue(fmt.Sprintf(L(p, "confirm_remove_channel_and_files", "Remove channel and files for %q?"), sec.Channel.Name))
+		templ_7745c5c3_Var25, templ_7745c5c3_Err = templ.ResolveAttributeValue(LF(p, "confirm_unfollow_channel_body", "Unfollow %1$s?", sec.Channel.Name))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/channels.templ`, Line: 98, Col: 125}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/channels.templ`, Line: 98, Col: 92}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var25)
 		if templ_7745c5c3_Err != nil {
@@ -820,22 +820,22 @@ func ChannelListItem(p PageProps, ch model.Channel) templ.Component {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var48 string
-		templ_7745c5c3_Var48, templ_7745c5c3_Err = templ.ResolveAttributeValue(L(p, "action_remove_channel_and_files", "Remove Channel & Files"))
+		templ_7745c5c3_Var48, templ_7745c5c3_Err = templ.ResolveAttributeValue(L(p, "action_unfollow", "Unfollow"))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/channels.templ`, Line: 170, Col: 126}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/channels.templ`, Line: 170, Col: 96}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var48)
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 53, "\" hx-delete=\"")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 53, "\" data-optimistic-unfollow hx-delete=\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var49 string
-		templ_7745c5c3_Var49, templ_7745c5c3_Err = templ.ResolveAttributeValue("/api/unsubscribe/" + ch.ChannelID + "?delete_files=true")
+		templ_7745c5c3_Var49, templ_7745c5c3_Err = templ.ResolveAttributeValue("/api/unsubscribe/" + ch.ChannelID)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/channels.templ`, Line: 171, Col: 74}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/channels.templ`, Line: 171, Col: 51}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var49)
 		if templ_7745c5c3_Err != nil {
@@ -846,9 +846,9 @@ func ChannelListItem(p PageProps, ch model.Channel) templ.Component {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var50 string
-		templ_7745c5c3_Var50, templ_7745c5c3_Err = templ.ResolveAttributeValue(fmt.Sprintf(L(p, "confirm_remove_channel_and_files", "Remove channel and files for %q?"), ch.Name))
+		templ_7745c5c3_Var50, templ_7745c5c3_Err = templ.ResolveAttributeValue(LF(p, "confirm_unfollow_channel_body", "Unfollow %1$s?", ch.Name))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/channels.templ`, Line: 174, Col: 116}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/channels.templ`, Line: 174, Col: 83}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var50)
 		if templ_7745c5c3_Err != nil {

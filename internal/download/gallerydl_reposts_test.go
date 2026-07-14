@@ -18,8 +18,8 @@ func TestTikTokRepostArgsUseExtractorRange(t *testing.T) {
 	}
 }
 
-func TestParseTikTokRepostDump(t *testing.T) {
-	output := []byte(`{"id":7350123456789012345,"url":"https://www.tiktok.com/@author_one/video/7350123456789012345","description":"clip","author":{"uniqueId":"author_one","nickname":"Author One"},"date":1710000000}` + "\n")
+func TestParseTikTokRepostDumpSeparatesPublishAndRepostTimes(t *testing.T) {
+	output := []byte(`[[2,{"id":"7350123456789012345","url":"https://www.tiktok.com/@author_one/video/7350123456789012345","description":"clip","author":{"uniqueId":"author_one","nickname":"Author One"},"createTime":"1710000000","date":"2024-03-09 16:00:00","reposted_at":1710003600}]]` + "\n")
 
 	refs := parseTikTokRepostDump(output, "reposter_one")
 	if len(refs) != 1 {
@@ -35,7 +35,10 @@ func TestParseTikTokRepostDump(t *testing.T) {
 	if ref.ChannelID != "tiktok_author_one" || ref.AuthorHandle != "author_one" || ref.AuthorDisplayName != "Author One" {
 		t.Fatalf("unexpected author metadata: %+v", ref)
 	}
-	if ref.RepostedAtMs != 1710000000000 {
+	if ref.PublishedAtMs != 1710000000000 {
+		t.Fatalf("PublishedAtMs = %d", ref.PublishedAtMs)
+	}
+	if ref.RepostedAtMs != 1710003600000 {
 		t.Fatalf("RepostedAtMs = %d", ref.RepostedAtMs)
 	}
 }
@@ -53,6 +56,9 @@ func TestParseTikTokRepostDumpGalleryDLTuple(t *testing.T) {
 	}
 	if ref.ChannelID != "tiktok_.wayru.fx" || ref.AuthorHandle != ".wayru.fx" || ref.AuthorDisplayName != "Wayru" {
 		t.Fatalf("unexpected author metadata: %+v", ref)
+	}
+	if ref.PublishedAtMs != 1777319779000 || ref.RepostedAtMs != 0 {
+		t.Fatalf("publish/repost timestamps = %d/%d", ref.PublishedAtMs, ref.RepostedAtMs)
 	}
 }
 

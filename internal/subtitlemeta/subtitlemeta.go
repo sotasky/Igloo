@@ -3,7 +3,6 @@ package subtitlemeta
 import (
 	"encoding/json"
 	"net/url"
-	"os"
 	"strings"
 )
 
@@ -19,49 +18,40 @@ func TrackLang(videoStem, filename string) string {
 	return suffix
 }
 
-// ManualLangs reads a yt-dlp info.json sidecar and returns languages that have
-// manually uploaded subtitles. Auto captions live under automatic_captions and
-// should not be enabled by default.
-func ManualLangs(infoPath string) map[string]bool {
-	data, err := os.ReadFile(infoPath)
-	if err != nil {
-		return nil
-	}
-	var info struct {
-		Subtitles         map[string]json.RawMessage `json:"subtitles"`
-		AutomaticCaptions map[string]json.RawMessage `json:"automatic_captions"`
-	}
-	if json.Unmarshal(data, &info) != nil {
-		return nil
-	}
+// ManualLangs returns languages that have manually uploaded subtitles.
+func ManualLangs(info map[string]any) map[string]bool {
+	subtitles := metadataMap(info, "subtitles")
+	automaticCaptions := metadataMap(info, "automatic_captions")
 	langs := make(map[string]bool)
-	for lang, raw := range info.Subtitles {
-		if subtitleListHasManualEntries(raw) && !subtitleListHasASREntries(info.AutomaticCaptions[lang]) {
+	for lang, value := range subtitles {
+		if subtitleListHasManualEntries(metadataRaw(value)) && !subtitleListHasASREntries(metadataRaw(automaticCaptions[lang])) {
 			langs[lang] = true
 		}
 	}
 	return langs
 }
 
-func IsAuto(infoPath, lang string) bool {
-	return !ManualLangs(infoPath)[lang]
+func IsAuto(info map[string]any, lang string) bool {
+	return !ManualLangs(info)[lang]
 }
 
-// Language returns the audio language reported by yt-dlp's info.json
-// (top-level `language` field, e.g. "en-US", "tr", "ja"). Empty string
-// when the file is missing, malformed, or the field is absent.
-func Language(infoPath string) string {
-	data, err := os.ReadFile(infoPath)
-	if err != nil {
-		return ""
+// Language returns the audio language reported by yt-dlp.
+func Language(info map[string]any) string {
+	language, _ := info["language"].(string)
+	return language
+}
+
+func metadataMap(info map[string]any, key string) map[string]any {
+	if info == nil {
+		return nil
 	}
-	var info struct {
-		Language string `json:"language"`
-	}
-	if json.Unmarshal(data, &info) != nil {
-		return ""
-	}
-	return info.Language
+	value, _ := info[key].(map[string]any)
+	return value
+}
+
+func metadataRaw(value any) json.RawMessage {
+	data, _ := json.Marshal(value)
+	return data
 }
 
 type subtitleFormat struct {

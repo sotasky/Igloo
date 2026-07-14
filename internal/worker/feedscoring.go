@@ -9,10 +9,13 @@ import (
 
 	"github.com/screwys/igloo/internal/db"
 	"github.com/screwys/igloo/internal/feed"
+	"github.com/screwys/igloo/internal/model"
 )
 
 func (m *Manager) runFeedScoringWorker(ctx context.Context) {
 	log.Printf("[feed_scoring] worker started")
+	periodic := time.NewTicker(time.Hour)
+	defer periodic.Stop()
 
 	lastRun := time.Time{}
 	var kickTimer *time.Timer
@@ -34,15 +37,15 @@ func (m *Manager) runFeedScoringWorker(ctx context.Context) {
 		stopKickTimer()
 	}()
 
-	runNow := func() {
+	runNow := func(forceRerank, forceRefill bool) {
 		stopKickTimer()
-		m.scoreFeedItems(ctx)
+		m.scoreFeedItems(ctx, forceRerank, forceRefill)
 		lastRun = time.Now()
 	}
 	scheduleKick := func() {
 		delay := time.Until(lastRun.Add(feedScoringKickMinInterval))
 		if delay <= 0 {
-			runNow()
+			runNow(false, false)
 			return
 		}
 		if kickTimerC == nil {
@@ -50,7 +53,7 @@ func (m *Manager) runFeedScoringWorker(ctx context.Context) {
 			kickTimerC = kickTimer.C
 		}
 	}
-	runNow()
+	runNow(true, true)
 
 	for {
 		select {
@@ -59,41 +62,74 @@ func (m *Manager) runFeedScoringWorker(ctx context.Context) {
 		case <-m.feedScoringKick:
 			scheduleKick()
 		case <-kickTimerC:
-			runNow()
+			runNow(false, false)
+		case <-periodic.C:
+			runNow(true, true)
 		}
 	}
 }
 
 const feedSnapshotBuildTimeout = 30 * time.Second
-const feedScoringKickMinInterval = 30 * time.Second
+const feedScoringKickMinInterval = 2 * time.Minute
+const feedSnapshotMaxItems = 2000
+const feedSnapshotRefillLowWater = 1500
+const feedSnapshotRefillBatch = 500
+const feedScoringDirtyBatch = 2000
+const feedReplyResolutionBatch = 16
+const feedReplyResolutionTimeout = 20 * time.Second
 
-func (m *Manager) scoreFeedItems(ctx context.Context) {
+func (m *Manager) scoreFeedItems(ctx context.Context, forceRerank, forceRefill bool) {
 	start := time.Now()
 	m.setStatus("feed_scoring", workerStatus("feed_scoring", true, "scoring", ""))
 
-	scored := m.runScoringPhase()
+	dirtyTweetIDs, moreDirty := m.runScoringPhase()
+	if moreDirty {
+		m.KickFeedScoring()
+	}
+	visible, err := m.db.CountVisibleFeedRankSnapshotContext(ctx)
+	if err != nil {
+		log.Printf("[feed_scoring] CountVisibleFeedRankSnapshot: %v", err)
+		visible = feedSnapshotRefillLowWater
+	}
+	needsRefill := forceRefill || visible < feedSnapshotRefillLowWater
+	if len(dirtyTweetIDs) == 0 && !forceRerank && !needsRefill {
+		m.setStatus("feed_scoring", workerStatus("feed_scoring", true, "idle", ""))
+		return
+	}
 
-	snap := m.runSnapshotPhaseStats(ctx)
+	refillLimit := 0
+	if needsRefill {
+		refillLimit = feedSnapshotMaxItems - visible
+		if refillLimit < feedSnapshotRefillBatch {
+			refillLimit = feedSnapshotRefillBatch
+		}
+		if refillLimit > feedSnapshotMaxItems {
+			refillLimit = feedSnapshotMaxItems
+		}
+	}
+	snap := m.runSnapshotPhaseStats(ctx, dirtyTweetIDs, refillLimit, forceRerank || forceRefill)
 
 	totalElapsed := time.Since(start).Round(time.Millisecond)
-	detail := fmt.Sprintf("scored=%d snap=%d/%s query=%s build=%s write=%s total=%s top=%s",
-		scored, snap.count, snap.totalDur, snap.queryDur, snap.buildDur, snap.writeDur, totalElapsed, snap.top)
+	detail := fmt.Sprintf("scored=%d refill=%d candidates=%d replies=%d/%d snap=%d/%s query=%s build=%s write=%s total=%s top=%s",
+		len(dirtyTweetIDs), refillLimit, snap.candidates, snap.replyAttempts, snap.replyBlocked, snap.count, snap.totalDur, snap.queryDur,
+		snap.buildDur, snap.writeDur, totalElapsed, snap.top)
 	log.Printf("[feed_scoring] %s", detail)
 	m.EmitFeed("feed_scoring", detail, "done")
 	m.setStatus("feed_scoring", workerStatus("feed_scoring", true, detail, ""))
 }
 
-// runScoringPhase re-scores any items flagged unscored. Returns the count scored.
-// On error, logs and returns 0 so the snapshot phase can still run against the
-// last-good algo_interest values.
-func (m *Manager) runScoringPhase() int {
-	items, err := m.db.GetUnscoredFeedItems(0)
+func (m *Manager) runScoringPhase() ([]string, bool) {
+	items, err := m.db.GetUnscoredFeedItems(feedScoringDirtyBatch + 1)
 	if err != nil {
 		log.Printf("[feed_scoring] GetUnscoredFeedItems: %v", err)
-		return 0
+		return nil, false
 	}
 	if len(items) == 0 {
-		return 0
+		return nil, false
+	}
+	more := len(items) > feedScoringDirtyBatch
+	if more {
+		items = items[:feedScoringDirtyBatch]
 	}
 
 	// Collect unique handles and tokens for batch affinity lookup
@@ -157,40 +193,52 @@ func (m *Manager) runScoringPhase() int {
 
 	if err := m.db.UpdateAlgoInterest(scores); err != nil {
 		log.Printf("[feed_scoring] UpdateAlgoInterest: %v", err)
-		return 0
+		return nil, false
 	}
-	return len(scores)
-}
-
-// runSnapshotPhase rebuilds the feed_rank_snapshot. Returns
-// (row_count, elapsed_rounded_ms, compact_top_10_string). On error, logs and
-// returns zero values — the prior snapshot is preserved because
-// ReplaceFeedRankSnapshot is a no-op on empty rows.
-func (m *Manager) runSnapshotPhase(ctx context.Context) (int, time.Duration, string) {
-	stats := m.runSnapshotPhaseStats(ctx)
-	return stats.count, stats.totalDur, stats.top
+	ids := make([]string, 0, len(items))
+	for _, item := range items {
+		ids = append(ids, item.TweetID)
+	}
+	return ids, more
 }
 
 type snapshotPhaseStats struct {
-	count    int
-	totalDur time.Duration
-	queryDur time.Duration
-	buildDur time.Duration
-	writeDur time.Duration
-	top      string
+	candidates    int
+	replyAttempts int
+	replyBlocked  int
+	count         int
+	totalDur      time.Duration
+	queryDur      time.Duration
+	buildDur      time.Duration
+	writeDur      time.Duration
+	top           string
 }
 
-func (m *Manager) runSnapshotPhaseStats(ctx context.Context) snapshotPhaseStats {
+func (m *Manager) runSnapshotPhaseStats(
+	ctx context.Context,
+	dirtyTweetIDs []string,
+	refillLimit int,
+	retryIncomplete bool,
+) snapshotPhaseStats {
 	stats := snapshotPhaseStats{top: "[]"}
 	snapStart := time.Now()
 	snapCtx, cancel := context.WithTimeout(ctx, feedSnapshotBuildTimeout)
 	defer cancel()
 
 	queryStart := time.Now()
-	pre, err := m.db.ListPreDiversityRankedContext(snapCtx)
+	pre, err := m.db.ListPreDiversityRankedCandidatesContext(snapCtx, dirtyTweetIDs, refillLimit)
 	stats.queryDur = time.Since(queryStart).Round(time.Millisecond)
 	if err != nil {
-		log.Printf("[feed_scoring] ListPreDiversityRanked: %v", err)
+		log.Printf("[feed_scoring] ListPreDiversityRankedCandidates: %v", err)
+		stats.totalDur = time.Since(snapStart).Round(time.Millisecond)
+		return stats
+	}
+	stats.candidates = len(pre)
+	pre, stats.replyAttempts, stats.replyBlocked, err = m.prepareRankCandidateReplies(
+		snapCtx, pre, dirtyTweetIDs, refillLimit, retryIncomplete,
+	)
+	if err != nil {
+		log.Printf("[feed_scoring] reply readiness: %v", err)
 		stats.totalDur = time.Since(snapStart).Round(time.Millisecond)
 		return stats
 	}
@@ -211,6 +259,96 @@ func (m *Manager) runSnapshotPhaseStats(ctx context.Context) snapshotPhaseStats 
 	stats.count = len(snapshot)
 	stats.top = snapshotTop10(snapshot)
 	return stats
+}
+
+func (m *Manager) prepareRankCandidateReplies(
+	ctx context.Context,
+	pre []db.PreDiversitySnapshotRow,
+	dirtyTweetIDs []string,
+	refillLimit int,
+	retryIncomplete bool,
+) ([]db.PreDiversitySnapshotRow, int, int, error) {
+	ids := make([]string, 0, len(pre))
+	for _, row := range pre {
+		ids = append(ids, row.TweetID)
+	}
+	incomplete, err := m.db.ListIncompleteReplyChainsContext(ctx, ids)
+	if err != nil || len(incomplete) == 0 {
+		return pre, 0, 0, err
+	}
+	beforeNode := make(map[string]string, len(incomplete))
+	for _, row := range incomplete {
+		beforeNode[row.SeedTweetID] = row.Item.TweetID
+	}
+	dirty := make(map[string]struct{}, len(dirtyTweetIDs))
+	for _, tweetID := range dirtyTweetIDs {
+		dirty[tweetID] = struct{}{}
+	}
+
+	attemptedItems := make(map[string]struct{}, feedReplyResolutionBatch)
+	attemptedSeeds := make(map[string]struct{}, feedReplyResolutionBatch)
+	toResolve := make([]model.FeedItem, 0, feedReplyResolutionBatch)
+	for _, row := range incomplete {
+		if !retryIncomplete {
+			if _, ok := dirty[row.SeedTweetID]; !ok {
+				continue
+			}
+		}
+		if _, ok := attemptedItems[row.Item.TweetID]; ok {
+			attemptedSeeds[row.SeedTweetID] = struct{}{}
+			continue
+		}
+		if len(toResolve) >= feedReplyResolutionBatch {
+			continue
+		}
+		attemptedItems[row.Item.TweetID] = struct{}{}
+		attemptedSeeds[row.SeedTweetID] = struct{}{}
+		toResolve = append(toResolve, row.Item)
+	}
+	if len(toResolve) > 0 {
+		resolveCtx, cancel := context.WithTimeout(ctx, feedReplyResolutionTimeout)
+		m.resolveReplyChains(resolveCtx, toResolve)
+		cancel()
+		m.KickProfileJobs()
+		m.KickMediaWork()
+		pre, err = m.db.ListPreDiversityRankedCandidatesContext(ctx, dirtyTweetIDs, refillLimit)
+		if err != nil {
+			return nil, len(toResolve), 0, err
+		}
+		ids = ids[:0]
+		for _, row := range pre {
+			ids = append(ids, row.TweetID)
+		}
+		incomplete, err = m.db.ListIncompleteReplyChainsContext(ctx, ids)
+		if err != nil {
+			return nil, len(toResolve), 0, err
+		}
+	}
+
+	blocked := make(map[string]struct{}, len(incomplete))
+	var retryIDs []string
+	for _, row := range incomplete {
+		blocked[row.SeedTweetID] = struct{}{}
+		_, wasDirty := dirty[row.SeedTweetID]
+		_, wasAttempted := attemptedSeeds[row.SeedTweetID]
+		madeProgress := wasAttempted && beforeNode[row.SeedTweetID] != row.Item.TweetID
+		if (retryIncomplete || wasDirty) && (!wasAttempted || madeProgress) {
+			retryIDs = append(retryIDs, row.SeedTweetID)
+		}
+	}
+	if len(retryIDs) > 0 {
+		if err := m.db.InvalidateAlgoScore(retryIDs...); err != nil {
+			return nil, len(toResolve), len(blocked), err
+		}
+		m.KickFeedScoring()
+	}
+	ready := pre[:0]
+	for _, row := range pre {
+		if _, excluded := blocked[row.TweetID]; !excluded {
+			ready = append(ready, row)
+		}
+	}
+	return ready, len(toResolve), len(blocked), nil
 }
 
 // snapshotTop10 returns a compact "tweet_id(final_score)" summary for the first

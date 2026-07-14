@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -81,7 +82,7 @@ func feedAbsenceBoostSelect(alias string) string {
 		END`, alias, feedRankingAccountIDSQL(alias), feedRankingAccountIsPrioritySQL(alias))
 }
 
-func feedRankingFromSQL(relatedSeenExpr, absenceExpr string) string {
+func feedRankingFromSQL(relatedSeenExpr, absenceExpr, candidateJoin string) string {
 	return fmt.Sprintf(`
 				FROM (
 				    SELECT fi.*,
@@ -89,11 +90,11 @@ func feedRankingFromSQL(relatedSeenExpr, absenceExpr string) string {
 				           %s AS related_seen_count,
 				           %s AS absence_boost
 				    FROM feed_items fi
+				    %s
 				    LEFT JOIN (
 				        SELECT %s AS related_key,
 				               COUNT(*) AS related_seen_count
-				        FROM feed_seen fs_related
-				        JOIN feed_items seen_fi ON seen_fi.tweet_id = fs_related.tweet_id
+				        FROM seen_feed seen_fi
 				        GROUP BY %s
 				    ) rsc ON rsc.related_key = %s
 			    LEFT JOIN channel_follows cf_author
@@ -107,22 +108,20 @@ func feedRankingFromSQL(relatedSeenExpr, absenceExpr string) string {
 				    LEFT JOIN (
 				        SELECT channel_id, MAX(seen_at) AS last_seen_at
 				        FROM (
-			            SELECT parent.channel_id, fs.seen_at
-			            FROM feed_seen fs
-			            JOIN feed_items parent ON parent.tweet_id = fs.tweet_id
+			            SELECT parent.channel_id, parent.seen_at
+			            FROM seen_feed parent
 			            WHERE NULLIF(parent.channel_id, '') IS NOT NULL
 				              AND COALESCE(parent.is_ghost, 0) = 0
 				            UNION ALL
-			            SELECT parent.source_channel_id, fs.seen_at
-			            FROM feed_seen fs
-			            JOIN feed_items parent ON parent.tweet_id = fs.tweet_id
+			            SELECT parent.source_channel_id, parent.seen_at
+			            FROM seen_feed parent
 			            WHERE NULLIF(parent.source_channel_id, '') IS NOT NULL
 				              AND COALESCE(parent.is_ghost, 0) = 0
 				        ) seen_channels
 				        GROUP BY channel_id
 				    ) lps ON lps.channel_id = %s
 			) fi
-			`, relatedSeenExpr, absenceExpr,
+				`, relatedSeenExpr, absenceExpr, candidateJoin,
 		feedRelatedContentKeySQL("seen_fi"),
 		feedRelatedContentKeySQL("seen_fi"),
 		feedRelatedContentKeySQL("fi"),
@@ -213,13 +212,7 @@ type SnapshotRow struct {
 // ReplaceFeedRankSnapshot replaces the snapshot atomically.
 // All existing rows are deleted and `rows` are inserted in one transaction.
 // `computed_at` is recorded on every row so callers can see snapshot age.
-//
-// If `rows` is empty, the existing snapshot is preserved and nil is returned.
-// This prevents a transient computation failure from wiping a good snapshot.
 func (db *DB) ReplaceFeedRankSnapshot(rows []SnapshotRow) error {
-	if len(rows) == 0 {
-		return nil
-	}
 	now := time.Now().UnixMilli()
 	return db.WithWrite(func(tx *sql.Tx) error {
 		var previous sql.NullInt64
@@ -313,24 +306,31 @@ type PreDiversitySnapshotRow struct {
 	ReplyPenalty             float64
 }
 
-// ListPreDiversityRanked returns every eligible feed item with its score
-// breakdown, ordered by raw (base*decay + freshness) DESC. This is the input
-// to the Go-side diversity + jitter pass that produces the snapshot.
-//
-// Filters mirror the main-feed ranked snapshot path: muted accounts excluded,
-// seen items excluded, canonical items plus pure reposts, retweet/quote filters
-// applied, and zero-interest items past the freshness window dropped. Pure
-// reposts stay in the candidate set so the snapshot presentation layer can
-// decide whether a nearby repost should own the main-feed card without
-// rewriting stored canonical identity.
-func (db *DB) ListPreDiversityRanked() ([]PreDiversitySnapshotRow, error) {
-	return db.ListPreDiversityRankedContext(context.Background())
-}
+const feedSnapshotMaxItems = 2000
 
-func (db *DB) ListPreDiversityRankedContext(ctx context.Context) ([]PreDiversitySnapshotRow, error) {
+func (db *DB) ListPreDiversityRankedCandidatesContext(
+	ctx context.Context,
+	dirtyTweetIDs []string,
+	refillLimit int,
+) ([]PreDiversitySnapshotRow, error) {
+	if refillLimit < 0 {
+		refillLimit = 0
+	}
+	if refillLimit > feedSnapshotMaxItems {
+		refillLimit = feedSnapshotMaxItems
+	}
+	if dirtyTweetIDs == nil {
+		dirtyTweetIDs = []string{}
+	}
+	dirtyJSON, err := json.Marshal(dirtyTweetIDs)
+	if err != nil {
+		return nil, fmt.Errorf("encode dirty feed candidates: %w", err)
+	}
+
 	var where []string
-	var args []any
+	var whereArgs []any
 	where = append(where, feedPrimaryItemPredicate("fi"))
+	where = append(where, feedActiveOwnerPredicate("fi"))
 
 	muted, _ := db.GetMutedChannelIDs()
 	if len(muted) > 0 {
@@ -338,11 +338,11 @@ func (db *DB) ListPreDiversityRankedContext(ctx context.Context) ([]PreDiversity
 		ph = ph[:len(ph)-1]
 		where = append(where, "fi.channel_id NOT IN ("+ph+")")
 		for _, channelID := range muted {
-			args = append(args, channelID)
+			whereArgs = append(whereArgs, channelID)
 		}
 		where = append(where, "COALESCE(fi.source_channel_id,'') NOT IN ("+ph+")")
 		for _, channelID := range muted {
-			args = append(args, channelID)
+			whereArgs = append(whereArgs, channelID)
 		}
 	}
 
@@ -366,24 +366,60 @@ func (db *DB) ListPreDiversityRankedContext(ctx context.Context) ([]PreDiversity
 
 	whereClause := "WHERE " + strings.Join(where, " AND ")
 
-	// Cap the snapshot size. The exact greedy diversity pass prunes candidates
-	// by score bounds, but the ranking query and snapshot write still do work
-	// proportional to the candidate set. 2000 covers ~50 pages of 40.
-	const snapshotMaxItems = 2000
-
-	// Recency ladder: the first two hours stay very competitive, then the
-	// multiplier falls quickly so medium-interest new posts can surface over
-	// older high-affinity items. The long tail remains non-zero for starred
-	// and high-affinity items, but should not pin the top of the feed.
 	capHours, seenMaxBoost, neverSeenBoost := db.feedAbsenceBoostConfig()
 	absenceExpr := feedAbsenceBoostSelect("fi")
 	relatedSeenExpr := feedRelatedSeenCountSelect("fi")
-	fromSQL := feedRankingFromSQL(relatedSeenExpr, absenceExpr)
-	args = append(feedRankingArgs(capHours, seenMaxBoost, neverSeenBoost), args...)
+	fromSQL := feedRankingFromSQL(
+		relatedSeenExpr,
+		absenceExpr,
+		"JOIN candidate_ids candidate ON candidate.tweet_id = fi.tweet_id",
+	)
+	args := []any{string(dirtyJSON), refillLimit, refillLimit}
+	args = append(args, feedRankingArgs(capHours, seenMaxBoost, neverSeenBoost)...)
+	args = append(args, whereArgs...)
 	decaySQL := feedDecaySQL()
 	freshnessSQL := feedFreshnessSQL()
+	refillWhere := strings.Join([]string{
+		feedPrimaryItemPredicate("refill"),
+		feedActiveOwnerPredicate("refill"),
+		feedUnseenPredicate("refill"),
+		"refill.published_at > 0",
+	}, " AND ")
 
 	query := fmt.Sprintf(`
+			WITH seen_feed AS MATERIALIZED (
+				SELECT fs.tweet_id, fs.seen_at,
+				       fi.quote_tweet_id, fi.canonical_tweet_id,
+				       fi.channel_id, fi.source_channel_id, fi.is_ghost
+				FROM feed_seen fs
+				JOIN feed_items fi INDEXED BY idx_feed_items_seen_cover
+				  ON fi.tweet_id = fs.tweet_id
+			),
+			dirty_ids(tweet_id) AS MATERIALIZED (
+				SELECT CAST(value AS TEXT)
+				FROM json_each(?)
+				WHERE TRIM(CAST(value AS TEXT)) != ''
+			),
+			recent_refill(tweet_id) AS MATERIALIZED (
+				SELECT refill.tweet_id
+				FROM feed_items refill INDEXED BY idx_feed_items_published
+				WHERE %s
+				ORDER BY refill.published_at DESC, refill.tweet_id DESC
+				LIMIT ?
+			),
+			interest_refill(tweet_id) AS MATERIALIZED (
+				SELECT refill.tweet_id
+				FROM feed_items refill INDEXED BY idx_feed_items_algo
+				WHERE %s
+				ORDER BY refill.algo_interest DESC, refill.published_at DESC
+				LIMIT ?
+			),
+			candidate_ids(tweet_id) AS MATERIALIZED (
+				SELECT tweet_id FROM feed_rank_snapshot
+				UNION SELECT tweet_id FROM dirty_ids
+				UNION SELECT tweet_id FROM recent_refill
+				UNION SELECT tweet_id FROM interest_refill
+			)
 			SELECT fi.tweet_id,
 				       COALESCE(fi.channel_id,''),
 				       COALESCE(fi.source_channel_id,''),
@@ -402,7 +438,9 @@ func (db *DB) ListPreDiversityRankedContext(ctx context.Context) ([]PreDiversity
 			%s
 			ORDER BY MAX(0, base * decay + freshness - reply_penalty) DESC, fi.tweet_id DESC
 			LIMIT %d
-			`, feedRelatedContentKeySQL("fi"), feedRankingBaseScoreSQL("fi"), decaySQL, freshnessSQL, feedReplyPenaltySQL("fi"), fromSQL, whereClause, snapshotMaxItems)
+			`, refillWhere, refillWhere,
+		feedRelatedContentKeySQL("fi"), feedRankingBaseScoreSQL("fi"), decaySQL, freshnessSQL,
+		feedReplyPenaltySQL("fi"), fromSQL, whereClause, feedSnapshotMaxItems)
 
 	rows, err := db.reader().QueryContext(ctx, query, args...)
 	if err != nil {
@@ -412,7 +450,7 @@ func (db *DB) ListPreDiversityRankedContext(ctx context.Context) ([]PreDiversity
 		_ = rows.Close()
 	}()
 
-	out := make([]PreDiversitySnapshotRow, 0, snapshotMaxItems)
+	out := make([]PreDiversitySnapshotRow, 0, feedSnapshotMaxItems)
 	repostTargetByTweetID := make(map[string]string)
 	for rows.Next() {
 		var r PreDiversitySnapshotRow
@@ -462,6 +500,34 @@ func (db *DB) ListPreDiversityRankedContext(ctx context.Context) ([]PreDiversity
 		}
 	}
 	return out, nil
+}
+
+func (db *DB) CountVisibleFeedRankSnapshotContext(ctx context.Context) (int, error) {
+	muted, _ := db.GetMutedChannelIDs()
+	where := []string{
+		feedPrimaryItemPredicate("fi"),
+		feedActiveOwnerPredicate("fi"),
+		feedUnseenPredicate("fi"),
+	}
+	args := make([]any, 0, len(muted)*2)
+	if len(muted) > 0 {
+		ph := strings.TrimSuffix(strings.Repeat("?,", len(muted)), ",")
+		where = append(where, "fi.channel_id NOT IN ("+ph+")")
+		for _, channelID := range muted {
+			args = append(args, channelID)
+		}
+		where = append(where, "COALESCE(fi.source_channel_id,'') NOT IN ("+ph+")")
+		for _, channelID := range muted {
+			args = append(args, channelID)
+		}
+	}
+	var count int
+	err := db.reader().QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM feed_rank_snapshot snapshot
+		JOIN feed_items fi ON fi.tweet_id = snapshot.tweet_id
+		WHERE `+strings.Join(where, " AND "), args...).Scan(&count)
+	return count, err
 }
 
 func (db *DB) threadRootIDsForTweetIDsContext(ctx context.Context, tweetIDs []string) (map[string]string, error) {
@@ -556,6 +622,7 @@ func (db *DB) ListSnapshotPage(snapshotAt int64, afterPos int, limit int) ([]Sna
 		WHERE s.computed_at = ?
 		  AND s.rank_position > ?
 		  AND `+feedPrimaryItemPredicate("fi")+`
+		  AND `+feedActiveOwnerPredicate("fi")+`
 		  AND `+feedUnseenPredicate("fi")+`
 		ORDER BY s.rank_position ASC
 		LIMIT ?

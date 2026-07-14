@@ -28,9 +28,10 @@ templ ChannelPage(p PageProps, channel model.Channel, profile *model.ChannelProf
 				<button
 					class="btn btn-secondary"
 					type="button"
-					hx-delete={ "/api/unsubscribe/" + channel.ChannelID + "?delete_files=true" }
+					data-optimistic-unfollow
+					hx-delete={ "/api/unsubscribe/" + channel.ChannelID }
 					hx-swap="none"
-					hx-confirm={ fmt.Sprintf(L(p, "confirm_remove_channel_and_files", "Remove channel and files for %q?"), channel.Name) }
+					hx-confirm={ LF(p, "confirm_unfollow_channel_body", "Unfollow %1$s?", channel.Name) }
 					hx-on::after-request="if(event.detail.successful)window.location.href='/channels'"
 				>{ L(p, "action_unsubscribe", "Unsubscribe") }</button>
 			</div>

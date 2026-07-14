@@ -151,7 +151,7 @@ func TestContentAssetPermanentFailuresStayDormantUntilExplicitRecovery(t *testin
 			}
 			claimed, err = d.ClaimContentAssetDownloadBatch(db.LeaseOptions{
 				Owner: "worker-c", NowMs: time.Now().UnixMilli(), LeaseMs: time.Minute.Milliseconds(), Limit: 1,
-			}, true, db.DownloadLaneBackfill)
+			}, true, db.DownloadLaneCurrent)
 			if err != nil || len(claimed) != 1 || claimed[0].LastErrorKind != "" || claimed[0].Attempts != 0 {
 				t.Fatalf("claimed recovered auth asset = %+v, err = %v", claimed, err)
 			}

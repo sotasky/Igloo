@@ -247,6 +247,26 @@ class NativeMainFeedSurfaceTest {
     }
 
     @Test
+    fun like_and_bookmark_updates_do_not_replace_feed_media_content() {
+        val original = adapterPost("sample_post")
+        val liked =
+            adapterPost(
+                tweetId = "sample_post",
+                rowTransform = { row -> row.copy(isLiked = 1, likedAt = 1_000L) },
+            )
+        val changedBody =
+            adapterPost(
+                tweetId = "sample_post",
+                rowTransform = { row ->
+                    row.copy(item = row.item.copy(bodyText = "updated content"))
+                },
+            )
+
+        assertTrue(nativeFeedLikeBookmarkOnlyChange(original, liked))
+        assertFalse(nativeFeedLikeBookmarkOnlyChange(original, changedBody))
+    }
+
+    @Test
     fun nativeBodyClampUsesLengthThreshold() {
         assertTrue(nativeShouldClampBody("x".repeat(421)))
         assertFalse(nativeShouldClampBody("short"))
@@ -333,6 +353,26 @@ class NativeMainFeedSurfaceTest {
                         ),
                 ),
             quoteMedia = null,
+        )
+    }
+
+    private fun adapterPost(
+        tweetId: String,
+        rowTransform: (com.screwy.igloo.data.entity.FeedRow) ->
+            com.screwy.igloo.data.entity.FeedRow = { it },
+    ): NativeFeedAdapterItem.Post {
+        val row = rowTransform(feedRow(tweetId))
+        val post =
+            post(tweetId).copy(
+                row = row,
+                actions =
+                    post(tweetId)
+                        .actions
+                        .copy(isLiked = row.isLiked == 1, isBookmarked = row.isBookmarked == 1),
+            )
+        return NativeFeedAdapterItem.Post(
+            threaded = com.screwy.igloo.data.entity.ThreadedFeedRow(row, emptyList()),
+            post = post,
         )
     }
 

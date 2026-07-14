@@ -284,11 +284,12 @@ func stringSet(values []string) map[string]struct{} {
 func TestListAndroidSyncFeedRankRowsKeepsOnlyDesiredVisibleItems(t *testing.T) {
 	d := openWritableTestDB(t)
 	if err := d.ExecRaw(`
-		INSERT INTO feed_items (tweet_id, published_at, fetched_at, is_ghost) VALUES
-			('sample_visible', 1, 1, 0),
-			('sample_other', 1, 1, 0),
-			('sample_seen', 1, 1, 0),
-			('sample_ghost', 1, 1, 1);
+		INSERT INTO channel_follows (channel_id, followed_at) VALUES ('twitter_sample_source', 1);
+		INSERT INTO feed_items (tweet_id, source_channel_id, channel_id, published_at, fetched_at, is_ghost) VALUES
+			('sample_visible', 'twitter_sample_source', 'twitter_sample_source', 1, 1, 0),
+			('sample_other', 'twitter_sample_source', 'twitter_sample_source', 1, 1, 0),
+			('sample_seen', 'twitter_sample_source', 'twitter_sample_source', 1, 1, 0),
+			('sample_ghost', 'twitter_sample_source', 'twitter_sample_source', 1, 1, 1);
 		INSERT INTO feed_seen (tweet_id, seen_at) VALUES ('sample_seen', 1);
 	`); err != nil {
 		t.Fatal(err)

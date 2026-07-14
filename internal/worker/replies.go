@@ -39,6 +39,15 @@ func NewReplyResolver(d *db.DB, fx *fxtwitter.Client) *ReplyResolver {
 	return &ReplyResolver{d: d, fx: fx}
 }
 
+func (m *Manager) resolveReplyChains(ctx context.Context, items []model.FeedItem) {
+	if m.replyResolver == nil {
+		m.replyResolver = NewReplyResolver(m.db, fxtwitter.NewClient())
+	}
+	if err := m.replyResolver.ResolveCycle(ctx, items); err != nil && !errors.Is(err, context.Canceled) {
+		log.Printf("[reply-resolver] batch: %v", err)
+	}
+}
+
 // ResolveCycle resolves every reply in items. Safe to call with a mix of
 // replies and non-replies — non-replies are skipped. Errors from individual
 // resolves are logged but don't fail the cycle.
@@ -93,8 +102,7 @@ func (r *ReplyResolver) resolveOne(ctx context.Context, leaf model.FeedItem, cac
 			return err
 		}
 		if leafTweet.ReplyToStatus == "" {
-			// fxtwitter doesn't think this is a reply — leave reply_to_status empty.
-			return nil
+			return r.d.UpdateReplyToStatus(leaf.TweetID, "")
 		}
 
 		if err := r.d.UpdateReplyToStatus(leaf.TweetID, leafTweet.ReplyToStatus); err != nil {

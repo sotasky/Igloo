@@ -39,17 +39,6 @@ func atomicWrite(dest string, data []byte, perm os.FileMode) error {
 	return os.Rename(tmpPath, dest)
 }
 
-func (s *Server) removeCanonicalAssetFiles(keys []string) {
-	if s == nil || s.db == nil {
-		return
-	}
-	for _, key := range keys {
-		if _, err := s.db.RemoveAssetFileIfUnreferenced(key); err != nil {
-			slog.Warn("remove retired canonical asset", "key", key, "err", err)
-		}
-	}
-}
-
 // importSubscriptionList resolves and adds a list of URLs/handles.
 // Returns (added, skipped) counts.
 func (s *Server) importSubscriptionList(ctx context.Context, urls []string) (int, int) {

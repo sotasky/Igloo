@@ -94,6 +94,9 @@ CREATE INDEX idx_feed_items_reply_parent ON feed_items(reply_to_status, publishe
 -- index: idx_feed_items_reposter_channel on feed_items
 CREATE INDEX idx_feed_items_reposter_channel ON feed_items(reposter_channel_id, published_at DESC) WHERE reposter_channel_id IS NOT NULL AND reposter_channel_id != '';
 
+-- index: idx_feed_items_seen_cover on feed_items
+CREATE INDEX idx_feed_items_seen_cover ON feed_items(tweet_id, quote_tweet_id, canonical_tweet_id, channel_id, source_channel_id, is_ghost);
+
 -- index: idx_feed_items_source_channel on feed_items
 CREATE INDEX idx_feed_items_source_channel ON feed_items(source_channel_id);
 
@@ -113,7 +116,10 @@ CREATE INDEX idx_feed_rank_snapshot_score ON feed_rank_snapshot(final_score DESC
 CREATE INDEX idx_feed_sources_platform ON feed_sources(platform, enabled);
 
 -- index: idx_media_objects_claim on media_objects
-CREATE INDEX idx_media_objects_claim ON media_objects(job_state, next_attempt_at_ms, lease_until_ms, storage_class, updated_at_ms);
+CREATE INDEX idx_media_objects_claim ON media_objects(download_lane, next_attempt_at_ms, attempts, updated_at_ms DESC, id DESC, lease_until_ms) WHERE job_state IN ('queued', 'downloading') AND source_url != '';
+
+-- index: idx_media_objects_lease on media_objects
+CREATE INDEX idx_media_objects_lease ON media_objects(download_lane, lease_until_ms) WHERE job_state = 'downloading' AND source_url != '';
 
 -- index: idx_media_objects_ready_file_path on media_objects
 CREATE INDEX idx_media_objects_ready_file_path ON media_objects(file_path) WHERE published_revision > 0;
@@ -122,10 +128,10 @@ CREATE INDEX idx_media_objects_ready_file_path ON media_objects(file_path) WHERE
 CREATE INDEX idx_moment_views_date ON moment_views(viewed_at DESC);
 
 -- index: idx_profile_jobs_claim on profile_jobs
-CREATE INDEX idx_profile_jobs_claim ON profile_jobs(completed_revision, requested_revision, next_attempt_at_ms, lease_until_ms, requested_at_ms);
+CREATE INDEX idx_profile_jobs_claim ON profile_jobs(requested_at_ms DESC, channel_id, next_attempt_at_ms, lease_until_ms, lease_owner) WHERE requested_revision > completed_revision;
 
 -- index: idx_translation_jobs_ready on translation_jobs
-CREATE INDEX idx_translation_jobs_ready ON translation_jobs(status, next_attempt_at, priority, updated_at);
+CREATE INDEX idx_translation_jobs_ready ON translation_jobs(target_lang, status, priority DESC, updated_at, tweet_id, field, next_attempt_at);
 
 -- index: idx_video_desires_source_position on video_desires
 CREATE INDEX idx_video_desires_source_position ON video_desires(source_channel_id, source_component, source_position, video_id);
@@ -239,7 +245,7 @@ CREATE TABLE feed_sources ( source_id TEXT PRIMARY KEY, platform TEXT NOT NULL, 
 CREATE TABLE ingest_state ( handle TEXT PRIMARY KEY, fail_count INTEGER DEFAULT 0, next_retry_at REAL, last_success_at REAL, last_attempt_at REAL, last_error TEXT, last_http_status INTEGER, avg_latency_ms REAL, updated_at INTEGER NOT NULL DEFAULT 0 );
 
 -- table: media_objects on media_objects
-CREATE TABLE media_objects ( id INTEGER PRIMARY KEY AUTOINCREMENT, object_id TEXT UNIQUE NOT NULL, object_key TEXT UNIQUE NOT NULL, source_url TEXT NOT NULL DEFAULT '', published_source_url TEXT NOT NULL DEFAULT '', storage_class TEXT NOT NULL CHECK(storage_class IN ('state_ssd', 'bulk_hdd')), desired_revision INTEGER NOT NULL DEFAULT 1, published_revision INTEGER NOT NULL DEFAULT 0, file_path TEXT NOT NULL DEFAULT '', content_type TEXT NOT NULL DEFAULT '', size_bytes INTEGER NOT NULL DEFAULT 0, file_mtime_ns INTEGER NOT NULL DEFAULT 0, job_state TEXT NOT NULL DEFAULT 'queued', last_error_kind TEXT NOT NULL DEFAULT '', last_error TEXT NOT NULL DEFAULT '', attempts INTEGER NOT NULL DEFAULT 0, next_attempt_at_ms INTEGER NOT NULL DEFAULT 0, lease_owner TEXT NOT NULL DEFAULT '', lease_until_ms INTEGER NOT NULL DEFAULT 0, created_at_ms INTEGER NOT NULL DEFAULT 0, updated_at_ms INTEGER NOT NULL DEFAULT 0 );
+CREATE TABLE media_objects ( id INTEGER PRIMARY KEY AUTOINCREMENT, object_id TEXT UNIQUE NOT NULL, object_key TEXT UNIQUE NOT NULL, source_url TEXT NOT NULL DEFAULT '', published_source_url TEXT NOT NULL DEFAULT '', storage_class TEXT NOT NULL CHECK(storage_class IN ('state_ssd', 'bulk_hdd')), download_lane TEXT NOT NULL DEFAULT 'backfill' CHECK(download_lane IN ('current', 'backfill')), desired_revision INTEGER NOT NULL DEFAULT 1, published_revision INTEGER NOT NULL DEFAULT 0, file_path TEXT NOT NULL DEFAULT '', content_type TEXT NOT NULL DEFAULT '', size_bytes INTEGER NOT NULL DEFAULT 0, file_mtime_ns INTEGER NOT NULL DEFAULT 0, job_state TEXT NOT NULL DEFAULT 'queued', last_error_kind TEXT NOT NULL DEFAULT '', last_error TEXT NOT NULL DEFAULT '', attempts INTEGER NOT NULL DEFAULT 0, next_attempt_at_ms INTEGER NOT NULL DEFAULT 0, lease_owner TEXT NOT NULL DEFAULT '', lease_until_ms INTEGER NOT NULL DEFAULT 0, created_at_ms INTEGER NOT NULL DEFAULT 0, updated_at_ms INTEGER NOT NULL DEFAULT 0 );
 
 -- table: moment_views on moment_views
 CREATE TABLE moment_views ( video_id TEXT PRIMARY KEY, viewed_at INTEGER NOT NULL DEFAULT 0 );
@@ -590,7 +596,7 @@ CREATE TRIGGER trg_search_channel_profiles_ad AFTER DELETE ON channel_profiles B
 CREATE TRIGGER trg_search_channel_profiles_ai AFTER INSERT ON channel_profiles BEGIN DELETE FROM search_channels_fts WHERE rowid = (SELECT id FROM channels WHERE channel_id = new.channel_id); INSERT INTO search_channels_fts(rowid, channel_id_pk, name, source_id, display_name, handle) SELECT c.id, c.channel_id, COALESCE(c.name, ''), COALESCE(c.source_id, ''), COALESCE(cp.display_name, ''), COALESCE(cp.handle, '') FROM channels c LEFT JOIN channel_profiles cp ON cp.channel_id = c.channel_id AND COALESCE(cp.tombstone, 0) = 0 WHERE c.channel_id = new.channel_id; DELETE FROM search_videos_fts WHERE rowid IN (SELECT id FROM videos WHERE channel_id = new.channel_id); INSERT INTO search_videos_fts(rowid, video_id_pk, title, dearrow_title, dearrow_title_casual, channel_name) SELECT v.id, v.video_id, COALESCE(v.title, ''), COALESCE(v.dearrow_title, ''), COALESCE(v.dearrow_title_casual, ''), COALESCE(new.display_name, '') FROM videos v WHERE v.channel_id = new.channel_id; END;
 
 -- trigger: trg_search_channel_profiles_au on channel_profiles
-CREATE TRIGGER trg_search_channel_profiles_au AFTER UPDATE ON channel_profiles BEGIN DELETE FROM search_channels_fts WHERE rowid = (SELECT id FROM channels WHERE channel_id = new.channel_id); INSERT INTO search_channels_fts(rowid, channel_id_pk, name, source_id, display_name, handle) SELECT c.id, c.channel_id, COALESCE(c.name, ''), COALESCE(c.source_id, ''), COALESCE(cp.display_name, ''), COALESCE(cp.handle, '') FROM channels c LEFT JOIN channel_profiles cp ON cp.channel_id = c.channel_id AND COALESCE(cp.tombstone, 0) = 0 WHERE c.channel_id = new.channel_id; DELETE FROM search_videos_fts WHERE rowid IN (SELECT id FROM videos WHERE channel_id = new.channel_id); INSERT INTO search_videos_fts(rowid, video_id_pk, title, dearrow_title, dearrow_title_casual, channel_name) SELECT v.id, v.video_id, COALESCE(v.title, ''), COALESCE(v.dearrow_title, ''), COALESCE(v.dearrow_title_casual, ''), COALESCE(new.display_name, '') FROM videos v WHERE v.channel_id = new.channel_id; END;
+CREATE TRIGGER trg_search_channel_profiles_au AFTER UPDATE ON channel_profiles WHEN old.channel_id IS NOT new.channel_id OR old.display_name IS NOT new.display_name OR old.handle IS NOT new.handle OR old.tombstone IS NOT new.tombstone BEGIN DELETE FROM search_channels_fts WHERE rowid = (SELECT id FROM channels WHERE channel_id = new.channel_id); INSERT INTO search_channels_fts(rowid, channel_id_pk, name, source_id, display_name, handle) SELECT c.id, c.channel_id, COALESCE(c.name, ''), COALESCE(c.source_id, ''), COALESCE(cp.display_name, ''), COALESCE(cp.handle, '') FROM channels c LEFT JOIN channel_profiles cp ON cp.channel_id = c.channel_id AND COALESCE(cp.tombstone, 0) = 0 WHERE c.channel_id = new.channel_id; DELETE FROM search_videos_fts WHERE rowid IN (SELECT id FROM videos WHERE channel_id = new.channel_id); INSERT INTO search_videos_fts(rowid, video_id_pk, title, dearrow_title, dearrow_title_casual, channel_name) SELECT v.id, v.video_id, COALESCE(v.title, ''), COALESCE(v.dearrow_title, ''), COALESCE(v.dearrow_title_casual, ''), COALESCE(new.display_name, '') FROM videos v WHERE v.channel_id = new.channel_id; END;
 
 -- trigger: trg_search_channels_ad on channels
 CREATE TRIGGER trg_search_channels_ad AFTER DELETE ON channels BEGIN DELETE FROM search_channels_fts WHERE rowid = old.id; END;

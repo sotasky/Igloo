@@ -73,6 +73,15 @@ class MomentsPlayerTest {
     }
 
     @Test
+    fun moments_resume_follows_video_identity_when_rows_are_inserted_before_it() {
+        val initial = listOf(storyItem("older", "tiktok_a"), storyItem("active", "tiktok_b"))
+        val expanded = listOf(storyItem("backfill", "tiktok_c")) + initial
+
+        assertEquals(1, momentPagerStartIndex(initial, "active", fallbackIndex = 1))
+        assertEquals(2, momentPagerStartIndex(expanded, "active", fallbackIndex = 1))
+    }
+
+    @Test
     fun story_progress_window_counts_only_current_profile_group() {
         val items =
             listOf(

@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/screwys/igloo/internal/db"
-	"github.com/screwys/igloo/internal/fxtwitter"
 	"github.com/screwys/igloo/internal/model"
 	"github.com/screwys/igloo/internal/xfeed"
 )
@@ -19,6 +18,7 @@ import (
 const (
 	xIngestWorkerName     = "x_ingest"
 	xIngestActivitySource = "x_ingest"
+	xIngestCycleInterval  = 10 * time.Minute
 )
 
 type xFeedFetcher interface {
@@ -27,30 +27,35 @@ type xFeedFetcher interface {
 	FetchStatus(ctx context.Context, handle, tweetID string) (xfeed.ParseResult, error)
 }
 
-// runXIngestLoop runs periodic X ingest. It fires immediately on start, then
-// checks every 10 minutes whether a new cycle is due.
+// runXIngestLoop runs X ingest immediately, then waits between completed cycles.
 func (m *Manager) runXIngestLoop(ctx context.Context) {
 	log.Printf("[x_ingest] starting ingest loop")
 
 	m.runXIngestIfEnabled(ctx)
+	runXIngestSchedule(ctx, m.ingestKick, xIngestCycleInterval, func() {
+		if !m.IsIngestPaused() {
+			m.runXIngestIfEnabled(ctx)
+		}
+	})
+}
 
-	// Check every 10 minutes whether a new cycle is due.
-	ticker := time.NewTicker(10 * time.Minute)
-	defer ticker.Stop()
-
+func runXIngestSchedule(ctx context.Context, kick <-chan struct{}, interval time.Duration, run func()) {
 	for {
+		timer := time.NewTimer(interval)
 		select {
 		case <-ctx.Done():
+			timer.Stop()
 			return
-		case <-m.ingestKick:
-			if !m.IsIngestPaused() {
-				m.runXIngestIfEnabled(ctx)
+		case <-kick:
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
 			}
-		case <-ticker.C:
-			if !m.IsIngestPaused() {
-				m.runXIngestIfEnabled(ctx)
-			}
+		case <-timer.C:
 		}
+		run()
 	}
 }
 
@@ -197,8 +202,6 @@ func (m *Manager) runIngestCycle(ctx context.Context) {
 	atomic.StoreInt32(&m.ingestCycleDone, int32(notDue))
 
 	// Sequential paced fetch.
-	const batchSize = 500
-	var pendingItems []model.FeedItem
 	var totalUpserted int
 	cycleFailures := make(map[string]string)
 	fetchesStarted := 0
@@ -259,21 +262,19 @@ func (m *Manager) runIngestCycle(ctx context.Context) {
 		items = filterTimelineItemsForSource(handle, items)
 		filtered := applyChannelFiltersFromSettings(items, settings)
 
-		pendingItems = append(pendingItems, filtered...)
-
-		// Periodic batch upsert to avoid holding too much in memory.
-		if len(pendingItems) >= batchSize {
-			flushedItems := pendingItems
-			n, upsertErr := m.upsertFeedItemsBatch(ctx, flushedItems, "batch")
+		if len(filtered) > 0 {
+			result, upsertErr := m.upsertFeedItemsBatch(filtered)
 			if upsertErr != nil {
-				log.Printf("[x_ingest] UpsertFeedItems (batch): %v", upsertErr)
+				log.Printf("[x_ingest] UpsertFeedItems: %v", upsertErr)
 			} else {
-				totalUpserted += n
-				m.enforceXMediaLimitsForItems(flushedItems)
-				m.KickMediaWork()
+				totalUpserted += result.Processed
+				if err := m.reconcileXMediaRetentionChanges(result.XMediaRetentionChanges); err != nil {
+					log.Printf("[x_ingest] %v", err)
+				} else {
+					m.KickMediaWork()
+				}
+				m.KickFeedScoring()
 			}
-
-			pendingItems = pendingItems[:0]
 		}
 	}
 
@@ -290,18 +291,6 @@ func (m *Manager) runIngestCycle(ctx context.Context) {
 		}
 	}
 
-	// Final batch upsert for remaining items.
-	if len(pendingItems) > 0 {
-		n, upsertErr := m.upsertFeedItemsBatch(ctx, pendingItems, "final")
-		if upsertErr != nil {
-			log.Printf("[x_ingest] UpsertFeedItems (final): %v", upsertErr)
-		} else {
-			totalUpserted += n
-			m.enforceXMediaLimitsForItems(pendingItems)
-			m.KickMediaWork()
-		}
-	}
-
 	m.lastCycleMu.Lock()
 	m.lastCycleAt = time.Now().Unix()
 	m.lastCycleFailures = cycleFailures
@@ -310,16 +299,6 @@ func (m *Manager) runIngestCycle(ctx context.Context) {
 	m.lastCycleReady = len(fetchList) + len(readyFeedSources)
 	m.lastCycleMu.Unlock()
 
-	// Reply chain resolution runs per-batch inside the fetch loop above so
-	// threads are joinable before items become visible to readers, instead
-	// of deferring to end-of-cycle (which can be ~3 hours).
-
-	// Kick scoring so new items get algo_interest + show up in the snapshot
-	// without waiting for the next 5-minute worker tick.
-	if totalUpserted > 0 {
-		m.KickFeedScoring()
-	}
-
 	elapsed := time.Since(start)
 	detail := fmt.Sprintf("cycle done: %d items, %s", totalUpserted, elapsed.Round(time.Millisecond))
 	log.Printf("[x_ingest] %s", detail)
@@ -327,16 +306,15 @@ func (m *Manager) runIngestCycle(ctx context.Context) {
 	m.setStatus(xIngestWorkerName, workerStatus(xIngestWorkerName, true, detail, ""))
 }
 
-func (m *Manager) upsertFeedItemsBatch(ctx context.Context, items []model.FeedItem, label string) (int, error) {
-	n, err := m.db.UpsertFeedItems(items)
+func (m *Manager) upsertFeedItemsBatch(items []model.FeedItem) (db.FeedUpsertResult, error) {
+	result, err := m.db.UpsertFeedItemsDetailed(items)
 	if err != nil {
-		return 0, err
+		return db.FeedUpsertResult{}, err
 	}
-	// Resolve reply chains for this batch so threads are joinable promptly,
-	// instead of waiting for the full ingest cycle to finish.
-	m.resolveReplyChains(ctx, items)
-	m.KickProfileJobs()
-	return n, nil
+	if result.Processed > 0 {
+		m.KickProfileJobs()
+	}
+	return result, nil
 }
 
 func (m *Manager) fetchXTimeline(ctx context.Context, handle string, limit int) ([]model.FeedItem, error) {
@@ -393,7 +371,6 @@ func (m *Manager) FetchOneChannel(ctx context.Context, channelID string) (int, e
 	items = filterTimelineItemsForSource(strings.TrimPrefix(channelID, "twitter_"), items)
 	filtered := applyChannelFiltersFromSettings(items, settings)
 	if len(filtered) == 0 {
-		m.enforceXMediaLimit(channelID)
 		return 0, nil
 	}
 
@@ -401,15 +378,16 @@ func (m *Manager) FetchOneChannel(ctx context.Context, channelID string) (int, e
 		filtered[i].ParseMedia()
 	}
 
-	n, err := m.upsertFeedItemsBatch(ctx, filtered, "single")
+	result, err := m.upsertFeedItemsBatch(filtered)
 	if err != nil {
 		return 0, fmt.Errorf("upsert: %w", err)
 	}
-	m.enforceXMediaLimit(channelID)
+	if err := m.reconcileXMediaRetentionChanges(result.XMediaRetentionChanges); err != nil {
+		return result.Processed, err
+	}
 	m.KickMediaWork()
-
 	m.KickFeedScoring()
-	return n, nil
+	return result.Processed, nil
 }
 
 // FetchOneFeedSource fetches one X list/community source through gallery-dl and
@@ -433,12 +411,7 @@ func (m *Manager) FetchOneFeedSource(ctx context.Context, sourceID string) (int,
 		_ = m.db.RecordFeedSourceFailure(sourceID, err.Error())
 		return 0, err
 	}
-	if err := m.enforceXFeedSourceLimit(sourceID, m.xMediaDownloadLimit()); err != nil {
-		_ = m.db.RecordFeedSourceFailure(sourceID, err.Error())
-		return n, err
-	}
 	_ = m.db.RecordFeedSourceSuccess(sourceID)
-	m.KickMediaWork()
 	return n, nil
 }
 
@@ -449,45 +422,24 @@ func (m *Manager) upsertFeedSourceItems(ctx context.Context, source model.FeedSo
 	for i := range items {
 		items[i].ParseMedia()
 	}
-	n, err := m.upsertFeedItemsBatch(ctx, items, "source")
+	result, err := m.upsertFeedItemsBatch(items)
 	if err != nil {
 		return 0, fmt.Errorf("upsert: %w", err)
 	}
 	for _, item := range items {
 		if err := m.db.RecordFeedItemSources(item.TweetID, []string{source.SourceID}); err != nil {
-			return n, fmt.Errorf("record source attribution: %w", err)
+			return result.Processed, fmt.Errorf("record source attribution: %w", err)
 		}
 	}
+	if err := m.reconcileXMediaRetentionChanges(result.XMediaRetentionChanges); err != nil {
+		return result.Processed, err
+	}
+	if err := m.enforceXFeedSourceLimit(source.SourceID, m.xMediaDownloadLimit()); err != nil {
+		return result.Processed, err
+	}
+	m.KickMediaWork()
 	m.KickFeedScoring()
-	return n, nil
-}
-
-func (m *Manager) enforceXMediaLimitsForItems(items []model.FeedItem) {
-	affected := make(map[string]struct{}, len(items))
-	for _, item := range items {
-		handle := item.SourceHandle
-		if item.IsRetweet {
-			handle = item.RetweetedByHandle
-			if model.IsPlaceholderTwitterHandle(handle) {
-				handle = item.SourceHandle
-			}
-		}
-		channelID := model.TwitterChannelIDFromHandle(handle)
-		if channelID == "" {
-			continue
-		}
-		if _, exists := affected[channelID]; exists {
-			continue
-		}
-		affected[channelID] = struct{}{}
-		m.enforceXMediaLimit(channelID)
-	}
-}
-
-func (m *Manager) enforceXMediaLimit(channelID string) {
-	if err := m.EnforceXMediaRetentionForChannel(channelID); err != nil {
-		log.Printf("[x_ingest] prune X media retention %s: %v", channelID, err)
-	}
+	return result.Processed, nil
 }
 
 // applyChannelFiltersFromSettings filters items using ChannelSettings
@@ -529,16 +481,5 @@ func workerStatus(name string, running bool, detail, errMsg string) WorkerStatus
 		LastRunAt: time.Now(),
 		Detail:    detail,
 		Error:     errMsg,
-	}
-}
-
-// resolveReplyChains delegates to the ReplyResolver. Lazy-init on first use
-// so unit tests that construct a Manager without an fxtwitter client still work.
-func (m *Manager) resolveReplyChains(ctx context.Context, items []model.FeedItem) {
-	if m.replyResolver == nil {
-		m.replyResolver = NewReplyResolver(m.db, fxtwitter.NewClient())
-	}
-	if err := m.replyResolver.ResolveCycle(ctx, items); err != nil && !errors.Is(err, context.Canceled) {
-		log.Printf("[x_ingest] reply resolver: %v", err)
 	}
 }

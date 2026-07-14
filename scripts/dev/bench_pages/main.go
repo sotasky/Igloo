@@ -77,12 +77,6 @@ func main() {
 	dur = time.Since(t)
 	fmt.Printf("  RankFeedItems:               %6dms  (%d items)\n", dur.Milliseconds(), len(items))
 
-	// Fast ranked query (new path)
-	t = time.Now()
-	ranked, _ := d.ListRankedFeedItems(41, 0)
-	dur = time.Since(t)
-	fmt.Printf("  ListRankedFeedItems(41):     %6dms  (%d items)  << NEW\n", dur.Milliseconds(), len(ranked))
-
 	fmt.Println()
 
 	// --- Sidebar ---

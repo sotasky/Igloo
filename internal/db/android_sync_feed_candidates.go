@@ -350,6 +350,7 @@ func (db *DB) ListAndroidSyncDesiredFeedRanksAmong(
 			WHERE s.tweet_id IN (`+placeholders(len(chunk))+`)
 			  AND s.rank_position <= ?
 			  AND `+feedPrimaryItemPredicate("fi")+`
+			  AND `+feedActiveOwnerPredicate("fi")+`
 			  AND `+feedUnseenPredicate("fi")+`
 		`, args, selected); err != nil {
 			return nil, err

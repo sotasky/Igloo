@@ -1,7 +1,10 @@
 package worker
 
 import (
+	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -9,6 +12,40 @@ import (
 	"github.com/screwys/igloo/internal/download"
 	"github.com/screwys/igloo/internal/model"
 )
+
+func TestYouTubeDiscoveryDoesNotRetryUsablePartialWindow(t *testing.T) {
+	bin := t.TempDir()
+	calls := filepath.Join(bin, "calls")
+	script := `#!/bin/sh
+printf 'call\n' >> "$IGLOO_YTDLP_CALLS"
+printf '{"_type":"url","id":"sample_partial","title":"Partial item"}\n'
+printf 'source stopped before the full window was read\n' >&2
+exit 1
+`
+	if err := os.WriteFile(filepath.Join(bin, "yt-dlp"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("IGLOO_YTDLP_CALLS", calls)
+
+	database := newTestWorkerDB(t)
+	manager := &Manager{
+		db:         database,
+		downloader: &download.Downloader{YtDlp: &download.YtDlpWrapper{}},
+	}
+	_, _ = manager.checkChannel(context.Background(), model.Channel{
+		ChannelID: "youtube_sample_source",
+		Platform:  "youtube",
+		URL:       "https://www.youtube.com/channel/UCEXAMPLE000000000000001",
+	})
+	rawCalls, readErr := os.ReadFile(calls)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if string(rawCalls) != "call\n" {
+		t.Fatalf("yt-dlp calls = %q, want one call", rawCalls)
+	}
+}
 
 func TestDiscoveryReadyAtSpacesPlatformChecksAcrossCycle(t *testing.T) {
 	checked := time.Unix(100, 0)

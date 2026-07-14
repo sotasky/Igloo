@@ -23,14 +23,6 @@ func (s *Server) registerMutationAPIRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/mutations/moments_cursor", s.handleMutationMomentsCursor)
 }
 
-func feedHandleFromChannelID(channelID string) string {
-	handle := strings.TrimSpace(channelID)
-	if idx := strings.Index(handle, "_"); idx >= 0 {
-		handle = handle[idx+1:]
-	}
-	return handle
-}
-
 func (s *Server) kickFeedOrderForTweetIDs(tweetIDs ...string) {
 	if len(tweetIDs) == 0 {
 		return
@@ -39,19 +31,11 @@ func (s *Server) kickFeedOrderForTweetIDs(tweetIDs ...string) {
 	s.workers.KickFeedScoring()
 }
 
-func (s *Server) kickFeedOrderForHandle(handle string) {
-	if strings.TrimSpace(handle) == "" {
-		return
-	}
-	_ = s.db.InvalidateAlgoScoreByHandle(handle)
-	s.workers.KickFeedScoring()
-}
-
 func (s *Server) kickFeedOrderForChannelID(channelID string) {
 	if strings.TrimSpace(channelID) == "" {
 		return
 	}
-	_ = s.db.InvalidateAlgoScoreByHandle(feedHandleFromChannelID(channelID))
+	_ = s.db.InvalidateFeedWindowByChannelID(channelID)
 	s.workers.KickFeedScoring()
 }
 
@@ -207,9 +191,6 @@ func (s *Server) handleMutationFollow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if result.Applied {
-		if action == "clear" {
-			s.removeCanonicalAssetFiles(result.DeletedFileKeys)
-		}
 		s.kickFeedOrderForChannelID(result.CanonicalID)
 	}
 	writeJSON(w, 200, map[string]any{})
@@ -276,9 +257,12 @@ func (s *Server) handleMutationSeen(w http.ResponseWriter, r *http.Request) {
 	if len(body.TweetIDs) > 500 {
 		body.TweetIDs = body.TweetIDs[:500]
 	}
-	_, err := s.db.MutateSeen(body.TweetIDs, body.UpdatedAtMs)
+	result, err := s.db.MutateSeen(body.TweetIDs, body.UpdatedAtMs)
 	if writeMutationError(w, "MutateSeen", err) {
 		return
+	}
+	if result.Affected > 0 {
+		s.workers.KickFeedScoring()
 	}
 	writeJSON(w, 200, map[string]any{})
 }

@@ -151,29 +151,22 @@ func (s *Server) handleFeedSeen(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// HTMX per-card POST sends tweet_id via query/form; Android and legacy clients
-	// batch multiple IDs via JSON body. Try the single-id path first.
-	var tweetIDs []string
-	if single := strings.TrimSpace(r.URL.Query().Get("tweet_id")); single != "" {
-		tweetIDs = []string{single}
-	} else {
-		var body struct {
-			TweetIDs []string `json:"tweet_ids"`
-		}
-		if err := decodeJSON(w, r, &body); err != nil {
-			if requestBodyTooLarge(err) {
-				writeJSON(w, http.StatusRequestEntityTooLarge, map[string]any{"success": false, "error": requestBodyTooLargeMessage})
-				return
-			}
-			writeJSON(w, 400, map[string]any{"success": false, "error": "tweet_ids required"})
-			return
-		}
-		if len(body.TweetIDs) == 0 {
-			writeJSON(w, 400, map[string]any{"success": false, "error": "tweet_ids required"})
-			return
-		}
-		tweetIDs = body.TweetIDs
+	var body struct {
+		TweetIDs []string `json:"tweet_ids"`
 	}
+	if err := decodeJSON(w, r, &body); err != nil {
+		if requestBodyTooLarge(err) {
+			writeJSON(w, http.StatusRequestEntityTooLarge, map[string]any{"success": false, "error": requestBodyTooLargeMessage})
+			return
+		}
+		writeJSON(w, 400, map[string]any{"success": false, "error": "tweet_ids required"})
+		return
+	}
+	if len(body.TweetIDs) == 0 {
+		writeJSON(w, 400, map[string]any{"success": false, "error": "tweet_ids required"})
+		return
+	}
+	tweetIDs := body.TweetIDs
 	if len(tweetIDs) > 500 {
 		tweetIDs = tweetIDs[:500]
 	}
@@ -184,9 +177,9 @@ func (s *Server) handleFeedSeen(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 500, map[string]any{"success": false, "error": "db error"})
 		return
 	}
-
-	// Seen state is filtered at read time. Rebuilding the rank snapshot for
-	// every visible card churns snapshot cursors while the user is scrolling.
+	if result.Affected > 0 {
+		s.workers.KickFeedScoring()
+	}
 	writeJSON(w, 200, map[string]any{
 		"success": true,
 		"marked":  result.Affected,
@@ -213,7 +206,7 @@ func (s *Server) handleFeedMute(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if result.Applied {
-		_ = s.db.InvalidateAlgoScoreByHandle(handle)
+		_ = s.db.InvalidateFeedWindowByChannelID(channelID)
 		s.workers.KickFeedScoring()
 	}
 
@@ -246,7 +239,7 @@ func (s *Server) handleFeedUnmute(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if result.Applied {
-		_ = s.db.InvalidateAlgoScoreByHandle(handle)
+		_ = s.db.InvalidateFeedWindowByChannelID(channelID)
 		s.workers.KickFeedScoring()
 	}
 
