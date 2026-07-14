@@ -80,7 +80,7 @@ func (db *DB) SetDearrowData(videoID string, title, titleCasual, thumbPath *stri
 		}
 		ready, err := db.prepareReadyAssetMetadata(asset, atMs)
 		if err != nil {
-			return fmt.Errorf("fingerprint DeArrow thumbnail %s: %w", videoID, err)
+			return fmt.Errorf("prepare DeArrow thumbnail %s: %w", videoID, err)
 		}
 		ready = normalizeAsset(ready, atMs)
 		prepared = []Asset{ready}
@@ -108,7 +108,7 @@ func (db *DB) SetDearrowData(videoID string, title, titleCasual, thumbPath *stri
 			return fmt.Errorf("video not found: %s", videoID)
 		}
 		retired, err = replaceVideoAssetsTx(
-			tx, ownerKind, videoID, []string{"dearrow_thumbnail"}, prepared, "",
+			tx, ownerKind, videoID, []string{"dearrow_thumbnail"}, prepared, 0,
 		)
 		return err
 	})

@@ -373,7 +373,7 @@ func (m *Manager) downloadVideo(ctx context.Context, job db.DownloadWork, platfo
 	}
 
 	metadata := loadInfoJSONFile(completed.InfoJSONPath)
-	files, err := m.prepareCompletedVideoFiles(ctx, mediaLane, platform, attemptID, completed)
+	files, err := m.prepareCompletedVideoFiles(ctx, mediaLane, completed)
 	if err != nil {
 		if !reused {
 			m.removeFailedAttempt(ctx, mediaLane, files, completed)
@@ -443,7 +443,7 @@ func (m *Manager) downloadVideo(ctx context.Context, job db.DownloadWork, platfo
 	if err := m.db.StoreCompletedVideo(db.CompletedVideo{
 		VideoID: job.VideoID, ChannelID: job.OwnerChannelID, OwnerKind: ownerKind, Title: title, Description: description,
 		Duration: duration, PublishedAtMs: publishedAt, MetadataJSON: metadataJSON,
-		MediaKind: mediaKind, SlideCount: slideCount, SourceKind: sourceKind, MediaLane: mediaLane, Assets: files.assets,
+		MediaKind: mediaKind, SlideCount: slideCount, SourceKind: sourceKind, Assets: files.assets,
 	}); err != nil {
 		if !reused {
 			m.removeFailedAttempt(ctx, mediaLane, files, completed)
@@ -451,6 +451,9 @@ func (m *Manager) downloadVideo(ctx context.Context, job db.DownloadWork, platfo
 		log.Printf("[downloadpool] StoreCompletedVideo %s: %v", job.VideoID, err)
 		m.failDownloadJob(job, fmt.Errorf("db insert: %w", err))
 		return
+	}
+	if err := m.publishCompletedVideoThumbnail(ctx, mediaLane, job.VideoID, platform, attemptID, files); err != nil {
+		log.Printf("[downloadpool] StoreVideoThumbnailAsset %s: %v", job.VideoID, err)
 	}
 	if err := m.storeCompletedSubtitles(ctx, job.VideoID, files, completed, reused); err != nil {
 		log.Printf("[downloadpool] StoreVideoSubtitleAssets %s: %v", job.VideoID, err)

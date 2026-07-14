@@ -1,14 +1,11 @@
 package db
 
 import (
-	"context"
 	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
-
-	"github.com/screwys/igloo/internal/storage"
 )
 
 func TestClaimContentAssetsLeavesProfileIdentityOutsideQueue(t *testing.T) {
@@ -211,7 +208,7 @@ func TestContentAssetLanesSeparateVisibleQuoteFromHistoricalBackfill(t *testing.
 	}
 }
 
-func TestContentAssetLeasePublishesFingerprintAndRejectsStaleOwner(t *testing.T) {
+func TestContentAssetLeasePublishesCompletedFileAndRejectsStaleOwner(t *testing.T) {
 	d := openFreshTestDB(t)
 	now := time.Now().UnixMilli()
 	asset := Asset{
@@ -243,42 +240,14 @@ func TestContentAssetLeasePublishesFingerprintAndRejectsStaleOwner(t *testing.T)
 	if err := d.CompleteAssetDownload(result, "stale-worker", now+2); !errors.Is(err, ErrQueueLeaseNotHeld) {
 		t.Fatalf("stale completion error = %v", err)
 	}
-	started := make(chan struct{})
-	release := make(chan struct{})
-	backgroundDone := make(chan error, 1)
-	go func() {
-		backgroundDone <- d.storage.MediaExecutor().Run(context.Background(), storage.MediaLaneBulkBackground, func() error {
-			close(started)
-			<-release
-			return nil
-		})
-	}()
-	<-started
-	completeDone := make(chan error, 1)
-	go func() {
-		completeDone <- d.CompleteAssetDownloadInLane(result, "x-worker", now+3, storage.MediaLaneBulkForeground)
-	}()
-	var completeErr error
-	select {
-	case err := <-completeDone:
-		completeErr = err
-	case <-time.After(2 * time.Second):
-		close(release)
-		<-backgroundDone
-		t.Fatal("foreground asset publication waited for the backfill lane")
-	}
-	close(release)
-	if err := <-backgroundDone; err != nil {
+	if err := d.CompleteAssetDownload(result, "x-worker", now+3); err != nil {
 		t.Fatal(err)
-	}
-	if completeErr != nil {
-		t.Fatal(completeErr)
 	}
 	stored, err := d.GetAsset(asset.AssetID, asset.AssetKind)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stored == nil || stored.State != AssetStateReady || stored.FilePath != key || len(stored.SHA256) != 64 || stored.FileMtimeNs == 0 {
+	if stored == nil || stored.State != AssetStateReady || stored.FilePath != key || stored.SizeBytes == 0 || stored.FileMtimeNs == 0 {
 		t.Fatalf("published asset = %+v", stored)
 	}
 }

@@ -13,7 +13,7 @@ import (
 	"github.com/screwys/igloo/internal/storage"
 )
 
-func TestPrepareCompletedVideoFilesKeepsMediaExternalAndUsesExactThumbnail(t *testing.T) {
+func TestPrepareCompletedVideoFilesKeepsMediaExternalAndDefersExactThumbnail(t *testing.T) {
 	stateRoot := filepath.Join(t.TempDir(), "state")
 	mediaRoot := filepath.Join(t.TempDir(), "bulk")
 	if err := os.MkdirAll(mediaRoot, 0o755); err != nil {
@@ -60,7 +60,7 @@ func TestPrepareCompletedVideoFilesKeepsMediaExternalAndUsesExactThumbnail(t *te
 		}
 	}
 
-	files, err := m.prepareCompletedVideoFiles(context.Background(), download.MediaLaneBulkForeground, "youtube", "sample-attempt-123", download.CompletedDownload{
+	files, err := m.prepareCompletedVideoFiles(context.Background(), download.MediaLaneBulkForeground, download.CompletedDownload{
 		MediaPaths:    []string{videoPath},
 		ThumbnailPath: exactThumbnail,
 		SubtitlePaths: []string{subtitlePath},
@@ -71,26 +71,21 @@ func TestPrepareCompletedVideoFilesKeepsMediaExternalAndUsesExactThumbnail(t *te
 	if files.primaryKey != "media/youtube/sample.mp4" {
 		t.Fatalf("primary key = %q", files.primaryKey)
 	}
-	if len(files.assets) != 2 || files.assets[0].AssetKind != "video_stream" || files.assets[1].AssetKind != "post_thumbnail" {
+	if len(files.assets) != 1 || files.assets[0].AssetKind != "video_stream" {
 		t.Fatalf("main asset set = %+v", files.assets)
 	}
-	thumbnailKey := files.assets[1].FilePath
-	if thumbnailKey != "thumbnails/videos/youtube/sample-attempt-123.jpg" {
-		t.Fatalf("thumbnail key = %q", thumbnailKey)
+	if files.thumbnailImageSource != exactThumbnail || files.thumbnailVideoSource != videoPath {
+		t.Fatalf("thumbnail sources = (%q, %q)", files.thumbnailImageSource, files.thumbnailVideoSource)
 	}
 	if len(files.subtitleAssets) != 1 || files.subtitleAssets[0].AssetKind != "subtitle" {
 		t.Fatalf("subtitle asset set = %+v", files.subtitleAssets)
 	}
-	storedThumbnail, err := layout.Path(thumbnailKey)
+	storedThumbnail, err := layout.Path("thumbnails/videos/youtube/sample-attempt-123.jpg")
 	if err != nil {
 		t.Fatal(err)
 	}
-	body, err := os.ReadFile(storedThumbnail)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(body) != "exact thumbnail" {
-		t.Fatalf("stored thumbnail came from another file: %q", body)
+	if _, err := os.Stat(storedThumbnail); !os.IsNotExist(err) {
+		t.Fatalf("thumbnail was materialized during primary preparation: %v", err)
 	}
 	executor := storage.NewMediaExecutor()
 	m.downloader = download.NewDownloader("")
@@ -126,6 +121,85 @@ func TestPrepareCompletedVideoFilesKeepsMediaExternalAndUsesExactThumbnail(t *te
 	}
 	if body, err := os.ReadFile(decoyThumbnail); err != nil || string(body) != "decoy thumbnail" {
 		t.Fatalf("same-directory decoy was touched: body=%q err=%v", body, err)
+	}
+}
+
+func TestDownloadVideoPublishesPrimaryBeforeBlockedThumbnail(t *testing.T) {
+	root := t.TempDir()
+	database := newTestWorkerDBAt(t, root)
+	cfg := testCfg(root)
+	m := NewManager(database, cfg)
+	defer m.Shutdown()
+
+	binDir := filepath.Join(root, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	started := filepath.Join(root, "ffmpeg-started")
+	release := filepath.Join(root, "ffmpeg-release")
+	script := `#!/bin/sh
+: > "$IGLOO_FFMPEG_STARTED"
+while [ ! -e "$IGLOO_FFMPEG_RELEASE" ]; do sleep 0.01; done
+for output in "$@"; do :; done
+printf thumbnail > "$output"
+`
+	if err := os.WriteFile(filepath.Join(binDir, "ffmpeg"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("IGLOO_FFMPEG_STARTED", started)
+	t.Setenv("IGLOO_FFMPEG_RELEASE", release)
+	defer func() { _ = os.WriteFile(release, nil, 0o644) }()
+
+	mediaDir, err := cfg.Storage.WritePath("media/instagram/sample_author")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(mediaDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	const videoID = "sample_video"
+	if err := os.WriteFile(filepath.Join(mediaDir, videoID+".mp4"), []byte("video"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		m.downloadVideo(context.Background(), db.DownloadWork{
+			VideoID: videoID, OwnerChannelID: "instagram_sample_author",
+			SourceChannelID: "instagram_sample_author", Lane: db.DownloadLaneBackfill,
+		}, "instagram", "sample_author", "best", false)
+	}()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if _, err := os.Stat(started); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("thumbnail extraction did not start")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	primary, err := database.GetReadyVideoPrimaryAsset(videoID)
+	if err != nil || primary == nil {
+		t.Fatalf("primary media was not published before thumbnail extraction: %+v %v", primary, err)
+	}
+	thumbnail, err := database.GetAssetByOwnerIdentity("post_thumbnail", "instagram_reel", videoID, 0)
+	if err != nil || thumbnail != nil {
+		t.Fatalf("thumbnail was published while extraction was blocked: %+v %v", thumbnail, err)
+	}
+	if err := os.WriteFile(release, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("download did not finish after thumbnail extraction was released")
+	}
+	thumbnail, err = database.GetAssetByOwnerIdentity("post_thumbnail", "instagram_reel", videoID, 0)
+	if err != nil || thumbnail == nil || thumbnail.State != db.AssetStateReady {
+		t.Fatalf("thumbnail was not published after extraction: %+v %v", thumbnail, err)
 	}
 }
 
@@ -252,7 +326,7 @@ func TestFailedRedownloadPreservesReadyBytesAndRemovesOnlyAttemptOutputs(t *test
 		MediaPaths: []string{mediaPath}, ThumbnailPath: thumbPath,
 		InfoJSONPath: infoPath, SubtitlePaths: []string{subtitlePath},
 	}
-	files, err := m.prepareCompletedVideoFiles(context.Background(), download.MediaLaneBulkForeground, "youtube", attemptID, completed)
+	files, err := m.prepareCompletedVideoFiles(context.Background(), download.MediaLaneBulkForeground, completed)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -268,13 +342,13 @@ func TestFailedRedownloadPreservesReadyBytesAndRemovesOnlyAttemptOutputs(t *test
 	m.removeFailedAttempt(context.Background(), download.MediaLaneBulkForeground, files, completed)
 
 	after, err := m.db.GetAssetByOwnerIdentity("video_stream", "youtube_video", videoID, 0)
-	if err != nil || after == nil || after.FilePath != oldKey || after.SHA256 != before.SHA256 {
+	if err != nil || after == nil || after.FilePath != oldKey || after.FileMtimeNs != before.FileMtimeNs {
 		t.Fatalf("failed attempt changed ready stream: before=%+v after=%+v err=%v", before, after, err)
 	}
 	if body, err := os.ReadFile(oldPath); err != nil || string(body) != "ready bytes" {
 		t.Fatalf("ready bytes changed: body=%q err=%v", body, err)
 	}
-	for _, path := range append([]string{thumbPath, infoPath, subtitlePath}, files.materialized...) {
+	for _, path := range []string{thumbPath, infoPath, subtitlePath} {
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
 			t.Fatalf("attempt output survived cleanup: %s", path)
 		}

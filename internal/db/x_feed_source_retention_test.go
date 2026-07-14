@@ -263,7 +263,7 @@ func TestRestoreXMediaForFeedWindowPromotesReadyDesiredObject(t *testing.T) {
 		t.Fatalf("restored assets = %d, want 1", result.AssetsRestored)
 	}
 	if restored.State != AssetStateReady || restored.ObjectID != restored.DesiredObjectID ||
-		restored.SizeBytes <= 0 || len(restored.SHA256) != 64 {
+		restored.SizeBytes <= 0 || restored.FileMtimeNs <= 0 {
 		t.Fatalf("restored asset did not promote the ready desired object: %+v", restored)
 	}
 }

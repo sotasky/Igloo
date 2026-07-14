@@ -68,7 +68,7 @@ func TestProfileJobPipelinePublishesCanonicalAvatar(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetAsset: %v", err)
 	}
-	if asset == nil || asset.State != db.AssetStateReady || len(asset.SHA256) != 64 || asset.FilePath == "" {
+	if asset == nil || asset.State != db.AssetStateReady || asset.SizeBytes <= 0 || asset.ContentType != "image/png" || asset.FilePath == "" {
 		t.Fatalf("ready avatar asset = %+v", asset)
 	}
 	if want := profileMediaOwnerKey("twitter_sample_author") + "-r1-"; !strings.Contains(asset.FilePath, want) {
@@ -234,7 +234,7 @@ func TestProfileJobPublishesMetadataAndAvatarWhileBannerRetries(t *testing.T) {
 		t.Fatalf("successful avatar was not published: old=%+v got=%+v err=%v", oldAvatar, avatar, err)
 	}
 	banner, err := database.GetAsset(oldBanner.AssetID, oldBanner.AssetKind)
-	if err != nil || banner == nil || banner.State != db.AssetStateReady || banner.SourceURL != oldBanner.SourceURL || banner.FilePath != oldBanner.FilePath || banner.SHA256 != oldBanner.SHA256 {
+	if err != nil || banner == nil || banner.State != db.AssetStateReady || banner.SourceURL != oldBanner.SourceURL || banner.FilePath != oldBanner.FilePath || banner.FileMtimeNs != oldBanner.FileMtimeNs {
 		t.Fatalf("failed banner replaced ready asset: old=%+v got=%+v err=%v", oldBanner, banner, err)
 	}
 	if _, err := os.Stat(oldAvatarPath); !os.IsNotExist(err) {
@@ -322,7 +322,7 @@ func TestProfileJobReusesMatchingReadyAvatarWithoutDownloading(t *testing.T) {
 		t.Fatalf("matching ready avatar downloaded %d times", hits.Load())
 	}
 	asset, err := database.GetAsset(oldAsset.AssetID, "avatar")
-	if err != nil || asset == nil || asset.FilePath != oldAsset.FilePath || asset.SHA256 != oldAsset.SHA256 {
+	if err != nil || asset == nil || asset.FilePath != oldAsset.FilePath || asset.FileMtimeNs != oldAsset.FileMtimeNs {
 		t.Fatalf("reused avatar = %+v err=%v", asset, err)
 	}
 	if _, err := os.Stat(oldPath); err != nil {

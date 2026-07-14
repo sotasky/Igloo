@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"io"
 	"mime"
@@ -46,7 +45,6 @@ type Asset struct {
 	FilePath           string
 	ContentType        string
 	SizeBytes          int64
-	SHA256             string
 	FileMtimeNs        int64
 	Revision           int64
 	IsAuto             *bool
@@ -70,7 +68,6 @@ const assetProjectionSQL = `
 	CASE WHEN current.published_revision > 0 THEN current.file_path ELSE '' END,
 	CASE WHEN current.published_revision > 0 THEN current.content_type ELSE desired.content_type END,
 	CASE WHEN current.published_revision > 0 THEN current.size_bytes ELSE 0 END,
-	CASE WHEN current.published_revision > 0 THEN current.sha256 ELSE '' END,
 	CASE WHEN current.published_revision > 0 THEN current.file_mtime_ns ELSE 0 END,
 	a.revision, a.is_auto, a.audio_language,
 	CASE
@@ -184,7 +181,7 @@ func ReadyAssetMatchesSource(asset *Asset, sourceURL string) bool {
 	}
 	return publishedSource == sourceURL &&
 		asset.FilePath != "" && asset.ContentType != "" && asset.SizeBytes > 0 &&
-		asset.SHA256 != "" && asset.FileMtimeNs > 0
+		asset.FileMtimeNs > 0
 }
 
 // MediaAssetAvailability is the presentation-ready projection of canonical
@@ -255,7 +252,7 @@ func (db *DB) GetTweetMediaAssetAvailability(ownerIDs []string) (map[string]Medi
 	return out, nil
 }
 
-// StoreReadyAsset fingerprints a completed file and publishes its canonical
+// StoreReadyAsset validates a completed file and publishes its canonical
 // inventory row. Producers call this after the final same-filesystem rename.
 func (db *DB) StoreReadyAsset(asset Asset, nowMs int64) error {
 	asset.State = AssetStateReady
@@ -286,14 +283,14 @@ func upsertAssetTx(tx *sql.Tx, asset Asset) error {
 	publicationChanged := false
 	if asset.State == AssetStateReady {
 		publishedRevision = 1
-		var sourceURL, filePath, contentType, sha string
+		var sourceURL, filePath, contentType string
 		var size, mtime int64
 		err := tx.QueryRow(`
-			SELECT published_source_url, file_path, content_type, size_bytes, sha256, file_mtime_ns
+			SELECT published_source_url, file_path, content_type, size_bytes, file_mtime_ns
 			FROM media_objects WHERE object_key = ? AND published_revision > 0
-		`, asset.ObjectKey).Scan(&sourceURL, &filePath, &contentType, &size, &sha, &mtime)
+		`, asset.ObjectKey).Scan(&sourceURL, &filePath, &contentType, &size, &mtime)
 		publicationChanged = err == nil && (sourceURL != asset.SourceURL || filePath != asset.FilePath ||
-			contentType != asset.ContentType || size != asset.SizeBytes || sha != asset.SHA256 || mtime != asset.FileMtimeNs)
+			contentType != asset.ContentType || size != asset.SizeBytes || mtime != asset.FileMtimeNs)
 		if err != nil && err != sql.ErrNoRows {
 			return err
 		}
@@ -302,10 +299,10 @@ func upsertAssetTx(tx *sql.Tx, asset Asset) error {
 		INSERT INTO media_objects (
 			object_id, object_key, source_url, published_source_url, storage_class,
 			desired_revision, published_revision,
-			file_path, content_type, size_bytes, sha256, file_mtime_ns,
+			file_path, content_type, size_bytes, file_mtime_ns,
 			job_state, last_error_kind, last_error, attempts,
 			next_attempt_at_ms, lease_owner, lease_until_ms, created_at_ms, updated_at_ms
-		) VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(object_key) DO UPDATE SET
 			source_url = excluded.source_url,
 			published_source_url = CASE WHEN excluded.published_revision > 0 THEN excluded.source_url ELSE media_objects.published_source_url END,
@@ -322,7 +319,6 @@ func upsertAssetTx(tx *sql.Tx, asset Asset) error {
 			file_path = CASE WHEN excluded.published_revision > 0 THEN excluded.file_path ELSE media_objects.file_path END,
 			content_type = CASE WHEN excluded.published_revision > 0 OR media_objects.content_type = '' THEN excluded.content_type ELSE media_objects.content_type END,
 			size_bytes = CASE WHEN excluded.published_revision > 0 THEN excluded.size_bytes ELSE media_objects.size_bytes END,
-			sha256 = CASE WHEN excluded.published_revision > 0 THEN excluded.sha256 ELSE media_objects.sha256 END,
 			file_mtime_ns = CASE WHEN excluded.published_revision > 0 THEN excluded.file_mtime_ns ELSE media_objects.file_mtime_ns END,
 			job_state = CASE
 				WHEN excluded.published_revision > 0 THEN 'ready'
@@ -338,7 +334,7 @@ func upsertAssetTx(tx *sql.Tx, asset Asset) error {
 			lease_until_ms = CASE WHEN excluded.published_revision > 0 OR media_objects.source_url != excluded.source_url OR (excluded.job_state = 'queued' AND media_objects.job_state IN ('failed', 'server_missing', 'permanent_missing', 'stale', 'pruned')) THEN 0 ELSE media_objects.lease_until_ms END,
 			updated_at_ms = excluded.updated_at_ms
 	`, asset.ObjectID, asset.ObjectKey, asset.SourceURL, asset.SourceURL, asset.StorageClass,
-		publishedRevision, asset.FilePath, asset.ContentType, asset.SizeBytes, asset.SHA256, asset.FileMtimeNs,
+		publishedRevision, asset.FilePath, asset.ContentType, asset.SizeBytes, asset.FileMtimeNs,
 		asset.State, asset.LastErrorKind, asset.LastError, asset.Attempts,
 		asset.NextAttemptAtMs, asset.LeaseOwner, asset.LeaseUntilMs, asset.CreatedAtMs, asset.UpdatedAtMs)
 	if err != nil {
@@ -429,7 +425,6 @@ func normalizeAsset(asset Asset, nowMs int64) Asset {
 	asset.PublishedSourceURL = strings.TrimSpace(asset.PublishedSourceURL)
 	asset.FilePath = strings.TrimSpace(asset.FilePath)
 	asset.ContentType = strings.TrimSpace(asset.ContentType)
-	asset.SHA256 = strings.TrimSpace(asset.SHA256)
 	asset.AudioLanguage = strings.TrimSpace(asset.AudioLanguage)
 	asset.State = strings.TrimSpace(asset.State)
 	asset.RequiredReason = strings.TrimSpace(asset.RequiredReason)
@@ -481,9 +476,9 @@ func (db *DB) MarkReadyAssetUnavailable(expected Asset, nowMs int64) (bool, erro
 			SET published_revision = 0, job_state = ?, updated_at_ms = ?
 			WHERE object_id = (SELECT object_id FROM assets WHERE asset_id = ? AND revision = ?)
 			  AND published_revision > 0
-			  AND file_path = ? AND size_bytes = ? AND file_mtime_ns = ? AND sha256 = ?
+			  AND file_path = ? AND size_bytes = ? AND file_mtime_ns = ?
 		`, AssetStateServerMissing, nowMs, expected.AssetID, expected.Revision,
-			expected.FilePath, expected.SizeBytes, expected.FileMtimeNs, expected.SHA256)
+			expected.FilePath, expected.SizeBytes, expected.FileMtimeNs)
 		if err != nil {
 			return err
 		}
@@ -509,17 +504,13 @@ func readAssetTx(tx *sql.Tx, assetID string) (Asset, error) {
 // CompleteAssetDownload publishes a file for a content asset claimed by its
 // producer-owned queue.
 func (db *DB) CompleteAssetDownload(asset Asset, owner string, nowMs int64) error {
-	return db.CompleteAssetDownloadInLane(asset, owner, nowMs, "")
-}
-
-func (db *DB) CompleteAssetDownloadInLane(asset Asset, owner string, nowMs int64, bulkLane storage.MediaLane) error {
 	if nowMs == 0 {
 		nowMs = time.Now().UnixMilli()
 	}
 	asset.AssetID = strings.TrimSpace(asset.AssetID)
 	asset.AssetKind = strings.TrimSpace(asset.AssetKind)
 	var err error
-	asset, err = db.prepareReadyAssetMetadataInLane(asset, nowMs, bulkLane)
+	asset, err = db.prepareReadyAssetMetadata(asset, nowMs)
 	if err != nil {
 		return err
 	}
@@ -528,13 +519,13 @@ func (db *DB) CompleteAssetDownloadInLane(asset Asset, owner string, nowMs int64
 			UPDATE media_objects
 			   SET published_revision=desired_revision,
 			       published_source_url=source_url,
-			       file_path=?, content_type=?, size_bytes=?, sha256=?, file_mtime_ns=?,
+			       file_path=?, content_type=?, size_bytes=?, file_mtime_ns=?,
 			       job_state=?, last_error_kind='', last_error='', attempts=0, next_attempt_at_ms=0,
 			       lease_owner='', lease_until_ms=0, updated_at_ms=?
 			 WHERE object_id=(SELECT desired_object_id FROM assets WHERE asset_id=? AND asset_kind=?)
 			   AND job_state=? AND lease_owner=?
 		`, strings.TrimSpace(asset.FilePath), strings.TrimSpace(asset.ContentType),
-			asset.SizeBytes, strings.TrimSpace(asset.SHA256), asset.FileMtimeNs, AssetStateReady,
+			asset.SizeBytes, asset.FileMtimeNs, AssetStateReady,
 			nowMs, asset.AssetID, asset.AssetKind, AssetStateDownloading, owner)
 		if err != nil {
 			return err
@@ -818,7 +809,6 @@ func scanAsset(row assetScanner) (Asset, error) {
 		&asset.FilePath,
 		&asset.ContentType,
 		&asset.SizeBytes,
-		&asset.SHA256,
 		&asset.FileMtimeNs,
 		&asset.Revision,
 		&asset.IsAuto,
@@ -837,128 +827,9 @@ func scanAsset(row assetScanner) (Asset, error) {
 	return asset, err
 }
 
-// prepareReadyAssetMetadata fingerprints a completed file once. Repeated
-// declarations reuse the stored checksum while path, size, and mtime agree.
+// prepareReadyAssetMetadata validates the completed producer output and
+// captures the small metadata needed to publish it immediately.
 func (db *DB) prepareReadyAssetMetadata(asset Asset, nowMs int64) (Asset, error) {
-	return db.prepareReadyAssetMetadataInLane(asset, nowMs, "")
-}
-
-func (db *DB) prepareReadyAssetMetadataInLane(asset Asset, nowMs int64, bulkLane storage.MediaLane) (Asset, error) {
-	lane := readyAssetLane(asset.FilePath)
-	if lane == storage.MediaLaneBulkRegular && bulkLane != "" {
-		switch bulkLane {
-		case storage.MediaLaneBulkForeground, storage.MediaLaneBulkRegular, storage.MediaLaneBulkBackground:
-			lane = bulkLane
-		default:
-			return asset, fmt.Errorf("invalid completed media lane %q", bulkLane)
-		}
-	}
-	durability := db.readyAssetDurability
-	if durability == nil {
-		durability = makeReadyAssetDurable
-	}
-	var prepared Asset
-	err := db.storage.MediaExecutor().Run(context.Background(), lane, func() error {
-		var err error
-		prepared, err = db.prepareReadyAssetMetadataAdmitted(asset, nowMs, durability)
-		return err
-	})
-	return prepared, err
-}
-
-func readyAssetLane(key string) storage.MediaLane {
-	if strings.HasPrefix(strings.TrimSpace(key), "media/") {
-		return storage.MediaLaneBulkRegular
-	}
-	return storage.MediaLaneState
-}
-
-// prepareReadyAssetSetMetadata fingerprints one completed producer set under
-// one admission per storage lane. Files retain individual durability and
-// fingerprints; shared parent directories are synced once after the set is
-// prepared and before any caller can publish it.
-func (db *DB) prepareReadyAssetSetMetadata(assets []Asset, nowMs int64) ([]Asset, error) {
-	return db.prepareReadyAssetSetMetadataInLane(assets, nowMs, "")
-}
-
-func (db *DB) prepareReadyAssetSetMetadataInLane(assets []Asset, nowMs int64, bulkLane storage.MediaLane) ([]Asset, error) {
-	return db.prepareReadyAssetSetMetadataWithLane(
-		assets, nowMs, func(file *os.File) error { return file.Sync() }, storage.SyncDirectory,
-		bulkLane,
-	)
-}
-
-func (db *DB) prepareReadyAssetSetMetadataWith(
-	assets []Asset,
-	nowMs int64,
-	syncFile func(*os.File) error,
-	syncDirectory func(string) error,
-) ([]Asset, error) {
-	return db.prepareReadyAssetSetMetadataWithLane(assets, nowMs, syncFile, syncDirectory, "")
-}
-
-func (db *DB) prepareReadyAssetSetMetadataWithLane(
-	assets []Asset,
-	nowMs int64,
-	syncFile func(*os.File) error,
-	syncDirectory func(string) error,
-	bulkLane storage.MediaLane,
-) ([]Asset, error) {
-	if syncFile == nil || syncDirectory == nil {
-		return nil, fmt.Errorf("asset durability operations are required")
-	}
-	if bulkLane == "" {
-		bulkLane = storage.MediaLaneBulkRegular
-	}
-	switch bulkLane {
-	case storage.MediaLaneBulkForeground, storage.MediaLaneBulkRegular, storage.MediaLaneBulkBackground:
-	default:
-		return nil, fmt.Errorf("invalid completed media lane %q", bulkLane)
-	}
-	byLane := make(map[storage.MediaLane][]int, 2)
-	for i, asset := range assets {
-		lane := readyAssetLane(asset.FilePath)
-		if lane == storage.MediaLaneBulkRegular {
-			lane = bulkLane
-		}
-		byLane[lane] = append(byLane[lane], i)
-	}
-	prepared := make([]Asset, len(assets))
-	for _, lane := range []storage.MediaLane{bulkLane, storage.MediaLaneState} {
-		indexes := byLane[lane]
-		if len(indexes) == 0 {
-			continue
-		}
-		err := db.storage.MediaExecutor().Run(context.Background(), lane, func() error {
-			directories := make(map[string]struct{})
-			durability := func(path string) error {
-				return makeReadyAssetDurableWith(path, syncFile, func(dir string) error {
-					directories[dir] = struct{}{}
-					return nil
-				})
-			}
-			for _, index := range indexes {
-				ready, err := db.prepareReadyAssetMetadataAdmitted(assets[index], nowMs, durability)
-				if err != nil {
-					return err
-				}
-				prepared[index] = ready
-			}
-			for _, dir := range sortedSet(directories) {
-				if err := syncDirectory(dir); err != nil {
-					return fmt.Errorf("sync ready asset directory %q: %w", dir, err)
-				}
-			}
-			return nil
-		})
-		if err != nil {
-			return nil, err
-		}
-	}
-	return prepared, nil
-}
-
-func (db *DB) prepareReadyAssetMetadataAdmitted(asset Asset, nowMs int64, durability func(string) error) (Asset, error) {
 	asset = normalizeAsset(asset, nowMs)
 	path, err := db.storage.WritePath(asset.FilePath)
 	if err != nil {
@@ -977,58 +848,26 @@ func (db *DB) prepareReadyAssetMetadataAdmitted(asset Asset, nowMs int64, durabi
 	if asset.SizeBytes <= 0 {
 		return asset, fmt.Errorf("ready asset is empty: %s", asset.FilePath)
 	}
-	// The canonical file API owns the checksum. Never trust a checksum supplied
-	// by a caller for bytes that this process can fingerprint itself.
-	asset.SHA256 = ""
-
-	var existing *Asset
-	if asset.AssetID != "" && asset.AssetKind != "" {
-		existing, err = db.GetAsset(asset.AssetID, asset.AssetKind)
-	} else {
-		existing, err = db.GetAssetByOwnerIdentity(asset.AssetKind, asset.OwnerKind, asset.OwnerID, asset.MediaIndex)
-	}
-	if err != nil {
-		return asset, err
-	}
-	if existing != nil && existing.State == AssetStateReady && existing.SHA256 != "" && existing.ContentType != "" &&
-		existing.FilePath == asset.FilePath &&
-		existing.SizeBytes == asset.SizeBytes &&
-		existing.FileMtimeNs == asset.FileMtimeNs {
-		if err := requireSameAssetFile(path, info); err != nil {
-			return asset, err
-		}
-		asset.ContentType = existing.ContentType
-		asset.SHA256 = existing.SHA256
-		return asset, nil
-	}
-	if err := durability(path); err != nil {
-		return asset, fmt.Errorf("make ready asset durable %q: %w", asset.FilePath, err)
-	}
-	info, err = os.Stat(path)
-	if err != nil {
-		return asset, err
-	}
-	if !info.Mode().IsRegular() || info.Size() <= 0 {
-		return asset, fmt.Errorf("ready asset is not a non-empty regular file: %s", asset.FilePath)
-	}
-	asset.SizeBytes = info.Size()
-	asset.FileMtimeNs = info.ModTime().UnixNano()
 	asset.ContentType, err = CanonicalAssetContentType(path, asset.FilePath, asset.AssetKind, asset.ContentType)
 	if err != nil {
 		return asset, err
 	}
-
-	size, mtimeNs, sum, err := fingerprintAssetFile(path)
-	if err != nil {
-		return asset, err
-	}
-	asset.SizeBytes = size
-	asset.FileMtimeNs = mtimeNs
-	asset.SHA256 = sum
 	return asset, nil
 }
 
-// CanonicalAssetContentType returns the stored media type for verified bytes.
+func (db *DB) prepareReadyAssetSetMetadata(assets []Asset, nowMs int64) ([]Asset, error) {
+	prepared := make([]Asset, len(assets))
+	for i := range assets {
+		ready, err := db.prepareReadyAssetMetadata(assets[i], nowMs)
+		if err != nil {
+			return nil, err
+		}
+		prepared[i] = ready
+	}
+	return prepared, nil
+}
+
+// CanonicalAssetContentType returns the stored media type for completed bytes.
 // Strong byte signatures override declarations and filename extensions.
 func CanonicalAssetContentType(filePath, storageKey, assetKind, declared string) (string, error) {
 	detectedType, err := sniffAssetContentType(filePath, assetKind)
@@ -1100,89 +939,6 @@ func sniffAssetContentType(path, assetKind string) (string, error) {
 	default:
 		return "", nil
 	}
-}
-
-func fingerprintAssetFile(path string) (int64, int64, string, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return 0, 0, "", err
-	}
-	defer func() { _ = f.Close() }()
-	before, err := f.Stat()
-	if err != nil {
-		return 0, 0, "", err
-	}
-	if !before.Mode().IsRegular() {
-		return 0, 0, "", fmt.Errorf("asset path is not a regular file: %s", path)
-	}
-	h := sha256.New()
-	n, err := io.Copy(h, f)
-	if err != nil {
-		return 0, 0, "", err
-	}
-	after, err := f.Stat()
-	if err != nil {
-		return 0, 0, "", err
-	}
-	if before.Size() != after.Size() || before.ModTime() != after.ModTime() || n != after.Size() {
-		return 0, 0, "", fmt.Errorf("asset changed while fingerprinting: %s", path)
-	}
-	if err := requireSameAssetFile(path, after); err != nil {
-		return 0, 0, "", err
-	}
-	return n, after.ModTime().UnixNano(), hex.EncodeToString(h.Sum(nil)), nil
-}
-
-func requireSameAssetFile(path string, expected os.FileInfo) error {
-	current, err := os.Stat(path)
-	if err != nil {
-		return err
-	}
-	if !os.SameFile(expected, current) || expected.Size() != current.Size() || expected.ModTime() != current.ModTime() {
-		return fmt.Errorf("asset changed while preparing metadata: %s", path)
-	}
-	return nil
-}
-
-func makeReadyAssetDurable(path string) error {
-	return makeReadyAssetDurableWith(path, func(file *os.File) error {
-		return file.Sync()
-	}, storage.SyncDirectory)
-}
-
-func makeReadyAssetDurableWith(path string, syncFile func(*os.File) error, syncDirectory func(string) error) error {
-	if syncFile == nil || syncDirectory == nil {
-		return fmt.Errorf("asset durability operations are required")
-	}
-	file, err := os.Open(path)
-	if err != nil {
-		return err
-	}
-	closeWith := func(err error) error { return errors.Join(err, file.Close()) }
-	before, err := file.Stat()
-	if err != nil {
-		return closeWith(err)
-	}
-	if !before.Mode().IsRegular() {
-		return closeWith(fmt.Errorf("asset path is not a regular file: %s", path))
-	}
-	if err := syncFile(file); err != nil {
-		return closeWith(err)
-	}
-	if err := syncDirectory(filepath.Dir(path)); err != nil {
-		return closeWith(err)
-	}
-	after, err := file.Stat()
-	if err != nil {
-		return closeWith(err)
-	}
-	if before.Size() != after.Size() || before.ModTime() != after.ModTime() {
-		return closeWith(fmt.Errorf("asset changed while making durable: %s", path))
-	}
-	if err := requireSameAssetFile(path, after); err != nil {
-		return closeWith(err)
-	}
-	return file.Close()
 }
 
 // BuildAssetID returns the stable public identity for one canonical asset.

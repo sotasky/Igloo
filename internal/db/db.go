@@ -23,11 +23,10 @@ type EnsureSchemaOptions struct {
 }
 
 type DB struct {
-	conn                 *sql.DB
-	readTx               *sql.Tx
-	mu                   sync.Mutex // serialize writes
-	storage              storage.Layout
-	readyAssetDurability func(string) error
+	conn    *sql.DB
+	readTx  *sql.Tx
+	mu      sync.Mutex // serialize writes
+	storage storage.Layout
 }
 
 type sqlReader interface {
@@ -51,7 +50,6 @@ func (db *DB) WithReadSnapshot(fn func(*DB) error) error {
 	defer func() { _ = tx.Rollback() }()
 	snapshot := &DB{
 		conn: db.conn, readTx: tx, storage: db.storage,
-		readyAssetDurability: db.readyAssetDurability,
 	}
 	if err := fn(snapshot); err != nil {
 		return err

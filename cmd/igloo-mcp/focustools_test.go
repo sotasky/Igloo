@@ -30,15 +30,18 @@ func insertMCPTestAsset(t *testing.T, d *igloodb.DB, asset igloodb.Asset, state 
 		if asset.SizeBytes == 0 {
 			asset.SizeBytes = 1
 		}
+		if asset.FileMtimeNs == 0 {
+			asset.FileMtimeNs = nowMs
+		}
 	}
 	if err := d.ExecRaw(`
 		UPDATE media_objects
 		SET published_revision = CASE WHEN ? != 0 THEN desired_revision ELSE 0 END,
 		    published_source_url = CASE WHEN ? != 0 THEN source_url ELSE '' END,
-		    file_path = ?, content_type = ?, size_bytes = ?, sha256 = ?, file_mtime_ns = ?,
+		    file_path = ?, content_type = ?, size_bytes = ?, file_mtime_ns = ?,
 		    job_state = ?, lease_owner = ?, lease_until_ms = ?, updated_at_ms = ?
 		WHERE object_id = (SELECT desired_object_id FROM assets WHERE asset_id = ?)
-	`, published, published, asset.FilePath, asset.ContentType, asset.SizeBytes, asset.SHA256, nowMs,
+	`, published, published, asset.FilePath, asset.ContentType, asset.SizeBytes, asset.FileMtimeNs,
 		state, leaseOwner, leaseUntilMs, nowMs, asset.AssetID); err != nil {
 		t.Fatalf("set test asset state: %v", err)
 	}
@@ -66,7 +69,7 @@ func TestAndroidSyncStatusReportsConvergenceEvidence(t *testing.T) {
 	`, now); err != nil {
 		t.Fatalf("insert sync health: %v", err)
 	}
-	insertMCPTestAsset(t, d, igloodb.Asset{AssetID: "sample_ready_asset", AssetKind: "post_media", OwnerKind: "tweet", OwnerID: "sample_post", FilePath: "media/sample_post_0.jpg", ContentType: "image/jpeg", SizeBytes: 512, SHA256: "sha-ready"}, igloodb.AssetStateReady, now, 0, "")
+	insertMCPTestAsset(t, d, igloodb.Asset{AssetID: "sample_ready_asset", AssetKind: "post_media", OwnerKind: "tweet", OwnerID: "sample_post", FilePath: "media/sample_post_0.jpg", ContentType: "image/jpeg", SizeBytes: 512}, igloodb.AssetStateReady, now, 0, "")
 	insertMCPTestAsset(t, d, igloodb.Asset{AssetID: "sample_downloading_asset", AssetKind: "avatar", OwnerKind: "channel", OwnerID: "twitter_sample_author", FilePath: "thumbnails/avatars/twitter_sample_author.jpg", ContentType: "image/jpeg"}, igloodb.AssetStateDownloading, now, now-1, "worker-a")
 	insertMCPTestAsset(t, d, igloodb.Asset{AssetID: "sample_missing_asset", AssetKind: "avatar", OwnerKind: "channel", OwnerID: "twitter_sample_author", MediaIndex: 1}, igloodb.AssetStateServerMissing, now, 0, "")
 	if err := os.MkdirAll(filepath.Join(tmp, "logs", "android"), 0o755); err != nil {
@@ -144,7 +147,7 @@ func TestIdentityMediaStatusTracesTweetIdentities(t *testing.T) {
 	`, now-2000, now+1000, now); err != nil {
 		t.Fatalf("insert profile job: %v", err)
 	}
-	insertMCPTestAsset(t, d, igloodb.Asset{AssetID: "sample_author_avatar", AssetKind: "avatar", OwnerKind: "channel", OwnerID: "twitter_sample_author", SourceURL: "https://example.invalid/avatar.jpg", FilePath: "thumbnails/avatars/twitter_sample_author.jpg", ContentType: "image/jpeg", SizeBytes: 64, SHA256: "sha-avatar"}, igloodb.AssetStateReady, now, 0, "")
+	insertMCPTestAsset(t, d, igloodb.Asset{AssetID: "sample_author_avatar", AssetKind: "avatar", OwnerKind: "channel", OwnerID: "twitter_sample_author", SourceURL: "https://example.invalid/avatar.jpg", FilePath: "thumbnails/avatars/twitter_sample_author.jpg", ContentType: "image/jpeg", SizeBytes: 64}, igloodb.AssetStateReady, now, 0, "")
 	report, err := identityMediaStatus("", "", "", "sample_post", 5)
 	if err != nil {
 		t.Fatalf("identityMediaStatus: %v", err)

@@ -321,7 +321,7 @@ func TestAddAndRemoveBookmarkResolveCanonicalStatusURL(t *testing.T) {
 		t.Fatalf("GetAsset canonical media: %v", err)
 	}
 	if asset == nil || asset.OwnerID != originalID || asset.State != AssetStateReady ||
-		asset.FilePath != repostPath || asset.SizeBytes <= 0 || len(asset.SHA256) != 64 || asset.FileMtimeNs <= 0 ||
+		asset.FilePath != repostPath || asset.SizeBytes <= 0 || asset.FileMtimeNs <= 0 ||
 		asset.RequiredReason != "bookmark" {
 		t.Fatalf("canonical asset not materialized: %+v", asset)
 	}

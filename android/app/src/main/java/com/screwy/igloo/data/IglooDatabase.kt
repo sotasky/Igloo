@@ -93,7 +93,7 @@ import com.screwy.igloo.data.entity.WatchHistoryEntity
             AndroidSyncHeadEntity::class,
             AndroidSyncAssetEntity::class,
         ],
-    version = 40,
+    version = 41,
     exportSchema = true,
 )
 abstract class IglooDatabase : RoomDatabase() {
@@ -163,7 +163,9 @@ abstract class IglooDatabase : RoomDatabase() {
 
         fun build(context: Context): IglooDatabase {
             val appCtx = context.applicationContext
-            return Room.databaseBuilder(appCtx, IglooDatabase::class.java, DB_FILE_NAME).build()
+            return Room.databaseBuilder(appCtx, IglooDatabase::class.java, DB_FILE_NAME)
+                .addMigrations(IglooMigrations.MIGRATION_40_41)
+                .build()
         }
     }
 }

@@ -56,7 +56,6 @@ class FeedMediaModelStoreTest {
                 bucket = "twitter_media",
                 contentType = "image/jpeg",
                 sizeBytes = 1,
-                sha256 = "hash",
                 revision = 1,
             )
         )

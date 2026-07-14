@@ -519,7 +519,7 @@ func TestResolveFeedStateIDForWriteCopiesCanonicalReadyAsset(t *testing.T) {
 	if canonical == nil || canonical.State != AssetStateReady || canonical.FilePath == "" || canonical.SizeBytes <= 0 {
 		t.Fatalf("canonical ready row = %+v", canonical)
 	}
-	if canonical.SHA256 == "" || canonical.FileMtimeNs <= 0 {
-		t.Fatalf("canonical fingerprint missing: %+v", canonical)
+	if canonical.FileMtimeNs <= 0 {
+		t.Fatalf("canonical file metadata missing: %+v", canonical)
 	}
 }

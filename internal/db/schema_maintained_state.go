@@ -19,7 +19,6 @@ func schemaMaintainedStateStatements() []string {
 			file_path            TEXT NOT NULL DEFAULT '',
 			content_type         TEXT NOT NULL DEFAULT '',
 			size_bytes           INTEGER NOT NULL DEFAULT 0,
-			sha256               TEXT NOT NULL DEFAULT '',
 			file_mtime_ns        INTEGER NOT NULL DEFAULT 0,
 			job_state            TEXT NOT NULL DEFAULT 'queued',
 			last_error_kind      TEXT NOT NULL DEFAULT '',

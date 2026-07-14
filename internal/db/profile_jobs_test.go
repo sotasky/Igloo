@@ -485,7 +485,7 @@ func TestCompleteProfileJobPreservesReadyAssetUntilReplacementAndRemovesAuthorit
 		t.Fatalf("partial profile was not published: %+v err=%v", profile, err)
 	}
 	asset, err := d.GetAssetByOwnerIdentity("avatar", "channel", job.ChannelID, 0)
-	if err != nil || asset == nil || asset.FilePath != oldAsset.FilePath || asset.SHA256 != oldAsset.SHA256 || asset.SourceURL != oldSource {
+	if err != nil || asset == nil || asset.FilePath != oldAsset.FilePath || asset.FileMtimeNs != oldAsset.FileMtimeNs || asset.SourceURL != oldSource {
 		t.Fatalf("ready asset changed before replacement: %+v err=%v", asset, err)
 	}
 

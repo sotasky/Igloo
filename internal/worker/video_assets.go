@@ -18,29 +18,30 @@ import (
 )
 
 type completedVideoFiles struct {
-	assets         []db.Asset
-	subtitleAssets []db.Asset
-	primaryPath    string
-	primaryKey     string
-	imageKeys      []string
-	materialized   []string
-	transientPaths []string
+	assets               []db.Asset
+	subtitleAssets       []db.Asset
+	primaryPath          string
+	primaryKey           string
+	imageKeys            []string
+	thumbnailImageSource string
+	thumbnailVideoSource string
+	transientPaths       []string
 }
 
-func (m *Manager) prepareCompletedVideoFiles(ctx context.Context, lane download.MediaLane, platform, outputID string, completed download.CompletedDownload) (completedVideoFiles, error) {
+func (m *Manager) prepareCompletedVideoFiles(ctx context.Context, lane download.MediaLane, completed download.CompletedDownload) (completedVideoFiles, error) {
 	if m == nil || m.downloader == nil {
-		return m.prepareCompletedVideoFilesAdmitted(ctx, platform, outputID, completed)
+		return m.prepareCompletedVideoFilesAdmitted(completed)
 	}
 	var files completedVideoFiles
 	err := m.downloader.RunMedia(ctx, lane, func() error {
 		var err error
-		files, err = m.prepareCompletedVideoFilesAdmitted(ctx, platform, outputID, completed)
+		files, err = m.prepareCompletedVideoFilesAdmitted(completed)
 		return err
 	})
 	return files, err
 }
 
-func (m *Manager) prepareCompletedVideoFilesAdmitted(ctx context.Context, platform, outputID string, completed download.CompletedDownload) (completedVideoFiles, error) {
+func (m *Manager) prepareCompletedVideoFilesAdmitted(completed download.CompletedDownload) (completedVideoFiles, error) {
 	var out completedVideoFiles
 	if m == nil || m.cfg == nil {
 		return out, fmt.Errorf("storage is not configured")
@@ -92,27 +93,11 @@ func (m *Manager) prepareCompletedVideoFilesAdmitted(ctx context.Context, platfo
 		}
 		return out, fmt.Errorf("stat completed media %s: %w", out.primaryPath, err)
 	}
-	thumbnailSource := completed.ThumbnailPath
-	if thumbnailSource == "" {
-		thumbnailSource = firstImage
+	out.thumbnailImageSource = completed.ThumbnailPath
+	if out.thumbnailImageSource == "" {
+		out.thumbnailImageSource = firstImage
 	}
-	thumbnailPath, err := m.materializeVideoThumbnail(ctx, platform, outputID, thumbnailSource, firstVideo)
-	if err != nil {
-		return out, err
-	}
-	if thumbnailPath != "" {
-		out.materialized = append(out.materialized, thumbnailPath)
-		key, err := m.cfg.Storage.Key(thumbnailPath)
-		if err != nil {
-			return out, err
-		}
-		out.assets = append(out.assets, db.Asset{
-			AssetKind:      "post_thumbnail",
-			FilePath:       key,
-			ContentType:    completedContentType(thumbnailPath),
-			RequiredReason: "retention",
-		})
-	}
+	out.thumbnailVideoSource = firstVideo
 
 	infoPath := completed.InfoJSONPath
 	subtitlePaths := append([]string(nil), completed.SubtitlePaths...)
@@ -137,7 +122,7 @@ func (m *Manager) prepareCompletedVideoFilesAdmitted(ctx context.Context, platfo
 		})
 	}
 
-	kept := map[string]struct{}{thumbnailPath: {}}
+	kept := make(map[string]struct{}, len(completed.MediaPaths)+len(completed.SubtitlePaths))
 	for _, path := range completed.MediaPaths {
 		kept[path] = struct{}{}
 	}
@@ -153,6 +138,41 @@ func (m *Manager) prepareCompletedVideoFilesAdmitted(ctx context.Context, platfo
 		}
 	}
 	return out, nil
+}
+
+func (m *Manager) publishCompletedVideoThumbnail(ctx context.Context, lane download.MediaLane, videoID, platform, outputID string, files completedVideoFiles) error {
+	if files.thumbnailImageSource == "" && files.thumbnailVideoSource == "" {
+		return nil
+	}
+	var thumbnailPath string
+	materialize := func() error {
+		var err error
+		thumbnailPath, err = m.materializeVideoThumbnail(
+			ctx, platform, outputID, files.thumbnailImageSource, files.thumbnailVideoSource,
+		)
+		return err
+	}
+	if m != nil && m.downloader != nil {
+		if err := m.downloader.RunMedia(ctx, lane, materialize); err != nil {
+			return err
+		}
+	} else if err := materialize(); err != nil {
+		return err
+	}
+	if thumbnailPath == "" {
+		return nil
+	}
+	key, err := m.cfg.Storage.Key(thumbnailPath)
+	if err == nil {
+		err = m.db.StoreVideoThumbnailAsset(videoID, db.Asset{
+			FilePath: key, ContentType: completedContentType(thumbnailPath),
+		}, 0)
+		if err == nil {
+			return nil
+		}
+	}
+	m.removeStoredPaths(ctx, lane, []string{thumbnailPath})
+	return err
 }
 
 func completedMediaIdentity(path string) (kind, contentType string, priority int) {
@@ -445,7 +465,6 @@ func (m *Manager) removeFailedAttempt(ctx context.Context, bulkLane download.Med
 	paths := append([]string(nil), completed.MediaPaths...)
 	paths = append(paths, completed.SubtitlePaths...)
 	paths = append(paths, completed.ThumbnailPath, completed.InfoJSONPath)
-	paths = append(paths, files.materialized...)
 	m.removeStoredPaths(ctx, bulkLane, paths)
 }
 

@@ -11,7 +11,7 @@ import (
 	"github.com/screwys/igloo/internal/storage"
 )
 
-func TestStoreCompletedVideoForegroundPublicationDoesNotWaitForBackfill(t *testing.T) {
+func TestStoreCompletedVideoPublicationDoesNotWaitForDownloadLane(t *testing.T) {
 	d := openWritableTestDB(t)
 	key := filepath.Join("media", "instagram", "sample_foreground.mp4")
 	path, err := d.storage.Path(key)
@@ -36,8 +36,7 @@ func TestStoreCompletedVideoForegroundPublicationDoesNotWaitForBackfill(t *testi
 	go func() {
 		storeDone <- d.StoreCompletedVideo(CompletedVideo{
 			VideoID: "sample_foreground", ChannelID: "instagram_sample", OwnerKind: "instagram_reel",
-			MediaLane: storage.MediaLaneBulkForeground,
-			Assets:    []Asset{{AssetKind: "video_stream", FilePath: key}},
+			Assets: []Asset{{AssetKind: "video_stream", FilePath: key}},
 		})
 	}()
 
@@ -51,57 +50,11 @@ func TestStoreCompletedVideoForegroundPublicationDoesNotWaitForBackfill(t *testi
 	case <-time.After(2 * time.Second):
 		close(release)
 		<-backgroundDone
-		t.Fatal("foreground publication waited for the backfill lane")
+		t.Fatal("completed video publication waited for the download lane")
 	}
 	close(release)
 	if err := <-backgroundDone; err != nil {
 		t.Fatal(err)
-	}
-}
-
-func TestCompletedVideoAssetSetSyncsSharedDirectoryOnce(t *testing.T) {
-	d := openWritableTestDB(t)
-	keys := []string{
-		filepath.Join("media", "instagram", "sample_slideshow", "0.jpg"),
-		filepath.Join("media", "instagram", "sample_slideshow", "1.jpg"),
-	}
-	assets := make([]Asset, 0, len(keys))
-	for i, key := range keys {
-		path, err := d.storage.WritePath(key)
-		if err != nil {
-			t.Fatal(err)
-		}
-		writeDBTestFile(t, path, []byte{byte('a' + i)})
-		assets = append(assets, Asset{
-			AssetID:   BuildAssetID("instagram", "instagram_post", "sample_slideshow", "post_media", i),
-			AssetKind: "post_media", OwnerKind: "instagram_post", OwnerID: "sample_slideshow",
-			MediaIndex: i, FilePath: key, ContentType: "image/jpeg", State: AssetStateReady,
-		})
-	}
-
-	var fileSyncs, directorySyncs int
-	prepared, err := d.prepareReadyAssetSetMetadataWith(
-		assets,
-		1,
-		func(*os.File) error {
-			fileSyncs++
-			return nil
-		},
-		func(string) error {
-			directorySyncs++
-			return nil
-		},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if fileSyncs != len(assets) || directorySyncs != 1 {
-		t.Fatalf("durability calls = %d files, %d directories; want %d files, 1 directory", fileSyncs, directorySyncs, len(assets))
-	}
-	for _, asset := range prepared {
-		if asset.SizeBytes != 1 || len(asset.SHA256) != 64 || asset.FileMtimeNs <= 0 {
-			t.Fatalf("prepared asset lost fingerprint metadata: %+v", asset)
-		}
 	}
 }
 
@@ -139,17 +92,18 @@ func TestStoreCompletedVideoObservesInstagramAccountsAndDropsRawAvatars(t *testi
 	}
 }
 
-func TestStoreCompletedVideoReplacesProducerAssetsAndInvalidatesChangedStreamPreview(t *testing.T) {
+func TestStoreCompletedVideoReplacesPrimaryAssetsAndPreservesDerivedThumbnail(t *testing.T) {
 	d := openWritableTestDB(t)
 	videoID := "sample_video"
 	oldVideo := filepath.Join("media", "youtube", videoID+".mp4")
 	oldThumb := filepath.Join("thumbnails", "videos", "youtube", videoID+".jpg")
 	newVideo := filepath.Join("media", "youtube", videoID+"-new.mp4")
+	newThumb := filepath.Join("thumbnails", "videos", "youtube", videoID+"-new.jpg")
 	dearrow := filepath.Join("thumbnails", "dearrow", videoID+".jpg")
 	track := filepath.Join("thumbnails", "previews", videoID, "track.json")
 	sprite := filepath.Join("thumbnails", "previews", videoID, "sprite.jpg")
 	for key, body := range map[string]string{
-		oldVideo: "old video", oldThumb: "old thumb", newVideo: "new video",
+		oldVideo: "old video", oldThumb: "old thumb", newVideo: "new video", newThumb: "new thumb",
 		dearrow: "dearrow", track: `{}`, sprite: "sprite",
 	} {
 		path, err := d.storage.Path(key)
@@ -168,10 +122,10 @@ func TestStoreCompletedVideoReplacesProducerAssetsAndInvalidatesChangedStreamPre
 			t.Fatalf("StoreCompletedVideo: %v", err)
 		}
 	}
-	store([]Asset{
-		{AssetKind: "video_stream", FilePath: oldVideo},
-		{AssetKind: "post_thumbnail", FilePath: oldThumb},
-	})
+	store([]Asset{{AssetKind: "video_stream", FilePath: oldVideo}})
+	if err := d.StoreVideoThumbnailAsset(videoID, Asset{FilePath: oldThumb, ContentType: "image/jpeg"}, 100); err != nil {
+		t.Fatalf("StoreVideoThumbnailAsset: %v", err)
+	}
 	if err := d.SetDearrowData(videoID, nil, nil, &dearrow, 100); err != nil {
 		t.Fatalf("SetDearrowData: %v", err)
 	}
@@ -179,24 +133,48 @@ func TestStoreCompletedVideoReplacesProducerAssetsAndInvalidatesChangedStreamPre
 	if err != nil || oldStream == nil {
 		t.Fatalf("old stream asset: %+v %v", oldStream, err)
 	}
-	if err := d.StoreVideoPreviewAssets(videoID, oldStream.SHA256, track, sprite, 100); err != nil {
+	if err := d.StoreVideoPreviewAssets(videoID, oldStream.Revision, track, sprite, 100); err != nil {
 		t.Fatalf("StoreVideoPreviewAssets: %v", err)
 	}
 
 	store([]Asset{{AssetKind: "video_stream", FilePath: newVideo}})
 
-	for _, key := range []string{oldVideo, oldThumb} {
-		path, _ := d.storage.Path(key)
-		if _, err := os.Stat(path); !os.IsNotExist(err) {
-			t.Fatalf("retired producer file still exists: %s", key)
-		}
+	oldVideoPath, _ := d.storage.Path(oldVideo)
+	if _, err := os.Stat(oldVideoPath); !os.IsNotExist(err) {
+		t.Fatalf("retired primary file still exists: %s", oldVideo)
+	}
+	thumbnail, err := d.GetAssetByOwnerIdentity("post_thumbnail", "youtube_video", videoID, 0)
+	if err != nil || thumbnail == nil || thumbnail.FilePath != oldThumb {
+		t.Fatalf("primary replacement changed thumbnail: %+v %v", thumbnail, err)
+	}
+	oldThumbPath, _ := d.storage.Path(oldThumb)
+	if body, err := os.ReadFile(oldThumbPath); err != nil || string(body) != "old thumb" {
+		t.Fatalf("primary replacement changed thumbnail bytes: body=%q err=%v", body, err)
+	}
+	missingThumb := filepath.Join("thumbnails", "videos", "youtube", videoID+"-missing.jpg")
+	if err := d.StoreVideoThumbnailAsset(videoID, Asset{FilePath: missingThumb, ContentType: "image/jpeg"}, 101); err == nil {
+		t.Fatal("missing thumbnail replacement succeeded")
+	}
+	thumbnail, err = d.GetAssetByOwnerIdentity("post_thumbnail", "youtube_video", videoID, 0)
+	if err != nil || thumbnail == nil || thumbnail.FilePath != oldThumb {
+		t.Fatalf("failed thumbnail replacement changed canonical asset: %+v %v", thumbnail, err)
+	}
+	if err := d.StoreVideoThumbnailAsset(videoID, Asset{FilePath: newThumb, ContentType: "image/jpeg"}, 102); err != nil {
+		t.Fatalf("replace thumbnail: %v", err)
+	}
+	thumbnail, err = d.GetAssetByOwnerIdentity("post_thumbnail", "youtube_video", videoID, 0)
+	if err != nil || thumbnail == nil || thumbnail.FilePath != newThumb {
+		t.Fatalf("thumbnail replacement = %+v %v", thumbnail, err)
+	}
+	if _, err := os.Stat(oldThumbPath); !os.IsNotExist(err) {
+		t.Fatalf("replaced thumbnail file still exists: %v", err)
 	}
 	for _, assetKind := range []string{"dearrow_thumbnail"} {
 		asset, err := d.GetAssetByOwnerIdentity(assetKind, "youtube_video", videoID, 0)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if asset == nil || asset.State != AssetStateReady || asset.SHA256 == "" {
+		if asset == nil || asset.State != AssetStateReady || asset.FilePath == "" {
 			t.Fatalf("derived asset was not preserved: %s %+v", assetKind, asset)
 		}
 	}
@@ -219,7 +197,7 @@ func TestStoreCompletedVideoReplacesProducerAssetsAndInvalidatesChangedStreamPre
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stream == nil || stream.FilePath != newVideo || stream.SHA256 == "" {
+	if stream == nil || stream.FilePath != newVideo || stream.FileMtimeNs <= 0 {
 		t.Fatalf("replacement stream mismatch: %+v", stream)
 	}
 	video, err := d.GetVideo(videoID)
@@ -231,7 +209,7 @@ func TestStoreCompletedVideoReplacesProducerAssetsAndInvalidatesChangedStreamPre
 	}
 }
 
-func TestStoreCompletedVideoFingerprintFailureDoesNotCommitMetadata(t *testing.T) {
+func TestStoreCompletedVideoMissingOutputDoesNotCommitMetadata(t *testing.T) {
 	d := openWritableTestDB(t)
 	err := d.StoreCompletedVideo(CompletedVideo{
 		VideoID: "missing_output", ChannelID: "youtube_sample", OwnerKind: "youtube_video", Title: "Must not commit",
@@ -248,7 +226,7 @@ func TestStoreCompletedVideoFingerprintFailureDoesNotCommitMetadata(t *testing.T
 		t.Fatal(getErr)
 	}
 	if video != nil {
-		t.Fatalf("metadata committed before fingerprint succeeded: %+v", video)
+		t.Fatalf("metadata committed before output validation succeeded: %+v", video)
 	}
 }
 
@@ -477,7 +455,7 @@ func TestStoreCompletedVideoPreservesSubtitlesUntilExplicitReplacementSucceeds(t
 		t.Fatal("missing subtitle replacement succeeded")
 	}
 	after, err := d.GetAssetByOwnerIdentity("subtitle", "youtube_video", videoID, 0)
-	if err != nil || after == nil || after.FilePath != subtitle || after.SHA256 != old.SHA256 {
+	if err != nil || after == nil || after.FilePath != subtitle || after.FileMtimeNs != old.FileMtimeNs {
 		t.Fatalf("failed replacement changed ready subtitle: before=%+v after=%+v err=%v", old, after, err)
 	}
 	path, _ := d.storage.Path(subtitle)
@@ -486,50 +464,7 @@ func TestStoreCompletedVideoPreservesSubtitlesUntilExplicitReplacementSucceeds(t
 	}
 }
 
-func TestStoreCompletedVideoKeepsPreviewWhenStreamFingerprintIsUnchanged(t *testing.T) {
-	d := openWritableTestDB(t)
-	videoID := "same_stream"
-	stream1 := filepath.Join("media", "youtube", videoID+"-one.mp4")
-	stream2 := filepath.Join("media", "youtube", videoID+"-two.mp4")
-	track := filepath.Join("thumbnails", "previews", videoID+"-preview", "track.json")
-	sprite := filepath.Join("thumbnails", "previews", videoID+"-preview", "sprite.jpg")
-	for key, body := range map[string]string{
-		stream1: "identical bytes", stream2: "identical bytes", track: `{}`, sprite: "sprite",
-	} {
-		path, _ := d.storage.Path(key)
-		writeDBTestFile(t, path, []byte(body))
-	}
-	store := func(path string) {
-		t.Helper()
-		if err := d.StoreCompletedVideo(CompletedVideo{
-			VideoID: videoID, ChannelID: "youtube_sample", OwnerKind: "youtube_video",
-			Assets: []Asset{{AssetKind: "video_stream", FilePath: path}},
-		}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	store(stream1)
-	stream, err := d.GetAssetByOwnerIdentity("video_stream", "youtube_video", videoID, 0)
-	if err != nil || stream == nil {
-		t.Fatalf("stream: %+v %v", stream, err)
-	}
-	if err := d.StoreVideoPreviewAssets(videoID, stream.SHA256, track, sprite, 1); err != nil {
-		t.Fatal(err)
-	}
-	store(stream2)
-	for _, kind := range []string{"preview_track_json", "preview_sprite"} {
-		asset, err := d.GetAssetByOwnerIdentity(kind, "youtube_video", videoID, 0)
-		if err != nil || asset == nil || asset.SourceURL != "sha256:"+stream.SHA256 {
-			t.Fatalf("same stream fingerprint lost %s: %+v %v", kind, asset, err)
-		}
-		path, _ := d.storage.Path(asset.FilePath)
-		if _, err := os.Stat(path); err != nil {
-			t.Fatalf("same stream fingerprint removed %s file: %v", kind, err)
-		}
-	}
-}
-
-func TestPendingVideoPreviewsDeriveFromCanonicalStreamFingerprint(t *testing.T) {
+func TestPendingVideoPreviewsDeriveFromCanonicalStreamRevision(t *testing.T) {
 	d := openWritableTestDB(t)
 	store := func(videoID, ownerKind, path string, downloadedAt int64) *Asset {
 		t.Helper()
@@ -566,7 +501,7 @@ func TestPendingVideoPreviewsDeriveFromCanonicalStreamFingerprint(t *testing.T) 
 		}
 		writeDBTestFile(t, fullPath, []byte(body))
 	}
-	if err := d.StoreVideoPreviewAssets("sample_ready", ready.SHA256, track, sprite, 1); err != nil {
+	if err := d.StoreVideoPreviewAssets("sample_ready", ready.Revision, track, sprite, 1); err != nil {
 		t.Fatal(err)
 	}
 
@@ -577,7 +512,7 @@ func TestPendingVideoPreviewsDeriveFromCanonicalStreamFingerprint(t *testing.T) 
 	if len(candidates) != 2 || candidates[0].VideoID != "sample_new" || candidates[1].VideoID != "sample_old" {
 		t.Fatalf("pending previews = %+v", candidates)
 	}
-	if candidates[0].OwnerKind != "tiktok_video" || candidates[0].InputSHA256 == "" || candidates[0].Duration != 30 {
+	if candidates[0].OwnerKind != "tiktok_video" || candidates[0].InputRevision <= 0 || candidates[0].Duration != 30 {
 		t.Fatalf("newest candidate lost canonical input: %+v", candidates[0])
 	}
 	count, err := d.CountPendingVideoPreviews()

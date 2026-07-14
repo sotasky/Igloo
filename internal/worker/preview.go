@@ -30,11 +30,11 @@ const (
 
 // PreviewRequest is a request to generate a sprite sheet preview for a video.
 type PreviewRequest struct {
-	VideoID     string
-	OwnerKind   string  // exact canonical video owner kind
-	FilePath    string  // absolute path to the canonical video stream
-	InputSHA256 string  // canonical stream fingerprint this preview derives from
-	Duration    float64 // seconds
+	VideoID       string
+	OwnerKind     string  // exact canonical video owner kind
+	FilePath      string  // absolute path to the canonical video stream
+	InputRevision int64   // canonical stream asset revision this preview derives from
+	Duration      float64 // seconds
 }
 
 type PreviewTrack struct {
@@ -148,7 +148,7 @@ func (m *Manager) processPreviewCandidate(ctx context.Context, candidate db.Vide
 			}
 			return m.generatePreview(ctx, PreviewRequest{
 				VideoID: candidate.VideoID, OwnerKind: candidate.OwnerKind,
-				FilePath: path, InputSHA256: candidate.InputSHA256,
+				FilePath: path, InputRevision: candidate.InputRevision,
 				Duration: duration,
 			})
 		})
@@ -234,7 +234,7 @@ func (m *Manager) previewScanLimit() int {
 }
 
 func previewRetryKey(candidate db.VideoPreviewCandidate) string {
-	return candidate.VideoID + "\x00" + candidate.InputSHA256
+	return candidate.VideoID + "\x00" + strconv.FormatInt(candidate.InputRevision, 10)
 }
 
 func probePreviewDuration(ctx context.Context, path string) (float64, error) {
@@ -257,9 +257,9 @@ func probePreviewDuration(ctx context.Context, path string) (float64, error) {
 }
 
 // generatePreview publishes an immutable sprite/track pair derived from one
-// exact canonical stream fingerprint.
+// exact canonical stream revision.
 func (m *Manager) generatePreview(ctx context.Context, req PreviewRequest) error {
-	if req.Duration <= 0 || req.OwnerKind == "" || req.InputSHA256 == "" || !previewPathLooksVideo(req.FilePath) {
+	if req.Duration <= 0 || req.OwnerKind == "" || req.InputRevision <= 0 || !previewPathLooksVideo(req.FilePath) {
 		return nil
 	}
 	ready, current, err := m.previewState(req)
@@ -343,11 +343,7 @@ func (m *Manager) generatePreview(ctx context.Context, req PreviewRequest) error
 	if err := os.MkdirAll(previewRoot, 0o755); err != nil {
 		return err
 	}
-	shaPrefix := req.InputSHA256
-	if len(shaPrefix) > 12 {
-		shaPrefix = shaPrefix[:12]
-	}
-	outDir, err := os.MkdirTemp(previewRoot, safeVideoID+"-"+shaPrefix+"-")
+	outDir, err := os.MkdirTemp(previewRoot, safeVideoID+"-r"+strconv.FormatInt(req.InputRevision, 10)+"-")
 	if err != nil {
 		return err
 	}
@@ -374,7 +370,7 @@ func (m *Manager) generatePreview(ctx context.Context, req PreviewRequest) error
 	if err != nil {
 		return err
 	}
-	if err := m.db.StoreVideoPreviewAssets(req.VideoID, req.InputSHA256, trackKey, spriteKey, 0); err != nil {
+	if err := m.db.StoreVideoPreviewAssets(req.VideoID, req.InputRevision, trackKey, spriteKey, 0); err != nil {
 		return err
 	}
 	published = true
@@ -394,12 +390,12 @@ func (m *Manager) previewState(req PreviewRequest) (ready, current bool, err err
 	if err != nil {
 		return false, false, err
 	}
-	previewSource := "sha256:" + req.InputSHA256
+	previewSource := "revision:" + strconv.FormatInt(req.InputRevision, 10)
 	trackReady, spriteReady := false, false
 	for _, asset := range assets {
 		switch asset.AssetKind {
 		case "video_stream":
-			if asset.MediaIndex == 0 && asset.FilePath == streamKey && asset.SHA256 == req.InputSHA256 {
+			if asset.MediaIndex == 0 && asset.FilePath == streamKey && asset.Revision == req.InputRevision {
 				current = true
 			}
 		case "preview_track_json":

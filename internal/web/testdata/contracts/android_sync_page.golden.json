@@ -229,7 +229,6 @@
         "owner_id": "twitter_sample_channel",
         "owner_kind": "channel",
         "revision": 1,
-        "sha256": "bda445477ef30dc1be0f7d7399c9528a55787091dcb58e15494f3a9a624894c6",
         "size_bytes": 15,
         "state": "ready"
       },

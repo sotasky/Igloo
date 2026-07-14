@@ -2,10 +2,7 @@ package db
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
-	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -14,7 +11,7 @@ import (
 	"github.com/screwys/igloo/internal/storage"
 )
 
-func TestStoreReadyBulkAssetWaitsForMediaExecutor(t *testing.T) {
+func TestStoreReadyBulkAssetDoesNotWaitForDownloadLane(t *testing.T) {
 	d := openWritableTestDB(t)
 	path, err := d.storage.WritePath("media/youtube/sample.mp4")
 	if err != nil {
@@ -47,13 +44,15 @@ func TestStoreReadyBulkAssetWaitsForMediaExecutor(t *testing.T) {
 	}()
 	select {
 	case err := <-stored:
-		t.Fatalf("bulk asset bypassed executor: %v", err)
-	case <-time.After(50 * time.Millisecond):
+		if err != nil {
+			close(releaseBulk)
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		close(releaseBulk)
+		t.Fatal("completed asset publication waited for the download lane")
 	}
 	close(releaseBulk)
-	if err := <-stored; err != nil {
-		t.Fatal(err)
-	}
 }
 
 func upsertAssetForTest(t *testing.T, d *DB, asset Asset, nowMs int64) {
@@ -93,9 +92,6 @@ func publishAssetMetadataForTest(t *testing.T, d *DB, asset Asset, nowMs int64) 
 	if asset.SizeBytes <= 0 {
 		asset.SizeBytes = 1
 	}
-	if asset.SHA256 == "" {
-		asset.SHA256 = "fixture"
-	}
 	if asset.FileMtimeNs <= 0 {
 		asset.FileMtimeNs = 1
 	}
@@ -129,7 +125,7 @@ func TestListReadyAssetsForOwnersKeepsOwnerKindsDistinct(t *testing.T) {
 	}
 }
 
-func TestStoreReadyAssetOwnsChecksumAndRevision(t *testing.T) {
+func TestStoreReadyAssetCapturesMetadataAndRevision(t *testing.T) {
 	d := openWritableTestDB(t)
 	rel := filepath.Join("media", "twitter", "sample", "asset.jpg")
 	abs := filepath.Join(d.storage.StateRoot(), rel)
@@ -168,20 +164,18 @@ func TestStoreReadyAssetOwnsChecksumAndRevision(t *testing.T) {
 	baseTime := time.Unix(100, 0)
 	write("first", baseTime)
 	first := store(1000)
-	firstSum := sha256.Sum256([]byte("first"))
-	if first.SHA256 != hex.EncodeToString(firstSum[:]) || first.SizeBytes != 5 || first.Revision != 1 {
+	if first.SizeBytes != 5 || first.FileMtimeNs != baseTime.UnixNano() || first.Revision != 1 {
 		t.Fatalf("first asset metadata = %+v", first)
 	}
 
 	unchanged := store(2000)
-	if unchanged.Revision != first.Revision || unchanged.SHA256 != first.SHA256 {
+	if unchanged.Revision != first.Revision {
 		t.Fatalf("unchanged declaration revised asset: before=%+v after=%+v", first, unchanged)
 	}
 
 	write("other", baseTime.Add(time.Second))
 	replaced := store(3000)
-	otherSum := sha256.Sum256([]byte("other"))
-	if replaced.SHA256 != hex.EncodeToString(otherSum[:]) || replaced.SizeBytes != 5 {
+	if replaced.SizeBytes != 5 || replaced.FileMtimeNs != baseTime.Add(time.Second).UnixNano() {
 		t.Fatalf("replacement metadata = %+v", replaced)
 	}
 	if replaced.Revision != first.Revision+1 {
@@ -244,84 +238,6 @@ func TestMarkReadyAssetUnavailableIsFileIdentityConditional(t *testing.T) {
 	if after.State != AssetStateServerMissing || after.Revision <= current.Revision || headAfter.Revision <= headBefore.Revision {
 		t.Fatalf("withdrawal did not advance asset/head: asset=%+v head=%+v -> asset=%+v head=%+v",
 			current, headBefore, after, headAfter)
-	}
-}
-
-func TestStoreReadyAssetWaitsForFileAndDirectoryDurability(t *testing.T) {
-	d := openWritableTestDB(t)
-	key := filepath.Join("media", "twitter", "sample", "durable.jpg")
-	path, err := d.storage.WritePath(key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, []byte("durable bytes"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	asset := Asset{
-		AssetID: "twitter_tweet_sample_media_post_media", AssetKind: "post_media",
-		OwnerKind: "tweet", OwnerID: "sample_media", FilePath: key, ContentType: "image/jpeg",
-	}
-	injected := errors.New("directory sync failed")
-	var order []string
-	d.readyAssetDurability = func(path string) error {
-		assertNotReady := func() error {
-			var count int
-			if err := d.QueryRow(`
-				SELECT COUNT(*) FROM assets a JOIN media_objects mo ON mo.object_id = a.object_id
-				WHERE a.asset_id = ? AND mo.published_revision > 0
-			`, asset.AssetID).Scan(&count); err != nil {
-				return err
-			}
-			if count != 0 {
-				return errors.New("asset became ready before durability completed")
-			}
-			return nil
-		}
-		return makeReadyAssetDurableWith(path, func(file *os.File) error {
-			order = append(order, "file")
-			if err := assertNotReady(); err != nil {
-				return err
-			}
-			return file.Sync()
-		}, func(string) error {
-			order = append(order, "directory")
-			if err := assertNotReady(); err != nil {
-				return err
-			}
-			return injected
-		})
-	}
-
-	if err := d.StoreReadyAsset(asset, 1000); !errors.Is(err, injected) {
-		t.Fatalf("StoreReadyAsset error = %v, want injected directory sync failure", err)
-	}
-	if len(order) != 2 || order[0] != "file" || order[1] != "directory" {
-		t.Fatalf("durability order = %v, want file then directory", order)
-	}
-	if stored, err := d.GetAsset(asset.AssetID, asset.AssetKind); err != nil || stored != nil {
-		t.Fatalf("failed durability published asset: %+v, %v", stored, err)
-	}
-
-	d.readyAssetDurability = nil
-	if err := d.StoreReadyAsset(asset, 1001); err != nil {
-		t.Fatal(err)
-	}
-	if stored, err := d.GetAsset(asset.AssetID, asset.AssetKind); err != nil || stored == nil || stored.State != AssetStateReady {
-		t.Fatalf("durable asset was not published: %+v, %v", stored, err)
-	}
-	durabilityCalls := 0
-	d.readyAssetDurability = func(string) error {
-		durabilityCalls++
-		return injected
-	}
-	if err := d.StoreReadyAsset(asset, 1002); err != nil {
-		t.Fatalf("unchanged ready asset repeated durability work: %v", err)
-	}
-	if durabilityCalls != 0 {
-		t.Fatalf("unchanged ready asset durability calls = %d", durabilityCalls)
 	}
 }
 
@@ -433,7 +349,7 @@ func TestXSourceObservationPreservesSuccessfulCapture(t *testing.T) {
 		t.Fatalf("asset after new observation = %+v, err = %v", after, err)
 	}
 	if after.State != AssetStateReady || after.SourceURL != newSource || after.PublishedSourceURL != oldSource ||
-		after.FilePath != before.FilePath || after.SHA256 != before.SHA256 || after.Revision != before.Revision+1 {
+		after.FilePath != before.FilePath || after.FileMtimeNs != before.FileMtimeNs || after.Revision != before.Revision+1 {
 		t.Fatalf("successful capture was demoted by a source observation: before=%+v after=%+v", before, after)
 	}
 	claimed, err := d.ClaimContentAssetDownloadBatch(LeaseOptions{
@@ -500,7 +416,7 @@ func TestReadyAssetPublicationIsIdempotent(t *testing.T) {
 	if got == nil {
 		t.Fatal("asset missing after upsert")
 	}
-	if got.SizeBytes != int64(len("asset:"+asset.AssetID)) || got.FilePath != asset.FilePath || got.SHA256 == "" || got.FileMtimeNs <= 0 {
+	if got.SizeBytes != int64(len("asset:"+asset.AssetID)) || got.FilePath != asset.FilePath || got.FileMtimeNs <= 0 {
 		t.Fatalf("asset was not updated: %+v", *got)
 	}
 	if got.CreatedAtMs != 1000 || got.UpdatedAtMs != 2000 {
@@ -591,12 +507,14 @@ func TestCompletedVideoWritePublishesAssetInventory(t *testing.T) {
 	if err := d.StoreCompletedVideo(CompletedVideo{
 		VideoID: "sample_video_asset", ChannelID: "youtube_sample_channel", OwnerKind: "youtube_video", Title: "Sample",
 		Duration: 60, PublishedAtMs: 1234, MediaKind: "video",
-		Assets: []Asset{
-			{AssetKind: "video_stream", FilePath: videoRelPath, ContentType: "video/mp4"},
-			{AssetKind: "post_thumbnail", FilePath: thumbRelPath, ContentType: "image/jpeg"},
-		},
+		Assets: []Asset{{AssetKind: "video_stream", FilePath: videoRelPath, ContentType: "video/mp4"}},
 	}); err != nil {
 		t.Fatalf("StoreCompletedVideo: %v", err)
+	}
+	if err := d.StoreVideoThumbnailAsset("sample_video_asset", Asset{
+		FilePath: thumbRelPath, ContentType: "image/jpeg",
+	}, 1234); err != nil {
+		t.Fatalf("StoreVideoThumbnailAsset: %v", err)
 	}
 	if err := d.StoreVideoSubtitleAssets("sample_video_asset", []Asset{{
 		AssetKind: "subtitle", FilePath: subtitleRelPath, ContentType: "text/vtt",
@@ -642,7 +560,7 @@ func TestCompletedVideoWritePublishesAssetInventory(t *testing.T) {
 	if err != nil || streamAsset == nil {
 		t.Fatalf("video stream asset: %+v %v", streamAsset, err)
 	}
-	if err := d.StoreVideoPreviewAssets("sample_video_asset", streamAsset.SHA256, previewTrackRelPath, previewSpriteRelPath, 3000); err != nil {
+	if err := d.StoreVideoPreviewAssets("sample_video_asset", streamAsset.Revision, previewTrackRelPath, previewSpriteRelPath, 3000); err != nil {
 		t.Fatalf("StoreVideoPreviewAssets: %v", err)
 	}
 	for _, tt := range []struct {

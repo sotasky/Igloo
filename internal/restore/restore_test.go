@@ -242,7 +242,7 @@ func TestDatabaseRestorePreservesAssetRowsAndMediaFiles(t *testing.T) {
 	if err := restored.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if got.FilePath != want.FilePath || got.State != want.State || got.SHA256 != want.SHA256 || got.SizeBytes != want.SizeBytes {
+	if got.FilePath != want.FilePath || got.State != want.State || got.FileMtimeNs != want.FileMtimeNs || got.SizeBytes != want.SizeBytes {
 		t.Fatalf("restored asset = %#v, want path/state/hash/size from %#v", got, want)
 	}
 	if got := string(mustReadRestoreFile(t, destinationPath)); got != "destination-media" {

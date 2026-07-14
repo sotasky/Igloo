@@ -25,10 +25,10 @@ type roomField struct {
 	ColumnName string `json:"columnName"`
 }
 
-func TestAndroidRoomSchemaV40Owners(t *testing.T) {
+func TestAndroidRoomSchemaV41Owners(t *testing.T) {
 	schema := readAndroidRoomSchema(t)
-	if schema.Database.Version != 40 {
-		t.Fatalf("Room schema version = %d, want 40", schema.Database.Version)
+	if schema.Database.Version != 41 {
+		t.Fatalf("Room schema version = %d, want 41", schema.Database.Version)
 	}
 
 	tables := make(map[string][]string, len(schema.Database.Entities))
@@ -47,7 +47,7 @@ func TestAndroidRoomSchemaV40Owners(t *testing.T) {
 		"owner_kind", "owner_id", "retention_bucket", "retain_at_ms", "bootstrap_seen")
 	assertRoomColumns(t, tables, "android_sync_assets",
 		"asset_id", "asset_kind", "media_index",
-		"owner_id", "owner_kind", "bucket", "content_type", "size_bytes", "sha256",
+		"owner_id", "owner_kind", "bucket", "content_type", "size_bytes",
 		"revision", "subtitle_is_auto", "state", "local_path", "verified_at_ms", "next_attempt_at_ms")
 	assertRoomColumns(t, tables, "muted_channels", "channel_id", "muted_at")
 	assertRoomColumns(t, tables, "moments_cursors",
@@ -76,6 +76,7 @@ func TestAndroidRoomSchemaV40Owners(t *testing.T) {
 		"quote_author_handle", "quote_author_display_name", "quote_author_avatar_url",
 		"reply_to_handle", "sync_seq")
 	assertRoomExcludes(t, tables, "android_sync_assets",
+		"sha256",
 		"generation_id", "server_url", "server_state", "required_reason",
 		"effective_recency_ms", "file_size", "attempt_count", "last_error", "updated_at_ms")
 }
@@ -135,10 +136,10 @@ func readAndroidRoomSchema(t *testing.T) roomSchemaFile {
 		}
 	}
 	sort.Strings(names)
-	if !reflect.DeepEqual(names, []string{"40.json"}) {
-		t.Fatalf("Room schema files = %v, want only 40.json", names)
+	if !reflect.DeepEqual(names, []string{"40.json", "41.json"}) {
+		t.Fatalf("Room schema files = %v, want 40.json and 41.json", names)
 	}
-	raw, err := os.ReadFile(filepath.Join(dir, "40.json"))
+	raw, err := os.ReadFile(filepath.Join(dir, "41.json"))
 	if err != nil {
 		t.Fatal(err)
 	}

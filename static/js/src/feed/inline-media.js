@@ -47,8 +47,8 @@ function ensureObserver() {
 }
 
 function bindVideo(video) {
-  if (!(video instanceof HTMLVideoElement)) return
-  if (video.dataset.feedBound === '1') return
+  if (!(video instanceof HTMLVideoElement)) return false
+  if (video.dataset.feedBound === '1') return false
   video.dataset.feedBound = '1'
   const wrap = video.closest('.feed-media-wrap')
   const progress = wrap && wrap.querySelector ? wrap.querySelector('[data-feed-progress]') : null
@@ -67,13 +67,14 @@ function bindVideo(video) {
 
   ensurePreloadObserver().observe(video)
   ensureObserver().observe(video)
+  return true
 }
 
 export function initInlineMedia(container) {
   const scope = container || document
   const videos = Array.from(scope.querySelectorAll('video[data-feed-inline-video]'))
-  videos.forEach(bindVideo)
-  videos.slice(0, 3).forEach(preloadVideo)
+  const newlyBound = videos.filter(bindVideo)
+  newlyBound.slice(0, 3).forEach(preloadVideo)
 }
 
 // Global bridge for initFeedCards and other callers

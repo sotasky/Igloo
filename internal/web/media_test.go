@@ -418,7 +418,7 @@ func TestHandleThumbnail_DearrowQueryDoesNotGuessAroundStaleReadyAsset(t *testin
 	if err := srv.db.ExecRaw(`
 		UPDATE media_objects
 		SET published_revision = desired_revision, published_source_url = source_url,
-		    file_path = ?, content_type = 'image/jpeg', size_bytes = 1, sha256 = 'missing', file_mtime_ns = 1, job_state = 'ready'
+		    file_path = ?, content_type = 'image/jpeg', size_bytes = 1, file_mtime_ns = 1, job_state = 'ready'
 		WHERE object_id = (SELECT desired_object_id FROM assets WHERE asset_id = ?)
 	`, dearrowRelPath, assetID); err != nil {
 		t.Fatalf("publish missing canonical metadata: %v", err)

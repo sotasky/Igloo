@@ -414,7 +414,6 @@ data class AndroidSyncAssetEntity(
     @ColumnInfo(name = "bucket") val bucket: String,
     @ColumnInfo(name = "content_type") val contentType: String? = null,
     @ColumnInfo(name = "size_bytes") val sizeBytes: Long = 0,
-    @ColumnInfo(name = "sha256") val sha256: String? = null,
     @ColumnInfo(name = "revision") val revision: Long,
     @ColumnInfo(name = "subtitle_is_auto") val subtitleIsAuto: Boolean = true,
     @ColumnInfo(name = "state") val state: String = "ready",

@@ -34,6 +34,7 @@ import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
 import io.ktor.serialization.kotlinx.json.json
+import java.io.File
 import java.io.IOException
 import java.util.Collections
 import kotlinx.coroutines.CoroutineScope
@@ -221,6 +222,25 @@ class AndroidSyncMirrorTest {
         assertTrue(failure is AndroidSyncAssetChangedException)
         assertEquals(64, requested.size)
         assertTrue("sample_changed_asset_064" !in requested)
+    }
+
+    @Test
+    fun assetDrainPublishesOnlyAnExactLengthResponse() = runBlocking {
+        db.androidSyncDao().upsertAsset(readyAsset("sample_complete_asset", sizeBytes = 3))
+        buildAssetDrainer(MockEngine { respond("abc", HttpStatusCode.OK) }) { nowMs }.drain()
+
+        val downloaded = requireNotNull(db.androidSyncDao().asset("sample_complete_asset"))
+        val downloadedFile = File(requireNotNull(downloaded.localPath))
+        assertEquals(3L, downloadedFile.length())
+        assertEquals("abc", downloadedFile.readText())
+        assertFalse(File(downloadedFile.parentFile, downloadedFile.name + ".part").exists())
+
+        db.androidSyncDao().upsertAsset(readyAsset("sample_truncated_asset", sizeBytes = 3))
+        buildAssetDrainer(MockEngine { respond("ab", HttpStatusCode.OK) }) { nowMs }.drain()
+
+        val truncated = requireNotNull(db.androidSyncDao().asset("sample_truncated_asset"))
+        assertNull(truncated.localPath)
+        assertTrue(truncated.nextAttemptAtMs > nowMs)
     }
 
     @Test
@@ -629,7 +649,10 @@ class AndroidSyncMirrorTest {
         )
     }
 
-    private fun readyAsset(id: String) =
+    private fun readyAsset(
+        id: String,
+        sizeBytes: Long = 1,
+    ) =
         AndroidSyncAssetEntity(
             assetId = id,
             assetKind = "post_media",
@@ -637,8 +660,7 @@ class AndroidSyncMirrorTest {
             ownerKind = "tweet",
             bucket = "feed",
             contentType = "image/jpeg",
-            sizeBytes = 1,
-            sha256 = "0".repeat(64),
+            sizeBytes = sizeBytes,
             revision = 1,
         )
 
@@ -879,7 +901,6 @@ class AndroidSyncMirrorTest {
             bucket = bucket,
             content_type = "",
             size_bytes = 0,
-            sha256 = "",
             revision = 1,
             state = "server_missing",
             is_auto = null,

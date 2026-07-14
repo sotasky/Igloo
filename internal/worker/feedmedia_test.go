@@ -13,7 +13,7 @@ import (
 	"github.com/screwys/igloo/internal/model"
 )
 
-func TestProcessContentAssetPublishesFingerprintWithoutLegacyRows(t *testing.T) {
+func TestProcessContentAssetPublishesReadyMetadataWithoutLegacyRows(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "image/jpeg")
 		_, _ = w.Write([]byte("sample-image-bytes"))
@@ -27,8 +27,8 @@ func TestProcessContentAssetPublishesFingerprintWithoutLegacyRows(t *testing.T) 
 	if err != nil {
 		t.Fatalf("GetAsset: %v", err)
 	}
-	if ready == nil || ready.State != db.AssetStateReady || ready.FilePath == "" || ready.SizeBytes != int64(len("sample-image-bytes")) || len(ready.SHA256) != 64 || ready.FileMtimeNs <= 0 {
-		t.Fatalf("ready asset lacks complete fingerprint: %+v", ready)
+	if ready == nil || ready.State != db.AssetStateReady || ready.FilePath == "" || ready.SizeBytes != int64(len("sample-image-bytes")) || ready.ContentType != "image/jpeg" || ready.FileMtimeNs <= 0 {
+		t.Fatalf("ready asset lacks completed file metadata: %+v", ready)
 	}
 	path, err := m.cfg.Storage.Path(ready.FilePath)
 	if err != nil {

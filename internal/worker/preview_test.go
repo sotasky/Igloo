@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -123,7 +124,7 @@ func TestPreviewReconciliationDoesNotDependOnCompletionHint(t *testing.T) {
 
 	req := PreviewRequest{
 		VideoID: "sample_clip", OwnerKind: "youtube_video", FilePath: streamPath,
-		InputSHA256: stream.SHA256, Duration: 10,
+		InputRevision: stream.Revision, Duration: 10,
 	}
 	m.previewBackfillNotBefore = time.Time{}
 	worked, _ := m.processPreviewBatch(context.Background(), time.Now())
@@ -263,8 +264,8 @@ func TestPreviewBackfillScansPastCoolingCandidates(t *testing.T) {
 	now := time.Now()
 	for index := 1; index <= coolingCandidates; index++ {
 		candidate := db.VideoPreviewCandidate{
-			VideoID:     fmt.Sprintf("sample_preview_%03d", index),
-			InputSHA256: stream.SHA256,
+			VideoID:       fmt.Sprintf("sample_preview_%03d", index),
+			InputRevision: stream.Revision,
 		}
 		m.previewRetry[previewRetryKey(candidate)] = previewRetryState{
 			Attempts:  1,
@@ -294,7 +295,7 @@ func TestPreviewBackfillScansPastCoolingCandidates(t *testing.T) {
 	}
 }
 
-func TestPreviewStateIgnoresConventionalFilesWithoutFingerprintBoundRows(t *testing.T) {
+func TestPreviewStateIgnoresConventionalFilesWithoutRevisionBoundRows(t *testing.T) {
 	root := t.TempDir()
 	m := &Manager{cfg: testCfg(root), db: newTestWorkerDBAt(t, root)}
 	streamKey := "media/youtube/test_clip.mp4"
@@ -340,12 +341,12 @@ func TestPreviewStateIgnoresConventionalFilesWithoutFingerprintBoundRows(t *test
 		}
 		if err := m.db.StoreReadyAsset(db.Asset{
 			AssetID: db.BuildAssetID("tiktok", "tiktok_video", "test_clip", kind, 0), AssetKind: kind,
-			OwnerKind: "tiktok_video", OwnerID: "test_clip", FilePath: spec.key, SourceURL: "sha256:" + stream.SHA256,
+			OwnerKind: "tiktok_video", OwnerID: "test_clip", FilePath: spec.key, SourceURL: "revision:" + strconv.FormatInt(stream.Revision, 10),
 		}, 1); err != nil {
 			t.Fatal(err)
 		}
 	}
-	req := PreviewRequest{VideoID: "test_clip", OwnerKind: "youtube_video", FilePath: streamPath, InputSHA256: stream.SHA256, Duration: 30}
+	req := PreviewRequest{VideoID: "test_clip", OwnerKind: "youtube_video", FilePath: streamPath, InputRevision: stream.Revision, Duration: 30}
 	ready, current, err := m.previewState(req)
 	if err != nil || !current || ready {
 		t.Fatalf("conventional files or colliding owner affected canonical state: ready=%v current=%v err=%v", ready, current, err)
@@ -362,11 +363,11 @@ func TestPreviewStateIgnoresConventionalFilesWithoutFingerprintBoundRows(t *test
 			t.Fatal(err)
 		}
 	}
-	if err := m.db.StoreVideoPreviewAssets("test_clip", stream.SHA256, trackKey, spriteKey, 1); err != nil {
+	if err := m.db.StoreVideoPreviewAssets("test_clip", stream.Revision, trackKey, spriteKey, 1); err != nil {
 		t.Fatal(err)
 	}
 	ready, current, err = m.previewState(req)
 	if err != nil || !current || !ready {
-		t.Fatalf("fingerprint-bound preview not ready: ready=%v current=%v err=%v", ready, current, err)
+		t.Fatalf("revision-bound preview not ready: ready=%v current=%v err=%v", ready, current, err)
 	}
 }

@@ -614,12 +614,10 @@ func (s *Server) androidSyncAssetFromInventory(row db.Asset) model.AndroidSyncAs
 	state := "server_missing"
 	contentType := ""
 	sizeBytes := int64(0)
-	sha256 := ""
 	if ready {
 		state = "ready"
 		contentType = row.ContentType
 		sizeBytes = row.SizeBytes
-		sha256 = row.SHA256
 	}
 	asset := model.AndroidSyncAsset{
 		AssetID:            row.AssetID,
@@ -630,7 +628,6 @@ func (s *Server) androidSyncAssetFromInventory(row db.Asset) model.AndroidSyncAs
 		Bucket:             androidSyncInventoryBucket(row),
 		ContentType:        contentType,
 		SizeBytes:          sizeBytes,
-		SHA256:             sha256,
 		Revision:           row.Revision,
 		State:              state,
 		IsAuto:             row.IsAuto,

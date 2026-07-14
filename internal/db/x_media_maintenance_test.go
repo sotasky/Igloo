@@ -57,13 +57,13 @@ func TestPruneXMediaRetentionUsesAssetsAndKeepsProtectedItems(t *testing.T) {
 
 	for _, ownerID := range []string{"sample_tweet_prune", "sample_quote_prune", "sample_tweet_queued_prune"} {
 		asset := readXRetentionAsset(t, d, ownerID)
-		if asset.State != AssetStatePruned || asset.FilePath != "" || asset.SizeBytes != 0 || asset.SHA256 != "" || asset.FileMtimeNs != 0 {
+		if asset.State != AssetStatePruned || asset.FilePath != "" || asset.SizeBytes != 0 || asset.FileMtimeNs != 0 {
 			t.Fatalf("pruned asset %s retained ready metadata: %+v", ownerID, asset)
 		}
 	}
 	for _, ownerID := range []string{"sample_tweet_new", "sample_tweet_bookmarked", "sample_tweet_liked", "sample_tweet_keep"} {
 		asset := readXRetentionAsset(t, d, ownerID)
-		if asset.State != AssetStateReady || asset.FilePath == "" || len(asset.SHA256) != 64 || asset.FileMtimeNs <= 0 {
+		if asset.State != AssetStateReady || asset.FilePath == "" || asset.SizeBytes <= 0 || asset.FileMtimeNs <= 0 {
 			t.Fatalf("retained asset %s = %+v", ownerID, asset)
 		}
 	}

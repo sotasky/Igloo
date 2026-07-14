@@ -156,7 +156,6 @@ data class AndroidSyncAssetDto(
     val bucket: String,
     val content_type: String,
     val size_bytes: Long,
-    val sha256: String,
     val revision: Long,
     val state: String,
     val is_auto: Boolean?,

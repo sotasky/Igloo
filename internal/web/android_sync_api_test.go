@@ -600,7 +600,7 @@ func TestAndroidSyncAssetFileWithdrawsUnavailableReadyDescriptor(t *testing.T) {
 	}
 }
 
-func TestAndroidSyncReadyAssetPreservesStoredFingerprint(t *testing.T) {
+func TestAndroidSyncReadyAssetPreservesStoredMetadata(t *testing.T) {
 	stored := db.Asset{
 		AssetID:     "asset_sample",
 		AssetKind:   "post_media",
@@ -608,15 +608,14 @@ func TestAndroidSyncReadyAssetPreservesStoredFingerprint(t *testing.T) {
 		OwnerKind:   "tweet",
 		ContentType: "application/octet-stream",
 		SizeBytes:   128,
-		SHA256:      fmt.Sprintf("%064x", 1),
 		Revision:    1,
 		State:       db.AssetStateReady,
 	}
 
 	got := (&Server{}).androidSyncAssetFromInventory(stored)
 	if got.State != "ready" || got.ContentType != stored.ContentType ||
-		got.SizeBytes != stored.SizeBytes || got.SHA256 != stored.SHA256 {
-		t.Fatalf("ready fingerprint changed: got=%+v stored=%+v", got, stored)
+		got.SizeBytes != stored.SizeBytes || got.Revision != stored.Revision {
+		t.Fatalf("ready metadata changed: got=%+v stored=%+v", got, stored)
 	}
 }
 

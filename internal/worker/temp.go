@@ -141,7 +141,7 @@ func (m *Manager) DownloadTemp(ctx context.Context, rawURL string, saveChannel b
 		return TempDownloadResult{Message: msg}
 	}
 
-	files, err := m.prepareCompletedVideoFiles(ctx, download.MediaLaneBulkForeground, platform, attemptID, completed)
+	files, err := m.prepareCompletedVideoFiles(ctx, download.MediaLaneBulkForeground, completed)
 	if err != nil {
 		m.removeFailedAttempt(ctx, download.MediaLaneBulkForeground, files, completed)
 		return TempDownloadResult{Message: fmt.Sprintf("Prepare completed outputs: %v", err)}
@@ -197,10 +197,13 @@ func (m *Manager) DownloadTemp(ctx context.Context, rawURL string, saveChannel b
 		VideoID: videoID, ChannelID: channelID, OwnerKind: ownerKind, Title: title, Description: description,
 		Duration: duration, PublishedAtMs: publishedAt, MetadataJSON: metadataJSON,
 		MediaKind: mediaKind, SlideCount: slideCount, IsTemp: true,
-		MediaLane: download.MediaLaneBulkForeground, Assets: files.assets,
+		Assets: files.assets,
 	}); err != nil {
 		m.removeFailedAttempt(ctx, download.MediaLaneBulkForeground, files, completed)
 		return TempDownloadResult{Message: fmt.Sprintf("DB insert: %v", err)}
+	}
+	if err := m.publishCompletedVideoThumbnail(ctx, download.MediaLaneBulkForeground, videoID, platform, attemptID, files); err != nil {
+		log.Printf("[temp] thumbnail publish failed for %s: %v", videoID, err)
 	}
 	if err := m.storeCompletedSubtitles(ctx, videoID, files, completed, false); err != nil {
 		log.Printf("[temp] subtitle publish failed for %s: %v", videoID, err)
@@ -304,7 +307,7 @@ func (m *Manager) downloadPlaylist(ctx context.Context, rawURL, playlistID strin
 			continue
 		}
 
-		files, prepareErr := m.prepareCompletedVideoFiles(ctx, download.MediaLaneBulkForeground, "youtube", attemptID, completed)
+		files, prepareErr := m.prepareCompletedVideoFiles(ctx, download.MediaLaneBulkForeground, completed)
 		if prepareErr != nil {
 			m.removeFailedAttempt(ctx, download.MediaLaneBulkForeground, files, completed)
 			log.Printf("[temp] playlist item %s output preparation failed: %v", videoID, prepareErr)
@@ -325,12 +328,15 @@ func (m *Manager) downloadPlaylist(ctx context.Context, rawURL, playlistID strin
 		if err := m.db.StoreCompletedVideo(db.CompletedVideo{
 			VideoID: videoID, ChannelID: playlistChannelID, OwnerKind: "youtube_video", Title: entryTitle, Description: description,
 			Duration: duration, PublishedAtMs: publishedAt, MetadataJSON: metaJSON,
-			SourceKind: "playlist", MediaLane: download.MediaLaneBulkForeground, Assets: files.assets,
+			SourceKind: "playlist", Assets: files.assets,
 		}); err != nil {
 			m.removeFailedAttempt(ctx, download.MediaLaneBulkForeground, files, completed)
 			log.Printf("[temp] playlist item %s DB insert failed: %v", videoID, err)
 			failed++
 			continue
+		}
+		if err := m.publishCompletedVideoThumbnail(ctx, download.MediaLaneBulkForeground, videoID, "youtube", attemptID, files); err != nil {
+			log.Printf("[temp] playlist item %s thumbnail publish failed: %v", videoID, err)
 		}
 		m.removeTransientFiles(ctx, download.MediaLaneBulkForeground, files)
 		m.RequestVideoPreview(videoID)

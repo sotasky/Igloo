@@ -539,7 +539,7 @@ func (db *DB) prepareProfileJobReplacements(profile model.ChannelProfile, replac
 		var err error
 		replacement, err = db.prepareReadyAssetMetadata(replacement, nowMs)
 		if err != nil {
-			return nil, fmt.Errorf("CompleteProfileJob: fingerprint %s: %w", kind, err)
+			return nil, fmt.Errorf("CompleteProfileJob: prepare %s: %w", kind, err)
 		}
 		prepared[kind] = normalizeAsset(replacement, nowMs)
 	}
@@ -554,18 +554,18 @@ func profileAssetSource(profile model.ChannelProfile, kind string) string {
 }
 
 func reusableProfileAssetTx(tx *sql.Tx, channelID, kind, sourceURL string) (bool, error) {
-	var storedSource, filePath, contentType, sha256, state string
+	var storedSource, filePath, contentType, state string
 	var sizeBytes, fileMtimeNs int64
 	err := tx.QueryRow(`
 		SELECT COALESCE(current.published_source_url, ''), COALESCE(current.file_path, ''), COALESCE(current.content_type, ''),
-		       COALESCE(current.size_bytes, 0), COALESCE(current.sha256, ''), COALESCE(current.file_mtime_ns, 0),
+		       COALESCE(current.size_bytes, 0), COALESCE(current.file_mtime_ns, 0),
 		       CASE WHEN current.published_revision > 0 AND current.file_path != '' THEN 'ready' ELSE desired.job_state END
 		FROM assets a
 		JOIN media_objects current ON current.object_id = a.object_id
 		JOIN media_objects desired ON desired.object_id = a.desired_object_id
 		WHERE a.asset_kind = ? AND a.owner_kind = 'channel'
 		  AND a.owner_id = ? AND a.media_index = 0
-	`, kind, channelID).Scan(&storedSource, &filePath, &contentType, &sizeBytes, &sha256, &fileMtimeNs, &state)
+	`, kind, channelID).Scan(&storedSource, &filePath, &contentType, &sizeBytes, &fileMtimeNs, &state)
 	if err == sql.ErrNoRows {
 		return false, nil
 	}
@@ -574,7 +574,7 @@ func reusableProfileAssetTx(tx *sql.Tx, channelID, kind, sourceURL string) (bool
 	}
 	return ReadyAssetMatchesSource(&Asset{
 		SourceURL: storedSource, FilePath: filePath, ContentType: contentType, State: state,
-		SizeBytes: sizeBytes, SHA256: sha256, FileMtimeNs: fileMtimeNs,
+		SizeBytes: sizeBytes, FileMtimeNs: fileMtimeNs,
 	}, sourceURL), nil
 }
 

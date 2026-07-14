@@ -6,22 +6,21 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/screwys/igloo/internal/model"
-	"github.com/screwys/igloo/internal/storage"
 )
 
-var completedVideoAssetKinds = []string{
+var completedVideoPrimaryAssetKinds = []string{
 	"video_stream",
 	"post_media",
 	"post_audio",
-	"post_thumbnail",
 }
 
-// CompletedVideo is the content metadata committed with the producer's exact
-// completed asset set. Canonical asset rows own file identity, readiness, and size.
+// CompletedVideo is content metadata committed with the producer's exact
+// primary asset set. Canonical asset rows own file identity, readiness, and size.
 type CompletedVideo struct {
 	VideoID       string
 	ChannelID     string
@@ -35,22 +34,22 @@ type CompletedVideo struct {
 	SlideCount    int
 	IsTemp        bool
 	SourceKind    string
-	MediaLane     storage.MediaLane
 	Assets        []Asset
 }
 
 type VideoPreviewCandidate struct {
-	VideoID      string
-	OwnerKind    string
-	FilePath     string
-	InputSHA256  string
-	Duration     int
-	DownloadedAt int64
+	VideoID       string
+	OwnerKind     string
+	FilePath      string
+	InputRevision int64
+	Duration      int
+	DownloadedAt  int64
 }
 
-// StoreCompletedVideo fingerprints every producer-supplied file before the DB
-// transaction, then commits content metadata and the complete canonical asset
-// set together. Assets omitted from the completed set are retired.
+// StoreCompletedVideo validates every producer-supplied primary file before
+// committing content metadata and the complete canonical primary asset set
+// together. Derived assets are published separately and remain available while
+// a replacement is produced.
 func (db *DB) StoreCompletedVideo(video CompletedVideo) error {
 	video.VideoID = strings.TrimSpace(video.VideoID)
 	video.ChannelID = strings.TrimSpace(video.ChannelID)
@@ -93,7 +92,7 @@ func (db *DB) StoreCompletedVideo(video CompletedVideo) error {
 		}
 		var err error
 		retiredKeys, err = replaceVideoAssetsTx(
-			tx, prepared[0].OwnerKind, video.VideoID, completedVideoAssetKinds, prepared, "",
+			tx, prepared[0].OwnerKind, video.VideoID, completedVideoPrimaryAssetKinds, prepared, 0,
 		)
 		return err
 	})
@@ -187,9 +186,9 @@ func (db *DB) prepareCompletedVideoAssets(video CompletedVideo, platform string)
 		input.State = AssetStateReady
 		inputs = append(inputs, input)
 	}
-	prepared, err := db.prepareReadyAssetSetMetadataInLane(inputs, nowMs, video.MediaLane)
+	prepared, err := db.prepareReadyAssetSetMetadata(inputs, nowMs)
 	if err != nil {
-		return nil, nil, fmt.Errorf("fingerprint completed asset set for %s: %w", video.VideoID, err)
+		return nil, nil, fmt.Errorf("prepare completed asset set for %s: %w", video.VideoID, err)
 	}
 	newKeys := make(map[string]struct{}, len(prepared))
 	for i := range prepared {
@@ -212,7 +211,7 @@ func replaceVideoAssetsTx(
 	videoID string,
 	kinds []string,
 	assets []Asset,
-	expectedStreamSHA string,
+	expectedStreamRevision int64,
 ) ([]string, error) {
 	existing, err := readVideoAssetsTx(tx, ownerKind, videoID)
 	if err != nil {
@@ -230,26 +229,26 @@ func replaceVideoAssetsTx(
 		newIdentity[canonicalVideoAssetIdentity(asset)] = asset
 	}
 
-	oldStreamSHA, hadOldStream := primaryVideoStreamSHA(existing)
-	if expectedStreamSHA != "" {
-		var readyStreamSHA string
+	oldStream, hadOldStream := primaryVideoStreamIdentity(existing)
+	if expectedStreamRevision > 0 {
+		var readyStreamRevision int64
 		var ready bool
 		for _, asset := range existing {
 			if asset.AssetKind == "video_stream" && asset.MediaIndex == 0 && asset.State == AssetStateReady {
-				readyStreamSHA, ready = asset.SHA256, true
+				readyStreamRevision, ready = asset.Revision, true
 				break
 			}
 		}
 		if !ready {
 			return nil, sql.ErrNoRows
 		}
-		if readyStreamSHA != expectedStreamSHA {
+		if readyStreamRevision != expectedStreamRevision {
 			return nil, fmt.Errorf("preview input changed for %s", videoID)
 		}
 	}
-	newStreamSHA, hasNewStream := primaryVideoStreamSHA(assets)
+	newStream, hasNewStream := primaryVideoStreamIdentity(assets)
 	if _, replacesStream := selected["video_stream"]; replacesStream &&
-		(hadOldStream != hasNewStream || hadOldStream && oldStreamSHA != newStreamSHA) {
+		(hadOldStream != hasNewStream || hadOldStream && oldStream != newStream) {
 		for _, kind := range []string{"preview_track_json", "preview_sprite"} {
 			selected[kind] = struct{}{}
 		}
@@ -282,13 +281,21 @@ func replaceVideoAssetsTx(
 	return sortedSet(retired), nil
 }
 
-func primaryVideoStreamSHA(assets []Asset) (string, bool) {
+type videoStreamIdentity struct {
+	FilePath    string
+	SizeBytes   int64
+	FileMtimeNs int64
+}
+
+func primaryVideoStreamIdentity(assets []Asset) (videoStreamIdentity, bool) {
 	for _, asset := range assets {
 		if asset.AssetKind == "video_stream" && asset.MediaIndex == 0 {
-			return asset.SHA256, true
+			return videoStreamIdentity{
+				FilePath: asset.FilePath, SizeBytes: asset.SizeBytes, FileMtimeNs: asset.FileMtimeNs,
+			}, true
 		}
 	}
-	return "", false
+	return videoStreamIdentity{}, false
 }
 
 func readVideoAssetsTx(tx *sql.Tx, ownerKind, videoID string) ([]Asset, error) {
@@ -316,12 +323,26 @@ func canonicalVideoAssetIdentity(asset Asset) string {
 }
 
 func isCompletedVideoAssetKind(kind string) bool {
-	for _, candidate := range completedVideoAssetKinds {
+	for _, candidate := range completedVideoPrimaryAssetKinds {
 		if kind == candidate {
 			return true
 		}
 	}
 	return false
+}
+
+// StoreVideoThumbnailAsset publishes one derived thumbnail for an existing
+// video. The current thumbnail remains canonical until the replacement is
+// validated and committed.
+func (db *DB) StoreVideoThumbnailAsset(videoID string, asset Asset, nowMs int64) error {
+	if asset.AssetKind != "" && asset.AssetKind != "post_thumbnail" {
+		return fmt.Errorf("unexpected video thumbnail asset kind %q", asset.AssetKind)
+	}
+	if asset.MediaIndex != 0 {
+		return fmt.Errorf("video thumbnail media index must be zero")
+	}
+	asset.AssetKind = "post_thumbnail"
+	return db.storeVideoAssets(videoID, []string{"post_thumbnail"}, []Asset{asset}, 0, nowMs)
 }
 
 func upsertVideoMetadataTx(tx *sql.Tx, video CompletedVideo) error {
@@ -418,17 +439,16 @@ func (db *DB) GetReadyVideoPrimaryAsset(videoID string) (*Asset, error) {
 }
 
 // StoreVideoPreviewAssets replaces the complete preview pair from exact paths.
-func (db *DB) StoreVideoPreviewAssets(videoID, inputSHA256, trackPath, spritePath string, nowMs int64) error {
-	inputSHA256 = strings.TrimSpace(inputSHA256)
-	if inputSHA256 == "" {
-		return fmt.Errorf("preview input fingerprint is empty")
+func (db *DB) StoreVideoPreviewAssets(videoID string, inputRevision int64, trackPath, spritePath string, nowMs int64) error {
+	if inputRevision <= 0 {
+		return fmt.Errorf("preview input revision is invalid")
 	}
-	source := "sha256:" + inputSHA256
+	source := "revision:" + strconv.FormatInt(inputRevision, 10)
 	assets := []Asset{
 		{AssetKind: "preview_track_json", FilePath: trackPath, ContentType: "application/json", SourceURL: source},
 		{AssetKind: "preview_sprite", FilePath: spritePath, ContentType: "image/jpeg", SourceURL: source},
 	}
-	return db.storeVideoAssets(videoID, []string{"preview_track_json", "preview_sprite"}, assets, inputSHA256, nowMs)
+	return db.storeVideoAssets(videoID, []string{"preview_track_json", "preview_sprite"}, assets, inputRevision, nowMs)
 }
 
 func (db *DB) GetPendingVideoPreview(videoID string) (*VideoPreviewCandidate, error) {
@@ -467,7 +487,7 @@ const pendingVideoPreviewFromSQL = `
 	WHERE v.owner_kind IN ('youtube_video', 'instagram_reel', 'tiktok_video')
 	  AND stream.published_revision > 0
 	  AND stream.file_path != ''
-	  AND stream.sha256 != ''
+	  AND stream_asset.revision > 0
 	  AND (LOWER(stream.file_path) LIKE '%.mp4'
 	    OR LOWER(stream.file_path) LIKE '%.webm'
 	    OR LOWER(stream.file_path) LIKE '%.mkv'
@@ -476,11 +496,11 @@ const pendingVideoPreviewFromSQL = `
 	  AND (COALESCE(preview_track_asset.lifecycle_state, '') != 'active'
 	    OR COALESCE(preview_track.published_revision, 0) = 0
 	    OR COALESCE(preview_track.file_path, '') = ''
-	    OR COALESCE(preview_track.published_source_url, '') != 'sha256:' || stream.sha256
+	    OR COALESCE(preview_track.published_source_url, '') != 'revision:' || stream_asset.revision
 	    OR COALESCE(preview_sprite_asset.lifecycle_state, '') != 'active'
 	    OR COALESCE(preview_sprite.published_revision, 0) = 0
 	    OR COALESCE(preview_sprite.file_path, '') = ''
-	    OR COALESCE(preview_sprite.published_source_url, '') != 'sha256:' || stream.sha256)`
+	    OR COALESCE(preview_sprite.published_source_url, '') != 'revision:' || stream_asset.revision)`
 
 func (db *DB) listPendingVideoPreviews(videoID string, limit int) ([]VideoPreviewCandidate, error) {
 	if limit <= 0 {
@@ -494,7 +514,7 @@ func (db *DB) listPendingVideoPreviews(videoID string, limit int) ([]VideoPrevie
 	}
 	args = append(args, limit)
 	rows, err := db.reader().Query(`
-		SELECT v.video_id, v.owner_kind, stream.file_path, stream.sha256,
+		SELECT v.video_id, v.owner_kind, stream.file_path, stream_asset.revision,
 		       COALESCE(v.duration, 0), v.downloaded_at
 		`+pendingVideoPreviewFromSQL+whereVideo+`
 		ORDER BY v.downloaded_at DESC, v.published_at DESC, v.video_id
@@ -509,7 +529,7 @@ func (db *DB) listPendingVideoPreviews(videoID string, limit int) ([]VideoPrevie
 		var candidate VideoPreviewCandidate
 		if err := rows.Scan(
 			&candidate.VideoID, &candidate.OwnerKind, &candidate.FilePath,
-			&candidate.InputSHA256, &candidate.Duration, &candidate.DownloadedAt,
+			&candidate.InputRevision, &candidate.Duration, &candidate.DownloadedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -524,7 +544,7 @@ func (db *DB) CountPendingVideoPreviews() (int, error) {
 	return count, err
 }
 
-// StoreVideoSubtitleAssets fingerprints and replaces the complete subtitle set
+// StoreVideoSubtitleAssets validates and replaces the complete subtitle set
 // supplied by a producer. The caller supplies exact logical storage keys and
 // optional language metadata; this method performs no sibling discovery.
 func (db *DB) StoreVideoSubtitleAssets(videoID string, assets []Asset, nowMs int64) error {
@@ -548,10 +568,10 @@ func (db *DB) StoreVideoSubtitleAssets(videoID string, assets []Asset, nowMs int
 			assets[i].ContentType = "text/vtt"
 		}
 	}
-	return db.storeVideoAssets(videoID, []string{"subtitle"}, assets, "", nowMs)
+	return db.storeVideoAssets(videoID, []string{"subtitle"}, assets, 0, nowMs)
 }
 
-func (db *DB) storeVideoAssets(videoID string, kinds []string, assets []Asset, expectedStreamSHA string, nowMs int64) error {
+func (db *DB) storeVideoAssets(videoID string, kinds []string, assets []Asset, expectedStreamRevision int64, nowMs int64) error {
 	videoID = strings.TrimSpace(videoID)
 	if nowMs <= 0 {
 		nowMs = time.Now().UnixMilli()
@@ -574,7 +594,7 @@ func (db *DB) storeVideoAssets(videoID string, kinds []string, assets []Asset, e
 		asset.State = AssetStateReady
 		ready, err := db.prepareReadyAssetMetadata(asset, nowMs)
 		if err != nil {
-			return fmt.Errorf("fingerprint %s asset %d: %w", videoID, i, err)
+			return fmt.Errorf("prepare %s asset %d: %w", videoID, i, err)
 		}
 		ready = normalizeAsset(ready, nowMs)
 		prepared = append(prepared, ready)
@@ -583,7 +603,7 @@ func (db *DB) storeVideoAssets(videoID string, kinds []string, assets []Asset, e
 	var retired []string
 	err := db.WithWrite(func(tx *sql.Tx) error {
 		var err error
-		retired, err = replaceVideoAssetsTx(tx, ownerKind, videoID, kinds, prepared, expectedStreamSHA)
+		retired, err = replaceVideoAssetsTx(tx, ownerKind, videoID, kinds, prepared, expectedStreamRevision)
 		return err
 	})
 	if err != nil {

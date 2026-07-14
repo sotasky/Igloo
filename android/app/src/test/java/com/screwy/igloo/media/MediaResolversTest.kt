@@ -126,7 +126,6 @@ class MediaResolversTest {
                     bucket = "test",
                     contentType = contentType,
                     sizeBytes = localFile?.length() ?: 1,
-                    sha256 = "hash-$assetId",
                     revision = ++revision,
                     localPath = localFile?.absolutePath,
                     verifiedAtMs = localFile?.let { 1L },

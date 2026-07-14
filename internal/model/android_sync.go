@@ -35,7 +35,6 @@ type AndroidSyncAsset struct {
 	Bucket             string `json:"bucket"`
 	ContentType        string `json:"content_type"`
 	SizeBytes          int64  `json:"size_bytes"`
-	SHA256             string `json:"sha256"`
 	Revision           int64  `json:"revision"`
 	State              string `json:"state"`
 	IsAuto             *bool  `json:"is_auto"`

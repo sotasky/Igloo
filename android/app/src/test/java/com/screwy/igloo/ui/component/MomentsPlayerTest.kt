@@ -844,7 +844,6 @@ class MomentsPlayerTest {
             bucket = "shorts_videos",
             contentType = contentType,
             sizeBytes = 10L,
-            sha256 = "sha-$assetId",
             revision = 1,
             state = if (state == "verified" || state == "desired") "ready" else state,
             localPath = localPath,

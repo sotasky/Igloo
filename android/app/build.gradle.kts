@@ -114,6 +114,7 @@ android {
             }
         }
     }
+    sourceSets.getByName("devtest").assets.directories.add("$projectDir/schemas")
 }
 
 kotlin {

@@ -17,7 +17,8 @@ import io.ktor.utils.io.ByteReadChannel
 import io.ktor.utils.io.readAvailable
 import java.io.File
 import java.io.IOException
-import java.security.MessageDigest
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
@@ -188,10 +189,13 @@ internal class AndroidSyncAssetDrainer(
                             if (!verifyFile(partFile, asset)) {
                                 partFile.delete()
                                 defer(asset, changed = true)
-                            } else if (!partFile.renameTo(finalFile)) {
-                                partFile.delete()
-                                defer(asset)
                             } else {
+                                Files.move(
+                                    partFile.toPath(),
+                                    finalFile.toPath(),
+                                    StandardCopyOption.ATOMIC_MOVE,
+                                    StandardCopyOption.REPLACE_EXISTING,
+                                )
                                 markVerified(asset, finalFile)
                                 DrainResult.Downloaded
                             }
@@ -234,19 +238,27 @@ internal class AndroidSyncAssetDrainer(
                 output.write(buffer, 0, read)
             }
         }
+        if (total != expectedBytes) throw IOException("asset response does not match manifest size")
     }
 
     private fun finalFileFor(asset: AndroidSyncAssetEntity): File =
         File(
             File(syncRoot, safePathSegment(asset.bucket)),
-            safePathSegment(asset.assetId) + "." + extFor(asset.contentType),
+            buildString {
+                append(safePathSegment(asset.assetId))
+                append("-r")
+                append(asset.revision)
+                append("-s")
+                append(asset.sizeBytes)
+                append('-')
+                append(safePathSegment(asset.contentType.orEmpty()))
+                append('.')
+                append(extFor(asset.contentType))
+            },
         )
 
-    private fun verifyFile(file: File, asset: AndroidSyncAssetEntity): Boolean {
-        if (!file.isFile || file.length() != asset.sizeBytes) return false
-        val expected = asset.sha256?.trim()?.takeIf(SHA256_PATTERN::matches) ?: return false
-        return sha256Hex(file).equals(expected, ignoreCase = true)
-    }
+    private fun verifyFile(file: File, asset: AndroidSyncAssetEntity): Boolean =
+        file.isFile && file.length() == asset.sizeBytes
 
     private sealed interface DrainResult {
         data object VerifiedExisting : DrainResult
@@ -266,7 +278,6 @@ internal class AndroidSyncAssetDrainer(
         const val ASSET_SOCKET_TIMEOUT_MS = 2 * 60 * 1000L
         const val ASSET_RETRY_MS = 30_000L
         const val SYNC_DRAIN_TOKEN = "__android_sync_drain__"
-        val SHA256_PATTERN = Regex("[0-9a-fA-F]{64}")
 
         fun extFor(contentType: String?): String =
             when (contentType?.substringBefore(";")?.trim()?.lowercase()) {
@@ -289,19 +300,6 @@ internal class AndroidSyncAssetDrainer(
         fun safePathSegment(raw: String): String =
             raw.map { c -> if (c.isLetterOrDigit() || c == '.' || c == '_' || c == '-') c else '_' }
                 .joinToString("")
-
-        fun sha256Hex(file: File): String {
-            val digest = MessageDigest.getInstance("SHA-256")
-            file.inputStream().use { input ->
-                val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-                while (true) {
-                    val read = input.read(buffer)
-                    if (read <= 0) break
-                    digest.update(buffer, 0, read)
-                }
-            }
-            return digest.digest().joinToString("") { "%02x".format(it) }
-        }
     }
 }
 

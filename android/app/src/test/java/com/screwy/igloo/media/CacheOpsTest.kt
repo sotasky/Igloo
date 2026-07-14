@@ -144,7 +144,6 @@ class CacheOpsTest {
                     ownerKind = ownerKind,
                     bucket = bucket,
                     sizeBytes = file?.length() ?: 1,
-                    sha256 = "hash-$assetId",
                     revision = ++revision,
                     localPath = file?.absolutePath,
                     verifiedAtMs = file?.let { 1L },

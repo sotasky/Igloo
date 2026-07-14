@@ -48,7 +48,6 @@ templ feedThreadCapsule(p PageProps, item model.FeedItem) {
 						<img
 							class="feed-thread-capsule-avatar"
 							src={ participant.AvatarURL }
-							loading="lazy"
 							alt=""
 							onload="window.MpaSiteBase&&window.MpaSiteBase.avatarLoad(this)"
 							onerror="if(window.MpaSiteBase&&window.MpaSiteBase.avatarError(this))return; this.style.display='none'; this.nextElementSibling.style.display='inline-flex';"
@@ -285,7 +284,6 @@ templ feedAvatar(p PageProps, avatarURL string, authorLabel string) {
 			<img
 				class="feed-avatar-image"
 				src={ avatarURL }
-				loading="lazy"
 				alt={ L(p, "content_description_channel_avatar", "Channel avatar") }
 				onload="window.MpaSiteBase&&window.MpaSiteBase.avatarLoad(this)"
 				onerror="if(window.MpaSiteBase&&window.MpaSiteBase.avatarError(this))return; this.style.display='none'; this.nextElementSibling.style.display='inline-flex';"
@@ -535,7 +533,7 @@ templ feedMedia(p PageProps, item model.FeedItem) {
 			tabindex="0"
 			aria-label={ L(p, "action_open_media", "Open media") }
 		>
-			<img class="feed-media-image" src={ mediaURL } loading="lazy" alt={ L(p, "feed_post_media", "Post media") }/>
+			<img class="feed-media-image" src={ mediaURL } alt={ L(p, "feed_post_media", "Post media") }/>
 		</div>
 	} else if readyMediaCount > 0 {
 		<div class="feed-media-wrap feed-media-wrap-grid">
@@ -587,7 +585,7 @@ templ feedMediaTile(p PageProps, index int, m model.MediaRef, mediaCount int, st
 					</video>
 				}
 			} else {
-				<img class="feed-media-image" src={ slideURL } loading="lazy" alt={ fmt.Sprintf(L(p, "feed_post_media_index", "Post media %d"), index+1) }/>
+				<img class="feed-media-image" src={ slideURL } alt={ fmt.Sprintf(L(p, "feed_post_media_index", "Post media %d"), index+1) }/>
 			}
 			if index == 3 && mediaCount > 4 {
 				<span class="feed-media-more">+{ fmt.Sprintf("%d", mediaCount-4) }</span>
@@ -602,7 +600,7 @@ templ feedMediaTile(p PageProps, index int, m model.MediaRef, mediaCount int, st
 			data-feed-media-url={ slideURL }
 			aria-label={ ariaLabel }
 		>
-			<img class="feed-media-image" src={ slideURL } loading="lazy" alt={ fmt.Sprintf(L(p, "feed_post_media_index", "Post media %d"), index+1) }/>
+			<img class="feed-media-image" src={ slideURL } alt={ fmt.Sprintf(L(p, "feed_post_media_index", "Post media %d"), index+1) }/>
 			if index == 3 && mediaCount > 4 {
 				<span class="feed-media-more">+{ fmt.Sprintf("%d", mediaCount-4) }</span>
 			}
@@ -636,7 +634,6 @@ templ feedQuoteCard(p PageProps, item model.FeedItem) {
 					<img
 						class="feed-quote-avatar-image"
 						src={ item.QuoteAuthorAvatarURL }
-						loading="lazy"
 						alt={ L(p, "feed_quoted_author_avatar", "Quoted author avatar") }
 						onload="window.MpaSiteBase&&window.MpaSiteBase.avatarLoad(this)"
 						onerror="if(window.MpaSiteBase&&window.MpaSiteBase.avatarError(this))return; this.style.display='none'; this.nextElementSibling.style.display='inline-flex';"
@@ -743,7 +740,7 @@ templ feedQuoteMedia(p PageProps, item model.FeedItem, qMediaCount int) {
 			tabindex="0"
 			aria-label={ L(p, "action_open_media", "Open media") }
 		>
-			<img class="feed-media-image" src={ mediaURL } loading="lazy" alt={ L(p, "feed_quoted_post_media", "Quoted post media") }/>
+			<img class="feed-media-image" src={ mediaURL } alt={ L(p, "feed_quoted_post_media", "Quoted post media") }/>
 		</div>
 	} else if qMediaCount > 1 && readyMediaCount > 0 {
 		<div class="feed-media-wrap feed-media-wrap-grid">
@@ -797,7 +794,7 @@ templ feedQuoteMediaTile(p PageProps, index int, qm model.MediaRef, qMediaCount 
 					</video>
 				}
 			} else {
-				<img class="feed-media-image" src={ slideURL } loading="lazy" alt={ fmt.Sprintf(L(p, "feed_quoted_post_media_index", "Quoted post media %d"), index+1) }/>
+				<img class="feed-media-image" src={ slideURL } alt={ fmt.Sprintf(L(p, "feed_quoted_post_media_index", "Quoted post media %d"), index+1) }/>
 			}
 			if index == 3 && qMediaCount > 4 {
 				<span class="feed-media-more">+{ fmt.Sprintf("%d", qMediaCount-4) }</span>
@@ -812,7 +809,7 @@ templ feedQuoteMediaTile(p PageProps, index int, qm model.MediaRef, qMediaCount 
 			data-feed-media-url={ slideURL }
 			aria-label={ ariaLabel }
 		>
-			<img class="feed-media-image" src={ slideURL } loading="lazy" alt={ fmt.Sprintf(L(p, "feed_quoted_post_media_index", "Quoted post media %d"), index+1) }/>
+			<img class="feed-media-image" src={ slideURL } alt={ fmt.Sprintf(L(p, "feed_quoted_post_media_index", "Quoted post media %d"), index+1) }/>
 			if index == 3 && qMediaCount > 4 {
 				<span class="feed-media-more">+{ fmt.Sprintf("%d", qMediaCount-4) }</span>
 			}

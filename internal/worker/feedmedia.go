@@ -71,7 +71,7 @@ func (m *Manager) processContentAsset(ctx context.Context, asset db.Asset, workL
 	}
 	asset.FilePath = key
 	asset.ContentType = contentType
-	if err := m.db.CompleteAssetDownloadInLane(asset, asset.LeaseOwner, time.Now().UnixMilli(), bulkLane); err != nil {
+	if err := m.db.CompleteAssetDownload(asset, asset.LeaseOwner, time.Now().UnixMilli()); err != nil {
 		m.removeMediaPaths(ctx, mediaLaneForAsset(asset, bulkLane), finalPath)
 		if !errors.Is(err, db.ErrQueueLeaseNotHeld) {
 			log.Printf("[feedmedia] CompleteAssetDownload %s: %v", asset.AssetID, err)

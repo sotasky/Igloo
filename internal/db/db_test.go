@@ -157,7 +157,7 @@ func seedTestVideo(t *testing.T, d *DB, videoID, channelID string) {
 		AssetID: "fixture-stream:" + videoID, AssetKind: "video_stream",
 		OwnerKind: "youtube_video", OwnerID: videoID,
 		FilePath: "media/youtube/fixture.mp4", ContentType: "video/mp4",
-		SizeBytes: 1, SHA256: "fixture", FileMtimeNs: 1, State: AssetStateReady,
+		SizeBytes: 1, FileMtimeNs: 1, State: AssetStateReady,
 	}, 1)
 	if err := d.WithWrite(func(tx *sql.Tx) error { return upsertAssetTx(tx, asset) }); err != nil {
 		t.Fatalf("seed video asset %s: %v", videoID, err)

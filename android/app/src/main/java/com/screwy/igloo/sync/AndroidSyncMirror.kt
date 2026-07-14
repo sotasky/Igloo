@@ -422,7 +422,7 @@ class AndroidSyncMirror(
                     val asset = AndroidSyncChangeDecoder.asset(change)
                     if (!selectedSnapshot && asset.owner_id !in retainedAssetOwners) false
                     else {
-                        upsertAsset(asset, dao.asset(asset.asset_id))
+                        upsertAsset(asset, dao.asset(asset.asset_id), deletedAssets)
                         true
                     }
                 }
@@ -469,9 +469,12 @@ class AndroidSyncMirror(
     private suspend fun upsertAsset(
         asset: AndroidSyncAssetDto,
         existing: AndroidSyncAssetEntity?,
+        deletedAssets: MutableList<AndroidSyncAssetEntity>,
     ) {
         asset.validate()
-        dao.upsertAsset(asset.toEntity(existing))
+        val next = asset.toEntity(existing)
+        if (existing?.localPath != null && next.localPath == null) deletedAssets += existing
+        dao.upsertAsset(next)
     }
 
     private suspend fun deleteOwner(
@@ -776,10 +779,12 @@ private fun Int.daysMs(): Long = toLong() * 86_400_000L
 private fun Int.hoursMs(): Long = toLong() * 3_600_000L
 
 private fun AndroidSyncAssetDto.toEntity(existing: AndroidSyncAssetEntity?): AndroidSyncAssetEntity {
+    val readyContentType = content_type.ifBlank { null }
     val unchanged =
         state == "ready" &&
-            existing?.sizeBytes == size_bytes &&
-            existing.sha256.equals(sha256, ignoreCase = true)
+            existing?.revision == revision &&
+            existing.sizeBytes == size_bytes &&
+            existing.contentType == readyContentType
     val keepVerified = unchanged || state == "server_missing"
     return AndroidSyncAssetEntity(
         assetId = asset_id,
@@ -788,9 +793,8 @@ private fun AndroidSyncAssetDto.toEntity(existing: AndroidSyncAssetEntity?): And
         ownerId = owner_id,
         ownerKind = owner_kind,
         bucket = bucket,
-        contentType = content_type.ifBlank { null },
+        contentType = readyContentType,
         sizeBytes = size_bytes,
-        sha256 = sha256.ifBlank { null },
         revision = revision,
         subtitleIsAuto = is_auto ?: true,
         state = state,
@@ -811,11 +815,11 @@ internal fun AndroidSyncAssetDto.validate() {
     require(asset_kind != "subtitle" || is_auto != null) { "subtitle source kind is missing" }
     when (state) {
         "ready" ->
-            require(size_bytes > 0L && content_type.isNotBlank() && SHA256.matches(sha256)) {
-                "ready asset has invalid fingerprint"
+            require(size_bytes > 0L && content_type.isNotBlank()) {
+                "ready asset has invalid transfer metadata"
             }
         "server_missing" ->
-            require(size_bytes == 0L && sha256.isBlank() && content_type.isBlank()) {
+            require(size_bytes == 0L && content_type.isBlank()) {
                 "missing asset carries ready metadata"
             }
         else -> error("unknown asset state: $state")
@@ -863,4 +867,3 @@ private val THIN_OWNER_KINDS =
 private val DEPENDENCY_REPLACING_OWNER_KINDS = setOf("feed", "video", "retweet_sources")
 
 private val RETENTION_BUCKETS = setOf("", "feed", "youtube", "moments", "story")
-private val SHA256 = Regex("[0-9a-fA-F]{64}")

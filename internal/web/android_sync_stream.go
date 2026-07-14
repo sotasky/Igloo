@@ -369,14 +369,14 @@ func (s *Server) handleAndroidSyncAssetFile(w http.ResponseWriter, r *http.Reque
 	}
 	if current == nil || current.State != db.AssetStateReady || current.Revision != revision ||
 		current.FilePath != asset.FilePath || current.SizeBytes != asset.SizeBytes ||
-		current.FileMtimeNs != asset.FileMtimeNs || !strings.EqualFold(current.SHA256, asset.SHA256) {
+		current.FileMtimeNs != asset.FileMtimeNs {
 		writeJSONError(w, http.StatusConflict, "asset_changed", "asset descriptor changed")
 		return
 	}
 	if current.ContentType != "" {
 		w.Header().Set("Content-Type", current.ContentType)
 	}
-	w.Header().Set("ETag", `"`+current.SHA256+`"`)
+	w.Header().Set("ETag", fmt.Sprintf(`"revision-%d"`, current.Revision))
 	w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
 	http.ServeContent(w, r, filepath.Base(path), info.ModTime(), file)
 }

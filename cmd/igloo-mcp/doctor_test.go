@@ -55,7 +55,7 @@ func TestDoctorStatusReportsLocalHealthAndMasksSecrets(t *testing.T) {
 	`, now); err != nil {
 		t.Fatalf("insert video: %v", err)
 	}
-	insertMCPTestAsset(t, d, igloodb.Asset{AssetID: "sample_post_asset", AssetKind: "post_media", OwnerKind: "tweet", OwnerID: "sample_post", FilePath: "media/sample_post_0.jpg", ContentType: "image/jpeg", SizeBytes: 10, SHA256: "sha"}, igloodb.AssetStateReady, now, 0, "")
+	insertMCPTestAsset(t, d, igloodb.Asset{AssetID: "sample_post_asset", AssetKind: "post_media", OwnerKind: "tweet", OwnerID: "sample_post", FilePath: "media/sample_post_0.jpg", ContentType: "image/jpeg", SizeBytes: 10}, igloodb.AssetStateReady, now, 0, "")
 	insertMCPTestAsset(t, d, igloodb.Asset{AssetID: "sample_missing_asset", AssetKind: "avatar", OwnerKind: "channel", OwnerID: "twitter_sample_profile"}, igloodb.AssetStateServerMissing, now, 0, "")
 	insertMCPTestAsset(t, d, igloodb.Asset{AssetID: "sample_downloading_asset", AssetKind: "post_thumbnail", OwnerKind: "tweet", OwnerID: "sample_post", FilePath: "thumbnails/generated/sample_post.jpg", ContentType: "image/jpeg"}, igloodb.AssetStateDownloading, now, now-1, "worker-a")
 	if err := d.ExecRaw(`
