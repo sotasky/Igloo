@@ -106,6 +106,14 @@ test("cinema hides the left sidebar only when it is needed for the width target"
     css,
     /body:has\(#player-root\.cinema-view\.cinema-left-sidebar-hidden\)[\s\S]*?--sidebar-width:\s*0px;/,
   );
+  assert.match(
+    css,
+    /body:has\(#player-root\.cinema-view\.cinema-left-sidebar-hidden\) \.sidebar-toggle\s*\{[\s\S]*?display:\s*flex;/,
+  );
+  assert.match(
+    css,
+    /body\.sidebar-open:has\(#player-root\.cinema-view\.cinema-left-sidebar-hidden\) \.sidebar\s*\{[\s\S]*?transform:\s*translateX\(0\);/,
+  );
 });
 
 test("the player header search fills the available right sidebar width", () => {

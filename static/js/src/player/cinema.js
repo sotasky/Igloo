@@ -31,10 +31,17 @@ export function initCinemaView({ root, button }) {
 
   function setCinemaView(enabled) {
     root.classList.toggle('cinema-view', enabled)
+    const leftSidebarHidden = shouldHideLeftSidebarForCinema(normalLayoutWidth(), enabled, desktopSidebar.matches)
     root.classList.toggle(
       'cinema-left-sidebar-hidden',
-      shouldHideLeftSidebarForCinema(normalLayoutWidth(), enabled, desktopSidebar.matches),
+      leftSidebarHidden,
     )
+    if (typeof CustomEvent === 'function' && typeof root.dispatchEvent === 'function') {
+      root.dispatchEvent(new CustomEvent('igloo:cinema-sidebar-change', {
+        bubbles: true,
+        detail: { leftSidebarHidden },
+      }))
+    }
     sidebar.setAttribute('aria-hidden', enabled ? 'true' : 'false')
     button.classList.toggle('active', enabled)
     button.setAttribute('aria-pressed', enabled ? 'true' : 'false')

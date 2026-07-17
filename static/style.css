@@ -935,6 +935,20 @@ html.sidebar-resizing .sidebar-resize-handle::after {
         pointer-events: none;
     }
 
+    body:has(#player-root.cinema-view.cinema-left-sidebar-hidden) .sidebar-toggle {
+        display: flex;
+        z-index: 20002;
+    }
+
+    body.sidebar-open:has(#player-root.cinema-view.cinema-left-sidebar-hidden) .sidebar {
+        transform: translateX(0);
+        pointer-events: auto;
+    }
+
+    body.sidebar-open:has(#player-root.cinema-view.cinema-left-sidebar-hidden) .sidebar-overlay {
+        display: block;
+    }
+
     .sidebar-resize-handle {
         display: block;
     }

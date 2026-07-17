@@ -604,9 +604,15 @@
   }
 
   function syncSidebarControls() {
-    var expanded = desktopSidebar.matches || body.classList.contains('sidebar-open');
+    var cinemaHidesSidebar = !!q('#player-root.cinema-left-sidebar-hidden');
+    var expanded = cinemaHidesSidebar ? body.classList.contains('sidebar-open') : desktopSidebar.matches || body.classList.contains('sidebar-open');
     if (sidebarToggle) sidebarToggle.setAttribute('aria-expanded', expanded ? 'true' : 'false');
   }
+
+  doc.addEventListener('igloo:cinema-sidebar-change', function (event) {
+    if (!event.detail || !event.detail.leftSidebarHidden) body.classList.remove('sidebar-open');
+    syncSidebarControls();
+  });
 
   if (sidebarToggle) {
     sidebarToggle.addEventListener('click', function () {
