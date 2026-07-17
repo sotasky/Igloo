@@ -12,6 +12,9 @@ import {
 
 const css = readFileSync(new URL("../../static/style.css", import.meta.url), "utf8");
 const playerTemplate = readFileSync(new URL("../../internal/components/player.templ", import.meta.url), "utf8");
+const playerIndex = readFileSync(new URL("../../static/js/src/player/index.js", import.meta.url), "utf8");
+const siteBase = readFileSync(new URL("../../static/js/site_base.js", import.meta.url), "utf8");
+const modalsTemplate = readFileSync(new URL("../../internal/components/modals.templ", import.meta.url), "utf8");
 
 const layoutAtVideoWidth = (videoWidth) => (
   videoWidth + PLAYER_SIDEBAR_WIDTH + PLAYER_MAIN_HORIZONTAL_PADDING
@@ -124,9 +127,22 @@ test("player controls use a shared square hit area and icon size", () => {
   );
 });
 
-test("cinema icon remains centered in its own control", () => {
+test("cinema's visual spacing belongs to its button, not its icon", () => {
+  assert.match(
+    css,
+    /#player-cinema-btn\s*\{[\s\S]*?margin-inline-start:\s*6px;/,
+  );
   assert.doesNotMatch(
     css,
     /#player-cinema-btn svg\s*\{[\s\S]*?transform:\s*translateX/,
   );
+});
+
+test("cinema view has a configurable default C shortcut", () => {
+  assert.match(siteBase, /'player\.cinema':\s*'c'/);
+  assert.match(
+    playerIndex,
+    /sc\.match\('player\.cinema', event\.key\) && cinemaBtn[\s\S]*?cinemaBtn\.click\(\)/,
+  );
+  assert.match(modalsTemplate, /data-sc="player\.cinema"/);
 });

@@ -986,6 +986,10 @@ if (root && video) {
         event.preventDefault()
         event.stopImmediatePropagation()
         toggleFullscreen()
+      } else if (sc.match('player.cinema', event.key) && cinemaBtn) {
+        event.preventDefault()
+        event.stopImmediatePropagation()
+        cinemaBtn.click()
       } else if (event.key === 'ArrowLeft') {
         event.preventDefault()
         event.stopImmediatePropagation()

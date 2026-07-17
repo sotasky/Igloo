@@ -65,6 +65,26 @@ func TestSettingsToAPIFormat_DefaultsShareEmbedFriendlyLinksOff(t *testing.T) {
 	}
 }
 
+func TestShortcutDefaultsIncludeCinemaAndSidebar(t *testing.T) {
+	if got := defaultShortcutConfig()["player.cinema"]; got != "c" {
+		t.Fatalf("default cinema shortcut = %q, want c", got)
+	}
+	if got := defaultShortcutConfig()["global.sidebar"]; got != "z" {
+		t.Fatalf("default sidebar shortcut = %q, want z", got)
+	}
+	settings := settingsToAPIFormat(nil)
+	shortcuts, ok := settings["shortcuts"].(map[string]string)
+	if !ok {
+		t.Fatalf("shortcuts = %#v, want map[string]string", settings["shortcuts"])
+	}
+	if got := shortcuts["player.cinema"]; got != "c" {
+		t.Fatalf("settings cinema shortcut = %q, want c", got)
+	}
+	if got := shortcuts["global.sidebar"]; got != "z" {
+		t.Fatalf("settings sidebar shortcut = %q, want z", got)
+	}
+}
+
 func TestSettingsToAPIFormatFiltersRetiredIntervalSettings(t *testing.T) {
 	got := settingsToAPIFormat(map[string]string{
 		"youtube_fetch_delay":    "12",

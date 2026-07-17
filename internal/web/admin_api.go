@@ -102,8 +102,9 @@ func (s *Server) handleSettingsForm(w http.ResponseWriter, r *http.Request) {
 var shortcutDefaults = map[string]string{
 	"feed.like": "l", "feed.bookmark": "b", "feed.share": "s", "feed.translate": "t", "feed.media": "f",
 	"shorts.autoplay": "a", "shorts.bookmark": "b", "shorts.share": "s", "shorts.grid": "c",
-	"player.fullscreen": "f", "player.bookmark": "b", "player.share": "s", "player.autoplay": "a",
-	"global.logs": "l",
+	"player.fullscreen": "f", "player.cinema": "c", "player.bookmark": "b", "player.share": "s", "player.autoplay": "a",
+	"global.sidebar": "z",
+	"global.logs":    "l",
 }
 
 var settingsInternalKeys = map[string]bool{

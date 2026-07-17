@@ -5,6 +5,7 @@ import test from "node:test";
 const css = readFileSync(new URL("../../static/style.css", import.meta.url), "utf8");
 const baseTemplate = readFileSync(new URL("../../internal/components/base.templ", import.meta.url), "utf8");
 const sidebarTemplate = readFileSync(new URL("../../internal/components/sidebar.templ", import.meta.url), "utf8");
+const modalsTemplate = readFileSync(new URL("../../internal/components/modals.templ", import.meta.url), "utf8");
 const siteBase = readFileSync(new URL("../../static/js/site_base.js", import.meta.url), "utf8");
 
 test("desktop sidebar can be resized down to the compact rail", () => {
@@ -33,8 +34,18 @@ test("dragging owns compact snapping and persisted custom widths", () => {
   assert.match(siteBase, /pointerup/);
   assert.match(siteBase, /setPointerCapture/);
   assert.match(siteBase, /igloo\.sidebar\.width\.v1/);
+  assert.match(siteBase, /igloo\.sidebar\.full-width\.v1/);
+  assert.match(siteBase, /fullSidebarWidth/);
   assert.doesNotMatch(sidebarTemplate, /id="sidebar-collapse"/);
   assert.doesNotMatch(sidebarTemplate, /sidebar-panel-(?:expand|collapse)-icon/);
+});
+
+test("Z toggles compact mode without discarding the saved full width", () => {
+  assert.match(siteBase, /'global\.sidebar':\s*'z'/);
+  assert.match(siteBase, /cfShortcuts\.match\('global\.sidebar', event\.key\)/);
+  assert.match(siteBase, /currentSidebarWidth === SIDEBAR_COMPACT_WIDTH \? fullSidebarWidth : SIDEBAR_COMPACT_WIDTH/);
+  assert.match(siteBase, /setSidebarWidth\([\s\S]*?true,[\s\S]*?false/);
+  assert.match(modalsTemplate, /data-sc="global\.sidebar"/);
 });
 
 test("compact mode keeps its page and utility controls", () => {

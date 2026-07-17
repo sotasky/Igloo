@@ -860,6 +860,7 @@ templ prefsShortcutsTab(p PageProps) {
 				<!-- filled by JS from sidebar nav items -->
 			</div>
 			<div class="shortcuts-list" style="margin-top:1rem;">
+					<div class="shortcut-row" data-sc="global.sidebar"><kbd></kbd><span>{ L(p, "action_toggle_sidebar", "Toggle sidebar") }</span></div>
 					<div class="shortcut-row" data-sc="global.search"><kbd></kbd><span data-i18n="shortcuts_open_search_overlay">{ L(p, "shortcuts_open_search_overlay", "Open search overlay") }</span></div>
 					<div class="shortcut-row" data-sc="global.logs"><kbd></kbd><span data-i18n="shortcuts_open_logs_modal">{ L(p, "shortcuts_open_logs_modal", "Open logs modal") }</span></div>
 					<div class="shortcut-row"><kbd>{ L(p, "shortcuts_key_escape", "Esc") }</kbd><span data-i18n="shortcuts_close_any_modal_overlay">{ L(p, "shortcuts_close_any_modal_overlay", "Close any modal or overlay") }</span></div>
@@ -905,6 +906,7 @@ templ prefsShortcutsTab(p PageProps) {
 					<h4 class="shortcuts-section-title">{ L(p, "shortcuts_section_video_player", "Video Player") }</h4>
 					<div class="shortcuts-list">
 						<div class="shortcut-row" data-sc="player.fullscreen"><kbd></kbd><span>{ L(p, "action_toggle_fullscreen", "Toggle fullscreen") }</span></div>
+						<div class="shortcut-row" data-sc="player.cinema"><kbd></kbd><span>{ L(p, "player_cinema_view", "Cinema view") }</span></div>
 						<div class="shortcut-row" data-sc="player.bookmark"><kbd></kbd><span>{ L(p, "shortcuts_bookmark_video", "Bookmark video") }</span></div>
 						<div class="shortcut-row" data-sc="player.share"><kbd></kbd><span>{ L(p, "shortcuts_copy_share_link", "Copy share link") }</span></div>
 						<div class="shortcut-row" data-sc="player.autoplay"><kbd></kbd><span>{ L(p, "shortcuts_toggle_auto_play_next", "Toggle auto-play next") }</span></div>

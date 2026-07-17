@@ -3,7 +3,8 @@
   var defaults = {
     'feed.like': 'l', 'feed.bookmark': 'b', 'feed.share': 's', 'feed.translate': 't', 'feed.media': 'f',
     'shorts.mute': 'm', 'shorts.autoplay': 'a', 'shorts.bookmark': 'b', 'shorts.share': 's', 'shorts.grid': 'c',
-    'player.fullscreen': 'f', 'player.bookmark': 'b', 'player.share': 's', 'player.autoplay': 'a',
+    'player.fullscreen': 'f', 'player.cinema': 'c', 'player.bookmark': 'b', 'player.share': 's', 'player.autoplay': 'a',
+    'global.sidebar': 'z',
     'global.logs': 'o',
     'global.search': 'h'
   };
@@ -551,7 +552,9 @@
   const SIDEBAR_MAX_WIDTH = 420;
   const SIDEBAR_COMPACT_SNAP_WIDTH = 136;
   const sidebarStorageKey = 'igloo.sidebar.width.v1';
+  const sidebarFullWidthStorageKey = 'igloo.sidebar.full-width.v1';
   let currentSidebarWidth = 0;
+  let fullSidebarWidth = 0;
   let resizingPointerId = null;
 
   function sidebarMaxWidth() {
@@ -565,9 +568,24 @@
     return Math.min(sidebarMaxWidth(), Math.max(SIDEBAR_FULL_MIN_WIDTH, Math.round(width)));
   }
 
-  function setSidebarWidth(width, persist) {
+  function defaultSidebarFullWidth() {
+    return Math.min(sidebarMaxWidth(), Math.max(SIDEBAR_FULL_MIN_WIDTH, Math.round(window.innerWidth * 0.2)));
+  }
+
+  function storedSidebarFullWidth() {
+    try {
+      var stored = Number(window.localStorage.getItem(sidebarFullWidthStorageKey));
+      if (Number.isFinite(stored) && stored >= SIDEBAR_FULL_MIN_WIDTH) return normalizedSidebarWidth(stored);
+      var legacy = Number(window.localStorage.getItem(sidebarStorageKey));
+      if (Number.isFinite(legacy) && legacy >= SIDEBAR_FULL_MIN_WIDTH) return normalizedSidebarWidth(legacy);
+    } catch (_) {}
+    return defaultSidebarFullWidth();
+  }
+
+  function setSidebarWidth(width, persist, rememberFullWidth) {
     var normalized = normalizedSidebarWidth(width);
     var compact = normalized === SIDEBAR_COMPACT_WIDTH;
+    if (!compact && rememberFullWidth !== false) fullSidebarWidth = normalized;
     currentSidebarWidth = normalized;
     doc.documentElement.classList.toggle('sidebar-collapsed', compact);
     doc.documentElement.style.setProperty('--sidebar-panel-width', normalized + 'px');
@@ -578,6 +596,9 @@
     if (persist) {
       try {
         window.localStorage.setItem(sidebarStorageKey, String(normalized));
+        if (!compact && rememberFullWidth !== false) {
+          window.localStorage.setItem(sidebarFullWidthStorageKey, String(fullSidebarWidth));
+        }
       } catch (_) {}
     }
   }
@@ -594,8 +615,9 @@
     });
   }
   if (sidebar && sidebarResizeHandle) {
+    fullSidebarWidth = storedSidebarFullWidth();
     var initialSidebarWidth = sidebar.getBoundingClientRect().width;
-    setSidebarWidth(initialSidebarWidth, false);
+    setSidebarWidth(initialSidebarWidth, false, false);
 
     sidebarResizeHandle.addEventListener('pointerdown', function (event) {
       if (!desktopSidebar.matches || event.button !== 0) return;
@@ -665,6 +687,19 @@
       toggleLogsModal();
     });
   }
+  doc.addEventListener('keydown', function (event) {
+    if (!desktopSidebar.matches || event.ctrlKey || event.shiftKey || event.altKey || event.metaKey) return;
+    if (!window.cfShortcuts.match('global.sidebar', event.key)) return;
+    if (q('.modal:not(.hidden)')) return;
+    var activeEl = doc.activeElement;
+    if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA' || activeEl.tagName === 'SELECT' || activeEl.isContentEditable)) return;
+    event.preventDefault();
+    setSidebarWidth(
+      currentSidebarWidth === SIDEBAR_COMPACT_WIDTH ? fullSidebarWidth : SIDEBAR_COMPACT_WIDTH,
+      true,
+      false,
+    );
+  });
   doc.addEventListener('click', function (event) {
     if (desktopSidebar.matches || !event.target || !event.target.closest) return;
     if (!event.target.closest('#app-sidebar a[href]')) return;
@@ -674,13 +709,13 @@
   desktopSidebar.addEventListener('change', function () {
     body.classList.remove('sidebar-open');
     if (desktopSidebar.matches && currentSidebarWidth > sidebarMaxWidth()) {
-      setSidebarWidth(sidebarMaxWidth(), true);
+      setSidebarWidth(sidebarMaxWidth(), true, false);
     }
     syncSidebarControls();
   });
   window.addEventListener('resize', function () {
     if (!desktopSidebar.matches || currentSidebarWidth <= sidebarMaxWidth()) return;
-    setSidebarWidth(sidebarMaxWidth(), true);
+    setSidebarWidth(sidebarMaxWidth(), true, false);
   });
   syncSidebarControls();
   window.requestAnimationFrame(function () {

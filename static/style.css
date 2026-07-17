@@ -3793,6 +3793,11 @@ select.input.themed-select-native {
     display: block;
 }
 
+.dashboard-media-controller:not(.dashboard-media-controller-mini) #player-cinema-btn {
+    /* Keep the rectangle centered in its hit area while matching the adjacent visual gaps. */
+    margin-inline-start: 6px;
+}
+
 .dashboard-media-controller:not(.dashboard-media-controller-mini) .mc-custom-btn:focus-visible {
     outline: 2px solid rgba(var(--accent-primary-rgb), 0.85);
     outline-offset: 2px;
