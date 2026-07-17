@@ -257,10 +257,6 @@ internal class NativeFeedCardViews(context: Context) {
         orientation = LinearLayout.HORIZONTAL
         gravity = Gravity.CENTER_VERTICAL
     }
-    val actions: LinearLayout = LinearLayout(context).apply {
-        orientation = LinearLayout.HORIZONTAL
-        gravity = Gravity.CENTER_VERTICAL
-    }
     val threadCapsule: LinearLayout = LinearLayout(context).apply {
         orientation = LinearLayout.HORIZONTAL
         gravity = Gravity.CENTER
@@ -298,10 +294,10 @@ internal class NativeFeedCardViews(context: Context) {
         quote.addView(quoteBody)
         quote.addView(quoteMedia, LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
         root.addView(quote, verticalSpacingLayoutParams())
-        actionContainer.addView(menu, LinearLayout.LayoutParams(dp(48), dp(36)))
-        actionContainer.addView(View(context), LinearLayout.LayoutParams(0, dp(40), 1f))
-        actionContainer.addView(actions, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(40)))
-        root.addView(actionContainer)
+        root.addView(
+            actionContainer,
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(40)),
+        )
         threadCapsule.addView(
             threadCapsuleAvatars,
             LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(22)).apply {

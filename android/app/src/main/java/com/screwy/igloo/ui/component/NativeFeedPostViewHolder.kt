@@ -181,6 +181,31 @@ internal class NativeFeedViewHolder(
         )
     }
 
+    fun bindMediaState(adapterRow: NativeFeedAdapterItem.Post) {
+        if (boundRow?.id != adapterRow.id) {
+            bind(adapterRow)
+            return
+        }
+        boundRow = adapterRow
+        videoSlots.forEach { inlineVideoManager.detachSlot(it.key) }
+        videoSlots.clear()
+
+        val colors = getColors()
+        val callbacks = getCallbacks()
+        val row = adapterRow.threaded.row
+        val post = adapterRow.post
+        bindMediaGrid(
+            container = views.media,
+            ownerKeyPrefix = row.item.tweetId,
+            row = row,
+            grid = post.media.grid,
+            mediaIndexOffset = 0,
+            colors = colors,
+            callbacks = callbacks,
+        )
+        bindQuoteMedia(row, post, colors, callbacks)
+    }
+
     fun recycle() {
         videoSlots.forEach { inlineVideoManager.detachSlot(it.key) }
         videoSlots.clear()
@@ -325,7 +350,10 @@ internal class NativeFeedViewHolder(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
             )
         }
-        container.addView(threadAncestorActions(post, colors, callbacks))
+        container.addView(
+            threadAncestorActions(post, colors, callbacks),
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(40)),
+        )
         return container
     }
 
@@ -503,16 +531,25 @@ internal class NativeFeedViewHolder(
             views.quoteBody.ellipsize = TextUtils.TruncateAt.END
             views.quoteBody.setOnClickListener { callbacks.onQuoteOpen(quoteId) }
         }
-        val parentCount = post.media.grid.mediaSetItemCount
+        bindQuoteMedia(row, post, colors, callbacks)
+    }
+
+    private fun bindQuoteMedia(
+        row: FeedRow,
+        post: SocialPostModel,
+        colors: NativeFeedColors,
+        callbacks: NativeFeedCallbacks,
+    ) {
         val quoteMedia = post.quoteMedia?.grid
         if (quoteMedia == null || quoteMedia.mediaCount == 0) {
             views.quoteMedia.visibility = View.GONE
             views.quoteMedia.removeAllViews()
         } else {
+            val parentCount = post.media.grid.mediaSetItemCount
             views.quoteMedia.visibility = View.VISIBLE
             bindMediaGrid(
                 container = views.quoteMedia,
-                ownerKeyPrefix = item.quoteTweetId.orEmpty(),
+                ownerKeyPrefix = row.item.quoteTweetId.orEmpty(),
                 row = row,
                 grid = quoteMedia,
                 mediaIndexOffset = parentCount,
@@ -529,9 +566,15 @@ internal class NativeFeedViewHolder(
         colors: NativeFeedColors,
         callbacks: NativeFeedCallbacks,
     ) {
-        bindActionButtons(views.actions, row, post, shareUrl, colors, callbacks)
-        configureMenuButton(views.menu, colors)
-        views.menu.setOnClickListener { showMenu(views.menu, row, post, shareUrl) }
+        bindActionRow(
+            container = views.actionContainer,
+            menu = views.menu,
+            row = row,
+            post = post,
+            shareUrl = shareUrl,
+            colors = colors,
+            callbacks = callbacks,
+        )
     }
 
     private fun showMenu(
@@ -606,26 +649,25 @@ internal class NativeFeedViewHolder(
         val context = views.root.context
         val row = post.row
         val shareUrl = feedShareUrl(row.item).trim()
-        val actions =
-            LinearLayout(context).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-            }
         val menu = ImageButton(context)
-        configureMenuButton(menu, colors)
-        menu.setOnClickListener { showMenu(menu, row, post, shareUrl) }
         return LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            addView(menu, LinearLayout.LayoutParams(dp(48), dp(36)))
-            addView(View(context), LinearLayout.LayoutParams(0, dp(40), 1f))
-            bindActionButtons(actions, row, post, shareUrl, colors, callbacks)
-            addView(actions, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(40)))
+            bindActionRow(
+                container = this,
+                menu = menu,
+                row = row,
+                post = post,
+                shareUrl = shareUrl,
+                colors = colors,
+                callbacks = callbacks,
+            )
         }
     }
 
-    private fun bindActionButtons(
-        actions: LinearLayout,
+    private fun bindActionRow(
+        container: LinearLayout,
+        menu: ImageButton,
         row: FeedRow,
         post: SocialPostModel,
         shareUrl: String,
@@ -633,7 +675,10 @@ internal class NativeFeedViewHolder(
         callbacks: NativeFeedCallbacks,
     ) {
         val canOpenExternal = shareUrl.isNotBlank()
-        actions.removeAllViews()
+        container.removeAllViews()
+        configureMenuButton(menu, colors)
+        menu.setOnClickListener { showMenu(menu, row, post, shareUrl) }
+        container.addView(menu, equalActionLayoutParams())
         NativeFeedPrimaryActions.forEach { action ->
             val button = actionIconButton(views.root.context, colors)
             button.contentDescription = action.contentDescription(views.root.context, post)
@@ -670,9 +715,12 @@ internal class NativeFeedViewHolder(
                     NativeFeedPrimaryAction.Bookmark -> callbacks.onBookmarkToggle(row)
                 }
             }
-            actions.addView(button)
+            container.addView(button, equalActionLayoutParams())
         }
     }
+
+    private fun equalActionLayoutParams(): LinearLayout.LayoutParams =
+        LinearLayout.LayoutParams(0, dp(40), 1f)
 
     private fun configureMenuButton(menu: ImageButton, colors: NativeFeedColors) {
         menu.background = null
@@ -851,6 +899,7 @@ internal class NativeFeedViewHolder(
                 cell = cell,
                 mediaIndex = feedMediaViewerIndex(grid, 0, mediaIndexOffset),
                 isSingle = true,
+                imageDimensions = dimensions,
                 colors = colors,
                 callbacks = callbacks,
             )
@@ -861,6 +910,13 @@ internal class NativeFeedViewHolder(
             val gap = dp(2)
             val displayCells = grid.cells.take(4)
             fun frameFor(index: Int, cell: FeedMediaCellModel): FrameLayout {
+                val imageDimensions =
+                    nativeMultiMediaCellDimensions(
+                        visibleCellCount = displayCells.size,
+                        cellIndex = index,
+                        gridWidthPx = gridWidth,
+                        gapPx = gap,
+                    )
                 val frame =
                     FrameLayout(container.context).apply {
                         setBackgroundColor(colors.surface)
@@ -874,6 +930,7 @@ internal class NativeFeedViewHolder(
                     grid = grid,
                     cell = cell,
                     mediaIndex = feedMediaViewerIndex(grid, index, mediaIndexOffset),
+                    imageDimensions = imageDimensions,
                     colors = colors,
                     callbacks = callbacks,
                 )
@@ -940,8 +997,8 @@ internal class NativeFeedViewHolder(
                     rightColumn.addView(
                         frameFor(2, displayCells[2]),
                         LinearLayout.LayoutParams(
-                                ViewGroup.LayoutParams.MATCH_PARENT,
-                                rightCellHeight,
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            rightCellHeight,
                             )
                             .apply { topMargin = gap },
                     )
@@ -965,8 +1022,8 @@ internal class NativeFeedViewHolder(
                             rowLayout.addView(
                                 frameFor(index, displayCells[index]),
                                 LinearLayout.LayoutParams(
-                                        cellSize,
-                                        ViewGroup.LayoutParams.MATCH_PARENT,
+                                    cellSize,
+                                    ViewGroup.LayoutParams.MATCH_PARENT,
                                     )
                                     .apply { if (columnIndex > 0) marginStart = gap },
                             )
@@ -987,6 +1044,7 @@ internal class NativeFeedViewHolder(
         cell: FeedMediaCellModel,
         mediaIndex: Int?,
         isSingle: Boolean = false,
+        imageDimensions: NativeMediaDimensions,
         colors: NativeFeedColors,
         callbacks: NativeFeedCallbacks,
     ) {
@@ -1005,8 +1063,8 @@ internal class NativeFeedViewHolder(
         loadMediaImage(
             image,
             cell.artworkUri(),
-            parent.layoutParams?.width ?: 0,
-            parent.layoutParams?.height ?: 0,
+            imageDimensions.widthPx,
+            imageDimensions.heightPx,
         )
 
         if (cell.descriptor.isVideo) {

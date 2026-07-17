@@ -43,6 +43,10 @@ internal class NativeMainFeedController(
         NativeInlineVideoManager(player = buildIglooPlayer(context, authTokens, iglooHostProvider))
     private var pendingInitialScrollAnchor: NativeFeedScrollAnchor? =
         initialScrollAnchor.takeIf { it.rowId != null }
+    private var currentPosts: List<NativeFeedAdapterItem.Post> = emptyList()
+    private var currentPostIds: List<String> = emptyList()
+    private var postIndexByAdapterIndex = IntArray(0)
+    private var currentMediaWindow: IntRange? = null
     private val adapter =
         NativeFeedAdapter(
             imageLoader = imageLoader,
@@ -53,6 +57,7 @@ internal class NativeMainFeedController(
             getColors = { colors },
             getCallbacks = { callbacks },
             inlineVideoManager = inlineVideoManager,
+            onItemsChanged = ::cacheAdapterSnapshot,
         )
     val recyclerView: RecyclerView =
         RecyclerView(context).apply {
@@ -72,6 +77,9 @@ internal class NativeMainFeedController(
 
                     override fun onScrollStateChanged(recyclerView: RecyclerView, newState: Int) {
                         onViewportChanged()
+                        if (newState == RecyclerView.SCROLL_STATE_IDLE) {
+                            persistScrollAnchor()
+                        }
                     }
                 }
             )
@@ -135,23 +143,25 @@ internal class NativeMainFeedController(
         recyclerView.stopScroll()
         layoutManager.scrollToPositionWithOffset(0, 0)
         onViewportChanged()
+        persistScrollAnchor()
     }
 
     fun pauseVideo() {
+        persistScrollAnchor()
         inlineVideoManager.pause()
     }
 
     fun release() {
+        persistScrollAnchor()
         scopeJob.cancel()
         inlineVideoManager.release()
     }
 
     private fun onViewportChanged() {
-        onScrollAnchorChanged(nativeFeedScrollAnchor(adapter.currentList, layoutManager))
         val firstVisible = layoutManager.findFirstVisibleItemPosition().coerceAtLeast(0)
         val firstVisiblePost = firstVisiblePostIndex(firstVisible).coerceAtLeast(0)
         seenTracker.onViewportChanged(
-            rowIds = adapter.postItems().map { it.id },
+            rowIds = currentPostIds,
             firstVisibleIndex = firstVisiblePost,
         )
         onScrollToTopVisibility(firstVisiblePost > 5)
@@ -167,38 +177,69 @@ internal class NativeMainFeedController(
         layoutManager.scrollToPositionWithOffset(adapterIndex, anchor.offsetPx)
     }
 
-    private fun firstVisiblePostIndex(firstVisibleAdapterIndex: Int): Int {
-        val lastVisible =
-            layoutManager.findLastVisibleItemPosition().coerceAtLeast(firstVisibleAdapterIndex)
-        for (index in firstVisibleAdapterIndex..lastVisible) {
-            adapter.postIndexForAdapterIndex(index)?.let {
-                return it
+    private fun cacheAdapterSnapshot(items: List<NativeFeedAdapterItem>) {
+        val posts = ArrayList<NativeFeedAdapterItem.Post>(items.size)
+        val postIds = ArrayList<String>(items.size)
+        val indices = IntArray(items.size) { -1 }
+        items.forEachIndexed { adapterIndex, item ->
+            if (item is NativeFeedAdapterItem.Post) {
+                indices[adapterIndex] = posts.size
+                posts += item
+                postIds += item.id
             }
         }
-        return adapter.postIndexForAdapterIndex(firstVisibleAdapterIndex) ?: 0
+        currentPosts = posts
+        currentPostIds = postIds
+        postIndexByAdapterIndex = indices
+        currentMediaWindow = null
+    }
+
+    private fun persistScrollAnchor() {
+        onScrollAnchorChanged(nativeFeedScrollAnchor(adapter.currentList, layoutManager))
+    }
+
+    private fun firstVisiblePostIndex(firstVisibleAdapterIndex: Int): Int {
+        return postIndexAt(firstVisibleAdapterIndex)
+            ?: postIndexAt(firstVisibleAdapterIndex + 1)
+            ?: 0
     }
 
     private fun updateNearVisibleMediaRows(firstVisiblePost: Int) {
         val lastVisibleAdapter = layoutManager.findLastVisibleItemPosition()
         val lastVisiblePost =
-            (0..lastVisibleAdapter.coerceAtLeast(0))
-                .mapNotNull { adapter.postIndexForAdapterIndex(it) }
-                .lastOrNull() ?: firstVisiblePost
-        val posts = adapter.postItems()
-        val start = (firstVisiblePost - 2).coerceAtLeast(0)
-        val end = (lastVisiblePost + 4).coerceAtMost(posts.lastIndex)
-        if (end < start) return
-        val rows =
-            (start..end).flatMap { index ->
-                posts
-                    .getOrNull(index)
-                    ?.threaded
-                    ?.let { threaded -> threaded.chain + threaded.row }
-                    .orEmpty()
+            postIndexAt(lastVisibleAdapter) ?: postIndexAt(lastVisibleAdapter - 1) ?: firstVisiblePost
+        val window =
+            nativeFeedMediaWindow(
+                firstVisiblePost = firstVisiblePost,
+                lastVisiblePost = lastVisiblePost,
+                postCount = currentPosts.size,
+            ) ?: return
+        if (window == currentMediaWindow) return
+        currentMediaWindow = window
+        val rows = buildList {
+            for (index in window) {
+                val threaded = currentPosts[index].threaded
+                addAll(threaded.chain)
+                add(threaded.row)
             }
+        }
         if (rows.isNotEmpty()) {
-
             callbacks.onMediaRowsChanged(rows)
         }
     }
+
+    private fun postIndexAt(adapterIndex: Int): Int? =
+        postIndexByAdapterIndex.getOrNull(adapterIndex)?.takeIf { it >= 0 }
+}
+
+internal fun nativeFeedMediaWindow(
+    firstVisiblePost: Int,
+    lastVisiblePost: Int,
+    postCount: Int,
+): IntRange? {
+    if (postCount <= 0) return null
+    val lastPostIndex = postCount - 1
+    val first = firstVisiblePost.coerceIn(0, lastPostIndex)
+    val last = lastVisiblePost.coerceIn(first, lastPostIndex)
+    return (first - 2).coerceAtLeast(0)..(last + 4).coerceAtMost(lastPostIndex)
 }

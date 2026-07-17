@@ -237,6 +237,28 @@ internal fun nativeSingleMediaDimensions(
     return NativeMediaDimensions(widthPx = width, heightPx = height)
 }
 
+internal fun nativeMultiMediaCellDimensions(
+    visibleCellCount: Int,
+    cellIndex: Int,
+    gridWidthPx: Int,
+    gapPx: Int,
+): NativeMediaDimensions {
+    val cellWidth = (gridWidthPx - gapPx).coerceAtLeast(1) / 2
+    return when (visibleCellCount) {
+        2 -> NativeMediaDimensions(widthPx = cellWidth, heightPx = cellWidth)
+        3 -> {
+            val gridHeight = (gridWidthPx / 1.6f).toInt().coerceAtLeast(1)
+            val rightCellHeight = (gridHeight - gapPx).coerceAtLeast(1) / 2
+            if (cellIndex == 0) {
+                NativeMediaDimensions(widthPx = cellWidth, heightPx = gridHeight)
+            } else {
+                NativeMediaDimensions(widthPx = cellWidth, heightPx = rightCellHeight)
+            }
+        }
+        else -> NativeMediaDimensions(widthPx = cellWidth, heightPx = cellWidth)
+    }
+}
+
 internal fun nativeMediaGridWidthPx(context: Context): Int =
     (context.resources.displayMetrics.widthPixels - dp(36)).coerceAtLeast(dp(160))
 

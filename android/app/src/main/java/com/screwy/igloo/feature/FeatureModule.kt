@@ -111,9 +111,7 @@ val iglooFeatureModule = module {
             ownerId = ownerId,
             requestedIndex = index,
             db = get<IglooDatabase>(),
-            outboxWriter = get(),
             baseUrlProvider = get(),
-            uiEffects = get(),
             reachability = get(),
         )
     }

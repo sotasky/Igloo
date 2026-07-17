@@ -283,7 +283,57 @@ class FeedMediaCellDescriptorTest {
             )
 
         assertEquals(2, set?.items?.size)
-        assertEquals(2, set?.parentMediaCount)
+    }
+
+    @Test
+    fun route_media_set_keeps_mixed_parent_and_quote_slides_in_order() {
+        val parentId = "sample_parent"
+        val quoteId = "sample_quote"
+        val parentJson =
+            """[
+            {"type":"photo","url":"https://pbs.twimg.com/media/a.jpg"},
+            {"type":"animated_gif","url":"https://video.twimg.com/media/b.gif"},
+            {"type":"video","url":"https://video.twimg.com/media/c.mp4"}
+        ]"""
+        val quoteJson = """[{"type":"photo","url":"https://pbs.twimg.com/media/d.jpg"}]"""
+        val set =
+            buildFeedMediaSet(
+                row =
+                    feedRow(
+                        FeedItemEntity(
+                            tweetId = parentId,
+                            mediaJson = parentJson,
+                            quoteTweetId = quoteId,
+                            quoteMediaJson = quoteJson,
+                        )
+                    ),
+                assetRows =
+                    listOf(
+                        syncPostMedia("parent-image", 0, "/verified/a.jpg", parentId),
+                        syncPostMedia(
+                            "parent-gif",
+                            1,
+                            "/verified/b.gif",
+                            parentId,
+                            contentType = "image/gif",
+                        ),
+                        syncPostMedia(
+                            "parent-video",
+                            2,
+                            "/verified/c.mp4",
+                            parentId,
+                            contentType = "video/mp4",
+                        ),
+                        syncPostMedia("quote-image", 0, "/verified/d.jpg", quoteId),
+                    ),
+                baseUrl = "https://igloo.example",
+            ) ?: error("expected media set")
+
+        assertEquals(4, set.items.size)
+        assertTrue(set.items[0] is MediaItem.Image)
+        assertTrue(set.items[1] is MediaItem.Gif)
+        assertTrue(set.items[2] is MediaItem.Video)
+        assertTrue(set.items[3] is MediaItem.Image)
     }
 
     private fun syncPostMedia(

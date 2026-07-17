@@ -85,23 +85,7 @@ internal fun buildFeedMediaSet(
     val items = parentItems + quoteItems
     if (items.isEmpty()) return null
 
-    val displayName = row.authorDisplayName
-        ?.trim()
-        ?.takeIf { it.isNotBlank() }
-        ?: row.channelName?.trim()?.takeIf { it.isNotBlank() }
-        ?: ""
-    return MediaSet(
-        items = items,
-        parentMediaCount = parentItems.size,
-        parentIsTextOnly = parentItems.isEmpty(),
-        authorHandle = row.authorHandle.orEmpty(),
-        authorDisplayName = displayName,
-        authorChannelId = row.item.channelId.orEmpty(),
-        bodyText = row.item.bodyText.orEmpty(),
-        quoteBodyText = row.item.quoteBodyText.orEmpty(),
-        canonicalUrl = canonicalTweetUrl(row.item),
-        quoteCanonicalUrl = quoteCanonicalTweetUrl(row.item),
-    )
+    return MediaSet(items = items)
 }
 
 internal suspend fun loadFeedMediaAssetRows(

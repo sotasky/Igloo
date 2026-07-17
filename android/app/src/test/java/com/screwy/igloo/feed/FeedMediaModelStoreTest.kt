@@ -45,7 +45,7 @@ class FeedMediaModelStoreTest {
     }
 
     @Test
-    fun observedOwnersReactToAssetReadinessAndWindowChanges() = runBlocking {
+    fun observedOwnersReactToAssetReadinessAndRetainLocalModelsAcrossWindowChanges() = runBlocking {
         val dao = db.androidSyncDao()
         dao.upsertAsset(
             AndroidSyncAssetEntity(
@@ -74,6 +74,15 @@ class FeedMediaModelStoreTest {
         store.setMediaModelRows(listOf(feedRow("sample_tweet"), feedRow("tweet-2")))
         withTimeout(2_000) { store.mediaModels.first { it.keys == setOf("sample_tweet", "tweet-2") } }
 
+        store.setMediaModelRows(listOf(feedRow("tweet-2")))
+        assertEquals(
+            setOf("tweet-2"),
+            withTimeout(2_000) { store.mediaModels.first { it.keys == setOf("tweet-2") } }.keys,
+        )
+
+        store.setMediaModelRows(listOf(feedRow("sample_tweet"), feedRow("tweet-2")))
+        withTimeout(2_000) { store.mediaModels.first { it.keys == setOf("sample_tweet", "tweet-2") } }
+
         val localFile = File("/verified/sample.jpg")
         dao.markVerified("asset-1", 1, localFile.absolutePath, 2)
         val models =
@@ -88,8 +97,10 @@ class FeedMediaModelStoreTest {
 
         store.setMediaModelRows(listOf(feedRow("tweet-2")))
         assertEquals(
-            setOf("tweet-2"),
-            withTimeout(2_000) { store.mediaModels.first { it.keys == setOf("tweet-2") } }.keys,
+            setOf("sample_tweet", "tweet-2"),
+            withTimeout(2_000) {
+                store.mediaModels.first { it.keys == setOf("sample_tweet", "tweet-2") }
+            }.keys,
         )
     }
 

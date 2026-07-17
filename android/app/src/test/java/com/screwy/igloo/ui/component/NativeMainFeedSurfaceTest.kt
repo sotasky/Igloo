@@ -247,6 +247,54 @@ class NativeMainFeedSurfaceTest {
     }
 
     @Test
+    fun nativeFeedMediaWindowKeepsTheExistingViewportMarginWithinTheFeed() {
+        assertEquals(0..5, nativeFeedMediaWindow(0, 1, postCount = 200))
+        assertEquals(38..54, nativeFeedMediaWindow(40, 50, postCount = 200))
+        assertEquals(197..199, nativeFeedMediaWindow(199, 199, postCount = 200))
+        assertEquals(null, nativeFeedMediaWindow(0, 0, postCount = 0))
+    }
+
+    @Test
+    fun nativeMultiMediaCellsUseTheirRenderedGridDimensions() {
+        assertEquals(
+            NativeMediaDimensions(widthPx = 498, heightPx = 498),
+            nativeMultiMediaCellDimensions(
+                visibleCellCount = 2,
+                cellIndex = 0,
+                gridWidthPx = 1_000,
+                gapPx = 4,
+            ),
+        )
+        assertEquals(
+            NativeMediaDimensions(widthPx = 498, heightPx = 625),
+            nativeMultiMediaCellDimensions(
+                visibleCellCount = 3,
+                cellIndex = 0,
+                gridWidthPx = 1_000,
+                gapPx = 4,
+            ),
+        )
+        assertEquals(
+            NativeMediaDimensions(widthPx = 498, heightPx = 310),
+            nativeMultiMediaCellDimensions(
+                visibleCellCount = 3,
+                cellIndex = 2,
+                gridWidthPx = 1_000,
+                gapPx = 4,
+            ),
+        )
+        assertEquals(
+            NativeMediaDimensions(widthPx = 498, heightPx = 498),
+            nativeMultiMediaCellDimensions(
+                visibleCellCount = 4,
+                cellIndex = 3,
+                gridWidthPx = 1_000,
+                gapPx = 4,
+            ),
+        )
+    }
+
+    @Test
     fun like_and_bookmark_updates_do_not_replace_feed_media_content() {
         val original = adapterPost("sample_post")
         val liked =
@@ -264,6 +312,32 @@ class NativeMainFeedSurfaceTest {
 
         assertTrue(nativeFeedLikeBookmarkOnlyChange(original, liked))
         assertFalse(nativeFeedLikeBookmarkOnlyChange(original, changedBody))
+    }
+
+    @Test
+    fun media_model_updates_do_not_rebind_post_text_or_actions() {
+        val original = adapterPost("sample_post")
+        val mediaReady =
+            original.copy(
+                post =
+                    original.post.copy(
+                        media =
+                            original.post.media.copy(
+                                grid = original.post.media.grid.copy(inventoryLoaded = false)
+                            )
+                    )
+            )
+        val changedBody =
+            adapterPost(
+                tweetId = "sample_post",
+                rowTransform = { row -> row.copy(item = row.item.copy(bodyText = "updated content")) },
+            )
+        val threadedOriginal = original.copy(chainPosts = listOf(original.post))
+        val threadedMediaReady = mediaReady.copy(chainPosts = listOf(mediaReady.post))
+
+        assertTrue(nativeFeedMediaOnlyChange(original, mediaReady))
+        assertFalse(nativeFeedMediaOnlyChange(original, changedBody))
+        assertFalse(nativeFeedMediaOnlyChange(threadedOriginal, threadedMediaReady))
     }
 
     @Test

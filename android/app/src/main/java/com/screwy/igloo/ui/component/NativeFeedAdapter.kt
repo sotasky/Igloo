@@ -10,6 +10,7 @@ import androidx.recyclerview.widget.RecyclerView
 import coil3.ImageLoader
 import com.screwy.igloo.data.entity.FeedRow
 import com.screwy.igloo.data.entity.ThreadedFeedRow
+import com.screwy.igloo.feed.FeedMediaGridModel
 import com.screwy.igloo.feed.SocialPostModel
 import com.screwy.igloo.media.MediaResolvers
 import com.screwy.igloo.net.IglooHostProvider
@@ -25,6 +26,7 @@ internal class NativeFeedAdapter(
     private val getColors: () -> NativeFeedColors,
     private val getCallbacks: () -> NativeFeedCallbacks,
     private val inlineVideoManager: NativeInlineVideoManager,
+    private val onItemsChanged: (List<NativeFeedAdapterItem>) -> Unit,
 ) : ListAdapter<NativeFeedAdapterItem, RecyclerView.ViewHolder>(Diff) {
 
     init {
@@ -80,10 +82,19 @@ internal class NativeFeedAdapter(
         position: Int,
         payloads: MutableList<Any>,
     ) {
-        val actionPayload = payloads.lastOrNull() as? LikeBookmarkPayload
-        if (actionPayload != null && holder is NativeFeedViewHolder) {
-            holder.bindLikeBookmarkState(actionPayload.item)
-            return
+        if (holder is NativeFeedViewHolder) {
+            val actionPayload = payloads.singleOrNull() as? LikeBookmarkPayload
+            val mediaPayload = payloads.singleOrNull() as? MediaPayload
+            when {
+                actionPayload != null -> {
+                    holder.bindLikeBookmarkState(actionPayload.item)
+                    return
+                }
+                mediaPayload != null -> {
+                    holder.bindMediaState(mediaPayload.item)
+                    return
+                }
+            }
         }
         super.onBindViewHolder(holder, position, payloads)
     }
@@ -96,13 +107,12 @@ internal class NativeFeedAdapter(
         super.onViewRecycled(holder)
     }
 
-    fun postItems(): List<NativeFeedAdapterItem.Post> =
-        currentList.filterIsInstance<NativeFeedAdapterItem.Post>()
-
-    fun postIndexForAdapterIndex(adapterIndex: Int): Int? {
-        if (adapterIndex !in currentList.indices) return null
-        if (currentList[adapterIndex] !is NativeFeedAdapterItem.Post) return null
-        return currentList.take(adapterIndex + 1).count { it is NativeFeedAdapterItem.Post } - 1
+    override fun onCurrentListChanged(
+        previousList: List<NativeFeedAdapterItem>,
+        currentList: List<NativeFeedAdapterItem>,
+    ) {
+        super.onCurrentListChanged(previousList, currentList)
+        onItemsChanged(currentList)
     }
 
     companion object {
@@ -125,16 +135,20 @@ internal class NativeFeedAdapter(
                     oldItem: NativeFeedAdapterItem,
                     newItem: NativeFeedAdapterItem,
                 ): Any? =
-                    if (nativeFeedLikeBookmarkOnlyChange(oldItem, newItem)) {
-                        LikeBookmarkPayload(newItem as NativeFeedAdapterItem.Post)
-                    } else {
-                        null
+                    when {
+                        nativeFeedLikeBookmarkOnlyChange(oldItem, newItem) ->
+                            LikeBookmarkPayload(newItem as NativeFeedAdapterItem.Post)
+                        nativeFeedMediaOnlyChange(oldItem, newItem) ->
+                            MediaPayload(newItem as NativeFeedAdapterItem.Post)
+                        else -> null
                     }
             }
     }
 }
 
 private data class LikeBookmarkPayload(val item: NativeFeedAdapterItem.Post)
+
+private data class MediaPayload(val item: NativeFeedAdapterItem.Post)
 
 internal fun nativeFeedLikeBookmarkOnlyChange(
     oldItem: NativeFeedAdapterItem,
@@ -145,6 +159,19 @@ internal fun nativeFeedLikeBookmarkOnlyChange(
     }
     if (oldItem == newItem) return false
     return oldItem.withoutLikeBookmarkState() == newItem.withoutLikeBookmarkState()
+}
+
+internal fun nativeFeedMediaOnlyChange(
+    oldItem: NativeFeedAdapterItem,
+    newItem: NativeFeedAdapterItem,
+): Boolean {
+    if (oldItem !is NativeFeedAdapterItem.Post || newItem !is NativeFeedAdapterItem.Post) {
+        return false
+    }
+    if (oldItem == newItem || oldItem.chainPosts.isNotEmpty() || newItem.chainPosts.isNotEmpty()) {
+        return false
+    }
+    return oldItem.withoutMediaModels() == newItem.withoutMediaModels()
 }
 
 private fun NativeFeedAdapterItem.Post.withoutLikeBookmarkState(): NativeFeedAdapterItem.Post =
@@ -165,6 +192,21 @@ private fun SocialPostModel.withoutLikeBookmarkState(): SocialPostModel =
         row = row.withoutLikeBookmarkState(),
         actions = actions.copy(isLiked = false, isBookmarked = false),
     )
+
+private fun NativeFeedAdapterItem.Post.withoutMediaModels(): NativeFeedAdapterItem.Post =
+    copy(
+        post = post.withoutMediaModels(),
+        chainPosts = chainPosts.map(SocialPostModel::withoutMediaModels),
+    )
+
+private fun SocialPostModel.withoutMediaModels(): SocialPostModel =
+    copy(
+        media = media.copy(grid = media.grid.withoutMediaModels()),
+        quoteMedia = quoteMedia?.copy(grid = quoteMedia.grid.withoutMediaModels()),
+    )
+
+private fun FeedMediaGridModel.withoutMediaModels(): FeedMediaGridModel =
+    copy(cells = emptyList(), inventoryLoaded = false)
 
 private fun FeedRow.withoutLikeBookmarkState(): FeedRow =
     copy(

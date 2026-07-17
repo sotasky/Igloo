@@ -2,8 +2,10 @@ package com.screwy.igloo.feed
 
 import com.screwy.igloo.data.IglooDatabase
 import com.screwy.igloo.data.entity.FeedRow
+import com.screwy.igloo.media.MediaUri
 import com.screwy.igloo.net.ServerBaseUrlProvider
 import com.screwy.igloo.net.Reachability
+import com.screwy.igloo.ui.component.MediaItem
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -25,10 +27,14 @@ internal class FeedMediaModelStore(
     private val scope: CoroutineScope,
 ) {
     private val observedSpecs = MutableStateFlow<List<FeedMediaOwnerSpec>>(emptyList())
+    // Keep locally ready media available during a reverse scroll without widening the Room query.
+    private val recentLocalModels =
+        LinkedHashMap<String, FeedMediaGridModel>(FeedMediaLocalModelCacheCapacity, 0.75f, true)
 
     val mediaModels: StateFlow<Map<String, FeedMediaGridModel>> = observedSpecs
         .flatMapLatest { specs ->
             if (specs.isEmpty()) {
+                recentLocalModels.clear()
                 flowOf(emptyMap())
             } else {
                 combine(
@@ -39,15 +45,18 @@ internal class FeedMediaModelStore(
                     reachability.state,
                 ) { assetRows, reachabilityState ->
                         val rowsByOwner = assetRows.groupBy { it.ownerId }
-                        specs.associate { spec ->
-                            spec.ownerId to buildFeedMediaGridModel(
-                                ownerId = spec.ownerId,
-                                rawJson = spec.rawJson,
-                                assetRows = rowsByOwner[spec.ownerId].orEmpty(),
-                                baseUrl = baseUrlProvider.baseUrl(),
-                                allowRemote = reachabilityState is Reachability.State.Online,
-                            )
-                        }
+                        val activeModels =
+                            specs.associate { spec ->
+                                spec.ownerId to buildFeedMediaGridModel(
+                                    ownerId = spec.ownerId,
+                                    rawJson = spec.rawJson,
+                                    assetRows = rowsByOwner[spec.ownerId].orEmpty(),
+                                    baseUrl = baseUrlProvider.baseUrl(),
+                                    allowRemote = reachabilityState is Reachability.State.Online,
+                                )
+                            }
+                        retainRecentLocalModels(activeModels)
+                        recentLocalModels + activeModels
                 }
             }
         }
@@ -59,7 +68,37 @@ internal class FeedMediaModelStore(
             .flatMap(::feedMediaOwnerSpecs)
             .distinctBy { it.ownerId }
     }
+
+    private fun retainRecentLocalModels(activeModels: Map<String, FeedMediaGridModel>) {
+        activeModels.forEach { (ownerId, model) ->
+            if (model.hasOnlyLocalPreviewItems()) {
+                recentLocalModels[ownerId] = model
+            } else {
+                recentLocalModels.remove(ownerId)
+            }
+        }
+        while (recentLocalModels.size > FeedMediaLocalModelCacheCapacity) {
+            val iterator = recentLocalModels.entries.iterator()
+            iterator.next()
+            iterator.remove()
+        }
+    }
 }
+
+private const val FeedMediaLocalModelCacheCapacity = 72
+
+private fun FeedMediaGridModel.hasOnlyLocalPreviewItems(): Boolean =
+    cells.isNotEmpty() &&
+        cells.all { cell ->
+            when (val item = cell.previewItem) {
+                is MediaItem.Image -> item.uri is MediaUri.Local
+                is MediaItem.Video ->
+                    item.streamUri is MediaUri.Local &&
+                        (item.thumbnailUri is MediaUri.Local || item.thumbnailUri is MediaUri.Missing)
+                is MediaItem.Gif -> item.streamUri is MediaUri.Local
+                null -> false
+            }
+        }
 
 internal data class FeedMediaOwnerSpec(
     val ownerId: String,
