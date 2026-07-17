@@ -457,5 +457,6 @@ private fun shouldShowScaffoldBackButton(
         RouteRegistry.Moments.route,
         RouteRegistry.Bookmarks.route,
         RouteRegistry.Liked.route,
+        RouteRegistry.Downloaded.route,
     )
 }

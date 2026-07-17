@@ -12,6 +12,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavController
+import com.screwy.igloo.R
 import com.screwy.igloo.sync.OfflineVideoActions
 import com.screwy.igloo.ui.UiStateSwitch
 import com.screwy.igloo.ui.component.DeleteDownloadedVideoDialog
@@ -23,17 +24,14 @@ import kotlinx.coroutines.launch
 import org.koin.androidx.compose.koinViewModel
 import org.koin.compose.koinInject
 
-/**
- * YouTube long-form videos tab.
- * `videos` — vertically paged Room grid; pull-to-refresh triggers the YouTube sync stream.
- */
+/** Device downloads and server-temporary videos, displayed with the standard video grid. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun VideosRoute(
+fun DownloadedRoute(
     navController: NavController,
     modifier: Modifier = Modifier,
 ) {
-    val vm: VideosViewModel = koinViewModel()
+    val vm: DownloadedVideosViewModel = koinViewModel()
     val items by vm.items.collectAsStateWithLifecycle()
     val uiState by vm.uiState.collectAsStateWithLifecycle()
     val isRefreshing by vm.isRefreshing.collectAsStateWithLifecycle()
@@ -54,10 +52,10 @@ fun VideosRoute(
                 items = items,
                 columns = 2,
                 onVideoClick = { videoId ->
-                    navigator.openVideo(videoId, IglooNavigationSource.Videos)
+                    navigator.openVideo(videoId, IglooNavigationSource.Downloaded)
                 },
                 onChannelClick = { channelId ->
-                    navigator.openChannel(channelId, IglooNavigationSource.Videos)
+                    navigator.openChannel(channelId, IglooNavigationSource.Downloaded)
                 },
                 onVideoLongClick = { videoId, action ->
                     when (action) {

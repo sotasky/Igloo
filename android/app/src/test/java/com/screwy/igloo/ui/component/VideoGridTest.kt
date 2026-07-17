@@ -2,6 +2,7 @@ package com.screwy.igloo.ui.component
 
 import com.screwy.igloo.data.entity.VideoEntity
 import com.screwy.igloo.data.entity.VideoGridItem
+import com.screwy.igloo.media.MediaUri
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
@@ -118,6 +119,19 @@ class VideoGridTest {
                 )
             ),
         )
+    }
+
+    @Test
+    fun video_binary_action_uses_only_the_primary_stream_location() {
+        assertEquals(
+            VideoBinaryAction.Delete,
+            videoBinaryAction(MediaUri.Local(java.io.File("/media/video.mp4"))),
+        )
+        assertEquals(
+            VideoBinaryAction.Download,
+            videoBinaryAction(MediaUri.Remote("https://igloo.example/video")),
+        )
+        assertEquals(VideoBinaryAction.Unavailable, videoBinaryAction(MediaUri.Missing))
     }
 
     @Test

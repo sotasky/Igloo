@@ -91,7 +91,7 @@ interface VideoDao {
     @Query(
         """
         SELECT video_id FROM videos
-        WHERE channel_id LIKE 'youtube_%'
+        WHERE owner_kind = 'youtube_video'
           AND (
                 published_at < (SELECT published_at FROM videos WHERE video_id = :videoId)
                 OR (
@@ -108,7 +108,7 @@ interface VideoDao {
     @Query(
         """
         SELECT video_id FROM videos
-        WHERE channel_id LIKE 'youtube_%'
+        WHERE owner_kind = 'youtube_video'
           AND (
                 published_at > (SELECT published_at FROM videos WHERE video_id = :videoId)
                 OR (
@@ -530,6 +530,9 @@ interface MomentsCursorDao {
 
     @Query("DELETE FROM moments_cursors WHERE scope = :scope")
     suspend fun delete(scope: String)
+
+    @Query("DELETE FROM moments_cursors WHERE video_id = :videoId")
+    suspend fun deleteForVideo(videoId: String)
 
     @Query("DELETE FROM moments_cursors")
     suspend fun deleteAll()

@@ -8,6 +8,14 @@ import com.screwy.igloo.data.entity.AndroidSyncHeadEntity
 import com.screwy.igloo.data.entity.AndroidSyncStateEntity
 import kotlinx.coroutines.flow.Flow
 
+/** SQL predicate for the locally playable primary binary of a YouTube video. */
+internal const val youtubeVideoPrimaryAssetSql =
+    """(
+       asset_kind = 'video_stream'
+       OR (asset_kind = 'post_media' AND LOWER(COALESCE(content_type, '')) LIKE 'video/%')
+       OR (asset_kind = 'post_audio' AND LOWER(COALESCE(content_type, '')) LIKE 'audio/%')
+    )"""
+
 data class AndroidSyncHealthCounts(
     val total: Int,
     val verified: Int,
@@ -46,11 +54,18 @@ interface AndroidSyncDao {
     )
     suspend fun deleteHead(ownerKind: String, ownerId: String)
 
+    @Query("DELETE FROM android_sync_heads WHERE owner_id = :ownerId")
+    suspend fun deleteHeadsForOwnerId(ownerId: String)
+
     @Query(
         """
         SELECT * FROM android_sync_heads
         WHERE (retention_bucket = 'feed' AND (:feedDays = 0 OR retain_at_ms <= :feedCutoffMs))
-           OR (retention_bucket = 'youtube' AND (:youtubeDays = 0 OR retain_at_ms <= :youtubeCutoffMs))
+           OR (
+                retention_bucket = 'youtube'
+                AND owner_kind != 'video'
+                AND (:youtubeDays = 0 OR retain_at_ms <= :youtubeCutoffMs)
+              )
            OR (retention_bucket = 'moments' AND (:momentsDays = 0 OR retain_at_ms <= :momentsCutoffMs))
            OR (retention_bucket = 'story' AND (:storyHours = 0 OR retain_at_ms <= :storyCutoffMs))
         ORDER BY owner_kind, owner_id
@@ -131,6 +146,15 @@ interface AndroidSyncDao {
     @Query(
         """
         SELECT * FROM android_sync_assets
+        WHERE owner_kind = :ownerKind AND owner_id = :ownerId
+        ORDER BY media_index, asset_id
+        """,
+    )
+    suspend fun assetsForOwner(ownerKind: String, ownerId: String): List<AndroidSyncAssetEntity>
+
+    @Query(
+        """
+        SELECT * FROM android_sync_assets
         WHERE owner_kind = :ownerKind AND owner_id IN (:ownerIds)
           AND (state != 'server_missing' OR local_path IS NOT NULL)
         ORDER BY owner_id, media_index, asset_id
@@ -140,6 +164,18 @@ interface AndroidSyncDao {
         ownerKind: String,
         ownerIds: List<String>,
     ): Flow<List<AndroidSyncAssetEntity>>
+
+    @Query(
+        """
+        SELECT * FROM android_sync_assets
+        WHERE owner_kind = 'youtube_video'
+          AND owner_id = :videoId
+          AND ${youtubeVideoPrimaryAssetSql}
+          AND local_path IS NOT NULL
+        ORDER BY media_index, asset_id
+        """,
+    )
+    suspend fun localYoutubeVideoPrimaryAssets(videoId: String): List<AndroidSyncAssetEntity>
 
     @Query("SELECT DISTINCT local_path FROM android_sync_assets WHERE local_path IS NOT NULL")
     suspend fun verifiedLocalPaths(): List<String>
@@ -173,6 +209,39 @@ interface AndroidSyncDao {
         """
         UPDATE android_sync_assets
         SET local_path = NULL, verified_at_ms = NULL, next_attempt_at_ms = 0
+        WHERE owner_kind = 'youtube_video'
+          AND owner_id = :videoId
+          AND ${youtubeVideoPrimaryAssetSql}
+          AND local_path IS NOT NULL
+        """,
+    )
+    suspend fun resetVerifiedLocalPathsForYoutubeVideoPrimaryAssets(videoId: String): Int
+
+    @Query(
+        """
+        UPDATE android_sync_assets
+        SET local_path = NULL, verified_at_ms = NULL, next_attempt_at_ms = 0
+        WHERE asset_id IN (:assetIds) AND local_path IS NOT NULL
+        """,
+    )
+    suspend fun resetVerifiedLocalPaths(assetIds: List<String>): Int
+
+    @Query(
+        """
+        UPDATE android_sync_assets
+        SET next_attempt_at_ms = 0
+        WHERE owner_kind = 'youtube_video'
+          AND owner_id = :videoId
+          AND ${youtubeVideoPrimaryAssetSql}
+          AND state = 'ready'
+        """,
+    )
+    suspend fun prioritizeYoutubeVideoPrimaryAssets(videoId: String): Int
+
+    @Query(
+        """
+        UPDATE android_sync_assets
+        SET local_path = NULL, verified_at_ms = NULL, next_attempt_at_ms = 0
         WHERE local_path IS NOT NULL AND (:bucket IS NULL OR bucket = :bucket)
         """,
     )
@@ -180,21 +249,124 @@ interface AndroidSyncDao {
 
     @Query(
         """
-        SELECT * FROM android_sync_assets
-        WHERE state = 'ready' AND local_path IS NULL AND next_attempt_at_ms <= :nowMs
-        ORDER BY asset_id LIMIT :limit
+        SELECT asa.*
+        FROM android_sync_assets asa
+        WHERE asa.state = 'ready'
+          AND asa.local_path IS NULL
+          AND asa.next_attempt_at_ms <= :nowMs
+          AND (
+            NOT ${youtubeVideoPrimaryAssetSql}
+            OR asa.owner_kind != 'youtube_video'
+            OR EXISTS (
+              SELECT 1 FROM offline_video_downloads saved
+              WHERE saved.video_id = asa.owner_id
+                AND saved.state IN ('requested', 'downloaded')
+            )
+            OR (
+              NOT EXISTS (
+                SELECT 1 FROM offline_video_downloads removed
+                WHERE removed.video_id = asa.owner_id AND removed.state = 'removed'
+              )
+              AND EXISTS (
+                SELECT 1
+                FROM videos v
+                WHERE v.video_id = asa.owner_id
+                  AND COALESCE(v.is_temp, 0) = 0
+                  AND v.published_at >= :youtubeCutoffMs
+              )
+            )
+          )
+        ORDER BY
+          CASE WHEN asa.owner_kind = 'youtube_video'
+                  AND ${youtubeVideoPrimaryAssetSql}
+                  AND EXISTS (
+                    SELECT 1 FROM offline_video_downloads requested
+                    WHERE requested.video_id = asa.owner_id AND requested.state = 'requested'
+                  )
+               THEN 0 ELSE 1 END,
+          asa.asset_id
+        LIMIT :limit
         """,
     )
-    suspend fun claimableAssets(nowMs: Long, limit: Int): List<AndroidSyncAssetEntity>
+    suspend fun claimableAssets(
+        nowMs: Long,
+        youtubeCutoffMs: Long,
+        limit: Int,
+    ): List<AndroidSyncAssetEntity>
+
+    @Query(
+        """
+        SELECT asa.*
+        FROM android_sync_assets asa
+        JOIN videos v ON v.video_id = asa.owner_id
+        WHERE asa.owner_kind = 'youtube_video'
+          AND ${youtubeVideoPrimaryAssetSql}
+          AND asa.local_path IS NOT NULL
+          AND NOT EXISTS (
+            SELECT 1 FROM offline_video_downloads saved
+            WHERE saved.video_id = asa.owner_id
+              AND saved.state IN ('requested', 'downloaded')
+          )
+          AND (
+            COALESCE(v.is_temp, 0) = 1
+            OR v.published_at < :youtubeCutoffMs
+          )
+        ORDER BY asa.asset_id
+        """,
+    )
+    suspend fun expiredAutomaticYoutubeVideoPrimaryAssets(youtubeCutoffMs: Long): List<AndroidSyncAssetEntity>
 
     @Query(
         """
         UPDATE android_sync_assets
         SET local_path = :localPath, verified_at_ms = :nowMs, next_attempt_at_ms = 0
         WHERE asset_id = :assetId AND revision = :revision AND state = 'ready'
+          AND NOT (
+            owner_kind = 'youtube_video'
+            AND ${youtubeVideoPrimaryAssetSql}
+            AND EXISTS (
+              SELECT 1 FROM offline_video_downloads removed
+              WHERE removed.video_id = android_sync_assets.owner_id
+                AND removed.state = 'removed'
+            )
+          )
         """,
     )
-    suspend fun markVerified(assetId: String, revision: Long, localPath: String, nowMs: Long)
+    suspend fun markVerified(assetId: String, revision: Long, localPath: String, nowMs: Long): Int
+
+    @Query(
+        """
+        UPDATE offline_video_downloads
+        SET state = 'downloaded', updated_at_ms = :nowMs
+        WHERE video_id = :videoId AND state = 'requested'
+        """,
+    )
+    suspend fun markOfflineYoutubeVideoDownloaded(videoId: String, nowMs: Long): Int
+
+    @Query(
+        """
+        UPDATE offline_video_downloads
+        SET state = 'removed', updated_at_ms = :nowMs
+        WHERE state IN ('requested', 'downloaded')
+          AND video_id IN (
+            SELECT owner_id
+            FROM android_sync_assets
+            WHERE owner_kind = 'youtube_video'
+              AND ${youtubeVideoPrimaryAssetSql}
+              AND (:bucket IS NULL OR bucket = :bucket)
+          )
+        """,
+    )
+    suspend fun markOfflineYoutubeDownloadsRemovedForPrimaryAssets(bucket: String?, nowMs: Long): Int
+
+    @Query(
+        """
+        UPDATE offline_video_downloads
+        SET state = 'removed', updated_at_ms = :nowMs
+        WHERE video_id = :videoId AND state IN ('requested', 'downloaded')
+        """,
+    )
+    suspend fun markOfflineYoutubeDownloadRemoved(videoId: String, nowMs: Long): Int
 
     @Query(
         """
@@ -233,6 +405,16 @@ interface AndroidSyncDao {
         WITH RECURSIVE protected(owner_id) AS (
             SELECT tweet_id FROM feed_likes
             UNION SELECT video_id FROM bookmarks
+            UNION
+            SELECT saved.video_id
+            FROM offline_video_downloads saved
+            JOIN videos v ON v.video_id = saved.video_id
+            JOIN android_sync_assets asa
+              ON asa.owner_id = saved.video_id
+             AND asa.owner_kind = 'youtube_video'
+             AND ${youtubeVideoPrimaryAssetSql}
+             AND asa.local_path IS NOT NULL
+            WHERE saved.state = 'downloaded' AND COALESCE(v.is_temp, 0) = 0
             UNION
             SELECT fi.reply_to_status
             FROM feed_items fi

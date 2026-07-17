@@ -56,6 +56,9 @@ interface OutboxDao {
     @Query("DELETE FROM outbox WHERE state = 'pending' AND kind = :kind")
     suspend fun deleteAllPendingOfKind(kind: String): Int
 
+    @Query("DELETE FROM outbox WHERE item_id = :itemId")
+    suspend fun deleteForItemId(itemId: String): Int
+
     // ─── Claim + drain path ───────────────────────────────────────────────────
 
     /**

@@ -166,7 +166,7 @@ func (s *Server) androidSyncProductHealth(now time.Time) (string, map[string]any
 	}
 
 	cursor, cursorErr := decodeAndroidSyncCursor(health.Cursor)
-	if cursorErr != nil || cursor.Mode != "changes" || cursor.Version != androidSyncModelVersion || cursor.Epoch != clock.Epoch {
+	if cursorErr != nil || cursor.Mode != "changes" || !androidSyncModelVersionSupported(cursor.Version) || cursor.Epoch != clock.Epoch {
 		check["status"] = productHealthStatusUnhealthy
 		check["reason"] = productHealthReasonStale
 		return productHealthStatusUnhealthy, check

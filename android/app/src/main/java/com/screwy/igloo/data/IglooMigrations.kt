@@ -80,4 +80,29 @@ object IglooMigrations {
                 )
             }
         }
+
+    val MIGRATION_41_42 =
+        object : Migration(41, 42) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE `videos` ADD COLUMN `is_temp` INTEGER NOT NULL DEFAULT 0",
+                )
+                db.execSQL(
+                    """
+                    CREATE INDEX IF NOT EXISTS `idx_videos_owner_published`
+                    ON `videos` (`owner_kind` ASC, `published_at` DESC, `video_id` DESC)
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `offline_video_downloads` (
+                        `video_id` TEXT NOT NULL,
+                        `state` TEXT NOT NULL,
+                        `updated_at_ms` INTEGER NOT NULL,
+                        PRIMARY KEY(`video_id`)
+                    )
+                    """.trimIndent(),
+                )
+            }
+        }
 }

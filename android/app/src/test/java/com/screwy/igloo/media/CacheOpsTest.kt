@@ -4,6 +4,7 @@ import com.screwy.igloo.data.IglooDatabase
 import com.screwy.igloo.data.PreferencesRepo
 import com.screwy.igloo.data.RoomTestSupport
 import com.screwy.igloo.data.entity.AndroidSyncAssetEntity
+import com.screwy.igloo.data.entity.OfflineVideoDownloadEntity
 import com.screwy.igloo.log.InMemoryLogSink
 import com.screwy.igloo.log.Logger
 import java.io.File
@@ -108,6 +109,45 @@ class CacheOpsTest {
     }
 
     @Test
+    fun clearingManualYoutubePrimaryBytesMarksTheDownloadRemoved() = runBlocking {
+        val stream = assetFile("youtube_videos/manual.mp4", 5)
+        insertAsset(
+            assetId = "manual_stream",
+            ownerKind = "youtube_video",
+            ownerId = "sample_video",
+            bucket = "youtube_videos",
+            file = stream,
+            assetKind = "video_stream",
+        )
+        db.offlineVideoDownloadDao().upsert(
+            OfflineVideoDownloadEntity("sample_video", state = "downloaded", updatedAtMs = 1L),
+        )
+
+        buildCacheOps().clearCache("youtube_videos")
+
+        assertFalse(stream.exists())
+        assertEquals("removed", db.offlineVideoDownloadDao().get("sample_video")?.state)
+    }
+
+    @Test
+    fun clearingYoutubeCacheCancelsARequestedDownloadBeforeItHasBytes() = runBlocking {
+        insertAsset(
+            assetId = "requested_stream",
+            ownerKind = "youtube_video",
+            ownerId = "sample_video",
+            bucket = "youtube_videos",
+            assetKind = "video_stream",
+        )
+        db.offlineVideoDownloadDao().upsert(
+            OfflineVideoDownloadEntity("sample_video", state = "requested", updatedAtMs = 1L),
+        )
+
+        buildCacheOps().clearCache("youtube_videos")
+
+        assertEquals("removed", db.offlineVideoDownloadDao().get("sample_video")?.state)
+    }
+
+    @Test
     fun outsideRootPathIsDemotedButNeverDeleted() = runBlocking {
         val outside = tmpFolder.newFile("outside.jpg")
         insertAsset("outside", "channel", "channel-1", "avatars", outside)
@@ -134,12 +174,13 @@ class CacheOpsTest {
         ownerId: String,
         bucket: String,
         file: File? = null,
+        assetKind: String = if (assetId == "avatar") "avatar" else "post_thumbnail",
     ) {
         db.androidSyncDao()
             .upsertAsset(
                 AndroidSyncAssetEntity(
                     assetId = assetId,
-                    assetKind = if (assetId == "avatar") "avatar" else "post_thumbnail",
+                    assetKind = assetKind,
                     ownerId = ownerId,
                     ownerKind = ownerKind,
                     bucket = bucket,

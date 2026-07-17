@@ -52,6 +52,11 @@ object RouteRegistry {
         chrome = feedStylePolicy(topBarTitle = TopBarTitle.Resource(R.string.nav_liked)),
     )
 
+    val Downloaded = IglooRouteSpec(
+        route = "liked/downloaded",
+        chrome = feedStylePolicy(topBarTitle = TopBarTitle.Resource(R.string.nav_downloaded)),
+    )
+
     val Channel = IglooRouteSpec(
         route = "channel/{channel_id}",
         chrome = feedStylePolicy(topBarTitle = TopBarTitle.Channel),
@@ -121,6 +126,7 @@ object RouteRegistry {
         AllMoments,
         Bookmarks,
         Liked,
+        Downloaded,
         Channel,
         Shorts,
         Media,

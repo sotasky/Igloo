@@ -79,15 +79,41 @@ class NativeMainFeedSurfaceTest {
     }
 
     @Test
-    fun nativeStableAspectRatioClampsBeforeImageLoad() {
-        assertEquals(0.55f, nativeStableSingleMediaAspectRatio(cell(0.1f)), 0.0001f)
+    fun nativeStableAspectRatioPreservesKnownImageGeometry() {
+        assertEquals(0.1f, nativeStableSingleMediaAspectRatio(cell(0.1f)), 0.0001f)
         assertEquals(1.25f, nativeStableSingleMediaAspectRatio(cell(1.25f)), 0.0001f)
-        assertEquals(2.4f, nativeStableSingleMediaAspectRatio(cell(9f)), 0.0001f)
+        assertEquals(9f, nativeStableSingleMediaAspectRatio(cell(9f)), 0.0001f)
         assertEquals(1f, nativeStableSingleMediaAspectRatio(cell(1.7f, known = false)), 0.0001f)
         assertEquals(
             16f / 9f,
             nativeStableSingleMediaAspectRatio(cell(1f, known = false, isVideo = true)),
             0.0001f,
+        )
+    }
+
+    @Test
+    fun nativeSingleMediaDimensionsKeepWideQuoteImagesCompact() {
+        val aspectRatio = 3.5f
+
+        assertEquals(
+            NativeMediaDimensions(widthPx = 1109, heightPx = 317),
+            nativeSingleMediaDimensions(
+                maxWidthPx = 1112,
+                aspectRatio = aspectRatio,
+                maxHeightPx = 1680,
+            ),
+        )
+        assertEquals(
+            NativeMediaDimensions(widthPx = 1064, heightPx = 304),
+            nativeSingleMediaDimensions(
+                maxWidthPx = 1064,
+                aspectRatio = aspectRatio,
+                maxHeightPx = 1680,
+            ),
+        )
+        assertEquals(
+            1064,
+            nativeQuoteMediaGridWidthPx(mediaGridWidthPx = 1112, horizontalPaddingPx = 24),
         )
     }
 

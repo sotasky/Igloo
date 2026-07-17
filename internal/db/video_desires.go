@@ -402,7 +402,7 @@ func reconcileVideoOwnerTx(tx *sql.Tx, item VideoDesire, sourceComponent string)
 		if item.OwnerAuthoritative || storyDesire || strings.HasPrefix(existingOwner, "playlist_") || isTemp || sourceKind == "story" {
 			canonicalOwner = item.OwnerChannelID
 		}
-		_, err = tx.Exec(`
+		res, err := tx.Exec(`
 			UPDATE videos
 			SET channel_id = ?, is_temp = 0,
 			    source_kind = CASE
@@ -415,8 +415,22 @@ func reconcileVideoOwnerTx(tx *sql.Tx, item VideoDesire, sourceComponent string)
 			       OR (? AND COALESCE(source_kind, '') != 'story')
 			       OR (NOT ? AND COALESCE(source_kind, '') = 'story'))
 		`, canonicalOwner, storyDesire, item.VideoID, canonicalOwner, storyDesire, storyDesire)
-		if err != nil || ready {
-			return ready, "", canonicalOwner, err
+		if err != nil {
+			return false, "", canonicalOwner, err
+		}
+		if isTemp {
+			changed, err := res.RowsAffected()
+			if err != nil {
+				return false, "", canonicalOwner, err
+			}
+			if changed > 0 {
+				if err := touchAndroidSyncHeadTx(tx, "video", item.VideoID); err != nil {
+					return false, "", canonicalOwner, err
+				}
+			}
+		}
+		if ready {
+			return true, "", canonicalOwner, nil
 		}
 	}
 
@@ -766,6 +780,32 @@ func (db *DB) MaintainVideoRetention(nowMs int64) (int, error) {
 				return err
 			}
 		}
+		expiredRows, err := tx.Query(`
+			SELECT video_id
+			FROM videos
+			WHERE COALESCE(is_pinned, 0) = 0
+			  AND COALESCE(is_temp, 0) = 1
+			  AND downloaded_at > 0 AND downloaded_at < ?
+		`, tempCutoffMs)
+		if err != nil {
+			return err
+		}
+		var expiredTemporaryVideoIDs []string
+		for expiredRows.Next() {
+			var videoID string
+			if err := expiredRows.Scan(&videoID); err != nil {
+				_ = expiredRows.Close()
+				return err
+			}
+			expiredTemporaryVideoIDs = append(expiredTemporaryVideoIDs, videoID)
+		}
+		if err := expiredRows.Err(); err != nil {
+			_ = expiredRows.Close()
+			return err
+		}
+		if err := expiredRows.Close(); err != nil {
+			return err
+		}
 		if _, err := tx.Exec(`
 			UPDATE videos
 			SET is_temp = CASE
@@ -782,6 +822,11 @@ func (db *DB) MaintainVideoRetention(nowMs int64) (int, error) {
 		`, tempCutoffMs, storyCutoffMs, storyCutoffMs,
 			tempCutoffMs, storyCutoffMs, storyCutoffMs); err != nil {
 			return err
+		}
+		for _, videoID := range expiredTemporaryVideoIDs {
+			if err := touchAndroidSyncHeadTx(tx, "video", videoID); err != nil {
+				return err
+			}
 		}
 		if _, err := tx.Exec(`
 			DELETE FROM download_queue

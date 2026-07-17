@@ -105,15 +105,17 @@ class AppDrawerTest {
         assertTrue(drawerDestinationSelected(RouteRegistry.Shorts.route, IglooDestination.Moments))
         assertTrue(drawerDestinationSelected(RouteRegistry.Bookmarks.route, IglooDestination.Bookmarks))
         assertTrue(drawerDestinationSelected(RouteRegistry.Liked.route, IglooDestination.Liked))
+        assertTrue(drawerDestinationSelected(RouteRegistry.Downloaded.route, IglooDestination.Downloaded))
         assertTrue(drawerDestinationSelected(RouteRegistry.PlaybackSettings.route, IglooDestination.Settings))
         assertTrue(drawerDestinationSelected(RouteRegistry.OutboxLogs.route, IglooDestination.Logs))
         assertFalse(drawerDestinationSelected(RouteRegistry.Videos.route, IglooDestination.Liked))
+        assertFalse(drawerDestinationSelected(RouteRegistry.Liked.route, IglooDestination.Downloaded))
     }
 
     @Test
     fun compact_drawer_keeps_liked_while_wide_drawer_shows_all_primary_destinations() {
         assertEquals(
-            listOf(IglooDestination.Liked),
+            listOf(IglooDestination.Liked, IglooDestination.Downloaded),
             drawerPrimaryDestinations(widePrimaryNavigation = false),
         )
         assertEquals(
@@ -123,6 +125,7 @@ class AppDrawerTest {
                 IglooDestination.Moments,
                 IglooDestination.Bookmarks,
                 IglooDestination.Liked,
+                IglooDestination.Downloaded,
             ),
             drawerPrimaryDestinations(widePrimaryNavigation = true),
         )

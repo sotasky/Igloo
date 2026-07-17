@@ -41,7 +41,7 @@ internal class AndroidSyncAssetDrainer(
 ) {
     private val syncRoot = File(mediaRoot, "sync").apply { mkdirs() }
 
-    suspend fun drain() {
+    suspend fun drain(youtubeCutoffMs: Long) {
         var downloaded = 0
         var verifiedExisting = 0
         var deferred = 0
@@ -51,7 +51,11 @@ internal class AndroidSyncAssetDrainer(
         try {
             while (!stale) {
                 val assets =
-                    dao.claimableAssets(claimableBeforeMs, ASSET_CLAIM_BATCH_SIZE)
+                    dao.claimableAssets(
+                        nowMs = claimableBeforeMs,
+                        youtubeCutoffMs = youtubeCutoffMs,
+                        limit = ASSET_CLAIM_BATCH_SIZE,
+                    )
                 if (assets.isEmpty()) break
                 if (!promoted) {
                     foregroundPromoter.startDownloading(listOf(SYNC_DRAIN_TOKEN))
@@ -213,7 +217,14 @@ internal class AndroidSyncAssetDrainer(
     }
 
     private suspend fun markVerified(asset: AndroidSyncAssetEntity, file: File) {
-        dao.markVerified(asset.assetId, asset.revision, file.absolutePath, nowMsProvider())
+        val nowMs = nowMsProvider()
+        if (dao.markVerified(asset.assetId, asset.revision, file.absolutePath, nowMs) == 0) {
+            file.delete()
+            return
+        }
+        if (asset.ownerKind == "youtube_video" && asset.isYoutubeVideoPrimaryBinary()) {
+            dao.markOfflineYoutubeVideoDownloaded(asset.ownerId, nowMs)
+        }
     }
 
     private suspend fun defer(asset: AndroidSyncAssetEntity, changed: Boolean = false): DrainResult {

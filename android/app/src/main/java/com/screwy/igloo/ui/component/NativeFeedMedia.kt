@@ -226,7 +226,7 @@ internal fun nativeVisibleHeightFraction(bounds: Rect, viewportHeight: Int): Flo
 
 internal fun nativeStableSingleMediaAspectRatio(cell: com.screwy.igloo.feed.FeedMediaCellDescriptor): Float =
     when {
-        cell.aspectRatioKnown -> cell.aspectRatio.coerceIn(0.55f, 2.4f)
+        cell.aspectRatioKnown -> cell.aspectRatio.takeIf { it.isFinite() && it > 0f } ?: 1f
         cell.isVideo -> 16f / 9f
         else -> 1f
     }
@@ -240,15 +240,16 @@ internal data class NativeMediaDimensions(
 )
 
 internal fun nativeSingleMediaDimensions(
-    context: Context,
+    maxWidthPx: Int,
     aspectRatio: Float,
+    maxHeightPx: Int = dp(560),
 ): NativeMediaDimensions {
-    val safeRatio = aspectRatio.coerceIn(0.55f, 2.4f)
-    val maxWidth = nativeMediaGridWidthPx(context)
-    val maxHeight = dp(560)
+    val safeRatio = aspectRatio.takeIf { it.isFinite() && it > 0f } ?: 1f
+    val maxWidth = maxWidthPx.coerceAtLeast(1)
+    val maxHeight = maxHeightPx.coerceAtLeast(1)
     val fullWidthHeight = (maxWidth / safeRatio).toInt()
-    val height = fullWidthHeight.coerceAtMost(maxHeight).coerceAtLeast(dp(1))
-    val width = (height * safeRatio).toInt().coerceAtMost(maxWidth).coerceAtLeast(dp(1))
+    val height = fullWidthHeight.coerceAtMost(maxHeight).coerceAtLeast(1)
+    val width = (height * safeRatio).toInt().coerceAtMost(maxWidth).coerceAtLeast(1)
     return NativeMediaDimensions(widthPx = width, heightPx = height)
 }
 
@@ -276,6 +277,12 @@ internal fun nativeMultiMediaCellDimensions(
 
 internal fun nativeMediaGridWidthPx(context: Context): Int =
     (context.resources.displayMetrics.widthPixels - dp(36)).coerceAtLeast(dp(160))
+
+internal fun nativeQuoteMediaGridWidthPx(
+    mediaGridWidthPx: Int,
+    horizontalPaddingPx: Int,
+): Int =
+    (mediaGridWidthPx - horizontalPaddingPx * 2).coerceAtLeast(1)
 
 internal fun nativeMediaScaleTypeFor(
     cell: com.screwy.igloo.feed.FeedMediaCellDescriptor,

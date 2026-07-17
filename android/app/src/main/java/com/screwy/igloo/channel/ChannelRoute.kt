@@ -11,6 +11,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.res.stringResource
@@ -27,6 +29,7 @@ import com.screwy.igloo.data.entity.ThreadedFeedRow
 import com.screwy.igloo.feed.FeedMediaGridModel
 import com.screwy.igloo.feed.SocialPostModel
 import com.screwy.igloo.feed.buildProfileOpenSnapshot
+import com.screwy.igloo.sync.OfflineVideoActions
 import com.screwy.igloo.ui.UiState
 import com.screwy.igloo.ui.UiStateSwitch
 import com.screwy.igloo.ui.component.BookmarkCategoryDisplay
@@ -34,10 +37,12 @@ import com.screwy.igloo.ui.component.BookmarkTarget
 import com.screwy.igloo.ui.component.ChannelProfileHeaderLabels
 import com.screwy.igloo.ui.component.ChannelProfileHeaderUiModel
 import com.screwy.igloo.ui.component.ComposeChannelHeader
+import com.screwy.igloo.ui.component.DeleteDownloadedVideoDialog
 import com.screwy.igloo.ui.component.MomentThumbnailItem
 import com.screwy.igloo.ui.component.MomentsGrid
 import com.screwy.igloo.ui.component.NativeFeedSurface
 import com.screwy.igloo.ui.component.Platform
+import com.screwy.igloo.ui.component.VideoBinaryAction
 import com.screwy.igloo.ui.component.VideoGrid
 import com.screwy.igloo.ui.component.channelProfileHeaderUiModel
 import com.screwy.igloo.ui.component.channelProfileOverflowControls
@@ -48,8 +53,10 @@ import com.screwy.igloo.ui.nav.IglooNavigationSource
 import com.screwy.igloo.ui.nav.OverlayChromeState
 import com.screwy.igloo.ui.nav.ProfileOpenSnapshot
 import com.screwy.igloo.ui.nav.rememberIglooNavigator
+import kotlinx.coroutines.launch
 import org.koin.androidx.compose.koinViewModel
 import org.koin.core.parameter.parametersOf
+import org.koin.compose.koinInject
 
 /**
  * Per-channel page with a platform-dispatched body. Twitter channels use the
@@ -83,7 +90,10 @@ fun ChannelRoute(
     val repostsEnabled by vm.repostsEnabled.collectAsStateWithLifecycle()
     val isChannelMuted by vm.isChannelMuted.collectAsStateWithLifecycle()
     var confirmUnfollow by remember { mutableStateOf(false) }
+    var deleteVideoId by rememberSaveable { mutableStateOf<String?>(null) }
+    val offlineVideoActions: OfflineVideoActions = koinInject()
     val navigator = rememberIglooNavigator(navController)
+    val scope = rememberCoroutineScope()
 
     ApplyOverlayChrome(
         if (pendingBookmark != null) {
@@ -244,6 +254,15 @@ fun ChannelRoute(
                     onChannelClick = { cid ->
                         navigator.openChannel(cid, IglooNavigationSource.Channel)
                     },
+                    onVideoLongClick = { videoId, action ->
+                        when (action) {
+                            VideoBinaryAction.Download -> {
+                                scope.launch { offlineVideoActions.requestDownload(videoId) }
+                            }
+                            VideoBinaryAction.Delete -> deleteVideoId = videoId
+                            VideoBinaryAction.Unavailable -> Unit
+                        }
+                    },
                 )
             }
             null -> androidx.compose.foundation.layout.Column(modifier = Modifier.fillMaxSize()) {
@@ -288,6 +307,15 @@ fun ChannelRoute(
             },
         )
     }
+
+    DeleteDownloadedVideoDialog(
+        videoId = deleteVideoId,
+        onDismiss = { deleteVideoId = null },
+        onConfirm = { videoId ->
+            deleteVideoId = null
+            scope.launch { offlineVideoActions.removeDownload(videoId) }
+        },
+    )
 }
 
 /** Twitter body — channel-scoped native feed rows with a native header item. */
@@ -407,6 +435,7 @@ private fun ChannelVideosBody(
     headerContent: @Composable () -> Unit,
     onVideoClick: (String) -> Unit,
     onChannelClick: (String) -> Unit,
+    onVideoLongClick: (videoId: String, action: VideoBinaryAction) -> Unit,
 ) {
     val videos by vm.videos.collectAsStateWithLifecycle()
     VideoGrid(
@@ -414,6 +443,7 @@ private fun ChannelVideosBody(
         columns = 2,
         onVideoClick = onVideoClick,
         onChannelClick = onChannelClick,
+        onVideoLongClick = onVideoLongClick,
         headerContent = headerContent,
     )
 }

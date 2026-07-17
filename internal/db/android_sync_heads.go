@@ -1,6 +1,10 @@
 package db
 
 import (
+	"database/sql"
+	"fmt"
+	"strings"
+
 	"github.com/screwys/igloo/internal/model"
 )
 
@@ -60,30 +64,54 @@ func (db *DB) ListAndroidSyncHeadsThrough(afterRevision, throughRevision int64, 
 	return out, rows.Err()
 }
 
-// ListAndroidSyncContentHeadsThrough returns only heads which can change the
-// retained feed, video, or rank selection for an incremental sync session.
-func (db *DB) ListAndroidSyncContentHeadsThrough(afterRevision, throughRevision int64) ([]model.AndroidSyncHead, error) {
-	if afterRevision < 0 {
-		afterRevision = 0
+// touchAndroidSyncHeadTx records a change that is intentionally not covered by
+// the schema-maintained payload triggers. Callers must use it only after the
+// owning row changed in the same write transaction.
+func touchAndroidSyncHeadTx(tx *sql.Tx, ownerKind, ownerID string) error {
+	ownerKind = strings.TrimSpace(ownerKind)
+	ownerID = strings.TrimSpace(ownerID)
+	if ownerKind == "" || ownerID == "" {
+		return fmt.Errorf("android sync head needs owner kind and id")
 	}
-	rows, err := db.reader().Query(`
-		SELECT owner_kind, owner_id, revision
-		FROM android_sync_heads
-		WHERE revision > ? AND revision <= ?
-		  AND owner_kind IN ('feed', 'video', 'feed_rank', 'retweet_sources')
-		ORDER BY revision
-	`, afterRevision, throughRevision)
-	if err != nil {
-		return nil, err
+	if _, err := tx.Exec(`
+		UPDATE android_sync_clock
+		SET revision = revision + 1
+		WHERE id = 1
+	`); err != nil {
+		return fmt.Errorf("advance android sync clock: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
-	out := make([]model.AndroidSyncHead, 0)
-	for rows.Next() {
-		var head model.AndroidSyncHead
-		if err := rows.Scan(&head.OwnerKind, &head.OwnerID, &head.Revision); err != nil {
+	if _, err := tx.Exec(`
+		INSERT INTO android_sync_heads (owner_kind, owner_id, revision)
+		VALUES (?, ?, (SELECT revision FROM android_sync_clock WHERE id = 1))
+		ON CONFLICT(owner_kind, owner_id) DO UPDATE SET
+			revision = excluded.revision
+	`, ownerKind, ownerID); err != nil {
+		return fmt.Errorf("touch android sync head %s/%s: %w", ownerKind, ownerID, err)
+	}
+	return nil
+}
+
+// ListAndroidSyncVideoIDsForAssetIDs finds video owners whose current primary
+// asset changed. It lets readiness transitions re-evaluate the video library
+// without adding another persistent trigger to the server schema.
+func (db *DB) ListAndroidSyncVideoIDsForAssetIDs(assetIDs []string) ([]string, error) {
+	assetIDs = uniqueStrings(assetIDs)
+	if len(assetIDs) == 0 {
+		return nil, nil
+	}
+	selected := make(map[string]struct{})
+	for _, chunk := range stringChunks(assetIDs, androidSyncProjectionChunkSize) {
+		if err := db.collectStrings(`
+			SELECT v.video_id
+			FROM assets a
+			JOIN videos v
+			  ON v.owner_kind = a.owner_kind
+			 AND v.video_id = a.owner_id
+			WHERE a.asset_id IN (`+placeholders(len(chunk))+`)
+			  AND a.asset_kind IN ('video_stream', 'post_media', 'post_audio')
+		`, stringsToAny(chunk), selected); err != nil {
 			return nil, err
 		}
-		out = append(out, head)
 	}
-	return out, rows.Err()
+	return sortedKeys(selected), nil
 }

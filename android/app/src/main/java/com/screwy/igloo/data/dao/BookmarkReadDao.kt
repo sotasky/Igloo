@@ -112,6 +112,7 @@ interface BookmarkReadDao {
             v.description                  AS vd_description,
             v.duration                     AS vd_duration,
             v.published_at                 AS vd_published_at,
+            v.is_temp                      AS vd_is_temp,
             v.media_kind                   AS vd_media_kind,
             v.slide_count                  AS vd_slide_count,
             v.source_kind                  AS vd_source_kind,

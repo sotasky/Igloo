@@ -87,6 +87,11 @@ data class FeedItemEntity(
             orders = [Index.Order.ASC, Index.Order.DESC],
             name = "idx_videos_source_kind",
         ),
+        Index(
+            value = ["owner_kind", "published_at", "video_id"],
+            orders = [Index.Order.ASC, Index.Order.DESC, Index.Order.DESC],
+            name = "idx_videos_owner_published",
+        ),
     ],
 )
 data class VideoEntity(
@@ -98,6 +103,7 @@ data class VideoEntity(
     @ColumnInfo(name = "description") val description: String? = null,
     @ColumnInfo(name = "duration") val duration: Long? = null,
     @ColumnInfo(name = "published_at") val publishedAt: Long = 0,
+    @ColumnInfo(name = "is_temp", defaultValue = "0") val isTemp: Boolean = false,
     @ColumnInfo(name = "media_kind") val mediaKind: String? = null,
     @ColumnInfo(name = "slide_count") val slideCount: Int = 0,
     @ColumnInfo(name = "source_kind") val sourceKind: String? = null,
@@ -396,6 +402,18 @@ data class AndroidSyncHeadEntity(
     @ColumnInfo(name = "retention_bucket") val retentionBucket: String,
     @ColumnInfo(name = "retain_at_ms") val retainAtMs: Long,
     @ColumnInfo(name = "bootstrap_seen") val bootstrapSeen: Boolean = true,
+)
+
+/**
+ * Device-owned intent for the YouTube primary stream. Server sync still owns
+ * the video row and every auxiliary asset; this table only says whether this
+ * device should keep or suppress a local primary video binary.
+ */
+@Entity(tableName = "offline_video_downloads")
+data class OfflineVideoDownloadEntity(
+    @PrimaryKey @ColumnInfo(name = "video_id") val videoId: String,
+    @ColumnInfo(name = "state") val state: String,
+    @ColumnInfo(name = "updated_at_ms") val updatedAtMs: Long,
 )
 
 @Entity(

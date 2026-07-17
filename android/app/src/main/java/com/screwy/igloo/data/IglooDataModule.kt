@@ -51,6 +51,7 @@ val iglooDataModule = module {
     factory { get<IglooDatabase>().outboxDao() }
     factory { get<IglooDatabase>().preferenceDao() }
     factory { get<IglooDatabase>().androidSyncDao() }
+    factory { get<IglooDatabase>().offlineVideoDownloadDao() }
 
     // Composite read DAOs.
     factory { get<IglooDatabase>().feedReadDao() }

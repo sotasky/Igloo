@@ -4,6 +4,7 @@ import androidx.room.testing.MigrationTestHelper
 import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -97,6 +98,66 @@ class IglooDatabaseMigrationTest {
             db.query("SELECT value FROM preferences WHERE `key` = 'theme'").use { cursor ->
                 cursor.moveToFirst()
                 assertEquals("sample_theme", cursor.getString(0))
+            }
+        }
+    }
+
+    @Test
+    fun migration41To42KeepsVideosAndAddsOfflineDownloadState() {
+        helper.createDatabase(DATABASE_NAME, 41).use { db ->
+            db.execSQL(
+                """
+                INSERT INTO videos (
+                    video_id,
+                    channel_id,
+                    owner_kind,
+                    title,
+                    published_at,
+                    slide_count
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """.trimIndent(),
+                arrayOf<Any?>(
+                    "sample_video",
+                    "sample_channel",
+                    "youtube_video",
+                    "Sample video",
+                    123L,
+                    0,
+                ),
+            )
+        }
+
+        helper.runMigrationsAndValidate(
+            DATABASE_NAME,
+            42,
+            true,
+            IglooMigrations.MIGRATION_41_42,
+        ).use { db ->
+            db.query("SELECT is_temp FROM videos WHERE video_id = 'sample_video'").use { cursor ->
+                cursor.moveToFirst()
+                assertEquals(0, cursor.getInt(0))
+            }
+            db.query("PRAGMA index_list(videos)").use { cursor ->
+                val nameIndex = cursor.getColumnIndexOrThrow("name")
+                val indexes = buildSet {
+                    while (cursor.moveToNext()) add(cursor.getString(nameIndex))
+                }
+                assertTrue(indexes.contains("idx_videos_owner_published"))
+            }
+            db.execSQL(
+                """
+                INSERT INTO offline_video_downloads (video_id, state, updated_at_ms)
+                VALUES (?, ?, ?)
+                """.trimIndent(),
+                arrayOf<Any?>("sample_video", "downloaded", 456L),
+            )
+            db.query(
+                "SELECT video_id, state, updated_at_ms FROM offline_video_downloads",
+            ).use { cursor ->
+                cursor.moveToFirst()
+                assertEquals("sample_video", cursor.getString(0))
+                assertEquals("downloaded", cursor.getString(1))
+                assertEquals(456L, cursor.getLong(2))
             }
         }
     }

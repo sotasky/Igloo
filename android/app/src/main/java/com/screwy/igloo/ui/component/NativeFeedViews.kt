@@ -20,6 +20,8 @@ import androidx.compose.ui.unit.dp
 import androidx.recyclerview.widget.RecyclerView
 import com.screwy.igloo.R
 
+internal const val NativeFeedQuoteHorizontalPaddingDp = 8
+
 internal class NativeFeedChannelHeaderViews(context: Context) {
     val root: LinearLayout = LinearLayout(context).apply {
         orientation = LinearLayout.VERTICAL
@@ -248,7 +250,12 @@ internal class NativeFeedCardViews(context: Context) {
     val media: LinearLayout = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
     val quote: LinearLayout = LinearLayout(context).apply {
         orientation = LinearLayout.VERTICAL
-        setPadding(dp(8), dp(8), dp(8), dp(8))
+        setPadding(
+            dp(NativeFeedQuoteHorizontalPaddingDp),
+            dp(8),
+            dp(NativeFeedQuoteHorizontalPaddingDp),
+            dp(8),
+        )
     }
     val quoteHeader: NativeIdentityHeaderViews = NativeIdentityHeaderViews(context)
     val quoteBody: TextView = quoteText(context)

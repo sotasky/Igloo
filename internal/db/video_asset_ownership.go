@@ -349,7 +349,22 @@ func upsertVideoMetadataTx(tx *sql.Tx, video CompletedVideo) error {
 	if err := requireVideoOwnerKindTx(tx, video.VideoID, video.OwnerKind); err != nil {
 		return err
 	}
-	_, err := tx.Exec(`
+	// is_temp is not in the schema-maintained payload-trigger columns. Update it
+	// first so an existing row's transition emits an explicit video head.
+	tempChange, err := tx.Exec(`
+		UPDATE videos
+		SET is_temp = ?
+		WHERE video_id = ?
+		  AND COALESCE(is_temp, 0) != ?
+	`, video.IsTemp, video.VideoID, video.IsTemp)
+	if err != nil {
+		return err
+	}
+	tempChanged, err := tempChange.RowsAffected()
+	if err != nil {
+		return err
+	}
+	_, err = tx.Exec(`
 		INSERT INTO videos
 			(video_id, channel_id, owner_kind, title, description, duration,
 			 published_at, metadata_json, media_kind, slide_count, source_kind,
@@ -375,7 +390,13 @@ func upsertVideoMetadataTx(tx *sql.Tx, video CompletedVideo) error {
 	`, video.VideoID, video.ChannelID, video.OwnerKind, video.Title, video.Description, video.Duration,
 		video.PublishedAtMs, video.MetadataJSON, video.MediaKind, video.SlideCount,
 		video.SourceKind, video.IsTemp)
-	return err
+	if err != nil {
+		return err
+	}
+	if tempChanged > 0 {
+		return touchAndroidSyncHeadTx(tx, "video", video.VideoID)
+	}
+	return nil
 }
 
 func requireVideoOwnerKindTx(tx *sql.Tx, videoID, ownerKind string) error {

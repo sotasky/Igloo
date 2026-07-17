@@ -54,6 +54,7 @@
           "dearrow_title_casual": null,
           "description": "video contract body",
           "duration": 90,
+          "is_temp": false,
           "media_kind": "video",
           "metadata_json": "",
           "owner_kind": "tiktok_video",

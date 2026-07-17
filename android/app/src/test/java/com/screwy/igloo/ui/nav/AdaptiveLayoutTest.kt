@@ -30,6 +30,11 @@ class AdaptiveLayoutTest {
     }
 
     @Test
+    fun downloaded_route_uses_the_wide_grid_content_width() {
+        assertEquals(WideContentKind.Grid, wideContentKindForRoute(RouteRegistry.Downloaded.route))
+    }
+
+    @Test
     fun moments_stage_keeps_nine_by_sixteen_and_clamps_width() {
         assertEquals(
             MomentsStageSizeDp(widthDp = 430, heightDp = 764),

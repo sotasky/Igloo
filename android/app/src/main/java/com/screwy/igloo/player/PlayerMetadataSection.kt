@@ -56,7 +56,7 @@ internal fun VideoMetaBlock(
     isBookmarked: Boolean,
     isFollowed: Boolean,
     isStarred: Boolean,
-    hasLocalMedia: Boolean,
+    hasLocalVideo: Boolean,
     onChannelClick: (channelId: String) -> Unit,
     shareEnabled: Boolean = true,
     onShare: () -> Unit,
@@ -156,7 +156,7 @@ internal fun VideoMetaBlock(
         StatsRow(
             metadataCounts = metadataCounts,
             isBookmarked = isBookmarked,
-            hasLocalMedia = hasLocalMedia,
+            hasLocalVideo = hasLocalVideo,
             shareEnabled = shareEnabled,
             onShare = onShare,
             onBookmark = onBookmark,
@@ -179,7 +179,7 @@ internal fun VideoMetaBlock(
 private fun StatsRow(
     metadataCounts: VideoMetadataCounts,
     isBookmarked: Boolean,
-    hasLocalMedia: Boolean,
+    hasLocalVideo: Boolean,
     shareEnabled: Boolean,
     onShare: () -> Unit,
     onBookmark: () -> Unit,
@@ -237,11 +237,11 @@ private fun StatsRow(
                     tint = if (isBookmarked) colors.primary else colors.onSurfaceMuted,
                 )
             }
-            IconButton(onClick = onDeleteLocal, enabled = hasLocalMedia) {
+            IconButton(onClick = onDeleteLocal, enabled = hasLocalVideo) {
                 Icon(
                     imageVector = Icons.Default.Delete,
-                    contentDescription = stringResource(R.string.action_delete_local_media),
-                    tint = if (hasLocalMedia) colors.onSurfaceMuted else colors.onSurfaceFaint,
+                    contentDescription = stringResource(R.string.action_delete_downloaded_video),
+                    tint = if (hasLocalVideo) colors.onSurfaceMuted else colors.onSurfaceFaint,
                 )
             }
         }

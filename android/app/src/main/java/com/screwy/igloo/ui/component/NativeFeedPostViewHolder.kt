@@ -552,6 +552,11 @@ internal class NativeFeedViewHolder(
                 ownerKeyPrefix = row.item.quoteTweetId.orEmpty(),
                 row = row,
                 grid = quoteMedia,
+                gridWidthPx =
+                    nativeQuoteMediaGridWidthPx(
+                        mediaGridWidthPx = nativeMediaGridWidthPx(views.quoteMedia.context),
+                        horizontalPaddingPx = dp(NativeFeedQuoteHorizontalPaddingDp),
+                    ),
                 mediaIndexOffset = parentCount,
                 colors = colors,
                 callbacks = callbacks,
@@ -867,6 +872,7 @@ internal class NativeFeedViewHolder(
         ownerKeyPrefix: String,
         row: FeedRow,
         grid: FeedMediaGridModel,
+        gridWidthPx: Int = nativeMediaGridWidthPx(container.context),
         mediaIndexOffset: Int,
         colors: NativeFeedColors,
         callbacks: NativeFeedCallbacks,
@@ -880,7 +886,7 @@ internal class NativeFeedViewHolder(
         if (grid.mediaCount == 1) {
             val cell = grid.cells.first()
             val aspect = nativeStableSingleMediaAspectRatio(cell)
-            val dimensions = nativeSingleMediaDimensions(container.context, aspect)
+            val dimensions = nativeSingleMediaDimensions(gridWidthPx, aspect)
             val frame =
                 FrameLayout(container.context).apply {
                     setBackgroundColor(Color.TRANSPARENT)
@@ -906,7 +912,7 @@ internal class NativeFeedViewHolder(
             container.addView(frame)
         } else {
             val context = container.context
-            val gridWidth = nativeMediaGridWidthPx(context)
+            val gridWidth = gridWidthPx
             val gap = dp(2)
             val displayCells = grid.cells.take(4)
             fun frameFor(index: Int, cell: FeedMediaCellModel): FrameLayout {

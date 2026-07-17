@@ -261,7 +261,7 @@ func androidStatusSyncState(clock db.AndroidSyncClock, health *db.AndroidSyncHea
 		return "No report"
 	}
 	cursor, err := decodeAndroidSyncCursor(health.Cursor)
-	if err != nil || cursor.Mode != "changes" || cursor.Version != androidSyncModelVersion || cursor.Epoch != clock.Epoch {
+	if err != nil || cursor.Mode != "changes" || !androidSyncModelVersionSupported(cursor.Version) || cursor.Epoch != clock.Epoch {
 		return "Stale"
 	}
 	if now.Sub(time.UnixMilli(health.ReportedAtMs)) > androidSyncHealthReportMaxAge {

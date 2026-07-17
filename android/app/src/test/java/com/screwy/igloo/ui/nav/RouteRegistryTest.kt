@@ -21,6 +21,7 @@ class RouteRegistryTest {
             "all-moments",
             "bookmarks",
             "liked",
+            "liked/downloaded",
             "channel/{channel_id}",
             "shorts/{playlist_type}/{playlist_id}/{video_id}",
             "media/{owner_kind}/{owner_id}/{index}",

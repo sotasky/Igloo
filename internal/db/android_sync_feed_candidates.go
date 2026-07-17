@@ -223,13 +223,33 @@ func (db *DB) ListAndroidSyncDesiredFeedAssetOwnersAmong(feedDays int, nowMs int
 	return sortedKeys(owners), nil
 }
 
-// ListAndroidSyncDesiredContentAmong applies the canonical retention rules only
-// to content invalidated since the client's cursor.
+// ListAndroidSyncDesiredContentAmong applies the full YouTube metadata rules
+// only to content invalidated since the client's cursor.
 func (db *DB) ListAndroidSyncDesiredContentAmong(
 	settings AndroidRetentionSettings,
 	nowMs int64,
 	feedCandidates []string,
 	videoCandidates []string,
+) (AndroidSyncDesiredSets, error) {
+	return db.ListAndroidSyncDesiredContentAmongForMode(
+		settings,
+		nowMs,
+		feedCandidates,
+		videoCandidates,
+		true,
+	)
+}
+
+// ListAndroidSyncDesiredContentAmongForMode applies the selected Android sync
+// protocol retention rules only to content invalidated since the client's
+// cursor. The mode must match the bootstrap selection that produced the
+// cursor.
+func (db *DB) ListAndroidSyncDesiredContentAmongForMode(
+	settings AndroidRetentionSettings,
+	nowMs int64,
+	feedCandidates []string,
+	videoCandidates []string,
+	fullYoutubeMetadata bool,
 ) (AndroidSyncDesiredSets, error) {
 	out := AndroidSyncDesiredSets{
 		Tweets:           map[string]struct{}{},
@@ -248,13 +268,21 @@ func (db *DB) ListAndroidSyncDesiredContentAmong(
 		out.TweetAssetOwners[id] = struct{}{}
 	}
 
-	selectedVideos, err := db.listAndroidSyncDesiredVideoIDsAmong(settings, nowMs, videoCandidates)
+	selectedVideos, err := db.listAndroidSyncDesiredVideoIDsAmong(settings, nowMs, videoCandidates, fullYoutubeMetadata)
 	if err != nil {
 		return out, err
 	}
 	out.Videos = selectedVideos
 	for id := range selectedVideos {
 		out.MediaVideos[id] = struct{}{}
+	}
+	if fullYoutubeMetadata {
+		if err := db.excludeAndroidSyncMetadataOnlyVideoStreams(
+			out.MediaVideos,
+			retentionCutoffMs(nowMs, settings.YoutubeDays),
+		); err != nil {
+			return out, err
+		}
 	}
 	return out, nil
 }
@@ -263,13 +291,13 @@ func (db *DB) listAndroidSyncDesiredVideoIDsAmong(
 	settings AndroidRetentionSettings,
 	nowMs int64,
 	candidates []string,
+	fullYoutubeMetadata bool,
 ) (map[string]struct{}, error) {
 	candidates = uniqueStrings(candidates)
 	selected := make(map[string]struct{}, len(candidates))
 	if len(candidates) == 0 {
 		return selected, nil
 	}
-	youtubeCutoff := retentionCutoffMs(nowMs, settings.YoutubeDays)
 	momentsCutoff := retentionCutoffMs(nowMs, settings.MomentsDays)
 	storyCutoff := int64(math.MaxInt64)
 	if settings.StoryHours > 0 {
@@ -277,19 +305,27 @@ func (db *DB) listAndroidSyncDesiredVideoIDsAmong(
 	}
 	includeMomentReposts := db.MomentsIncludeRepostsEnabled()
 	includeInstagramTagged := db.InstagramIncludeTaggedEnabled()
+	youtubeSelection := `(v.channel_id LIKE 'youtube_%'
+		AND COALESCE(v.published_at, 0) >= ?
+		AND EXISTS (SELECT 1 FROM channel_follows cf WHERE cf.channel_id = v.channel_id))`
+	if fullYoutubeMetadata {
+		youtubeSelection = `(` + androidSyncWebYoutubeLibraryPredicate("v") + `)
+			OR (v.channel_id LIKE 'youtube_%' AND COALESCE(v.is_temp, 0) = 1)`
+	}
 
 	for _, chunk := range stringChunks(candidates, androidSyncProjectionChunkSize) {
 		args := stringsToAny(chunk)
-		args = append(args, youtubeCutoff, momentsCutoff, momentsCutoff, storyCutoff)
+		if !fullYoutubeMetadata {
+			args = append(args, retentionCutoffMs(nowMs, settings.YoutubeDays))
+		}
+		args = append(args, momentsCutoff, momentsCutoff, storyCutoff)
 		if err := db.collectStrings(`
 			SELECT v.video_id
 			FROM videos v
 			LEFT JOIN channels c ON c.channel_id = v.channel_id
 			WHERE v.video_id IN (`+placeholders(len(chunk))+`)
 			  AND (
-			    (v.channel_id LIKE 'youtube_%'
-			      AND COALESCE(v.published_at, 0) >= ?
-			      AND EXISTS (SELECT 1 FROM channel_follows cf WHERE cf.channel_id = v.channel_id))
+			    (`+youtubeSelection+`)
 			    OR
 			    ((v.channel_id LIKE 'tiktok_%' OR v.channel_id LIKE 'instagram_%')
 			      AND COALESCE(v.source_kind, '') != 'story'

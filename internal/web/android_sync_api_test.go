@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -25,6 +26,7 @@ type androidSyncPageResponse struct {
 }
 
 const androidSyncTestRetentionQuery = "feed_days=7&youtube_days=7&moments_days=7&story_hours=48"
+const androidSyncTestFullYoutubeMetadataQuery = androidSyncTestRetentionQuery + "&full_youtube_metadata=1"
 
 func TestAndroidSyncFlatStreamConvergesChangedAndDeletedOwners(t *testing.T) {
 	srv := newAndroidSyncTestServer(t)
@@ -66,6 +68,250 @@ func TestAndroidSyncFlatStreamConvergesChangedAndDeletedOwners(t *testing.T) {
 	deleted := findAndroidSyncChange(page.Changes, "feed", "sample_tweet")
 	if deleted == nil || deleted.Operation != model.AndroidSyncOperationDelete || len(deleted.PayloadJSON) != 0 {
 		t.Fatalf("delete change = %+v in %+v", deleted, androidSyncChangeKeys(page.Changes))
+	}
+}
+
+func TestAndroidSyncFullYoutubeMetadataIsOptInAndCursorBound(t *testing.T) {
+	srv := newAndroidSyncTestServer(t)
+	old := time.Now().Add(-365 * 24 * time.Hour).UnixMilli()
+	if err := srv.db.ExecRaw(`
+		INSERT INTO channels (channel_id, source_id, name, platform)
+		VALUES ('youtube_sample_channel', 'sample_channel', 'Sample Channel', 'youtube');
+		INSERT INTO channel_follows (channel_id, followed_at)
+		VALUES ('youtube_sample_channel', ?);
+		INSERT INTO videos (video_id, channel_id, owner_kind, title, published_at)
+		VALUES ('sample_old_video', 'youtube_sample_channel', 'youtube_video', 'Old Video', ?);
+	`, old, old); err != nil {
+		t.Fatal(err)
+	}
+	streamPath := filepath.Join("media", "youtube", "sample_old_video.mp4")
+	mustWriteFile(t, filepath.Join(srv.cfg.Storage.StateRoot(), streamPath), []byte("stream"))
+	storeReadyWebTestAsset(t, srv, db.Asset{
+		AssetID: "sample_old_video_stream", AssetKind: "video_stream",
+		OwnerKind: "youtube_video", OwnerID: "sample_old_video",
+		FilePath: streamPath, ContentType: "video/mp4",
+	})
+
+	legacy := requestAndroidSyncPage(t, srv, "/api/android/sync/bootstrap?"+androidSyncTestRetentionQuery)
+	legacyCursor, err := decodeAndroidSyncCursor(legacy.NextCursor)
+	if err != nil || legacyCursor.Version != androidSyncLegacyModelVersion {
+		t.Fatalf("legacy bootstrap cursor = %+v / %v", legacyCursor, err)
+	}
+	if change := findAndroidSyncChange(legacy.Changes, "video", "sample_old_video"); change != nil && change.Operation == model.AndroidSyncOperationUpsert {
+		t.Fatalf("legacy bootstrap transferred old video: %+v", change)
+	}
+	legacyChanges := requestAndroidSyncPage(t, srv,
+		"/api/android/sync/changes?"+androidSyncTestRetentionQuery+"&after="+legacy.NextCursor)
+	legacyChangesCursor, err := decodeAndroidSyncCursor(legacyChanges.NextCursor)
+	if err != nil || legacyChangesCursor.Version != androidSyncLegacyModelVersion {
+		t.Fatalf("legacy changes cursor = %+v / %v", legacyChangesCursor, err)
+	}
+
+	reset := requestAndroidSync(t, srv, http.MethodGet,
+		"/api/android/sync/changes?"+androidSyncTestFullYoutubeMetadataQuery+"&after="+legacy.NextCursor,
+		nil, true)
+	if reset.Code != http.StatusConflict || !strings.Contains(reset.Body.String(), "sync_reset_required") {
+		t.Fatalf("v1 cursor upgrade response = %d %s", reset.Code, reset.Body.String())
+	}
+
+	legacySelection := emptyAndroidSyncDesiredSets()
+	srv.storeAndroidSyncSession("sample_legacy_bootstrap", &androidSyncSession{
+		Version:       androidSyncLegacyModelVersion,
+		Mode:          "bootstrap",
+		Epoch:         legacyCursor.Epoch,
+		Through:       legacyCursor.Revision,
+		RetentionHash: legacyCursor.Retention,
+		Selection:     &legacySelection,
+		CreatedAt:     time.Now(),
+	})
+	bootstrapCursor, err := encodeAndroidSyncCursor(androidSyncCursor{
+		Version: androidSyncLegacyModelVersion, Mode: "bootstrap", Epoch: legacyCursor.Epoch,
+		Session: "sample_legacy_bootstrap", Retention: legacyCursor.Retention,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reset = requestAndroidSync(t, srv, http.MethodGet,
+		"/api/android/sync/bootstrap?"+androidSyncTestFullYoutubeMetadataQuery+"&after="+bootstrapCursor,
+		nil, true)
+	if reset.Code != http.StatusConflict || !strings.Contains(reset.Body.String(), "sync_reset_required") {
+		t.Fatalf("v1 bootstrap upgrade response = %d %s", reset.Code, reset.Body.String())
+	}
+
+	full := requestAndroidSyncPage(t, srv,
+		"/api/android/sync/bootstrap?"+androidSyncTestFullYoutubeMetadataQuery)
+	fullCursor, err := decodeAndroidSyncCursor(full.NextCursor)
+	if err != nil || fullCursor.Version != androidSyncModelVersion {
+		t.Fatalf("full bootstrap cursor = %+v / %v", fullCursor, err)
+	}
+	if change := findAndroidSyncChange(full.Changes, "video", "sample_old_video"); change == nil || change.Operation != model.AndroidSyncOperationUpsert {
+		t.Fatalf("full bootstrap old video = %+v in %+v", change, androidSyncChangeKeys(full.Changes))
+	}
+	if change := findAndroidSyncChange(full.Changes, "asset", "sample_old_video_stream"); change == nil || change.Operation != model.AndroidSyncOperationUpsert {
+		t.Fatalf("full bootstrap old video descriptor = %+v in %+v", change, androidSyncChangeKeys(full.Changes))
+	}
+	fullChanges := requestAndroidSyncPage(t, srv,
+		"/api/android/sync/changes?"+androidSyncTestRetentionQuery+"&after="+full.NextCursor)
+	fullChangesCursor, err := decodeAndroidSyncCursor(fullChanges.NextCursor)
+	if err != nil || fullChangesCursor.Version != androidSyncModelVersion {
+		t.Fatalf("v2 cursor without flag = %+v / %v", fullChangesCursor, err)
+	}
+}
+
+func TestAndroidSyncMetadataOnlyYoutubeVideoKeepsStreamDescriptor(t *testing.T) {
+	srv := newAndroidSyncTestServer(t)
+	old := time.Now().Add(-365 * 24 * time.Hour).UnixMilli()
+	if err := srv.db.ExecRaw(`
+		INSERT INTO channels (channel_id, source_id, name, platform)
+		VALUES ('youtube_sample_channel', 'sample_channel', 'Sample Channel', 'youtube');
+		INSERT INTO videos (video_id, channel_id, owner_kind, title, published_at)
+		VALUES ('sample_old_video', 'youtube_sample_channel', 'youtube_video', 'Old Video', ?);
+	`, old); err != nil {
+		t.Fatal(err)
+	}
+	streamPath := filepath.Join("media", "youtube", "sample_old_video.mp4")
+	mustWriteFile(t, filepath.Join(srv.cfg.Storage.StateRoot(), streamPath), []byte("stream"))
+	stream := storeReadyWebTestAsset(t, srv, db.Asset{
+		AssetID: "sample_old_video_stream", AssetKind: "video_stream",
+		OwnerKind: "youtube_video", OwnerID: "sample_old_video",
+		FilePath: streamPath, ContentType: "video/mp4",
+	})
+	audioPath := filepath.Join("media", "youtube", "sample_old_video.m4a")
+	mustWriteFile(t, filepath.Join(srv.cfg.Storage.StateRoot(), audioPath), []byte("audio"))
+	audio := storeReadyWebTestAsset(t, srv, db.Asset{
+		AssetID: "sample_old_video_audio", AssetKind: "post_audio",
+		OwnerKind: "youtube_video", OwnerID: "sample_old_video",
+		FilePath: audioPath, ContentType: "audio/mp4",
+	})
+
+	page := requestAndroidSyncPage(t, srv, "/api/android/sync/bootstrap?"+androidSyncTestFullYoutubeMetadataQuery)
+	if change := findAndroidSyncChange(page.Changes, "video", "sample_old_video"); change == nil || change.Operation != model.AndroidSyncOperationUpsert {
+		t.Fatalf("metadata-only video change = %+v in %+v", change, androidSyncChangeKeys(page.Changes))
+	}
+	for _, assetID := range []string{stream.AssetID, audio.AssetID} {
+		if change := findAndroidSyncChange(page.Changes, "asset", assetID); change == nil || change.Operation != model.AndroidSyncOperationUpsert {
+			t.Fatalf("metadata-only video primary descriptor %q = %+v in %+v", assetID, change, androidSyncChangeKeys(page.Changes))
+		}
+	}
+}
+
+func TestAndroidSyncChannelProfileChangeDoesNotRematerializeChannelVideos(t *testing.T) {
+	srv := newAndroidSyncTestServer(t)
+	seedAndroidSyncContent(t, srv)
+	bootstrap := requestAndroidSyncPage(t, srv, "/api/android/sync/bootstrap?"+androidSyncTestFullYoutubeMetadataQuery)
+
+	if err := srv.db.ExecRaw(`
+		UPDATE channel_profiles
+		SET display_name = 'Updated Channel'
+		WHERE channel_id = 'youtube_sample_channel'
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	page := requestAndroidSyncPage(t, srv,
+		"/api/android/sync/changes?"+androidSyncTestFullYoutubeMetadataQuery+"&after="+bootstrap.NextCursor)
+	if change := findAndroidSyncChange(page.Changes, "channel", "youtube_sample_channel"); change == nil || change.Operation != model.AndroidSyncOperationUpsert {
+		t.Fatalf("channel profile update = %+v in %+v", change, androidSyncChangeKeys(page.Changes))
+	}
+	if change := findAndroidSyncChange(page.Changes, "video", "sample_video"); change != nil {
+		t.Fatalf("channel profile update rematerialized video: %+v", androidSyncChangeKeys(page.Changes))
+	}
+}
+
+func TestAndroidSyncChangesKeepReadyYoutubeVideoWhenDesireIsRemoved(t *testing.T) {
+	srv := newAndroidSyncTestServer(t)
+	now := time.Now().UnixMilli()
+	if err := srv.db.ExecRaw(`
+		INSERT INTO channels (channel_id, source_id, name, platform)
+		VALUES ('youtube_sample_channel', 'sample_channel', 'Sample Channel', 'youtube');
+		INSERT INTO channel_follows (channel_id, followed_at)
+		VALUES ('youtube_sample_channel', ?);
+		INSERT INTO videos (video_id, channel_id, owner_kind, title, published_at)
+		VALUES ('sample_video', 'youtube_sample_channel', 'youtube_video', 'Sample Video', ?);
+		INSERT INTO video_desires (source_channel_id, source_component, video_id, source_position, lane)
+		VALUES ('youtube_sample_channel', 'uploads', 'sample_video', 1, 'current');
+	`, now, now); err != nil {
+		t.Fatal(err)
+	}
+	streamPath := filepath.Join("media", "youtube", "sample_video.mp4")
+	mustWriteFile(t, filepath.Join(srv.cfg.Storage.StateRoot(), streamPath), []byte("stream"))
+	storeReadyWebTestAsset(t, srv, db.Asset{
+		AssetID: "sample_video_stream", AssetKind: "video_stream",
+		OwnerKind: "youtube_video", OwnerID: "sample_video",
+		FilePath: streamPath, ContentType: "video/mp4",
+	})
+
+	bootstrap := requestAndroidSyncPage(t, srv, "/api/android/sync/bootstrap?"+androidSyncTestFullYoutubeMetadataQuery)
+	if change := findAndroidSyncChange(bootstrap.Changes, "video", "sample_video"); change == nil || change.Operation != model.AndroidSyncOperationUpsert {
+		t.Fatalf("bootstrap video = %+v in %+v", change, androidSyncChangeKeys(bootstrap.Changes))
+	}
+	if err := srv.db.ExecRaw(`
+		DELETE FROM video_desires
+		WHERE source_channel_id = 'youtube_sample_channel'
+		  AND source_component = 'uploads'
+		  AND video_id = 'sample_video'
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	page := requestAndroidSyncPage(t, srv, "/api/android/sync/changes?"+androidSyncTestRetentionQuery+"&after="+bootstrap.NextCursor)
+	if change := findAndroidSyncChange(page.Changes, "video", "sample_video"); change != nil {
+		t.Fatalf("removed desire changed ready web-library video = %+v in %+v", change, androidSyncChangeKeys(page.Changes))
+	}
+}
+
+func TestAndroidSyncChangesAddVideoWhenPrimaryAssetBecomesReady(t *testing.T) {
+	srv := newAndroidSyncTestServer(t)
+	now := time.Now().UnixMilli()
+	if err := srv.db.ExecRaw(`
+		INSERT INTO channels (channel_id, source_id, name, platform)
+		VALUES ('youtube_sample_channel', 'sample_channel', 'Sample Channel', 'youtube');
+		INSERT INTO videos (video_id, channel_id, owner_kind, title, published_at)
+		VALUES ('sample_new_video', 'youtube_sample_channel', 'youtube_video', 'New Video', ?);
+	`, now); err != nil {
+		t.Fatal(err)
+	}
+
+	bootstrap := requestAndroidSyncPage(t, srv, "/api/android/sync/bootstrap?"+androidSyncTestFullYoutubeMetadataQuery)
+	if change := findAndroidSyncChange(bootstrap.Changes, "video", "sample_new_video"); change != nil {
+		t.Fatalf("unready video entered bootstrap: %+v", change)
+	}
+
+	streamPath := filepath.Join("media", "youtube", "sample_new_video.mp4")
+	mustWriteFile(t, filepath.Join(srv.cfg.Storage.StateRoot(), streamPath), []byte("stream"))
+	storeReadyWebTestAsset(t, srv, db.Asset{
+		AssetID: "sample_new_video_stream", AssetKind: "video_stream",
+		OwnerKind: "youtube_video", OwnerID: "sample_new_video",
+		FilePath: streamPath, ContentType: "video/mp4",
+	})
+
+	page := requestAndroidSyncPage(t, srv, "/api/android/sync/changes?"+androidSyncTestRetentionQuery+"&after="+bootstrap.NextCursor)
+	if change := findAndroidSyncChange(page.Changes, "video", "sample_new_video"); change == nil || change.Operation != model.AndroidSyncOperationUpsert {
+		t.Fatalf("ready video change = %+v in %+v", change, androidSyncChangeKeys(page.Changes))
+	}
+}
+
+func TestAndroidSyncTemporaryVideoPayloadMarksItTemporary(t *testing.T) {
+	srv := newAndroidSyncTestServer(t)
+	old := time.Now().Add(-365 * 24 * time.Hour).UnixMilli()
+	if err := srv.db.ExecRaw(`
+		INSERT INTO videos (video_id, channel_id, owner_kind, title, published_at, is_temp)
+		VALUES ('sample_temporary_video', 'youtube_sample_channel', 'youtube_video', 'Temporary Video', ?, 1);
+	`, old); err != nil {
+		t.Fatal(err)
+	}
+
+	page := requestAndroidSyncPage(t, srv, "/api/android/sync/bootstrap?feed_days=0&youtube_days=0&moments_days=0&story_hours=0&full_youtube_metadata=1")
+	change := findAndroidSyncChange(page.Changes, "video", "sample_temporary_video")
+	if change == nil || change.Operation != model.AndroidSyncOperationUpsert {
+		t.Fatalf("temporary video change = %+v in %+v", change, androidSyncChangeKeys(page.Changes))
+	}
+	var payload androidSyncVideoPayload
+	if err := json.Unmarshal(change.PayloadJSON, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if !payload.Item.IsTemp {
+		t.Fatalf("temporary video payload = %+v, want is_temp=true", payload.Item)
 	}
 }
 
@@ -366,10 +612,21 @@ func TestAndroidSyncBootstrapFinalPageCanBeRetried(t *testing.T) {
 	if first.EndOfStream {
 		t.Fatalf("first bootstrap page unexpectedly ended with %d changes", len(first.Changes))
 	}
-	finalPath := "/api/android/sync/bootstrap?" + androidSyncTestRetentionQuery + "&after=" + first.NextCursor
-	final := requestAndroidSyncPage(t, srv, finalPath)
-	if !final.EndOfStream {
-		t.Fatalf("final bootstrap page did not end: %d changes", len(final.Changes))
+	cursor := first.NextCursor
+	var finalPath string
+	var final androidSyncPageResponse
+	for page := 0; page < 10; page++ {
+		path := "/api/android/sync/bootstrap?" + androidSyncTestRetentionQuery + "&after=" + cursor
+		response := requestAndroidSyncPage(t, srv, path)
+		if response.EndOfStream {
+			finalPath = path
+			final = response
+			break
+		}
+		cursor = response.NextCursor
+	}
+	if finalPath == "" {
+		t.Fatal("bootstrap did not finish within the bounded page count")
 	}
 	retry := requestAndroidSyncPage(t, srv, finalPath)
 	if !retry.EndOfStream || retry.NextCursor != final.NextCursor ||
@@ -384,7 +641,7 @@ func TestAndroidSyncBootstrapFinalPageCanBeRetried(t *testing.T) {
 	}
 }
 
-func TestAndroidSyncChangesSessionBoundsPagesAndRetainsSelectionForRetry(t *testing.T) {
+func TestAndroidSyncChangesSessionBoundsPagesWithoutRetainingWholeSelection(t *testing.T) {
 	srv := newAndroidSyncTestServer(t)
 	if err := srv.db.ExecRaw(`
 		INSERT INTO channel_settings (channel_id, include_reposts, updated_at)
@@ -392,7 +649,7 @@ func TestAndroidSyncChangesSessionBoundsPagesAndRetainsSelectionForRetry(t *test
 	`); err != nil {
 		t.Fatal(err)
 	}
-	bootstrap := requestAndroidSyncPage(t, srv, "/api/android/sync/bootstrap?"+androidSyncTestRetentionQuery)
+	bootstrap := requestAndroidSyncPage(t, srv, "/api/android/sync/bootstrap?"+androidSyncTestFullYoutubeMetadataQuery)
 	nowMs := time.Now().UnixMilli()
 	if err := srv.db.ExecRaw(`
 		WITH RECURSIVE seq(n) AS (
@@ -415,7 +672,7 @@ func TestAndroidSyncChangesSessionBoundsPagesAndRetainsSelectionForRetry(t *test
 		t.Fatal(err)
 	}
 
-	firstPath := "/api/android/sync/changes?" + androidSyncTestRetentionQuery + "&after=" + bootstrap.NextCursor
+	firstPath := "/api/android/sync/changes?" + androidSyncTestFullYoutubeMetadataQuery + "&after=" + bootstrap.NextCursor
 	first := requestAndroidSyncPage(t, srv, firstPath)
 	if first.EndOfStream {
 		t.Fatalf("first changes page unexpectedly ended: %+v", androidSyncChangeKeys(first.Changes))
@@ -424,6 +681,12 @@ func TestAndroidSyncChangesSessionBoundsPagesAndRetainsSelectionForRetry(t *test
 	if err != nil || firstCursor.Session == "" {
 		t.Fatalf("changes session cursor = %+v / %v", firstCursor, err)
 	}
+	srv.androidSyncSessionMu.Lock()
+	selection := srv.androidSyncSessions[firstCursor.Session].Selection
+	srv.androidSyncSessionMu.Unlock()
+	if selection != nil {
+		t.Fatal("changes session retained an unbounded desired selection")
+	}
 	if err := srv.db.ExecRaw(`
 		DELETE FROM retweet_sources WHERE content_hash = 'sample_session_hash';
 		INSERT INTO feed_seen (tweet_id, seen_at) VALUES ('sample_after_through', ?)
@@ -431,14 +694,14 @@ func TestAndroidSyncChangesSessionBoundsPagesAndRetainsSelectionForRetry(t *test
 		t.Fatal(err)
 	}
 
-	finalPath := "/api/android/sync/changes?" + androidSyncTestRetentionQuery + "&after=" + first.NextCursor
+	finalPath := "/api/android/sync/changes?" + androidSyncTestFullYoutubeMetadataQuery + "&after=" + first.NextCursor
 	final := requestAndroidSyncPage(t, srv, finalPath)
 	if !final.EndOfStream {
 		t.Fatalf("bounded changes session did not end: %+v", androidSyncChangeKeys(final.Changes))
 	}
 	feed := findAndroidSyncChange(final.Changes, "feed", "sample_session_feed")
-	if feed == nil || feed.Operation != model.AndroidSyncOperationUpsert {
-		t.Fatalf("captured selection changed between pages: %+v", androidSyncChangeKeys(final.Changes))
+	if feed == nil || feed.Operation != model.AndroidSyncOperationDelete {
+		t.Fatalf("post-through content state was not applied: %+v", androidSyncChangeKeys(final.Changes))
 	}
 	if findAndroidSyncChange(final.Changes, "feed_seen", "sample_after_through") != nil {
 		t.Fatalf("post-through head leaked into session: %+v", androidSyncChangeKeys(final.Changes))
@@ -450,7 +713,7 @@ func TestAndroidSyncChangesSessionBoundsPagesAndRetainsSelectionForRetry(t *test
 	}
 
 	next := requestAndroidSyncPage(t, srv,
-		"/api/android/sync/changes?"+androidSyncTestRetentionQuery+"&after="+final.NextCursor)
+		"/api/android/sync/changes?"+androidSyncTestFullYoutubeMetadataQuery+"&after="+final.NextCursor)
 	if findAndroidSyncChange(next.Changes, "feed_seen", "sample_after_through") == nil {
 		t.Fatalf("post-through head did not enter next stream: %+v", androidSyncChangeKeys(next.Changes))
 	}
@@ -730,6 +993,13 @@ func seedAndroidSyncContent(t *testing.T, srv *testServer) db.Asset {
 	`, now, now, now, now, now); err != nil {
 		t.Fatal(err)
 	}
+	streamPath := filepath.Join("media", "youtube", "sample_video.mp4")
+	mustWriteFile(t, filepath.Join(srv.cfg.Storage.StateRoot(), streamPath), []byte("stream"))
+	storeReadyWebTestAsset(t, srv, db.Asset{
+		AssetID: "sample_video_stream", AssetKind: "video_stream",
+		OwnerKind: "youtube_video", OwnerID: "sample_video",
+		FilePath: streamPath, ContentType: "video/mp4",
+	})
 	relPath := filepath.Join("media", "twitter", "sample-avatar.jpg")
 	mustWriteFile(t, filepath.Join(srv.cfg.Storage.StateRoot(), relPath), []byte("ready-image"))
 	return storeReadyWebTestAsset(t, srv, db.Asset{

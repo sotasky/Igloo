@@ -277,7 +277,7 @@ func (db *DB) GetNextVideo(videoID string) (*model.Video, error) {
 		LEFT JOIN channel_stars cs ON cs.channel_id = c.channel_id
 		WHERE v.published_at < (SELECT published_at FROM videos WHERE video_id = ?)
 		  AND `+readyVideoMediaExistsSQL("v")+`
-		  AND c.platform = 'youtube'
+		  AND v.owner_kind = 'youtube_video'
 		ORDER BY v.published_at DESC
 		LIMIT 1
 	`, videoID)
@@ -341,6 +341,8 @@ func (db *DB) GetVideos(opts GetVideosOpts) ([]model.Video, error) {
 				where = append(where, "cf.channel_id IS NOT NULL")
 			}
 		}
+	} else if opts.Platform == "youtube" {
+		where = append(where, "v.owner_kind = 'youtube_video'")
 	} else if opts.Platform != "" {
 		where = append(where, "v.channel_id IN (SELECT channel_id FROM channels WHERE platform = ?)")
 		args = append(args, opts.Platform)
@@ -694,6 +696,8 @@ func (db *DB) GetVideoCount(opts GetVideosOpts) (int, error) {
 				where = append(where, "cf.channel_id IS NOT NULL")
 			}
 		}
+	} else if opts.Platform == "youtube" {
+		where = append(where, "v.owner_kind = 'youtube_video'")
 	} else if opts.Platform != "" {
 		where = append(where, "v.channel_id IN (SELECT channel_id FROM channels WHERE platform = ?)")
 		args = append(args, opts.Platform)

@@ -1,6 +1,7 @@
 package db
 
 import (
+	"database/sql"
 	"testing"
 
 	"github.com/screwys/igloo/internal/model"
@@ -87,6 +88,114 @@ func TestAndroidSyncHeadsMapAttachmentsAndStateToOwners(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = requireAndroidSyncHead(t, d, "retweet_sources", "sample_hash")
+}
+
+func TestAndroidSyncHeadsTrackTemporaryVideoTransitions(t *testing.T) {
+	t.Run("completed video upsert", func(t *testing.T) {
+		d := openWritableTestDB(t)
+		const videoID = "sample_temporary_upsert"
+		if err := d.ExecRaw(`
+			INSERT INTO videos (video_id, channel_id, owner_kind, title, is_temp)
+			VALUES (?, 'youtube_sample_channel', 'youtube_video', 'Sample video', 1)
+		`, videoID); err != nil {
+			t.Fatal(err)
+		}
+		video := CompletedVideo{
+			VideoID: videoID, ChannelID: "youtube_sample_channel", OwnerKind: "youtube_video",
+			Title: "Sample video",
+		}
+
+		before := requireAndroidSyncHead(t, d, "video", videoID)
+		if err := d.WithWrite(func(tx *sql.Tx) error {
+			return upsertVideoMetadataTx(tx, video)
+		}); err != nil {
+			t.Fatal(err)
+		}
+		afterClear := requireAndroidSyncHead(t, d, "video", videoID)
+		if afterClear.Revision <= before.Revision {
+			t.Fatalf("clearing temporary state did not advance head: before=%+v after=%+v", before, afterClear)
+		}
+
+		video.IsTemp = true
+		if err := d.WithWrite(func(tx *sql.Tx) error {
+			return upsertVideoMetadataTx(tx, video)
+		}); err != nil {
+			t.Fatal(err)
+		}
+		afterSet := requireAndroidSyncHead(t, d, "video", videoID)
+		if afterSet.Revision <= afterClear.Revision {
+			t.Fatalf("setting temporary state did not advance head: before=%+v after=%+v", afterClear, afterSet)
+		}
+
+		if err := d.WithWrite(func(tx *sql.Tx) error {
+			return upsertVideoMetadataTx(tx, video)
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if stable := requireAndroidSyncHead(t, d, "video", videoID); stable != afterSet {
+			t.Fatalf("unchanged temporary state advanced head: before=%+v after=%+v", afterSet, stable)
+		}
+	})
+
+	t.Run("desire reconciliation", func(t *testing.T) {
+		d := openWritableTestDB(t)
+		const (
+			source  = "youtube_sample_source"
+			videoID = "sample_temporary_desire"
+		)
+		seedVideoDesireChannels(t, d, source)
+		if err := d.ExecRaw(`
+			INSERT INTO videos (video_id, channel_id, owner_kind, title, is_temp)
+			VALUES (?, ?, 'youtube_video', 'Sample video', 1)
+		`, videoID, source); err != nil {
+			t.Fatal(err)
+		}
+		before := requireAndroidSyncHead(t, d, "video", videoID)
+		if _, err := d.ReconcileVideoDesires(VideoDesireSnapshot{
+			SourceChannelID: source,
+			Component:       "uploads",
+			Items: []VideoDesire{{
+				VideoID: videoID, OwnerChannelID: source,
+				Lane: DownloadLaneCurrent,
+			}},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		after := requireAndroidSyncHead(t, d, "video", videoID)
+		if after.Revision <= before.Revision {
+			t.Fatalf("reconciling temporary video did not advance head: before=%+v after=%+v", before, after)
+		}
+	})
+
+	t.Run("retention", func(t *testing.T) {
+		d := openWritableTestDB(t)
+		const videoID = "sample_temporary_retention"
+		const nowMs = int64(3 * 24 * 60 * 60 * 1000)
+		if err := d.ExecRaw(`
+			INSERT INTO videos (video_id, channel_id, owner_kind, title, is_temp, downloaded_at)
+			VALUES (?, 'youtube_sample_channel', 'youtube_video', 'Sample video', 1, ?)
+		`, videoID, nowMs-int64(2*24*60*60*1000)); err != nil {
+			t.Fatal(err)
+		}
+		if err := d.ExecRaw(`INSERT INTO bookmarks (video_id, bookmarked_at) VALUES (?, ?)`, videoID, nowMs); err != nil {
+			t.Fatal(err)
+		}
+		before := requireAndroidSyncHead(t, d, "video", videoID)
+		if _, err := d.MaintainVideoRetention(nowMs); err != nil {
+			t.Fatal(err)
+		}
+		after := requireAndroidSyncHead(t, d, "video", videoID)
+		if after.Revision <= before.Revision {
+			t.Fatalf("retiring temporary state did not advance head: before=%+v after=%+v", before, after)
+		}
+		var isTemp bool
+		if err := d.QueryRow(`SELECT is_temp FROM videos WHERE video_id = ?`, videoID).Scan(&isTemp); err != nil {
+			t.Fatal(err)
+		}
+		if isTemp {
+			t.Fatal("retention left the video temporary")
+		}
+	})
 }
 
 func TestAndroidSyncHeadsFilterSettingsAndHydrateProtectedContent(t *testing.T) {

@@ -21,6 +21,8 @@ func TestListAndroidSyncDesiredSetsIncludesOwnersAndExcludesCommentAuthors(t *te
 			('twitter_sample_reposter', 'twitter', 'sample_reposter'),
 			('twitter_sample_retweeter', 'twitter', 'sample_retweeter'),
 			('youtube_sample_followed', 'youtube', 'sample_followed');
+		INSERT INTO channels (channel_id, source_id, name, platform) VALUES
+			('youtube_sample_followed', 'sample_followed', 'Sample Followed', 'youtube');
 		INSERT INTO channel_follows (channel_id, followed_at)
 		VALUES ('youtube_sample_followed', 1);
 		INSERT INTO feed_items (
@@ -50,6 +52,13 @@ func TestListAndroidSyncDesiredSetsIncludesOwnersAndExcludesCommentAuthors(t *te
 	`, old); err != nil {
 		t.Fatal(err)
 	}
+	for _, videoID := range []string{"sample_video", "sample_old_video"} {
+		publishAssetMetadataForTest(t, d, Asset{
+			AssetID: "asset_" + videoID, AssetKind: "video_stream",
+			OwnerKind: "youtube_video", OwnerID: videoID,
+			FilePath: "media/test/" + videoID + ".mp4", ContentType: "video/mp4",
+		}, nowMs)
+	}
 
 	sets, err := d.ListAndroidSyncDesiredSets(AndroidRetentionSettings{FeedDays: 3, YoutubeDays: 3}, nowMs)
 	if err != nil {
@@ -64,14 +73,17 @@ func TestListAndroidSyncDesiredSetsIncludesOwnersAndExcludesCommentAuthors(t *te
 	if _, ok := sets.Videos["sample_video"]; !ok {
 		t.Fatalf("video missing: %+v", sets.SortedVideos())
 	}
-	if _, ok := sets.Videos["sample_old_video"]; ok {
-		t.Fatalf("old unprotected video remained in content: %+v", sets.SortedVideos())
+	if _, ok := sets.Videos["sample_old_video"]; !ok {
+		t.Fatalf("old library video missing from content: %+v", sets.SortedVideos())
 	}
 	if _, ok := sets.MediaVideos["sample_old_video"]; ok {
 		t.Fatalf("old unprotected video remained in media: %+v", sets.SortedMediaVideos())
 	}
-	if _, ok := sets.MediaVideos["sample_saved_video"]; !ok {
-		t.Fatalf("saved video missing from media: %+v", sets.SortedMediaVideos())
+	if _, ok := sets.Videos["sample_saved_video"]; !ok {
+		t.Fatalf("saved video missing from metadata: %+v", sets.SortedVideos())
+	}
+	if _, ok := sets.MediaVideos["sample_saved_video"]; ok {
+		t.Fatalf("saved old video remained in automatic media: %+v", sets.SortedMediaVideos())
 	}
 	for _, id := range []string{
 		"twitter_sample_author",
@@ -235,6 +247,9 @@ func TestListAndroidSyncDesiredContentAmongMatchesCanonicalVideoSelection(t *tes
 			('instagram_story_123', 'instagram_sample', 'instagram_reel', 'story', ?),
 			('instagram_story_invalid', 'instagram_sample', 'instagram_reel', 'story', ?);
 		INSERT INTO bookmarks (video_id, bookmarked_at) VALUES ('sample_youtube_saved', ?);
+		INSERT INTO video_desires (source_channel_id, source_component, video_id, source_position, lane) VALUES
+			('youtube_sample', 'uploads', 'sample_youtube_recent', 1, 'current'),
+			('youtube_sample', 'uploads', 'sample_youtube_old', 2, 'current');
 		INSERT INTO video_repost_sources (
 			video_id, reposter_channel_id, reposted_at_ms, first_seen_at_ms, updated_at_ms
 		) VALUES ('sample_moment_reposted', 'tiktok_reposter', ?, ?, ?)
@@ -265,6 +280,171 @@ func TestListAndroidSyncDesiredContentAmongMatchesCanonicalVideoSelection(t *tes
 	if got := selected.SortedVideos(); strings.Join(got, ",") != strings.Join(uniqueSortedStrings(want), ",") {
 		t.Fatalf("candidate videos = %v, want %v from full %v", got, uniqueSortedStrings(want), full.SortedVideos())
 	}
+}
+
+func TestListAndroidSyncDesiredSetsMatchesWebYoutubeLibrary(t *testing.T) {
+	d := openWritableTestDB(t)
+	nowMs := int64(30 * 24 * time.Hour / time.Millisecond)
+	old := nowMs - 10*24*time.Hour.Milliseconds()
+	if err := d.ExecRaw(`
+		INSERT INTO channels (channel_id, source_id, name, platform) VALUES
+			('youtube_sample_channel', 'sample_channel', 'Sample Channel', 'youtube'),
+			('youtube_sample_second', 'sample_second', 'Sample Second', 'youtube'),
+			('stale_platform_channel', 'sample_stale', 'Stale Platform', 'twitter'),
+			('tiktok_sample_channel', 'sample_channel', 'Sample Channel', 'tiktok');
+		INSERT INTO channel_follows (channel_id, followed_at)
+		VALUES ('youtube_sample_channel', 1);
+		INSERT INTO videos (video_id, channel_id, owner_kind, title, source_kind, published_at) VALUES
+			('sample_ready_tracked', 'youtube_sample_channel', 'youtube_video', 'Tracked', '', ?),
+			('sample_ready_untracked', 'youtube_sample_second', 'youtube_video', 'Untracked', '', ?),
+			('sample_ready_stale_platform', 'stale_platform_channel', 'youtube_video', 'Stale Platform', '', ?),
+			('sample_ready_story', 'youtube_sample_channel', 'youtube_video', 'Story', 'story', ?),
+			('sample_unready', 'youtube_sample_channel', 'youtube_video', 'Unready', '', ?),
+			('sample_other_platform', 'tiktok_sample_channel', 'tiktok_video', 'Other', '', ?);
+	`, old, old, old, old, old, old); err != nil {
+		t.Fatal(err)
+	}
+	for _, videoID := range []string{
+		"sample_ready_tracked", "sample_ready_untracked", "sample_ready_stale_platform", "sample_ready_story", "sample_other_platform",
+	} {
+		ownerKind := "youtube_video"
+		if videoID == "sample_other_platform" {
+			ownerKind = "tiktok_video"
+		}
+		publishAssetMetadataForTest(t, d, Asset{
+			AssetID: "asset_" + videoID, AssetKind: "video_stream",
+			OwnerKind: ownerKind, OwnerID: videoID,
+			FilePath: "media/test/" + videoID + ".mp4", ContentType: "video/mp4",
+		}, nowMs)
+	}
+
+	webVideos, err := d.GetVideos(GetVideosOpts{Platform: "youtube", Limit: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := make([]string, 0, len(webVideos))
+	for _, video := range webVideos {
+		want = append(want, video.VideoID)
+	}
+	want = uniqueSortedStrings(want)
+
+	settings := AndroidRetentionSettings{FeedDays: 1, YoutubeDays: 1, MomentsDays: 1, StoryHours: 48}
+	full, err := d.ListAndroidSyncDesiredContent(settings, nowMs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := full.SortedVideos(); strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("Android YouTube library = %v, want web Videos library %v", got, want)
+	}
+
+	candidates := []string{
+		"sample_ready_tracked", "sample_ready_untracked", "sample_ready_stale_platform", "sample_ready_story", "sample_unready", "sample_other_platform",
+	}
+	incremental, err := d.ListAndroidSyncDesiredContentAmong(settings, nowMs, nil, candidates)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := incremental.SortedVideos(); strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("incremental Android YouTube library = %v, want web Videos library %v", got, want)
+	}
+}
+
+func TestListAndroidSyncDesiredContentForModeKeepsLegacyYoutubeWindow(t *testing.T) {
+	d := openWritableTestDB(t)
+	nowMs := int64(30 * 24 * time.Hour / time.Millisecond)
+	recent := nowMs - time.Hour.Milliseconds()
+	old := nowMs - 10*24*time.Hour.Milliseconds()
+	if err := d.ExecRaw(`
+		INSERT INTO channels (channel_id, source_id, name, platform) VALUES
+			('youtube_sample_followed', 'sample_followed', 'Sample Followed', 'youtube'),
+			('youtube_sample_unfollowed', 'sample_unfollowed', 'Sample Unfollowed', 'youtube');
+		INSERT INTO channel_follows (channel_id, followed_at) VALUES
+			('youtube_sample_followed', 1);
+		INSERT INTO videos (video_id, channel_id, owner_kind, source_kind, published_at, is_temp) VALUES
+			('sample_recent_followed', 'youtube_sample_followed', 'youtube_video', '', ?, 0),
+			('sample_old_followed', 'youtube_sample_followed', 'youtube_video', '', ?, 0),
+			('sample_old_unfollowed', 'youtube_sample_unfollowed', 'youtube_video', '', ?, 0),
+			('sample_saved_old', 'youtube_sample_followed', 'youtube_video', '', ?, 0),
+			('sample_temporary_unfollowed', 'youtube_sample_unfollowed', 'youtube_video', '', ?, 1),
+			('sample_unready_recent', 'youtube_sample_followed', 'youtube_video', '', ?, 0);
+		INSERT INTO bookmarks (video_id, bookmarked_at) VALUES ('sample_saved_old', ?);
+	`, recent, old, old, old, recent, recent, old); err != nil {
+		t.Fatal(err)
+	}
+	for _, videoID := range []string{
+		"sample_recent_followed",
+		"sample_old_followed",
+		"sample_old_unfollowed",
+		"sample_saved_old",
+	} {
+		publishAssetMetadataForTest(t, d, Asset{
+			AssetID: "asset_" + videoID, AssetKind: "video_stream",
+			OwnerKind: "youtube_video", OwnerID: videoID,
+			FilePath: "media/test/" + videoID + ".mp4", ContentType: "video/mp4",
+		}, nowMs)
+	}
+
+	settings := AndroidRetentionSettings{FeedDays: 1, YoutubeDays: 1, MomentsDays: 1, StoryHours: 48}
+	full, err := d.ListAndroidSyncDesiredContentForMode(settings, nowMs, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy, err := d.ListAndroidSyncDesiredContentForMode(settings, nowMs, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	assertIDs := func(label string, got []string, want ...string) {
+		t.Helper()
+		if joinedGot, joinedWant := strings.Join(got, ","), strings.Join(uniqueSortedStrings(want), ","); joinedGot != joinedWant {
+			t.Fatalf("%s = %v, want %v", label, got, uniqueSortedStrings(want))
+		}
+	}
+	assertIDs("full videos", full.SortedVideos(),
+		"sample_old_followed",
+		"sample_old_unfollowed",
+		"sample_recent_followed",
+		"sample_saved_old",
+		"sample_temporary_unfollowed",
+	)
+	assertIDs("full media videos", full.SortedMediaVideos(), "sample_recent_followed")
+	assertIDs("legacy videos", legacy.SortedVideos(),
+		"sample_recent_followed",
+		"sample_saved_old",
+		"sample_unready_recent",
+	)
+	assertIDs("legacy media videos", legacy.SortedMediaVideos(),
+		"sample_recent_followed",
+		"sample_saved_old",
+		"sample_unready_recent",
+	)
+	legacySets, err := d.ListAndroidSyncDesiredSetsForMode(settings, nowMs, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertIDs("legacy set videos", legacySets.SortedVideos(), legacy.SortedVideos()...)
+
+	candidates := []string{
+		"sample_recent_followed",
+		"sample_old_followed",
+		"sample_old_unfollowed",
+		"sample_saved_old",
+		"sample_temporary_unfollowed",
+		"sample_unready_recent",
+	}
+	fullIncremental, err := d.ListAndroidSyncDesiredContentAmongForMode(settings, nowMs, nil, candidates, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertIDs("full incremental videos", fullIncremental.SortedVideos(), full.SortedVideos()...)
+	assertIDs("full incremental media videos", fullIncremental.SortedMediaVideos(), full.SortedMediaVideos()...)
+
+	legacyIncremental, err := d.ListAndroidSyncDesiredContentAmongForMode(settings, nowMs, nil, candidates, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertIDs("legacy incremental videos", legacyIncremental.SortedVideos(), legacy.SortedVideos()...)
+	assertIDs("legacy incremental media videos", legacyIncremental.SortedMediaVideos(), legacy.SortedMediaVideos()...)
 }
 
 func uniqueSortedStrings(values []string) []string {

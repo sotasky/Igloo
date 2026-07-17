@@ -4,6 +4,7 @@ import com.screwy.igloo.data.IglooDatabase
 import com.screwy.igloo.data.PreferencesRepo
 import com.screwy.igloo.data.RoomTestSupport
 import com.screwy.igloo.data.entity.AndroidSyncAssetEntity
+import com.screwy.igloo.net.Reachability
 import java.io.File
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -57,7 +58,7 @@ class MediaResolversTest {
     }
 
     @Test
-    fun readyAssetUsesRevisionEndpointOnlyWhileOnline() = runBlocking {
+    fun readyAssetUsesRevisionEndpointWhenRemoteFallbackIsAllowed() = runBlocking {
         insert("stream", "video_stream", "youtube_video", "video", contentType = "video/mp4")
 
         assertEquals(
@@ -67,6 +68,22 @@ class MediaResolversTest {
         assertEquals(
             MediaUri.Missing,
             resolvers(allowRemote = false).videoStream("video", OwnerKind.YouTubeVideo),
+        )
+    }
+
+    @Test
+    fun unknownReachabilityAllowsTheFirstRemoteVideoRequest() {
+        assertEquals(true, allowsRemoteMediaFallback(Reachability.State.Unknown))
+        assertEquals(false, allowsRemoteMediaFallback(Reachability.State.Offline))
+    }
+
+    @Test
+    fun readyPrimaryAudioUsesTheRemoteRevisionEndpoint() = runBlocking {
+        insert("audio", "post_audio", "youtube_video", "video", contentType = "audio/mp4")
+
+        assertEquals(
+            MediaUri.Remote("https://igloo.example/api/android/sync/assets/audio/file?revision=1"),
+            resolvers().videoStream("video", OwnerKind.YouTubeVideo),
         )
     }
 

@@ -23,6 +23,7 @@ import com.screwy.igloo.data.dao.MomentReadDao
 import com.screwy.igloo.data.dao.MomentViewDao
 import com.screwy.igloo.data.dao.MomentsCursorDao
 import com.screwy.igloo.data.dao.MutedChannelDao
+import com.screwy.igloo.data.dao.OfflineVideoDownloadDao
 import com.screwy.igloo.data.dao.OutboxDao
 import com.screwy.igloo.data.dao.PreferenceDao
 import com.screwy.igloo.data.dao.RetweetSourceDao
@@ -50,6 +51,7 @@ import com.screwy.igloo.data.entity.FeedSeenEntity
 import com.screwy.igloo.data.entity.MomentViewEntity
 import com.screwy.igloo.data.entity.MomentsCursorEntity
 import com.screwy.igloo.data.entity.MutedChannelEntity
+import com.screwy.igloo.data.entity.OfflineVideoDownloadEntity
 import com.screwy.igloo.data.entity.OutboxEntity
 import com.screwy.igloo.data.entity.PreferenceEntity
 import com.screwy.igloo.data.entity.RetweetSourceEntity
@@ -92,8 +94,9 @@ import com.screwy.igloo.data.entity.WatchHistoryEntity
             AndroidSyncStateEntity::class,
             AndroidSyncHeadEntity::class,
             AndroidSyncAssetEntity::class,
+            OfflineVideoDownloadEntity::class,
         ],
-    version = 41,
+    version = 42,
     exportSchema = true,
 )
 abstract class IglooDatabase : RoomDatabase() {
@@ -147,6 +150,8 @@ abstract class IglooDatabase : RoomDatabase() {
 
     abstract fun androidSyncDao(): AndroidSyncDao
 
+    abstract fun offlineVideoDownloadDao(): OfflineVideoDownloadDao
+
     // Composite read DAOs
     abstract fun feedReadDao(): FeedReadDao
 
@@ -164,7 +169,10 @@ abstract class IglooDatabase : RoomDatabase() {
         fun build(context: Context): IglooDatabase {
             val appCtx = context.applicationContext
             return Room.databaseBuilder(appCtx, IglooDatabase::class.java, DB_FILE_NAME)
-                .addMigrations(IglooMigrations.MIGRATION_40_41)
+                .addMigrations(
+                    IglooMigrations.MIGRATION_40_41,
+                    IglooMigrations.MIGRATION_41_42,
+                )
                 .build()
         }
     }

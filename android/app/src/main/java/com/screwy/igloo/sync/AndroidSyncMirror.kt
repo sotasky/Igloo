@@ -7,6 +7,7 @@ import com.screwy.igloo.data.dao.AndroidSyncDao
 import com.screwy.igloo.data.entity.AndroidSyncAssetEntity
 import com.screwy.igloo.data.entity.AndroidSyncHeadEntity
 import com.screwy.igloo.data.entity.AndroidSyncStateEntity
+import com.screwy.igloo.data.entity.VideoEntity
 import com.screwy.igloo.log.Logger
 import com.screwy.igloo.media.ForegroundPromoter
 import com.screwy.igloo.net.AndroidSyncApi
@@ -73,12 +74,12 @@ class AndroidSyncMirror(
         var state = requireChangesState()
         healthReporter.report(state.cursor, retention)
         try {
-            assetDrainer.drain()
+            assetDrainer.drain(youtubeCutoffMs(retention))
         } catch (e: AndroidSyncAssetChangedException) {
             syncMetadata(retention)
             prune(retention, sweepHeadlessContent = false)
             state = requireChangesState()
-            assetDrainer.drain()
+            assetDrainer.drain(youtubeCutoffMs(retention))
         } catch (e: Exception) {
             if (e is CancellationException) throw e
             healthReporter.report(state.cursor, retention)
@@ -500,7 +501,18 @@ class AndroidSyncMirror(
             "moments_cursor" -> db.momentsCursorDao().delete(ownerId)
             "setting" -> Unit
             "feed" -> if (ownerId !in protectedContent) db.feedItemDao().deleteByIds(listOf(ownerId))
-            "video" -> if (ownerId !in protectedContent) db.videoDao().deleteByIds(listOf(ownerId))
+            "video" -> {
+                val video = db.videoDao().getById(ownerId)
+                if (video?.isTemp == true) {
+                    // A temporary web download is server-owned. Its tombstone must win over
+                    // ordinary protection so no Android row tied to that video survives after
+                    // the server prunes it.
+                    purgeTemporaryVideo(video, deletedAssets)
+                } else if (ownerId !in protectedContent) {
+                    db.videoDao().deleteByIds(listOf(ownerId))
+                    db.offlineVideoDownloadDao().delete(ownerId)
+                }
+            }
             "channel" -> if (ownerId !in protectedChannels) {
                 db.channelDao().deleteByIds(listOf(ownerId))
                 db.channelProfileDao().delete(ownerId)
@@ -517,6 +529,34 @@ class AndroidSyncMirror(
             else -> error("unknown Android sync owner: $ownerKind")
         }
         dao.deleteHead(ownerKind, ownerId)
+    }
+
+    private suspend fun purgeTemporaryVideo(
+        video: VideoEntity,
+        deletedAssets: MutableList<AndroidSyncAssetEntity>,
+    ) {
+        val videoId = video.videoId
+        val assets = dao.assetsForOwner(video.ownerKind, videoId)
+        if (assets.isNotEmpty()) {
+            deletedAssets += assets
+            dao.deleteAssets(assets.map(AndroidSyncAssetEntity::assetId))
+        }
+
+        db.videoCommentDao().deleteForVideo(videoId)
+        db.videoRepostSourceDao().deleteForVideo(videoId)
+        db.sponsorBlockSegmentDao().deleteForVideo(videoId)
+        db.sponsorBlockCheckedDao().deleteForVideo(videoId)
+        db.feedLikeDao().delete(videoId)
+        db.bookmarkDao().delete(videoId)
+        db.feedSeenDao().delete(videoId)
+        db.momentViewDao().delete(videoId)
+        db.watchHistoryDao().delete(videoId)
+        db.momentsCursorDao().deleteForVideo(videoId)
+        db.feedRankDao().deleteForTweets(listOf(videoId))
+        db.outboxDao().deleteForItemId(videoId)
+        db.offlineVideoDownloadDao().delete(videoId)
+        db.videoDao().deleteByIds(listOf(videoId))
+        dao.deleteHeadsForOwnerId(videoId)
     }
 
     private suspend fun prune(
@@ -553,6 +593,11 @@ class AndroidSyncMirror(
                             deletedAssets = deletedAssets,
                         )
                     }
+                }
+                val expiredPrimaryAssets = dao.expiredAutomaticYoutubeVideoPrimaryAssets(youtubeCutoffMs(retention))
+                if (expiredPrimaryAssets.isNotEmpty()) {
+                    dao.resetVerifiedLocalPaths(expiredPrimaryAssets.map(AndroidSyncAssetEntity::assetId))
+                    deletedAssets += expiredPrimaryAssets
                 }
                 if (expired.isNotEmpty() || sweepHeadlessContent) {
                     cleanupOrphans(deletedAssets, sweepHeadlessContent)
@@ -600,6 +645,7 @@ class AndroidSyncMirror(
         db.sponsorBlockCheckedDao().deleteOrphans()
         db.retweetSourceDao().deleteOrphans()
         db.feedRankDao().deleteOrphans()
+        db.offlineVideoDownloadDao().deleteMissingVideos()
 
         val protectedChannels = dao.protectedChannelIds().toHashSet()
         db.channelDao().allIds().filterNot(protectedChannels::contains).chunked(PRUNE_BATCH_SIZE).forEach {
@@ -639,6 +685,10 @@ class AndroidSyncMirror(
         requireNotNull(dao.syncState()).also {
             check(it.mode == MODE_CHANGES && it.cursor.isNotBlank()) { "Android sync cursor is not ready" }
         }
+
+    private fun youtubeCutoffMs(retention: AndroidSyncRetentionRequest): Long =
+        if (retention.youtubeDays <= 0) Long.MAX_VALUE
+        else serverNowMsProvider() - retention.youtubeDays.daysMs()
 
     private suspend fun <T> withMetadataRetry(label: String, block: suspend () -> T): T {
         var failures = 0

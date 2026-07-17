@@ -13,21 +13,34 @@ type androidSyncRetweetSourcesPayload struct {
 }
 
 type androidSyncMaterializationPlan struct {
-	Desired       db.AndroidSyncDesiredSets
-	RetweetHashes map[string]struct{}
+	Desired                    db.AndroidSyncDesiredSets
+	RequestedMediaVideos       map[string]struct{}
+	AllRequestedVideosAreMedia bool
+	RetweetHashes              map[string]struct{}
 }
 
-func newAndroidSyncMaterializationPlan() *androidSyncMaterializationPlan {
-	return &androidSyncMaterializationPlan{
+func newAndroidSyncMaterializationPlan(desired *db.AndroidSyncDesiredSets) *androidSyncMaterializationPlan {
+	plan := &androidSyncMaterializationPlan{
 		Desired:       emptyAndroidSyncDesiredSets(),
 		RetweetHashes: make(map[string]struct{}),
 	}
+	if desired == nil {
+		plan.AllRequestedVideosAreMedia = true
+	} else {
+		plan.RequestedMediaVideos = desired.MediaVideos
+	}
+	return plan
 }
 
-func (s *Server) buildAndroidSyncBootstrapHeads(database *db.DB, retention db.AndroidRetentionSettings, nowMs int64) ([]model.AndroidSyncHead, error) {
-	sets, err := database.ListAndroidSyncDesiredSets(retention, nowMs)
+func (s *Server) buildAndroidSyncBootstrapSelection(
+	database *db.DB,
+	retention db.AndroidRetentionSettings,
+	nowMs int64,
+	fullYoutubeMetadata bool,
+) ([]model.AndroidSyncHead, db.AndroidSyncDesiredSets, error) {
+	sets, err := database.ListAndroidSyncDesiredSetsForMode(retention, nowMs, fullYoutubeMetadata)
 	if err != nil {
-		return nil, err
+		return nil, db.AndroidSyncDesiredSets{}, err
 	}
 	heads := make([]model.AndroidSyncHead, 0, len(sets.Tweets)+len(sets.Videos)+len(sets.Channels))
 	appendOwners := func(kind string, ids []string) {
@@ -41,14 +54,14 @@ func (s *Server) buildAndroidSyncBootstrapHeads(database *db.DB, retention db.An
 
 	_, ranks, err := database.ListAndroidSyncFeedRankRows(sets.SortedTweets(), androidSyncFeedRankMaxRows)
 	if err != nil {
-		return nil, err
+		return nil, db.AndroidSyncDesiredSets{}, err
 	}
 	for _, rank := range ranks {
 		heads = append(heads, model.AndroidSyncHead{OwnerKind: "feed_rank", OwnerID: rank.TweetID})
 	}
 	stateKeys, err := database.ListAndroidSyncStateKeys()
 	if err != nil {
-		return nil, err
+		return nil, db.AndroidSyncDesiredSets{}, err
 	}
 	for _, key := range stateKeys {
 		heads = append(heads, model.AndroidSyncHead{OwnerKind: key.OwnerKind, OwnerID: key.OwnerID})
@@ -56,7 +69,7 @@ func (s *Server) buildAndroidSyncBootstrapHeads(database *db.DB, retention db.An
 	for _, key := range androidSyncRelevantSettingKeys() {
 		row, err := database.GetAndroidSyncSetting(key)
 		if err != nil {
-			return nil, err
+			return nil, db.AndroidSyncDesiredSets{}, err
 		}
 		if row != nil {
 			heads = append(heads, model.AndroidSyncHead{OwnerKind: "setting", OwnerID: key})
@@ -68,23 +81,27 @@ func (s *Server) buildAndroidSyncBootstrapHeads(database *db.DB, retention db.An
 		}
 		return heads[i].OwnerID < heads[j].OwnerID
 	})
-	return heads, nil
+	return heads, sets, nil
+}
+
+func (s *Server) buildAndroidSyncBootstrapHeads(database *db.DB, retention db.AndroidRetentionSettings, nowMs int64) ([]model.AndroidSyncHead, error) {
+	heads, _, err := s.buildAndroidSyncBootstrapSelection(database, retention, nowMs, true)
+	return heads, err
 }
 
 func (s *Server) buildAndroidSyncChangeSelection(
 	database *db.DB,
 	retention db.AndroidRetentionSettings,
 	nowMs int64,
-	afterRevision int64,
-	throughRevision int64,
+	heads []model.AndroidSyncHead,
+	fullYoutubeMetadata bool,
 ) (db.AndroidSyncDesiredSets, error) {
-	heads, err := database.ListAndroidSyncContentHeadsThrough(afterRevision, throughRevision)
-	if err != nil {
-		return db.AndroidSyncDesiredSets{}, err
-	}
 	byKind := make(map[string][]string)
 	for _, head := range heads {
 		byKind[head.OwnerKind] = append(byKind[head.OwnerKind], head.OwnerID)
+	}
+	if err := s.addAndroidSyncDependentVideoOwners(database, byKind); err != nil {
+		return db.AndroidSyncDesiredSets{}, err
 	}
 	feedIDs := sortedNonEmpty(byKind["feed"])
 	if hashes := sortedNonEmpty(byKind["retweet_sources"]); len(hashes) > 0 {
@@ -95,13 +112,14 @@ func (s *Server) buildAndroidSyncChangeSelection(
 		feedIDs = append(feedIDs, peers...)
 	}
 	if len(feedIDs) > 0 {
-		feedIDs, err = database.ListAndroidSyncFeedHydrationIDs(feedIDs)
+		hydrated, err := database.ListAndroidSyncFeedHydrationIDs(feedIDs)
 		if err != nil {
 			return db.AndroidSyncDesiredSets{}, err
 		}
+		feedIDs = hydrated
 	}
-	selection, err := database.ListAndroidSyncDesiredContentAmong(
-		retention, nowMs, feedIDs, byKind["video"],
+	selection, err := database.ListAndroidSyncDesiredContentAmongForMode(
+		retention, nowMs, feedIDs, byKind["video"], fullYoutubeMetadata,
 	)
 	if err != nil {
 		return db.AndroidSyncDesiredSets{}, err
@@ -120,7 +138,10 @@ func (s *Server) materializeAndroidSyncHeads(database *db.DB, heads []model.Andr
 	for _, head := range heads {
 		byKind[head.OwnerKind] = append(byKind[head.OwnerKind], head.OwnerID)
 	}
-	plan := newAndroidSyncMaterializationPlan()
+	if err := s.addAndroidSyncDependentVideoOwners(database, byKind); err != nil {
+		return nil, err
+	}
+	plan := newAndroidSyncMaterializationPlan(desired)
 
 	// A changed retweet group can add or remove every same-hash feed owner.
 	retweetHeadHashes := sortedNonEmpty(byKind["retweet_sources"])
@@ -223,6 +244,15 @@ func (s *Server) materializeAndroidSyncHeads(database *db.DB, heads []model.Andr
 	return dedupeAndroidSyncChanges(changes), nil
 }
 
+func (s *Server) addAndroidSyncDependentVideoOwners(database *db.DB, byKind map[string][]string) error {
+	assetVideoIDs, err := database.ListAndroidSyncVideoIDsForAssetIDs(byKind["asset"])
+	if err != nil {
+		return err
+	}
+	byKind["video"] = append(byKind["video"], assetVideoIDs...)
+	return nil
+}
+
 func (s *Server) androidSyncFeedChanges(database *db.DB, plan *androidSyncMaterializationPlan, requested []string) ([]model.AndroidSyncChange, error) {
 	requested = sortedNonEmpty(requested)
 	if len(requested) == 0 {
@@ -293,7 +323,11 @@ func (s *Server) androidSyncVideoChanges(database *db.DB, plan *androidSyncMater
 	for _, projection := range projections {
 		video := projection.Video
 		plan.Desired.Videos[video.VideoID] = struct{}{}
-		plan.Desired.MediaVideos[video.VideoID] = struct{}{}
+		if plan.AllRequestedVideosAreMedia {
+			plan.Desired.MediaVideos[video.VideoID] = struct{}{}
+		} else if _, ok := plan.RequestedMediaVideos[video.VideoID]; ok {
+			plan.Desired.MediaVideos[video.VideoID] = struct{}{}
+		}
 		if video.ChannelID != "" {
 			plan.Desired.Channels[video.ChannelID] = struct{}{}
 		}
@@ -572,7 +606,9 @@ func androidSyncVideoRetentionBucket(video model.Video) string {
 	if video.SourceKind == "story" {
 		return "story"
 	}
-	if androidSyncPlatformForOwnerKind(video.OwnerKind) == "youtube" || strings.HasPrefix(video.ChannelID, "youtube_") {
+	if androidSyncPlatformForOwnerKind(video.OwnerKind) == "youtube" {
+		// The Android client retains this metadata and independently prunes its
+		// automatic primary binary.
 		return "youtube"
 	}
 	return "moments"

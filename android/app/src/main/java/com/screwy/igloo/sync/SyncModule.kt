@@ -9,6 +9,7 @@ import com.screwy.igloo.outbox.OutboxWriter
 import kotlinx.coroutines.flow.first
 import org.koin.android.ext.koin.androidContext
 import org.koin.core.qualifier.named
+import org.koin.dsl.bind
 import org.koin.dsl.module
 
 val iglooSyncModule = module {
@@ -85,4 +86,15 @@ val iglooSyncModule = module {
             logger = get(),
         )
     }
+
+    single {
+        OfflineVideoDownloads(
+            db = get<IglooDatabase>(),
+            syncDao = get(),
+            downloads = get(),
+            mediaRoot = get(named("mediaRoot")),
+            nowMsProvider = System::currentTimeMillis,
+            syncTrigger = get<SyncCoordinator>()::trigger,
+        )
+    } bind OfflineVideoActions::class
 }

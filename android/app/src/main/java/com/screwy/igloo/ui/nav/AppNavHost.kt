@@ -39,6 +39,7 @@ import com.screwy.igloo.settings.ThemeRoute
 import com.screwy.igloo.thread.ThreadRoute
 import com.screwy.igloo.ui.UiEffect
 import com.screwy.igloo.ui.UiEffects
+import com.screwy.igloo.videos.DownloadedRoute
 import com.screwy.igloo.videos.VideosRoute
 import org.koin.compose.koinInject
 
@@ -108,6 +109,7 @@ fun AppNavHost() {
             BookmarksRoute(navController = navController)
         }
         scaffoldDestination(navController, RouteRegistry.Liked) { LikedRoute(navController) }
+        scaffoldDestination(navController, RouteRegistry.Downloaded) { DownloadedRoute(navController) }
 
         scaffoldDestination(navController, RouteRegistry.Channel) { entry ->
             val channelId = entry.arguments!!.getString("channel_id")!!

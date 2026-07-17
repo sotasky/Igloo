@@ -10,6 +10,10 @@ import org.koin.core.qualifier.named
 import org.koin.dsl.bind
 import org.koin.dsl.module
 
+/** Let the first media request establish reachability; only a confirmed outage blocks it. */
+internal fun allowsRemoteMediaFallback(state: Reachability.State): Boolean =
+    state !is Reachability.State.Offline
+
 /**
  * Koin wiring for the media layer. Android sync owns media mirroring; this
  * module keeps the UI resolvers, storage accounting, and foreground promotion
@@ -35,7 +39,7 @@ val iglooMediaModule = module {
             syncDao = get(),
             baseUrlProvider = get<ServerBaseUrlProvider>()::baseUrl,
             prefs = get(),
-            remoteFallbackAllowed = get<Reachability>().state.map { it is Reachability.State.Online },
+            remoteFallbackAllowed = get<Reachability>().state.map(::allowsRemoteMediaFallback),
         )
     } bind MediaResolvers::class
 

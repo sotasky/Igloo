@@ -27,6 +27,7 @@
     <string name="action_create_admin">Yönetici oluştur</string>
     <string name="action_create_user">Kullanıcı oluştur</string>
     <string name="action_delete">Sil</string>
+    <string name="action_delete_downloaded_video">İndirilen videoyu sil</string>
     <string name="action_delete_local_media">Cihazdaki medyayı sil</string>
     <string name="action_disable">Devre dışı bırak</string>
     <string name="action_download">İndir</string>
@@ -181,6 +182,7 @@
     <string name="common_unknown">Bilinmiyor</string>
     <string name="common_untitled">Başlıksız</string>
     <string name="confirm_default_title">Onayla</string>
+    <string name="confirm_delete_downloaded_video_body">Bu videonun yalnızca indirilen dosyası bu cihazdan silinsin mi? Küçük resmi, altyazıları, önizlemeleri ve diğer meta verileri kalır.</string>
     <string name="confirm_delete_local_media_body">Bu videonun bu cihazdaki indirilmiş medyası silinsin mi? Saklama süresindeyse eşitleme yeniden indirebilir.</string>
     <string name="confirm_logout_body">Bu cihazda Igloo oturumu kapatılsın mı? Daha sonra yeniden giriş yapabilirsiniz.</string>
     <string name="confirm_logout_title">Çıkış yapılsın mı?</string>
@@ -426,6 +428,7 @@
     <string name="moments_label_all">Tümü</string>
     <string name="nav_bookmarks">Kaydedilenler</string>
     <string name="nav_channels">Kanallar</string>
+    <string name="nav_downloaded">İndirilenler</string>
     <string name="nav_feed">Akış</string>
     <string name="nav_liked">Beğeniler</string>
     <string name="nav_moments">Anlar</string>

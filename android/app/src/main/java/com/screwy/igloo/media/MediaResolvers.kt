@@ -168,6 +168,10 @@ class MediaResolversImpl(
                     it.assetKind == "post_media" &&
                         it.contentType.orEmpty().startsWith("video/", ignoreCase = true)
                 }
+                ?: rows.firstOrNull {
+                    it.assetKind == "post_audio" &&
+                        it.contentType.orEmpty().startsWith("audio/", ignoreCase = true)
+                }
         return row.toMediaUri(allowRemote)
     }
 

@@ -200,7 +200,7 @@ class AndroidSyncMirrorTest {
         buildAssetDrainer(retryEngine) {
             nowMs += 31_000
             nowMs
-        }.drain()
+        }.drain(youtubeCutoffMs = Long.MIN_VALUE)
         assertEquals(1, attempts)
 
         db.androidSyncDao().deleteAsset("sample_retry_asset")
@@ -217,7 +217,10 @@ class AndroidSyncMirrorTest {
             respond("", status)
         }
 
-        val failure = runCatching { buildAssetDrainer(changedEngine) { nowMs }.drain() }.exceptionOrNull()
+        val failure =
+            runCatching {
+                buildAssetDrainer(changedEngine) { nowMs }.drain(youtubeCutoffMs = Long.MIN_VALUE)
+            }.exceptionOrNull()
 
         assertTrue(failure is AndroidSyncAssetChangedException)
         assertEquals(64, requested.size)
@@ -227,7 +230,8 @@ class AndroidSyncMirrorTest {
     @Test
     fun assetDrainPublishesOnlyAnExactLengthResponse() = runBlocking {
         db.androidSyncDao().upsertAsset(readyAsset("sample_complete_asset", sizeBytes = 3))
-        buildAssetDrainer(MockEngine { respond("abc", HttpStatusCode.OK) }) { nowMs }.drain()
+        buildAssetDrainer(MockEngine { respond("abc", HttpStatusCode.OK) }) { nowMs }
+            .drain(youtubeCutoffMs = Long.MIN_VALUE)
 
         val downloaded = requireNotNull(db.androidSyncDao().asset("sample_complete_asset"))
         val downloadedFile = File(requireNotNull(downloaded.localPath))
@@ -236,7 +240,8 @@ class AndroidSyncMirrorTest {
         assertFalse(File(downloadedFile.parentFile, downloadedFile.name + ".part").exists())
 
         db.androidSyncDao().upsertAsset(readyAsset("sample_truncated_asset", sizeBytes = 3))
-        buildAssetDrainer(MockEngine { respond("ab", HttpStatusCode.OK) }) { nowMs }.drain()
+        buildAssetDrainer(MockEngine { respond("ab", HttpStatusCode.OK) }) { nowMs }
+            .drain(youtubeCutoffMs = Long.MIN_VALUE)
 
         val truncated = requireNotNull(db.androidSyncDao().asset("sample_truncated_asset"))
         assertNull(truncated.localPath)
@@ -462,7 +467,7 @@ class AndroidSyncMirrorTest {
     }
 
     @Test
-    fun rootEffectiveRecencyKeepsOldReplyAncestorAndRepostedVideo() = runBlocking {
+    fun rootEffectiveRecencyExpiresOldFeedButKeepsFullYoutubeMetadata() = runBlocking {
         val recentRoot = nowMs
         val oldPublished = nowMs - 100L * DAY_MS
         val changes =
@@ -491,7 +496,9 @@ class AndroidSyncMirrorTest {
 
         assertNull(db.feedItemDao().getById("sample_ancestor"))
         assertNull(db.feedItemDao().getById("sample_reply"))
-        assertNull(db.videoDao().getById("sample_reposted_video"))
+        // The full YouTube mirror retains old video metadata. Only its primary binary is
+        // eligible for retention pruning, which is covered by AndroidVideoBinaryRetentionTest.
+        assertNotNull(db.videoDao().getById("sample_reposted_video"))
     }
 
     @Test

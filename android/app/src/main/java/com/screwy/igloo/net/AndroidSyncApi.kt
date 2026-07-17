@@ -30,6 +30,7 @@ class AndroidSyncApi(
             parameter("youtube_days", retention.youtubeDays)
             parameter("moments_days", retention.momentsDays)
             parameter("story_hours", retention.storyHours)
+            parameter("full_youtube_metadata", FULL_YOUTUBE_METADATA_REQUEST)
             if (!after.isNullOrEmpty()) parameter("after", after)
         }.decodeSyncResponse("bootstrap")
 
@@ -43,6 +44,7 @@ class AndroidSyncApi(
             parameter("youtube_days", retention.youtubeDays)
             parameter("moments_days", retention.momentsDays)
             parameter("story_hours", retention.storyHours)
+            parameter("full_youtube_metadata", FULL_YOUTUBE_METADATA_REQUEST)
             parameter("after", after)
         }.decodeSyncResponse("changes")
 
@@ -62,6 +64,7 @@ class AndroidSyncApi(
     }
 
     private companion object {
+        const val FULL_YOUTUBE_METADATA_REQUEST = 1
         const val SYNC_METADATA_REQUEST_TIMEOUT_MS = 60_000L
         const val SYNC_CONNECT_TIMEOUT_MS = 15_000L
     }

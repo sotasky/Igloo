@@ -207,9 +207,24 @@ func (db *DB) ListAndroidSyncDesiredFeedAssetOwners(feedDays int, nowMs int64) (
 	return sortedKeys(owners), nil
 }
 
-// ListAndroidSyncDesiredContent returns the canonical retained/protected
-// content selection without expanding its identity dependencies.
+// ListAndroidSyncDesiredContent returns the full YouTube metadata selection
+// without expanding its identity dependencies. The legacy Android protocol
+// uses ListAndroidSyncDesiredContentForMode with fullYoutubeMetadata false.
 func (db *DB) ListAndroidSyncDesiredContent(settings AndroidRetentionSettings, nowMs int64) (AndroidSyncDesiredSets, error) {
+	return db.ListAndroidSyncDesiredContentForMode(settings, nowMs, true)
+}
+
+// ListAndroidSyncDesiredContentForMode returns the canonical retained/protected
+// content selection without expanding its identity dependencies. When
+// fullYoutubeMetadata is true, ordinary ready YouTube videos use the same
+// admission rule as the web Videos page and Android retains their metadata
+// independently from their primary-video transfer window. False preserves the
+// retention-window selection used by the legacy Android protocol.
+func (db *DB) ListAndroidSyncDesiredContentForMode(
+	settings AndroidRetentionSettings,
+	nowMs int64,
+	fullYoutubeMetadata bool,
+) (AndroidSyncDesiredSets, error) {
 	out := AndroidSyncDesiredSets{
 		Tweets:           map[string]struct{}{},
 		TweetAssetOwners: map[string]struct{}{},
@@ -250,8 +265,8 @@ func (db *DB) ListAndroidSyncDesiredContent(settings AndroidRetentionSettings, n
 
 	if err := collect(
 		"content_videos",
-		androidSyncDesiredVideoRowsSQL("v.video_id"),
-		androidSyncDesiredVideoRowsArgs(youtubeCutoff, momentsCutoff),
+		androidSyncDesiredVideoRowsSQL("v.video_id", fullYoutubeMetadata),
+		androidSyncDesiredVideoRowsArgs(fullYoutubeMetadata, youtubeCutoff, momentsCutoff),
 		out.Videos,
 	); err != nil {
 		return out, fmt.Errorf("android sync desired content videos: %w", err)
@@ -277,34 +292,26 @@ func (db *DB) ListAndroidSyncDesiredContent(settings AndroidRetentionSettings, n
 	for id := range out.Videos {
 		out.MediaVideos[id] = struct{}{}
 	}
-	if len(out.MediaVideos) > 0 {
-		videoIDsJSON, err := json.Marshal(out.SortedMediaVideos())
-		if err != nil {
-			return out, err
-		}
-		excluded := map[string]struct{}{}
-		if err := collect("media_video_cutoff", `
-			SELECT v.video_id
-			FROM videos v
-			WHERE v.video_id IN (SELECT value FROM json_each(?))
-			  AND v.channel_id LIKE 'youtube_%'
-			  AND COALESCE(v.published_at, 0) < ?
-			  AND NOT EXISTS (SELECT 1 FROM bookmarks b WHERE b.video_id = v.video_id)
-			  AND NOT EXISTS (SELECT 1 FROM feed_likes fl WHERE fl.tweet_id = v.video_id)
-		`, []any{string(videoIDsJSON), youtubeCutoff}, excluded); err != nil {
-			return out, fmt.Errorf("android sync media video cutoff: %w", err)
-		}
-		for id := range excluded {
-			delete(out.MediaVideos, id)
-		}
+	if err := db.excludeAndroidSyncVideoStreamsForMode(out.MediaVideos, youtubeCutoff, fullYoutubeMetadata); err != nil {
+		return out, err
 	}
 	return out, nil
 }
 
 // ListAndroidSyncDesiredSets adds the identity dependencies needed to
-// materialize the canonical content selection.
+// materialize the full YouTube metadata selection.
 func (db *DB) ListAndroidSyncDesiredSets(settings AndroidRetentionSettings, nowMs int64) (AndroidSyncDesiredSets, error) {
-	out, err := db.ListAndroidSyncDesiredContent(settings, nowMs)
+	return db.ListAndroidSyncDesiredSetsForMode(settings, nowMs, true)
+}
+
+// ListAndroidSyncDesiredSetsForMode adds the identity dependencies needed to
+// materialize the selected Android sync protocol mode.
+func (db *DB) ListAndroidSyncDesiredSetsForMode(
+	settings AndroidRetentionSettings,
+	nowMs int64,
+	fullYoutubeMetadata bool,
+) (AndroidSyncDesiredSets, error) {
+	out, err := db.ListAndroidSyncDesiredContentForMode(settings, nowMs, fullYoutubeMetadata)
 	if err != nil {
 		return out, err
 	}
@@ -399,13 +406,56 @@ func androidSyncLogDesiredSetQuery(name string, added int, total int, start time
 	slog.Info("android_sync_desired_set_query", fields...)
 }
 
-func androidSyncDesiredVideoRowsSQL(selectExpr string) string {
+func androidSyncDesiredVideoRowsSQL(selectExpr string, fullYoutubeMetadata bool) string {
+	if !fullYoutubeMetadata {
+		return fmt.Sprintf(`
+			SELECT %s
+			FROM channel_follows cf
+			JOIN videos v ON v.channel_id = cf.channel_id
+			WHERE v.channel_id LIKE 'youtube_%%'
+			  AND COALESCE(v.published_at, 0) >= ?
+
+			UNION
+			SELECT %s
+			FROM channel_follows cf
+			JOIN videos v ON v.channel_id = cf.channel_id
+			WHERE (v.channel_id LIKE 'tiktok_%%' OR v.channel_id LIKE 'instagram_%%')
+			  AND COALESCE(v.source_kind, '') != 'story'
+			  AND COALESCE(v.published_at, 0) >= ?
+
+			UNION
+			SELECT %s
+			FROM bookmarks b
+			JOIN videos v ON v.video_id = b.video_id
+			WHERE (
+			    v.channel_id LIKE 'youtube_%%'
+			    OR v.channel_id LIKE 'tiktok_%%'
+			    OR v.channel_id LIKE 'instagram_%%'
+			  )
+
+			UNION
+			SELECT %s
+			FROM feed_likes fl
+			JOIN videos v ON v.video_id = fl.tweet_id
+			WHERE (
+			    v.channel_id LIKE 'youtube_%%'
+			    OR v.channel_id LIKE 'tiktok_%%'
+			    OR v.channel_id LIKE 'instagram_%%'
+			  )
+		`, selectExpr, selectExpr, selectExpr, selectExpr)
+	}
+
+	youtubeLibrary := androidSyncWebYoutubeLibraryPredicate("v")
 	return fmt.Sprintf(`
 		SELECT %s
-		FROM channel_follows cf
-		JOIN videos v ON v.channel_id = cf.channel_id
-		WHERE v.channel_id LIKE 'youtube_%%'
-		  AND COALESCE(v.published_at, 0) >= ?
+		FROM videos v
+		WHERE %s
+
+		UNION
+		SELECT %s
+		FROM videos v
+		WHERE v.owner_kind = 'youtube_video'
+		  AND COALESCE(v.is_temp, 0) = 1
 
 		UNION
 		SELECT %s
@@ -434,11 +484,96 @@ func androidSyncDesiredVideoRowsSQL(selectExpr string) string {
 		    OR v.channel_id LIKE 'tiktok_%%'
 		    OR v.channel_id LIKE 'instagram_%%'
 		  )
-	`, selectExpr, selectExpr, selectExpr, selectExpr)
+		`, selectExpr, youtubeLibrary, selectExpr, selectExpr, selectExpr, selectExpr)
 }
 
-func androidSyncDesiredVideoRowsArgs(youtubeCutoff, momentsCutoff int64) []any {
-	return []any{youtubeCutoff, momentsCutoff}
+func androidSyncDesiredVideoRowsArgs(fullYoutubeMetadata bool, youtubeCutoff, momentsCutoff int64) []any {
+	if !fullYoutubeMetadata {
+		return []any{youtubeCutoff, momentsCutoff}
+	}
+	return []any{momentsCutoff}
+}
+
+// androidSyncWebYoutubeLibraryPredicate is the same ordinary-video admission
+// rule used by the web Videos page. The canonical video owner kind keeps the
+// web and Android predicates independent of channel-profile updates. Android
+// mirrors that server library as metadata, then independently applies its
+// binary retention window.
+func androidSyncWebYoutubeLibraryPredicate(videoAlias string) string {
+	return `COALESCE(` + videoAlias + `.source_kind, '') != 'story'
+		AND ` + videoAlias + `.owner_kind = 'youtube_video'
+		AND COALESCE(` + videoAlias + `.is_temp, 0) = 0
+		AND ` + readyVideoMediaExistsSQL(videoAlias)
+}
+
+// excludeAndroidSyncMetadataOnlyVideoStreams keeps every selected YouTube
+// record and its auxiliary assets in the Android mirror, while limiting only
+// automatic primary-video transfers to the configured binary window. A
+// temporary web download is deliberately metadata-only on Android: it remains
+// available to stream or explicitly save until the server expires it.
+func (db *DB) excludeAndroidSyncMetadataOnlyVideoStreams(videoIDs map[string]struct{}, youtubeCutoff int64) error {
+	if len(videoIDs) == 0 {
+		return nil
+	}
+	videoIDsJSON, err := json.Marshal(sortedKeys(videoIDs))
+	if err != nil {
+		return err
+	}
+	excluded := map[string]struct{}{}
+	if err := db.collectStrings(`
+		SELECT v.video_id
+		FROM videos v
+		WHERE v.video_id IN (SELECT value FROM json_each(?))
+		  AND v.owner_kind = 'youtube_video'
+		  AND (
+		    COALESCE(v.is_temp, 0) = 1
+		    OR COALESCE(v.published_at, 0) < ?
+	  )
+	`, []any{string(videoIDsJSON), youtubeCutoff}, excluded); err != nil {
+		return fmt.Errorf("android sync media video cutoff: %w", err)
+	}
+	for id := range excluded {
+		delete(videoIDs, id)
+	}
+	return nil
+}
+
+func (db *DB) excludeAndroidSyncVideoStreamsForMode(
+	videoIDs map[string]struct{}, youtubeCutoff int64, fullYoutubeMetadata bool,
+) error {
+	if fullYoutubeMetadata {
+		return db.excludeAndroidSyncMetadataOnlyVideoStreams(videoIDs, youtubeCutoff)
+	}
+	return db.excludeAndroidSyncLegacyVideoStreams(videoIDs, youtubeCutoff)
+}
+
+// excludeAndroidSyncLegacyVideoStreams preserves the former Android client
+// behavior: old saved YouTube videos remain eligible for automatic binary
+// transfer, while old ordinary videos do not.
+func (db *DB) excludeAndroidSyncLegacyVideoStreams(videoIDs map[string]struct{}, youtubeCutoff int64) error {
+	if len(videoIDs) == 0 {
+		return nil
+	}
+	videoIDsJSON, err := json.Marshal(sortedKeys(videoIDs))
+	if err != nil {
+		return err
+	}
+	excluded := map[string]struct{}{}
+	if err := db.collectStrings(`
+		SELECT v.video_id
+		FROM videos v
+		WHERE v.video_id IN (SELECT value FROM json_each(?))
+		  AND v.channel_id LIKE 'youtube_%'
+		  AND COALESCE(v.published_at, 0) < ?
+		  AND NOT EXISTS (SELECT 1 FROM bookmarks b WHERE b.video_id = v.video_id)
+		  AND NOT EXISTS (SELECT 1 FROM feed_likes fl WHERE fl.tweet_id = v.video_id)
+	`, []any{string(videoIDsJSON), youtubeCutoff}, excluded); err != nil {
+		return fmt.Errorf("android sync media video cutoff: %w", err)
+	}
+	for id := range excluded {
+		delete(videoIDs, id)
+	}
+	return nil
 }
 
 func (db *DB) collectStoryVideoIDs(storyCutoff int64, into map[string]struct{}) error {

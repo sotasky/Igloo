@@ -22,9 +22,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
@@ -69,8 +67,6 @@ class PlayerViewModel(
         started = SharingStarted.WhileSubscribed(5_000L),
         initialValue = PreferencesRepo.Defaults.DEARROW_MODE,
     )
-
-    private var seededHydration = false
 
     /** The `videos` row. Null until Room's first emission. */
     val video: StateFlow<VideoEntity?> = db.videoDao()
@@ -178,24 +174,6 @@ class PlayerViewModel(
                     duration = safeDuration / 1000.0,
                 )
             )
-        }
-    }
-
-    fun ensureHydrated() {
-        if (seededHydration) return
-        seededHydration = true
-        if (video.value == null || comments.value.isEmpty()) {
-            scheduler.triggerAll()
-        }
-        val channelId = video.value?.channelId ?: channel.value?.channelId
-        viewModelScope.launch {
-            val avatarReady = channelId != null && db.androidSyncDao()
-                .assetsForOwnerFlow("channel", channelId)
-                .first()
-                .any { it.assetKind == "avatar" }
-            if (channel.value == null || !avatarReady) {
-                scheduler.triggerAll()
-            }
         }
     }
 

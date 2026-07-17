@@ -130,6 +130,15 @@ class IglooNavigatorTest {
                 IglooNavigationIntent.OpenDestination(IglooDestination.AllMoments, IglooNavigationSource.Moments),
             )?.route,
         )
+        assertEquals(
+            RouteRegistry.Downloaded.route,
+            IglooNavigation.targetFor(
+                IglooNavigationIntent.OpenDestination(
+                    IglooDestination.Downloaded,
+                    IglooNavigationSource.Drawer,
+                ),
+            )?.route,
+        )
     }
 
     @Test

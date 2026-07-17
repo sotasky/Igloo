@@ -19,25 +19,34 @@ type roomSchemaFile struct {
 type roomEntity struct {
 	TableName string      `json:"tableName"`
 	Fields    []roomField `json:"fields"`
+	Indices   []roomIndex `json:"indices"`
 }
 
 type roomField struct {
 	ColumnName string `json:"columnName"`
 }
 
-func TestAndroidRoomSchemaV41Owners(t *testing.T) {
+type roomIndex struct {
+	Name        string   `json:"name"`
+	ColumnNames []string `json:"columnNames"`
+	Orders      []string `json:"orders"`
+}
+
+func TestAndroidRoomSchemaV42Owners(t *testing.T) {
 	schema := readAndroidRoomSchema(t)
-	if schema.Database.Version != 41 {
-		t.Fatalf("Room schema version = %d, want 41", schema.Database.Version)
+	if schema.Database.Version != 42 {
+		t.Fatalf("Room schema version = %d, want 42", schema.Database.Version)
 	}
 
 	tables := make(map[string][]string, len(schema.Database.Entities))
+	indexes := make(map[string][]roomIndex, len(schema.Database.Entities))
 	for _, entity := range schema.Database.Entities {
 		columns := make([]string, 0, len(entity.Fields))
 		for _, field := range entity.Fields {
 			columns = append(columns, field.ColumnName)
 		}
 		tables[entity.TableName] = columns
+		indexes[entity.TableName] = entity.Indices
 	}
 
 	assertRoomColumns(t, tables, "android_sync_state",
@@ -52,12 +61,17 @@ func TestAndroidRoomSchemaV41Owners(t *testing.T) {
 	assertRoomColumns(t, tables, "muted_channels", "channel_id", "muted_at")
 	assertRoomColumns(t, tables, "moments_cursors",
 		"scope", "video_id", "position_ms", "sort_at_ms", "updated_at_ms")
+	assertRoomColumns(t, tables, "offline_video_downloads",
+		"video_id", "state", "updated_at_ms")
 
 	assertRoomContains(t, tables, "feed_items",
 		"tweet_id", "source_channel_id", "reposter_channel_id", "quote_channel_id",
 		"reply_channel_id", "channel_id")
 	assertRoomContains(t, tables, "channel_profiles",
 		"channel_id", "handle", "display_name", "bio", "followers", "following")
+	assertRoomContains(t, tables, "videos", "video_id", "is_temp")
+	assertRoomIndex(t, indexes, "videos", "idx_videos_owner_published",
+		[]string{"owner_kind", "published_at", "video_id"}, []string{"ASC", "DESC", "DESC"})
 
 	for _, table := range []string{
 		"android_content_state",
@@ -79,6 +93,21 @@ func TestAndroidRoomSchemaV41Owners(t *testing.T) {
 		"sha256",
 		"generation_id", "server_url", "server_state", "required_reason",
 		"effective_recency_ms", "file_size", "attempt_count", "last_error", "updated_at_ms")
+}
+
+func assertRoomIndex(t *testing.T, indexes map[string][]roomIndex, table, name string, columns, orders []string) {
+	t.Helper()
+	for _, index := range indexes[table] {
+		if index.Name != name {
+			continue
+		}
+		if !reflect.DeepEqual(index.ColumnNames, columns) || !reflect.DeepEqual(index.Orders, orders) {
+			t.Errorf("Room index %s.%s = columns %v orders %v, want columns %v orders %v",
+				table, name, index.ColumnNames, index.Orders, columns, orders)
+		}
+		return
+	}
+	t.Errorf("Room index %s.%s is missing", table, name)
 }
 
 func assertRoomColumns(t *testing.T, tables map[string][]string, table string, want ...string) {
@@ -136,10 +165,10 @@ func readAndroidRoomSchema(t *testing.T) roomSchemaFile {
 		}
 	}
 	sort.Strings(names)
-	if !reflect.DeepEqual(names, []string{"40.json", "41.json"}) {
-		t.Fatalf("Room schema files = %v, want 40.json and 41.json", names)
+	if !reflect.DeepEqual(names, []string{"40.json", "41.json", "42.json"}) {
+		t.Fatalf("Room schema files = %v, want 40.json, 41.json, and 42.json", names)
 	}
-	raw, err := os.ReadFile(filepath.Join(dir, "41.json"))
+	raw, err := os.ReadFile(filepath.Join(dir, "42.json"))
 	if err != nil {
 		t.Fatal(err)
 	}

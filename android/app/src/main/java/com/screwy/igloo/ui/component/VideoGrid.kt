@@ -2,6 +2,8 @@ package com.screwy.igloo.ui.component
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,11 +21,13 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -59,6 +63,9 @@ fun VideoGrid(
     columns: Int = 2,
     onVideoClick: (videoId: String) -> Unit,
     onChannelClick: (channelId: String) -> Unit,
+    onVideoLongClick: ((videoId: String, action: VideoBinaryAction) -> Unit)? = null,
+    canLoadMore: Boolean = false,
+    onLoadMore: (() -> Unit)? = null,
     headerContent: (@Composable () -> Unit)? = null,
     showScrollFabs: Boolean = false,
     modifier: Modifier = Modifier,
@@ -75,6 +82,7 @@ fun VideoGrid(
     val gridState = rememberLazyGridState()
     val scope = rememberCoroutineScope()
     val headerOffset = if (headerContent != null) 1 else 0
+    val latestLoadMore by rememberUpdatedState(onLoadMore)
     val scrollArrows by remember(items.size, showScrollFabs) {
         derivedStateOf {
             scrollArrowVisibility(
@@ -85,6 +93,19 @@ fun VideoGrid(
                 firstVisibleItemScrollOffset = gridState.firstVisibleItemScrollOffset,
             )
         }
+    }
+    val shouldLoadMore by remember(items.size, headerOffset, canLoadMore) {
+        derivedStateOf {
+            val thresholdIndex = (items.lastIndex - VideoGridLoadMoreThreshold).coerceAtLeast(0)
+            canLoadMore &&
+                items.isNotEmpty() &&
+                gridState.layoutInfo.visibleItemsInfo.any { item ->
+                    item.index >= thresholdIndex + headerOffset
+                }
+        }
+    }
+    LaunchedEffect(shouldLoadMore, items.size) {
+        if (shouldLoadMore) latestLoadMore?.invoke()
     }
     GridMediaPrefetchEffect(
         gridState = gridState,
@@ -127,6 +148,9 @@ fun VideoGrid(
                     resolvers = resolvers,
                     dearrowMode = dearrowMode,
                     onVideoClick = { onVideoClick(items[index].video.videoId) },
+                    onVideoLongClick = onVideoLongClick?.let { callback ->
+                        { action -> callback(items[index].video.videoId, action) }
+                    },
                     onChannelClick = { onChannelClick(items[index].video.channelId) },
                     channelLabel = videoGridChannelLabel(items[index]),
                 )
@@ -151,6 +175,25 @@ fun VideoGrid(
         }
     }
 }
+
+private const val VideoGridLoadMoreThreshold = 6
+
+/**
+ * The only binary-availability signal the grid uses. Metadata availability is deliberately
+ * excluded: a remote stream is a faded, playable-and-downloadable video; a local stream is not.
+ */
+enum class VideoBinaryAction {
+    Download,
+    Delete,
+    Unavailable,
+}
+
+internal fun videoBinaryAction(streamUri: MediaUri): VideoBinaryAction =
+    when (streamUri) {
+        is MediaUri.Local -> VideoBinaryAction.Delete
+        is MediaUri.Remote -> VideoBinaryAction.Download
+        MediaUri.Missing -> VideoBinaryAction.Unavailable
+    }
 
 internal fun videoGridChannelLabel(item: VideoGridItem): String {
     val fallback = stripPlatformPrefix(item.video.channelId)
@@ -185,11 +228,18 @@ private fun VideoCell(
     resolvers: MediaResolvers,
     dearrowMode: String = "off",
     onVideoClick: () -> Unit,
+    onVideoLongClick: ((VideoBinaryAction) -> Unit)?,
     onChannelClick: () -> Unit,
     channelLabel: String,
 ) {
     val colors = MaterialTheme.iglooColors
     val video = item.video
+    val streamUri by resolvers.videoStreamFlow(video.videoId, OwnerKind.YouTubeVideo)
+        .collectAsState(initial = MediaUri.Missing)
+    val binaryAction = videoBinaryAction(streamUri)
+    val onBinaryLongClick = onVideoLongClick
+        ?.takeIf { binaryAction != VideoBinaryAction.Unavailable }
+        ?.let { callback -> { callback(binaryAction) } }
 
     Column(
         modifier = Modifier
@@ -203,6 +253,8 @@ private fun VideoCell(
             durationLabel = videoDurationBadgeLabel(video),
             progress = progressFraction(item.playbackPosition, item.watchDuration),
             onClick = onVideoClick,
+            onLongClick = onBinaryLongClick,
+            isVideoLocal = streamUri is MediaUri.Local,
         )
 
         Text(
@@ -220,7 +272,7 @@ private fun VideoCell(
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier
                 .fillMaxWidth()
-                .clickable(onClick = onVideoClick),
+                .videoCardClick(onClick = onVideoClick, onLongClick = onBinaryLongClick),
         )
 
         ChannelAndTimeRow(
@@ -281,13 +333,14 @@ private fun VideoThumbnail(
     durationLabel: String,
     progress: Float,
     onClick: () -> Unit,
+    onLongClick: (() -> Unit)?,
+    isVideoLocal: Boolean,
 ) {
     val colors = MaterialTheme.iglooColors
     val uri by resolvers.thumbnailForPostFlow(videoId, OwnerKind.YouTubeVideo)
         .collectAsState(initial = MediaUri.Missing)
 
     val backgroundColor = if (uri is MediaUri.Missing) colors.surfaceVariant else colors.surface
-    val showBadge = isIglooRemoteOffline(uri)
 
     Box(
         modifier = Modifier
@@ -295,8 +348,8 @@ private fun VideoThumbnail(
             .aspectRatio(16f / 9f)
             .clip(RoundedCornerShape(6.dp))
             .background(backgroundColor)
-            .clickable(onClick = onClick)
-            .alpha(mediaAlpha(uri)),
+            .videoCardClick(onClick = onClick, onLongClick = onLongClick)
+            .alpha(if (isVideoLocal) 1f else 0.55f),
         contentAlignment = Alignment.Center,
     ) {
         MediaCellArtwork(
@@ -331,7 +384,16 @@ private fun VideoThumbnail(
                     .background(colors.primary.copy(alpha = 0.8f)),
             )
         }
-
-        if (showBadge) DownloadPendingBadge()
     }
 }
+
+@OptIn(ExperimentalFoundationApi::class)
+private fun Modifier.videoCardClick(
+    onClick: () -> Unit,
+    onLongClick: (() -> Unit)?,
+): Modifier =
+    if (onLongClick == null) {
+        clickable(onClick = onClick)
+    } else {
+        combinedClickable(onClick = onClick, onLongClick = onLongClick)
+    }

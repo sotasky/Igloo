@@ -95,6 +95,7 @@ type androidSyncVideoItem struct {
 	MediaKind          string  `json:"media_kind"`
 	SlideCount         int     `json:"slide_count"`
 	SourceKind         string  `json:"source_kind"`
+	IsTemp             bool    `json:"is_temp"`
 	MetadataJSON       string  `json:"metadata_json"`
 	CanonicalURL       string  `json:"canonical_url"`
 	DearrowTitle       *string `json:"dearrow_title"`
@@ -208,7 +209,7 @@ func (s *Server) handleAndroidSyncHealth(w http.ResponseWriter, r *http.Request)
 	}
 	body.Cursor = strings.TrimSpace(body.Cursor)
 	cursor, cursorErr := decodeAndroidSyncCursor(body.Cursor)
-	if cursorErr != nil || cursor.Mode != "changes" || cursor.Version != androidSyncModelVersion || cursor.Revision < 0 {
+	if cursorErr != nil || cursor.Mode != "changes" || !androidSyncModelVersionSupported(cursor.Version) || cursor.Revision < 0 {
 		writeAndroidSyncResetRequired(w)
 		return
 	}
@@ -373,6 +374,7 @@ func androidSyncVideoItemFromProjection(projection db.AndroidSyncVideoProjection
 		MediaKind:          video.MediaKind,
 		SlideCount:         video.MediaSlideCount,
 		SourceKind:         video.SourceKind,
+		IsTemp:             video.IsTemp,
 		MetadataJSON:       video.MetadataJSON,
 		CanonicalURL:       androidSyncCanonicalVideoURL(video),
 		DearrowTitle:       video.DearrowTitle,
@@ -584,10 +586,14 @@ func androidSyncInventoryAssetDesired(row db.Asset, sets db.AndroidSyncDesiredSe
 	case "avatar", "banner":
 		_, ok := sets.Channels[row.OwnerID]
 		return ok
-	case "video_stream":
-		_, ok := sets.MediaVideos[row.OwnerID]
-		return ok
-	case "post_media", "post_audio":
+	case "video_stream", "post_media", "post_audio":
+		// The web library admits all three primary video asset kinds. Keep their
+		// descriptors on Android even when their bytes fall outside its automatic
+		// download window, so remote playback and an explicit download stay possible.
+		if row.OwnerKind == "youtube_video" {
+			_, ok := sets.Videos[row.OwnerID]
+			return ok
+		}
 		if _, ok := sets.MediaVideos[row.OwnerID]; ok {
 			return true
 		}

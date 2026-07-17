@@ -27,6 +27,7 @@
     <string name="action_create_admin">Create Admin</string>
     <string name="action_create_user">Create User</string>
     <string name="action_delete">Delete</string>
+    <string name="action_delete_downloaded_video">Delete downloaded video</string>
     <string name="action_delete_local_media">Delete local media</string>
     <string name="action_disable">Disable</string>
     <string name="action_download">Download</string>
@@ -183,6 +184,7 @@
     <string name="common_unknown">Unknown</string>
     <string name="common_untitled">Untitled</string>
     <string name="confirm_default_title">Confirm</string>
+    <string name="confirm_delete_downloaded_video_body">Delete only this video\'s downloaded file from this device? Its thumbnail, subtitles, previews, and other metadata will remain.</string>
     <string name="confirm_delete_local_media_body">Delete the downloaded media for this video from this device? Sync can download it again if it remains in retention.</string>
     <string name="confirm_logout_body">Log out of Igloo on this device? You can sign in again later.</string>
     <string name="confirm_logout_title">Log out?</string>
@@ -428,6 +430,7 @@
     <string name="moments_label_all">All</string>
     <string name="nav_bookmarks">Bookmarks</string>
     <string name="nav_channels">Channels</string>
+    <string name="nav_downloaded">Downloaded</string>
     <string name="nav_feed">Feed</string>
     <string name="nav_liked">Liked</string>
     <string name="nav_moments">Moments</string>

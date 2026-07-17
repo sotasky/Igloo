@@ -30,6 +30,7 @@ import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.automirrored.filled.Subject
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.DynamicFeed
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.PlayCircle
 import androidx.compose.material.icons.filled.Settings
@@ -351,9 +352,13 @@ private val WideDrawerPrimaryDestinations = listOf(
     IglooDestination.Moments,
     IglooDestination.Bookmarks,
     IglooDestination.Liked,
+    IglooDestination.Downloaded,
 )
 
-private val CompactDrawerPrimaryDestinations = listOf(IglooDestination.Liked)
+private val CompactDrawerPrimaryDestinations = listOf(
+    IglooDestination.Liked,
+    IglooDestination.Downloaded,
+)
 
 private data class PrimaryDrawerItem(
     val labelRes: Int,
@@ -366,6 +371,7 @@ private fun primaryDrawerItem(destination: IglooDestination): PrimaryDrawerItem 
     IglooDestination.Moments -> PrimaryDrawerItem(R.string.nav_moments, Icons.Default.PlayCircle)
     IglooDestination.Bookmarks -> PrimaryDrawerItem(R.string.nav_bookmarks, Icons.Default.Bookmark)
     IglooDestination.Liked -> PrimaryDrawerItem(R.string.nav_liked, Icons.Default.Favorite)
+    IglooDestination.Downloaded -> PrimaryDrawerItem(R.string.nav_downloaded, Icons.Default.Download)
     else -> error("Unsupported primary drawer destination: $destination")
 }
 
@@ -382,6 +388,7 @@ internal fun drawerDestinationSelected(currentRoute: String?, destination: Igloo
             route == RouteRegistry.Shorts.route
         IglooDestination.Bookmarks -> route == RouteRegistry.Bookmarks.route
         IglooDestination.Liked -> route == RouteRegistry.Liked.route
+        IglooDestination.Downloaded -> route == RouteRegistry.Downloaded.route
         IglooDestination.Settings -> route == RouteRegistry.Settings.route || route.startsWith("settings/")
         IglooDestination.Logs -> route == RouteRegistry.Logs.route || route == RouteRegistry.OutboxLogs.route
         else -> false

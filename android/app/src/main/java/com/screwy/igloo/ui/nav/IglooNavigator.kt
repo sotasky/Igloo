@@ -9,6 +9,7 @@ enum class IglooNavigationSource {
     Feed,
     Bookmarks,
     Liked,
+    Downloaded,
     Channel,
     Videos,
     Moments,
@@ -27,6 +28,7 @@ enum class IglooDestination {
     Moments,
     Bookmarks,
     Liked,
+    Downloaded,
     Settings,
     Logs,
     AllMoments,
@@ -211,6 +213,7 @@ object IglooNavigation {
             IglooDestination.Moments -> RouteRegistry.Moments.route
             IglooDestination.Bookmarks -> RouteRegistry.Bookmarks.route
             IglooDestination.Liked -> RouteRegistry.Liked.route
+            IglooDestination.Downloaded -> RouteRegistry.Downloaded.route
             IglooDestination.Settings -> RouteRegistry.Settings.route
             IglooDestination.Logs -> RouteRegistry.Logs.route
             IglooDestination.AllMoments -> RouteRegistry.AllMoments.route

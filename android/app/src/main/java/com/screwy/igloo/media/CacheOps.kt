@@ -96,6 +96,9 @@ class CacheOps(
         var demoted = false
         try {
             val paths = syncDao.verifiedLocalPathsForOwner(ownerKind, ownerId)
+            if (ownerKind == "youtube_video") {
+                syncDao.markOfflineYoutubeDownloadRemoved(ownerId, nowMsProvider())
+            }
             syncDao.resetVerifiedLocalPathsForOwner(ownerKind, ownerId)
             demoted = true
             val deletionFailure = deleteRecordedFilesOnIo(paths)
@@ -111,12 +114,14 @@ class CacheOps(
 
     private suspend fun clearAllBuckets(): IOException? {
         val paths = syncDao.verifiedLocalPaths(bucket = null)
+        syncDao.markOfflineYoutubeDownloadsRemovedForPrimaryAssets(bucket = null, nowMs = nowMsProvider())
         syncDao.resetVerifiedLocalPaths(bucket = null)
         return deleteRecordedFilesOnIo(paths)
     }
 
     private suspend fun clearBucket(bucket: String): IOException? {
         val paths = syncDao.verifiedLocalPaths(bucket)
+        syncDao.markOfflineYoutubeDownloadsRemovedForPrimaryAssets(bucket, nowMsProvider())
         syncDao.resetVerifiedLocalPaths(bucket = bucket)
         return deleteRecordedFilesOnIo(paths)
     }

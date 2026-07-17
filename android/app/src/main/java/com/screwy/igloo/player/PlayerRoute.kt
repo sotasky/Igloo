@@ -43,16 +43,16 @@ import androidx.navigation.NavController
 import com.screwy.igloo.R
 import com.screwy.igloo.data.Dearrow
 import com.screwy.igloo.data.PreferencesRepo
-import com.screwy.igloo.data.dao.AndroidSyncDao
 import com.screwy.igloo.data.dao.BookmarkDao
 import com.screwy.igloo.data.dao.ChannelFollowDao
 import com.screwy.igloo.data.dao.ChannelStarDao
 import com.screwy.igloo.data.dao.VideoDao
-import com.screwy.igloo.media.CacheActions
+import com.screwy.igloo.media.MediaUri
 import com.screwy.igloo.net.IglooHostProvider
 import com.screwy.igloo.net.auth.AuthTokenProvider
 import com.screwy.igloo.outbox.OutboxKind
 import com.screwy.igloo.outbox.OutboxWriter
+import com.screwy.igloo.sync.OfflineVideoActions
 import com.screwy.igloo.ui.component.sharePlainText
 import com.screwy.igloo.ui.nav.IglooNavigationSource
 import com.screwy.igloo.ui.nav.rememberIglooNavigator
@@ -111,8 +111,7 @@ fun PlayerRoute(videoId: String, navController: NavController, modifier: Modifie
     val bookmarkDao: BookmarkDao = koinInject()
     val channelFollowDao: ChannelFollowDao = koinInject()
     val channelStarDao: ChannelStarDao = koinInject()
-    val androidSyncDao: AndroidSyncDao = koinInject()
-    val cacheActions: CacheActions = koinInject()
+    val offlineVideoActions: OfflineVideoActions = koinInject()
     val videoDao: VideoDao = koinInject()
     val outboxWriter: OutboxWriter = koinInject()
     val player =
@@ -180,10 +179,6 @@ fun PlayerRoute(videoId: String, navController: NavController, modifier: Modifie
         channelFollowDao.allFlow().collectAsStateWithLifecycle(initialValue = emptyList())
     val starredChannels by
         channelStarDao.allFlow().collectAsStateWithLifecycle(initialValue = emptyList())
-    val mediaRows by
-        androidSyncDao
-            .assetsForOwnerFlow("youtube_video", videoId)
-            .collectAsStateWithLifecycle(initialValue = emptyList())
     val previousVideoId by
         produceState<String?>(initialValue = null, key1 = videoId) {
             value = videoDao.getPreviousVideoId(videoId)
@@ -233,8 +228,6 @@ fun PlayerRoute(videoId: String, navController: NavController, modifier: Modifie
         }
     }
     BackHandler(enabled = isFullscreen) { exitFullscreen() }
-    LaunchedEffect(videoId) { vm.ensureHydrated() }
-
     // Bind media item when the stream URI resolves. Re-run if Sync verifies a local
     // file after playback started. Stop first so a mid-session swap doesn't leak
     // a black frame or audio tail from the old item.
@@ -349,7 +342,7 @@ fun PlayerRoute(videoId: String, navController: NavController, modifier: Modifie
     val isBookmarked = bookmarkRow != null
     val isFollowed = channelId != null && followedChannels.any { it.channelId == channelId }
     val isStarred = channelId != null && starredChannels.any { it.channelId == channelId }
-    val hasLocalMedia = mediaRows.any { !it.localPath.isNullOrBlank() }
+    val hasLocalVideo = streamUri is MediaUri.Local
     val displayPosterUri = thumbnailUri
     val playerTitle =
         Dearrow.resolveTitle(
@@ -367,7 +360,7 @@ fun PlayerRoute(videoId: String, navController: NavController, modifier: Modifie
         nextVideoId?.let { nextId -> { navigator.openVideo(nextId, IglooNavigationSource.Player) } }
     fun deleteLocalMedia() {
         scope.launch {
-            runCatching { cacheActions.clearOwner("youtube_video", videoId) }.onFailure { error -> }
+            offlineVideoActions.removeDownload(videoId)
         }
     }
     if (isFullscreen) {
@@ -443,7 +436,7 @@ fun PlayerRoute(videoId: String, navController: NavController, modifier: Modifie
                     isBookmarked = isBookmarked,
                     isFollowed = isFollowed,
                     isStarred = isStarred,
-                    hasLocalMedia = hasLocalMedia,
+                    hasLocalVideo = hasLocalVideo,
                     onChannelClick = { cid ->
                         navigator.openChannel(cid, IglooNavigationSource.Player)
                     },
@@ -524,8 +517,8 @@ fun PlayerRoute(videoId: String, navController: NavController, modifier: Modifie
     if (showDeleteLocalDialog) {
         AlertDialog(
             onDismissRequest = { showDeleteLocalDialog = false },
-            title = { Text(stringResource(R.string.action_delete_local_media)) },
-            text = { Text(stringResource(R.string.confirm_delete_local_media_body)) },
+            title = { Text(stringResource(R.string.action_delete_downloaded_video)) },
+            text = { Text(stringResource(R.string.confirm_delete_downloaded_video_body)) },
             confirmButton = {
                 TextButton(
                     onClick = {

@@ -3,6 +3,7 @@ package com.screwy.igloo.feature
 import com.screwy.igloo.bookmarks.BookmarksViewModel
 import com.screwy.igloo.channel.ChannelViewModel
 import com.screwy.igloo.data.IglooDatabase
+import com.screwy.igloo.videos.DownloadedVideosViewModel
 import com.screwy.igloo.feed.FeedViewModel
 import com.screwy.igloo.liked.LikedViewModel
 import com.screwy.igloo.logs.LogsViewModel
@@ -40,6 +41,12 @@ val iglooFeatureModule = module {
     }
     viewModel {
         VideosViewModel(
+            db = get<IglooDatabase>(),
+            scheduler = get(),
+        )
+    }
+    viewModel {
+        DownloadedVideosViewModel(
             db = get<IglooDatabase>(),
             scheduler = get(),
         )
