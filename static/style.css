@@ -926,8 +926,20 @@ html.sidebar-resizing .sidebar-resize-handle::after {
 }
 
 @media (min-width: 769px) {
+    body:has(#player-root.cinema-view.cinema-left-sidebar-compact) {
+        --sidebar-width: var(--sidebar-compact-width);
+    }
+
     body:has(#player-root.cinema-view.cinema-left-sidebar-hidden) {
         --sidebar-width: 0px;
+    }
+
+    body:has(#player-root.cinema-view.cinema-left-sidebar-compact) .sidebar {
+        width: var(--sidebar-compact-width);
+    }
+
+    body:has(#player-root.cinema-view.cinema-left-sidebar-compact) .sidebar-resize-handle {
+        display: none;
     }
 
     body:has(#player-root.cinema-view.cinema-left-sidebar-hidden) .sidebar {
@@ -947,6 +959,10 @@ html.sidebar-resizing .sidebar-resize-handle::after {
 
     body.sidebar-open:has(#player-root.cinema-view.cinema-left-sidebar-hidden) .sidebar-overlay {
         display: block;
+    }
+
+    body.sidebar-open:has(#player-root.cinema-view.cinema-left-sidebar-hidden) .sidebar-toggle {
+        left: calc(var(--sidebar-panel-width) + 0.75rem);
     }
 
     .sidebar-resize-handle {
@@ -972,38 +988,38 @@ html.sidebar-resizing .sidebar-resize-handle::after {
         transition: none;
     }
 
-    html.sidebar-collapsed {
+    :is(html.sidebar-collapsed, body:has(#player-root.cinema-view.cinema-left-sidebar-compact)) {
         --sidebar-width: var(--sidebar-compact-width);
     }
 
-    html.sidebar-collapsed .sidebar {
+    :is(html.sidebar-collapsed, body:has(#player-root.cinema-view.cinema-left-sidebar-compact)) .sidebar {
         width: var(--sidebar-compact-width);
     }
 
-    html.sidebar-collapsed .sidebar-header {
+    :is(html.sidebar-collapsed, body:has(#player-root.cinema-view.cinema-left-sidebar-compact)) .sidebar-header {
         padding-inline: 0.75rem;
         justify-content: center;
     }
 
-    html.sidebar-collapsed .sidebar-header .logo > span {
+    :is(html.sidebar-collapsed, body:has(#player-root.cinema-view.cinema-left-sidebar-compact)) .sidebar-header .logo > span {
         display: none;
     }
 
-    html.sidebar-collapsed .sidebar-header .logo {
+    :is(html.sidebar-collapsed, body:has(#player-root.cinema-view.cinema-left-sidebar-compact)) .sidebar-header .logo {
         flex: 0 0 auto;
         gap: 0;
     }
 
-    html.sidebar-collapsed .sidebar-header .logo-icon {
+    :is(html.sidebar-collapsed, body:has(#player-root.cinema-view.cinema-left-sidebar-compact)) .sidebar-header .logo-icon {
         width: 36px;
         height: 36px;
     }
 
-    html.sidebar-collapsed .nav {
+    :is(html.sidebar-collapsed, body:has(#player-root.cinema-view.cinema-left-sidebar-compact)) .nav {
         padding: 0.35rem 0.5rem 0.6rem;
     }
 
-    html.sidebar-collapsed .nav-item {
+    :is(html.sidebar-collapsed, body:has(#player-root.cinema-view.cinema-left-sidebar-compact)) .nav-item {
         justify-content: center;
         gap: 0;
         min-height: 42px;
@@ -1011,20 +1027,20 @@ html.sidebar-resizing .sidebar-resize-handle::after {
         margin-bottom: 0.25rem;
     }
 
-    html.sidebar-collapsed .nav-item > span,
-    html.sidebar-collapsed .sidebar-section-block,
-    html.sidebar-collapsed .filter-row,
-    html.sidebar-collapsed .sidebar-scroll,
-    html.sidebar-collapsed .sidebar-footer {
+    :is(html.sidebar-collapsed, body:has(#player-root.cinema-view.cinema-left-sidebar-compact)) .nav-item > span,
+    :is(html.sidebar-collapsed, body:has(#player-root.cinema-view.cinema-left-sidebar-compact)) .sidebar-section-block,
+    :is(html.sidebar-collapsed, body:has(#player-root.cinema-view.cinema-left-sidebar-compact)) .filter-row,
+    :is(html.sidebar-collapsed, body:has(#player-root.cinema-view.cinema-left-sidebar-compact)) .sidebar-scroll,
+    :is(html.sidebar-collapsed, body:has(#player-root.cinema-view.cinema-left-sidebar-compact)) .sidebar-footer {
         display: none;
     }
 
-    html.sidebar-collapsed .nav-icon {
+    :is(html.sidebar-collapsed, body:has(#player-root.cinema-view.cinema-left-sidebar-compact)) .nav-icon {
         width: 22px;
         height: 22px;
     }
 
-    html.sidebar-collapsed .sidebar-compact-actions {
+    :is(html.sidebar-collapsed, body:has(#player-root.cinema-view.cinema-left-sidebar-compact)) .sidebar-compact-actions {
         display: flex;
     }
 }

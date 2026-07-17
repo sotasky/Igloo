@@ -7,9 +7,10 @@ import {
   CINEMA_TARGET_PLAYER_WIDTH,
   PLAYER_MAIN_HORIZONTAL_PADDING,
   PLAYER_SIDEBAR_WIDTH,
+  SIDEBAR_COMPACT_WIDTH,
+  cinemaLeftSidebarMode,
   initCinemaView,
   shouldAutoEnableCinema,
-  shouldHideLeftSidebarForCinema,
 } from "../../static/js/src/player/cinema.js";
 
 const css = readFileSync(new URL("../../static/style.css", import.meta.url), "utf8");
@@ -22,11 +23,11 @@ const layoutAtVideoWidth = (videoWidth) => (
   videoWidth + PLAYER_SIDEBAR_WIDTH + PLAYER_MAIN_HORIZONTAL_PADDING
 );
 
-test("cinema view targets a 1200px normal video column", () => {
-  assert.equal(CINEMA_MIN_PLAYER_WIDTH, 1200);
-  assert.equal(CINEMA_TARGET_PLAYER_WIDTH, 1200);
-  assert.equal(shouldAutoEnableCinema(layoutAtVideoWidth(1199), false), true);
-  assert.equal(shouldAutoEnableCinema(layoutAtVideoWidth(1200), false), false);
+test("cinema view targets a 1000px normal video column", () => {
+  assert.equal(CINEMA_MIN_PLAYER_WIDTH, 1000);
+  assert.equal(CINEMA_TARGET_PLAYER_WIDTH, 1000);
+  assert.equal(shouldAutoEnableCinema(layoutAtVideoWidth(999), false), true);
+  assert.equal(shouldAutoEnableCinema(layoutAtVideoWidth(1000), false), false);
 });
 
 test("cinema view does not auto-hide a sidebar that is already stacked below the player", () => {
@@ -37,7 +38,7 @@ test("a manual cinema choice survives sidebar width changes", () => {
   const classes = new Set();
   const attributes = new Map();
   const buttonListeners = new Map();
-  let layoutWidth = layoutAtVideoWidth(1199);
+  let layoutWidth = layoutAtVideoWidth(999);
   let resize;
 
   const classList = {
@@ -80,14 +81,14 @@ test("a manual cinema choice survives sidebar width changes", () => {
   resize();
   assert.equal(classes.has("cinema-view"), false);
 
-  layoutWidth = layoutAtVideoWidth(1200);
+  layoutWidth = layoutAtVideoWidth(1000);
   resize();
   assert.equal(classes.has("cinema-view"), false);
 
   buttonListeners.get("click")();
   assert.equal(classes.has("cinema-view"), true);
 
-  layoutWidth = layoutAtVideoWidth(1199);
+  layoutWidth = layoutAtVideoWidth(999);
   resize();
   assert.equal(classes.has("cinema-view"), true);
   assert.equal(attributes.get("button:aria-pressed"), "true");
@@ -96,12 +97,20 @@ test("a manual cinema choice survives sidebar width changes", () => {
   delete globalThis.window;
 });
 
-test("cinema hides the left sidebar only when it is needed for the width target", () => {
-  const layoutAtCinemaWidth = (videoWidth) => videoWidth + PLAYER_MAIN_HORIZONTAL_PADDING;
-  assert.equal(shouldHideLeftSidebarForCinema(layoutAtCinemaWidth(1199), true, true), true);
-  assert.equal(shouldHideLeftSidebarForCinema(layoutAtCinemaWidth(1200), true, true), false);
-  assert.equal(shouldHideLeftSidebarForCinema(layoutAtCinemaWidth(1199), false, true), false);
-  assert.equal(shouldHideLeftSidebarForCinema(layoutAtCinemaWidth(1199), true, false), false);
+test("cinema compacts the left sidebar before hiding it", () => {
+  assert.equal(cinemaLeftSidebarMode(1368, 320, true, true), "full");
+  assert.equal(cinemaLeftSidebarMode(1200, 320, true, true), "compact");
+  assert.equal(cinemaLeftSidebarMode(1119, 320, true, true), "hidden");
+  assert.equal(cinemaLeftSidebarMode(1200, SIDEBAR_COMPACT_WIDTH, false, true), false);
+  assert.equal(cinemaLeftSidebarMode(1200, SIDEBAR_COMPACT_WIDTH, true, false), false);
+  assert.match(
+    css,
+    /body:has\(#player-root\.cinema-view\.cinema-left-sidebar-compact\)[\s\S]*?--sidebar-width:\s*var\(--sidebar-compact-width\);/,
+  );
+  assert.match(
+    css,
+    /:is\(html\.sidebar-collapsed, body:has\(#player-root\.cinema-view\.cinema-left-sidebar-compact\)\) \.sidebar-compact-actions\s*\{[\s\S]*?display:\s*flex;/,
+  );
   assert.match(
     css,
     /body:has\(#player-root\.cinema-view\.cinema-left-sidebar-hidden\)[\s\S]*?--sidebar-width:\s*0px;/,
@@ -113,6 +122,10 @@ test("cinema hides the left sidebar only when it is needed for the width target"
   assert.match(
     css,
     /body\.sidebar-open:has\(#player-root\.cinema-view\.cinema-left-sidebar-hidden\) \.sidebar\s*\{[\s\S]*?transform:\s*translateX\(0\);/,
+  );
+  assert.match(
+    css,
+    /body\.sidebar-open:has\(#player-root\.cinema-view\.cinema-left-sidebar-hidden\) \.sidebar-toggle\s*\{[\s\S]*?left:\s*calc\(var\(--sidebar-panel-width\) \+ 0\.75rem\);/,
   );
 });
 
