@@ -3,6 +3,7 @@ import { openBookmarkMenu, closeBookmarkMenu, isBookmarkMenuOpen } from '../book
 import { initSponsorBlock } from './sponsorblock.js'
 import { initPreviewHover } from './preview.js'
 import { initProgress } from './progress.js'
+import { initCinemaView } from './cinema.js'
 
 const doc = document
 const root = doc.getElementById('player-root')
@@ -23,6 +24,7 @@ if (root && video) {
   const speedMenuBtn = doc.getElementById('player-speed-menu-btn')
   const speedMenu = doc.getElementById('player-speed-menu')
   const fullscreenBtn = doc.getElementById('player-fullscreen-btn')
+  const cinemaBtn = doc.getElementById('player-cinema-btn')
   // Note: no custom subtitle menu in the template — media-chrome's
   // built-in <media-captions-button> handles CC when tracks exist.
   const deleteBtn = doc.getElementById('player-delete-btn')
@@ -749,6 +751,7 @@ if (root && video) {
     setupPlayerActions()
     setupSeekButtons()
     setupFullscreenButton()
+    initCinemaView({ root, button: cinemaBtn })
     setupSpeedMenu()
     setupPlayerControlsVisibility()
     setupChannelInlineActions()

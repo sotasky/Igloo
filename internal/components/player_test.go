@@ -13,6 +13,7 @@ func TestPlayerControlLabelsEscapeLocalizedAttributes(t *testing.T) {
 	p := newTestPageProps()
 	p.Text = map[string]string{
 		"action_toggle_fullscreen":        `Full" onmouseover="alert(1)`,
+		"player_cinema_view":              `Cinema" onmouseover="alert(1)`,
 		"player_back_10_seconds":          `Back" onmouseover="alert(1)`,
 		"player_seek_backward_10_seconds": `Seek back" onmouseover="alert(1)`,
 		"player_forward_10_seconds":       `Forward" onmouseover="alert(1)`,
@@ -50,6 +51,12 @@ func TestPlayerControlLabelsEscapeLocalizedAttributes(t *testing.T) {
 	}
 	if !strings.Contains(html, `Full&#34; onmouseover=&#34;alert(1)`) {
 		t.Fatalf("expected escaped fullscreen label in output")
+	}
+	if !strings.Contains(html, `Cinema&#34; onmouseover=&#34;alert(1)`) {
+		t.Fatalf("expected escaped cinema view label in output")
+	}
+	if !strings.Contains(html, `id="player-cinema-btn"`) || !strings.Contains(html, `aria-pressed="false"`) {
+		t.Fatalf("expected cinema view control in output")
 	}
 	if !strings.Contains(html, `Subscribe&#34; onmouseover=&#34;alert(1)`) {
 		t.Fatalf("expected escaped subscribe label in output")

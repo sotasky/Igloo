@@ -446,6 +446,7 @@
     <string name="player_back_10_seconds">Back 10 seconds</string>
     <string name="player_brightness">Brightness</string>
     <string name="player_channel_unsubscribed">Channel unsubscribed</string>
+    <string name="player_cinema_view">Cinema view</string>
     <string name="player_comment_author_unknown">User</string>
     <string name="player_comments_empty">No comments found.</string>
     <string name="player_comments_heading">Comments</string>

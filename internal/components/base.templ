@@ -32,13 +32,14 @@ templ Base(p PageProps) {
 		<link rel="stylesheet" href={ p.StaticV("css/profile-card.css") }/>
 		<link id="igloo-theme-css" rel="stylesheet" href="/api/theme.css"/>
 		<style>#page-title-actions:empty{display:none}</style>
+		<script>try{if(localStorage.getItem('igloo.sidebar.collapsed.v1')==='1')document.documentElement.classList.add('sidebar-collapsed')}catch(_){}</script>
 	</head>
 	<body hx-headers={ `{"X-CSRF-Token":"` + p.CSRFToken + `"}` }>
 		<div class="app">
 			<div id="sidebar-overlay" class="sidebar-overlay"></div>
 			@Sidebar(p)
 			<main class="main" id="main-content">
-				<button id="sidebar-toggle" class="sidebar-toggle" aria-label={ L(p, "action_toggle_sidebar", "Toggle sidebar") }>
+				<button id="sidebar-toggle" class="sidebar-toggle" type="button" aria-controls="app-sidebar" aria-expanded="true" aria-label={ L(p, "action_toggle_sidebar", "Toggle sidebar") }>
 					<span></span>
 					<span></span>
 					<span></span>
