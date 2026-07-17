@@ -926,6 +926,15 @@ html.sidebar-resizing .sidebar-resize-handle::after {
 }
 
 @media (min-width: 769px) {
+    body:has(#player-root.cinema-view.cinema-left-sidebar-hidden) {
+        --sidebar-width: 0px;
+    }
+
+    body:has(#player-root.cinema-view.cinema-left-sidebar-hidden) .sidebar {
+        transform: translateX(-100%);
+        pointer-events: none;
+    }
+
     .sidebar-resize-handle {
         display: block;
     }

@@ -4,10 +4,12 @@ import test from "node:test";
 
 import {
   CINEMA_MIN_PLAYER_WIDTH,
+  CINEMA_TARGET_PLAYER_WIDTH,
   PLAYER_MAIN_HORIZONTAL_PADDING,
   PLAYER_SIDEBAR_WIDTH,
   initCinemaView,
   shouldAutoEnableCinema,
+  shouldHideLeftSidebarForCinema,
 } from "../../static/js/src/player/cinema.js";
 
 const css = readFileSync(new URL("../../static/style.css", import.meta.url), "utf8");
@@ -20,21 +22,22 @@ const layoutAtVideoWidth = (videoWidth) => (
   videoWidth + PLAYER_SIDEBAR_WIDTH + PLAYER_MAIN_HORIZONTAL_PADDING
 );
 
-test("cinema view starts when the normal video column is narrower than 720px", () => {
-  assert.equal(CINEMA_MIN_PLAYER_WIDTH, 720);
-  assert.equal(shouldAutoEnableCinema(layoutAtVideoWidth(719), false), true);
-  assert.equal(shouldAutoEnableCinema(layoutAtVideoWidth(720), false), false);
+test("cinema view targets a 1200px normal video column", () => {
+  assert.equal(CINEMA_MIN_PLAYER_WIDTH, 1200);
+  assert.equal(CINEMA_TARGET_PLAYER_WIDTH, 1200);
+  assert.equal(shouldAutoEnableCinema(layoutAtVideoWidth(1199), false), true);
+  assert.equal(shouldAutoEnableCinema(layoutAtVideoWidth(1200), false), false);
 });
 
 test("cinema view does not auto-hide a sidebar that is already stacked below the player", () => {
   assert.equal(shouldAutoEnableCinema(layoutAtVideoWidth(500), true), false);
 });
 
-test("a manual cinema choice holds until the available-width recommendation changes", () => {
+test("a manual cinema choice survives sidebar width changes", () => {
   const classes = new Set();
   const attributes = new Map();
   const buttonListeners = new Map();
-  let layoutWidth = layoutAtVideoWidth(719);
+  let layoutWidth = layoutAtVideoWidth(1199);
   let resize;
 
   const classList = {
@@ -77,17 +80,32 @@ test("a manual cinema choice holds until the available-width recommendation chan
   resize();
   assert.equal(classes.has("cinema-view"), false);
 
-  layoutWidth = layoutAtVideoWidth(720);
+  layoutWidth = layoutAtVideoWidth(1200);
   resize();
   assert.equal(classes.has("cinema-view"), false);
 
-  layoutWidth = layoutAtVideoWidth(719);
+  buttonListeners.get("click")();
+  assert.equal(classes.has("cinema-view"), true);
+
+  layoutWidth = layoutAtVideoWidth(1199);
   resize();
   assert.equal(classes.has("cinema-view"), true);
   assert.equal(attributes.get("button:aria-pressed"), "true");
   assert.equal(attributes.get("sidebar:aria-hidden"), "true");
 
   delete globalThis.window;
+});
+
+test("cinema hides the left sidebar only when it is needed for the width target", () => {
+  const layoutAtCinemaWidth = (videoWidth) => videoWidth + PLAYER_MAIN_HORIZONTAL_PADDING;
+  assert.equal(shouldHideLeftSidebarForCinema(layoutAtCinemaWidth(1199), true, true), true);
+  assert.equal(shouldHideLeftSidebarForCinema(layoutAtCinemaWidth(1200), true, true), false);
+  assert.equal(shouldHideLeftSidebarForCinema(layoutAtCinemaWidth(1199), false, true), false);
+  assert.equal(shouldHideLeftSidebarForCinema(layoutAtCinemaWidth(1199), true, false), false);
+  assert.match(
+    css,
+    /body:has\(#player-root\.cinema-view\.cinema-left-sidebar-hidden\)[\s\S]*?--sidebar-width:\s*0px;/,
+  );
 });
 
 test("the player header search fills the available right sidebar width", () => {
