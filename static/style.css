@@ -3456,7 +3456,8 @@ select.input.themed-select-native {
 }
 
 .player-main {
-    padding: 1.5rem;
+    /* Keep the video below the fixed navigation controls on narrow desktop layouts. */
+    padding: 4.5rem 1.5rem 1.5rem;
     min-width: 0;
 }
 
