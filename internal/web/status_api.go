@@ -1,7 +1,9 @@
 package web
 
 import (
+	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"sort"
@@ -52,6 +54,18 @@ func twitterSourceHandle(ch model.Channel) string {
 }
 
 var serverStartTime = time.Now()
+
+const (
+	serverDashboardInventoryRefreshInterval = 15 * time.Minute
+	serverDashboardInventoryCacheKey        = "server-dashboard-inventory-v1.json"
+	serverDashboardInventoryCacheVersion    = 1
+)
+
+type serverDashboardInventoryFile struct {
+	Version   int                            `json:"version"`
+	UpdatedAt time.Time                      `json:"updated_at"`
+	Data      components.ServerDashboardData `json:"data"`
+}
 
 var (
 	memoryHistory   []float64
@@ -275,6 +289,28 @@ func (s *Server) filterNewPosterAvatars(candidates []model.NewPosterAvatar, limi
 }
 
 func (s *Server) handleFeedStatus(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Query().Get("fmt") == "html" {
+		filter := r.URL.Query().Get("filter")
+		if filter == "" {
+			filter = "all"
+		}
+		w.Header().Set("Content-Type", "text/html")
+		switch r.URL.Query().Get("part") {
+		case "live":
+			_ = components.FeedDashboardLive(s.pageProps(w, r), s.feedDashboardLiveData()).Render(r.Context(), w)
+		case "sources":
+			_ = components.FeedDashboardSources(s.pageProps(w, r), s.feedDashboardSourcesData(filter)).Render(r.Context(), w)
+		default:
+			d := s.feedDashboardLiveData()
+			sources := s.feedDashboardSourcesData(filter)
+			d.Filter = sources.Filter
+			d.Sources = sources.Sources
+			d.XIngestStatus = sources.XIngestStatus
+			_ = components.FeedDashboard(s.pageProps(w, r), d).Render(r.Context(), w)
+		}
+		return
+	}
+
 	count, _ := s.db.CountFeedItems()
 	queued, processing, _ := s.db.CountPendingXContentDownloads()
 	coolingSources, _ := s.db.IngestCoverageCounts()
@@ -286,89 +322,6 @@ func (s *Server) handleFeedStatus(w http.ResponseWriter, r *http.Request) {
 	textOnly := s.db.CountFeedItemsTextOnly()
 
 	_, tzOffset := time.Now().Zone()
-
-	if r.URL.Query().Get("fmt") == "html" {
-		filter := r.URL.Query().Get("filter")
-		if filter == "" {
-			filter = "all"
-		}
-		d := components.FeedDashboardData{
-			IngestEnabled: s.cfg == nil || s.cfg.PlatformEnabled("twitter"),
-			IngestRunning: s.workers.IsIngestRunning(),
-			IngestPaused:  s.workers.IsIngestPaused(),
-			ParsedTotal:   count,
-			ParsedMedia:   withMedia,
-			ParsedText:    textOnly,
-			MediaReady:    count,
-			MediaPending:  queued + processing,
-			MediaFailed:   0,
-			MediaTotal:    count + queued + processing,
-			Filter:        filter,
-			TzOffsetSec:   tzOffset,
-		}
-		// Ingest stats
-		if s.workers.IsIngestRunning() && liveTotal > 0 {
-			d.IngestDone = liveDone
-			d.IngestTotal = liveTotal
-			d.IngestMeta = "fetching"
-		} else if s.workers.IsIngestRunning() {
-			d.IngestDone = lastReady
-			d.IngestTotal = totalTwitterChannels
-			d.IngestMeta = "starting"
-		} else {
-			d.IngestDone = lastReady
-			d.IngestTotal = totalTwitterChannels
-			if cycleAt > 0 {
-				d.IngestMeta = components.TimeAgo(cycleAt)
-			}
-		}
-		d.IngestFailures = len(failures)
-		d.IngestCooling = cooling
-		d.IngestNotDue = notDue
-
-		// Activity
-		allActivity := s.workers.FeedActivity().Last(100)
-		for i := len(allActivity) - 1; i >= 0; i-- {
-			e := allActivity[i]
-			var kind string
-			if e.Source == "feed_media" {
-				switch e.Status {
-				case "error":
-					kind = "error"
-				case "done":
-					kind = "ok"
-				default:
-					kind = "media"
-				}
-			} else {
-				switch e.Status {
-				case "error":
-					kind = "error"
-				case "warning":
-					kind = "timeout"
-				case "done":
-					kind = "ok"
-				default:
-					kind = "ingest"
-				}
-			}
-			d.Activity = append(d.Activity, components.FeedActivityEntry{
-				Timestamp: e.Timestamp,
-				Kind:      kind,
-				Message:   e.Message,
-			})
-			if len(d.Activity) >= 20 {
-				break
-			}
-		}
-
-		// Sources from diagnostics
-		d.Sources, d.XIngestStatus = s.buildFeedSources()
-
-		w.Header().Set("Content-Type", "text/html")
-		_ = components.FeedDashboard(s.pageProps(w, r), d).Render(r.Context(), w)
-		return
-	}
 
 	// JSON path
 	allActivity := s.workers.FeedActivity().Last(100)
@@ -439,6 +392,92 @@ func (s *Server) handleFeedStatus(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *Server) feedDashboardLiveData() components.FeedDashboardData {
+	count, _ := s.db.CountFeedItems()
+	queued, processing, _ := s.db.CountPendingXContentDownloads()
+	totalTwitterChannels := s.db.CountSubscribedTwitterChannels()
+	cycleAt, failures, cooling, notDue, lastReady := s.workers.IngestCycleStats()
+	liveTotal, liveDone := s.workers.IngestLiveProgress()
+	withMedia := s.db.CountFeedItemsWithMedia()
+	textOnly := s.db.CountFeedItemsTextOnly()
+	_, tzOffset := time.Now().Zone()
+
+	ingestRunning := s.workers.IsIngestRunning()
+	d := components.FeedDashboardData{
+		IngestEnabled: s.cfg == nil || s.cfg.PlatformEnabled("twitter"),
+		IngestRunning: ingestRunning,
+		IngestPaused:  s.workers.IsIngestPaused(),
+		ParsedTotal:   count,
+		ParsedMedia:   withMedia,
+		ParsedText:    textOnly,
+		MediaReady:    count,
+		MediaPending:  queued + processing,
+		MediaTotal:    count + queued + processing,
+		TzOffsetSec:   tzOffset,
+	}
+	if ingestRunning && liveTotal > 0 {
+		d.IngestDone = liveDone
+		d.IngestTotal = liveTotal
+		d.IngestMeta = "fetching"
+	} else if ingestRunning {
+		d.IngestDone = lastReady
+		d.IngestTotal = totalTwitterChannels
+		d.IngestMeta = "starting"
+	} else {
+		d.IngestDone = lastReady
+		d.IngestTotal = totalTwitterChannels
+		if cycleAt > 0 {
+			d.IngestMeta = components.TimeAgo(cycleAt)
+		}
+	}
+	d.IngestFailures = len(failures)
+	d.IngestCooling = cooling
+	d.IngestNotDue = notDue
+
+	allActivity := s.workers.FeedActivity().Last(100)
+	for i := len(allActivity) - 1; i >= 0; i-- {
+		e := allActivity[i]
+		kind := "ingest"
+		if e.Source == "feed_media" {
+			switch e.Status {
+			case "error":
+				kind = "error"
+			case "done":
+				kind = "ok"
+			default:
+				kind = "media"
+			}
+		} else {
+			switch e.Status {
+			case "error":
+				kind = "error"
+			case "warning":
+				kind = "timeout"
+			case "done":
+				kind = "ok"
+			}
+		}
+		d.Activity = append(d.Activity, components.FeedActivityEntry{
+			Timestamp: e.Timestamp,
+			Kind:      kind,
+			Message:   e.Message,
+		})
+		if len(d.Activity) >= 20 {
+			break
+		}
+	}
+	return d
+}
+
+func (s *Server) feedDashboardSourcesData(filter string) components.FeedDashboardData {
+	sources, status := s.buildFeedSources()
+	return components.FeedDashboardData{
+		Filter:        filter,
+		Sources:       sources,
+		XIngestStatus: status,
+	}
+}
+
 func (s *Server) handleDownloadsStatus(w http.ResponseWriter, r *http.Request) {
 	queued, processing, _ := s.db.CountPendingXContentDownloads()
 	total := queued + processing
@@ -505,7 +544,234 @@ func (s *Server) handleDownloadsStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleServerStatus(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Query().Get("fmt") != "html" {
+		s.handleServerStatusJSON(w, r)
+		return
+	}
+
+	filter := r.URL.Query().Get("log_filter")
+	if filter == "" {
+		filter = "all"
+	}
+	w.Header().Set("Content-Type", "text/html")
+	switch r.URL.Query().Get("part") {
+	case "stats":
+		data, ready := s.serverDashboardStaticData()
+		if ready {
+			_ = components.ServerDashboardStats(s.pageProps(w, r), data).Render(r.Context(), w)
+		} else {
+			_ = components.ServerDashboardStatsLoading(s.pageProps(w, r)).Render(r.Context(), w)
+		}
+	default:
+		_ = components.ServerDashboardLive(s.pageProps(w, r), s.serverDashboardLiveData(filter)).Render(r.Context(), w)
+	}
+}
+
+func (s *Server) serverDashboardLiveData(filter string) components.ServerDashboardData {
+	upSeconds := int(time.Since(serverStartTime).Seconds())
+	memMB := getMemoryRSSMB()
+
+	memoryHistoryMu.Lock()
+	memoryHistory = append(memoryHistory, memMB)
+	if len(memoryHistory) > 30 {
+		memoryHistory = memoryHistory[len(memoryHistory)-30:]
+	}
+	memHistCopy := make([]float64, len(memoryHistory))
+	copy(memHistCopy, memoryHistory)
+	memoryHistoryMu.Unlock()
+
+	d := components.ServerDashboardData{
+		UptimeText:    components.UptimeText(upSeconds, formatElapsed(upSeconds)),
+		UptimeStarted: serverStartTime.Format("2006-01-02 15:04:05"),
+		Errors24h:     len(s.workers.Activity().ByStatus("error")),
+		ErrorsDelta:   0,
+		MemoryMB:      memMB,
+		MemoryHistory: memHistCopy,
+		LogFilter:     filter,
+	}
+	for _, e := range reverseActivityEvents(s.workers.Activity().Last(100)) {
+		d.Activity = append(d.Activity, components.ServerActivityEntry{
+			Time: e.Time, Status: e.Status, Source: e.Source, Message: e.Message,
+		})
+	}
+	for _, e := range s.workers.Activity().ByStatus("error") {
+		d.Errors = append(d.Errors, components.ServerErrorEntry{Time: e.Time, Message: e.Message, Count: 1})
+	}
+	for _, e := range s.workers.Activity().ByStatus("warning") {
+		d.Warnings = append(d.Warnings, components.ServerErrorEntry{Time: e.Time, Message: e.Message, Count: 1})
+	}
+	for _, ws := range s.workers.Status() {
+		status := "stopped"
+		if ws.Running {
+			status = "running"
+		}
+		d.Processes = append(d.Processes, components.ServerProcessCard{
+			Name: ws.Name, Status: status, Summary: ws.Summary, Detail: ws.Detail, Error: ws.Error,
+		})
+	}
+	return d
+}
+
+// loadServerDashboardInventory restores the last complete inventory snapshot.
+// It is deliberately a tiny sidecar read, not a database aggregation, so a
+// process restart can still open the Server tab with useful full detail.
+func (s *Server) loadServerDashboardInventory() {
+	if s.cfg == nil {
+		return
+	}
+	path, err := s.cfg.Storage.Path(serverDashboardInventoryCacheKey)
+	if err != nil {
+		return
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	var stored serverDashboardInventoryFile
+	if err := json.Unmarshal(raw, &stored); err != nil || stored.Version != serverDashboardInventoryCacheVersion || stored.UpdatedAt.IsZero() {
+		return
+	}
+	s.dashboardInventoryMu.Lock()
+	s.dashboardInventory = &serverDashboardInventory{data: stored.Data, updatedAt: stored.UpdatedAt}
+	s.dashboardInventoryMu.Unlock()
+}
+
+func (s *Server) saveServerDashboardInventory(data components.ServerDashboardData, updatedAt time.Time) {
+	if s.cfg == nil {
+		return
+	}
+	path, err := s.cfg.Storage.WritePath(serverDashboardInventoryCacheKey)
+	if err != nil {
+		return
+	}
+	raw, err := json.Marshal(serverDashboardInventoryFile{
+		Version:   serverDashboardInventoryCacheVersion,
+		UpdatedAt: updatedAt,
+		Data:      data,
+	})
+	if err != nil {
+		return
+	}
+	if err := atomicWrite(path, raw, 0o600); err != nil {
+		slog.Warn("save server dashboard inventory", "err", err)
+	}
+}
+
+// serverDashboardStaticData returns the last complete inventory immediately.
+// A stale snapshot is refreshed in the background only after the Server tab
+// asks for it, so normal page rendering never pays for database-wide scans.
+func (s *Server) serverDashboardStaticData() (components.ServerDashboardData, bool) {
+	s.dashboardInventoryMu.RLock()
+	snapshot := s.dashboardInventory
+	stale := snapshot == nil || time.Since(snapshot.updatedAt) >= serverDashboardInventoryRefreshInterval
+	s.dashboardInventoryMu.RUnlock()
+
+	if stale {
+		s.refreshServerDashboardInventoryAsync()
+	}
+	if snapshot == nil {
+		return components.ServerDashboardData{}, false
+	}
+	return snapshot.data, true
+}
+
+func (s *Server) refreshServerDashboardInventoryAsync() {
+	s.dashboardInventoryMu.Lock()
+	if s.dashboardInventoryRefreshing || (s.dashboardInventory != nil && time.Since(s.dashboardInventory.updatedAt) < serverDashboardInventoryRefreshInterval) {
+		s.dashboardInventoryMu.Unlock()
+		return
+	}
+	s.dashboardInventoryRefreshing = true
+	s.dashboardInventoryMu.Unlock()
+
+	go func() {
+		data, err := s.serverDashboardStaticDataFresh()
+		if err != nil {
+			slog.Warn("refresh server dashboard inventory", "err", err)
+			s.dashboardInventoryMu.Lock()
+			s.dashboardInventoryRefreshing = false
+			s.dashboardInventoryMu.Unlock()
+			return
+		}
+		updatedAt := time.Now()
+		s.dashboardInventoryMu.Lock()
+		s.dashboardInventory = &serverDashboardInventory{data: data, updatedAt: updatedAt}
+		s.dashboardInventoryRefreshing = false
+		s.dashboardInventoryMu.Unlock()
+		s.saveServerDashboardInventory(data, updatedAt)
+	}()
+}
+
+func (s *Server) serverDashboardStaticDataFresh() (components.ServerDashboardData, error) {
+	d := components.ServerDashboardData{}
+	stats, err := s.db.GetDashboardStats()
+	if err != nil {
+		return d, err
+	}
+	s.populateServerDashboardStats(&d, stats)
+	avatarCount, err := s.countReadyAvatars()
+	if err != nil {
+		return d, err
+	}
+	d.AvatarCount = avatarCount
+	return d, nil
+}
+
+func (s *Server) populateServerDashboardStats(d *components.ServerDashboardData, dbStats map[string]any) {
+	d.TableCount = toInt(dbStats["table_count"])
+	d.DBSizeMB = parseFloatFromAny(dbStats["db_size_mb"])
+	d.WALSizeMB = parseFloatFromAny(dbStats["wal_size_mb"])
+	d.ChannelsTotal = toInt(dbStats["channels_total"])
+	d.VideosTotal = toInt(dbStats["videos_total"])
+	d.VideosWatched = toInt(dbStats["videos_watched"])
+	d.FeedItemsCount = toInt(dbStats["feed_items_count"])
+	d.LocalFeedCount = toInt(dbStats["local_feed_count"])
+	d.BookmarksCount = toInt(dbStats["bookmarks_count"])
+	d.CommentsCount = toInt(dbStats["comments_count"])
+	d.StorageGB = parseFloatFromAny(dbStats["storage_total_gb"])
+	d.VideoStorageGB = parseFloatFromAny(dbStats["video_storage_gb"])
+	d.AvgMBPerVideo = parseFloatFromAny(dbStats["avg_mb_per_video"])
+	if mp, ok := dbStats["media_pipeline"].(map[string]int); ok {
+		d.MediaReady = mp["ready"]
+		d.MediaQueued = mp["queued"]
+		d.MediaFailed = mp["failed"]
+	}
+	if sh, ok := dbStats["source_health"].(map[string]any); ok {
+		d.SourceHealthOK = toInt(sh["ok"])
+		d.SourceHealthCooling = toInt(sh["cooling"])
+		d.SourceHealthFailed = toInt(sh["failed"])
+		d.SourceAvgLatencyMs = toInt(sh["avg_latency_ms"])
+		d.SourcesOK = d.SourceHealthOK
+		d.SourcesCool = d.SourceHealthCooling
+		d.SourcesFail = d.SourceHealthFailed
+	}
+	if cbp, ok := dbStats["channels_by_platform"].(map[string]int); ok {
+		d.ChannelsByPlat = cbp
+	}
+	if pq, ok := dbStats["preview_queue"].(map[string]int); ok {
+		d.PreviewReady = pq["ready"]
+		d.PreviewPending = pq["pending"]
+		d.PreviewUnsupported = pq["unsupported"]
+	}
+	if an, ok := dbStats["analytics_summary"].(map[string]int); ok {
+		d.AnalyticsTotal = an["total"]
+		d.AnalyticsAppStarts = an["app_starts"]
+		d.AnalyticsVideoOpens = an["video_opens"]
+		d.AnalyticsSyncs = an["syncs"]
+	}
+	if dq, ok := dbStats["download_queue"].(map[string]int); ok {
+		d.DownloadQueuePending = dq["pending"]
+		d.DownloadQueueFailed = dq["failed"]
+	}
+	if sb, ok := dbStats["sponsorblock"].(map[string]int); ok {
+		d.SponsorBlockChecked = sb["checked"]
+		d.SponsorBlockSegments = sb["segments"]
+	}
+}
+
+func (s *Server) handleServerStatusJSON(w http.ResponseWriter, r *http.Request) {
 	dbStats, _ := s.db.GetDashboardStats()
+	avatarCount, _ := s.countReadyAvatars()
 	health := s.productHealth(time.Now()).response()
 	upSeconds := int(time.Since(serverStartTime).Seconds())
 	memMB := getMemoryRSSMB()
@@ -537,107 +803,13 @@ func (s *Server) handleServerStatus(w http.ResponseWriter, r *http.Request) {
 			"name":    ws.Name,
 			"status":  statusStr,
 			"running": ws.Running,
+			"summary": ws.Summary,
 			"detail":  ws.Detail,
+			"error":   ws.Error,
 		})
 	}
 	if processes == nil {
 		processes = []map[string]any{}
-	}
-
-	if r.URL.Query().Get("fmt") == "html" {
-		filter := r.URL.Query().Get("log_filter")
-		if filter == "" {
-			filter = "all"
-		}
-		d := components.ServerDashboardData{
-			UptimeText:    components.UptimeText(upSeconds, formatElapsed(upSeconds)),
-			UptimeStarted: serverStartTime.Format("2006-01-02 15:04:05"),
-			Errors24h:     len(s.workers.Activity().ByStatus("error")),
-			ErrorsDelta:   0,
-			MemoryMB:      memMB,
-			MemoryHistory: memHistCopy,
-			TableCount:    toInt(tableCount),
-			LogFilter:     filter,
-			AvatarCount:   s.countReadyAvatars(),
-			DBSizeMB:      parseFloatFromAny(dbSizeMB),
-			WALSizeMB:     parseFloatFromAny(walSizeMB),
-		}
-		// DB stats fields
-		d.ChannelsTotal = toInt(dbStats["channels_total"])
-		d.VideosTotal = toInt(dbStats["videos_total"])
-		d.VideosWatched = toInt(dbStats["videos_watched"])
-		d.FeedItemsCount = toInt(dbStats["feed_items_count"])
-		d.LocalFeedCount = toInt(dbStats["local_feed_count"])
-		d.BookmarksCount = toInt(dbStats["bookmarks_count"])
-		d.CommentsCount = toInt(dbStats["comments_count"])
-		d.StorageGB = parseFloatFromAny(dbStats["storage_total_gb"])
-		d.VideoStorageGB = parseFloatFromAny(dbStats["video_storage_gb"])
-		d.AvgMBPerVideo = parseFloatFromAny(dbStats["avg_mb_per_video"])
-		if mp, ok := dbStats["media_pipeline"].(map[string]int); ok {
-			d.MediaReady = mp["ready"]
-			d.MediaQueued = mp["queued"]
-			d.MediaFailed = mp["failed"]
-		}
-		if sh, ok := dbStats["source_health"].(map[string]any); ok {
-			d.SourceHealthOK = toInt(sh["ok"])
-			d.SourceHealthCooling = toInt(sh["cooling"])
-			d.SourceHealthFailed = toInt(sh["failed"])
-			d.SourceAvgLatencyMs = toInt(sh["avg_latency_ms"])
-			d.SourcesOK = d.SourceHealthOK
-			d.SourcesCool = d.SourceHealthCooling
-			d.SourcesFail = d.SourceHealthFailed
-		}
-		if cbp, ok := dbStats["channels_by_platform"].(map[string]int); ok {
-			d.ChannelsByPlat = cbp
-		}
-		if pq, ok := dbStats["preview_queue"].(map[string]int); ok {
-			d.PreviewReady = pq["ready"]
-			d.PreviewPending = pq["pending"]
-			d.PreviewUnsupported = pq["unsupported"]
-		}
-		if an, ok := dbStats["analytics_summary"].(map[string]int); ok {
-			d.AnalyticsTotal = an["total"]
-			d.AnalyticsAppStarts = an["app_starts"]
-			d.AnalyticsVideoOpens = an["video_opens"]
-			d.AnalyticsSyncs = an["syncs"]
-		}
-		if dq, ok := dbStats["download_queue"].(map[string]int); ok {
-			d.DownloadQueuePending = dq["pending"]
-			d.DownloadQueueFailed = dq["failed"]
-		}
-		if sb, ok := dbStats["sponsorblock"].(map[string]int); ok {
-			d.SponsorBlockChecked = sb["checked"]
-			d.SponsorBlockSegments = sb["segments"]
-		}
-		// Activity & errors
-		activity := reverseActivityEvents(s.workers.Activity().Last(100))
-		for _, e := range activity {
-			d.Activity = append(d.Activity, components.ServerActivityEntry{
-				Time: e.Time, Status: e.Status, Source: e.Source, Message: e.Message,
-			})
-		}
-		for _, e := range s.workers.Activity().ByStatus("error") {
-			d.Errors = append(d.Errors, components.ServerErrorEntry{
-				Time: e.Time, Message: e.Message, Count: 1,
-			})
-		}
-		for _, e := range s.workers.Activity().ByStatus("warning") {
-			d.Warnings = append(d.Warnings, components.ServerErrorEntry{
-				Time: e.Time, Message: e.Message, Count: 1,
-			})
-		}
-		// Processes
-		for _, p := range processes {
-			name, _ := p["name"].(string)
-			status, _ := p["status"].(string)
-			detail, _ := p["detail"].(string)
-			d.Processes = append(d.Processes, components.ServerProcessCard{
-				Name: name, Status: status, Detail: detail,
-			})
-		}
-		w.Header().Set("Content-Type", "text/html")
-		_ = components.ServerDashboard(s.pageProps(w, r), d).Render(r.Context(), w)
-		return
 	}
 
 	writeJSON(w, 200, map[string]any{
@@ -656,7 +828,7 @@ func (s *Server) handleServerStatus(w http.ResponseWriter, r *http.Request) {
 		"table_count":    tableCount,
 		"errors_24h":     len(s.workers.Activity().ByStatus("error")),
 		"errors_delta":   0,
-		"avatar_count":   s.countReadyAvatars(),
+		"avatar_count":   avatarCount,
 		"activity":       reverseActivityEvents(s.workers.Activity().Last(100)),
 		"errors":         s.workers.Activity().ByStatus("error"),
 		"warnings":       s.workers.Activity().ByStatus("warning"),
@@ -705,12 +877,16 @@ func (s *Server) buildFeedSources() ([]components.FeedSourceEntry, string) {
 		return nil, ""
 	}
 
-	var handles []string
+	type sourceChannel struct {
+		Handle    string
+		ChannelID string
+	}
+	var sourceChannels []sourceChannel
 	handleSet := make(map[string]bool)
 	for _, ch := range channels {
 		handle := twitterSourceHandle(ch)
 		if handle != "" && !handleSet[handle] {
-			handles = append(handles, handle)
+			sourceChannels = append(sourceChannels, sourceChannel{Handle: handle, ChannelID: ch.ChannelID})
 			handleSet[handle] = true
 		}
 	}
@@ -743,11 +919,12 @@ func (s *Server) buildFeedSources() ([]components.FeedSourceEntry, string) {
 		}{status, int64(st.LastSuccessAt), st.LastError, st.LastHTTPStatus}
 	}
 
-	itemCounts, _ := s.db.CountFeedItemsBySource()
+	itemCounts, _ := s.db.CountFeedItemsBySourceChannel()
 	twoDaysAgo := time.Now().Unix() - 2*24*3600
 
 	var sources []components.FeedSourceEntry
-	for _, handle := range handles {
+	for _, source := range sourceChannels {
+		handle := source.Handle
 		entry := components.FeedSourceEntry{Handle: handle, Status: "unknown", DisplayStatus: "unknown"}
 		if st, ok := stateMap[handle]; ok {
 			entry.Status = st.Status
@@ -756,7 +933,7 @@ func (s *Server) buildFeedSources() ([]components.FeedSourceEntry, string) {
 			entry.LastError = st.LastError
 			entry.LastHTTPStatus = st.LastHTTPStatus
 		}
-		if c, ok := itemCounts[handle]; ok {
+		if c, ok := itemCounts[source.ChannelID]; ok {
 			entry.ItemCount = c
 		}
 		// Relax status: if last OK was <2 days ago, consider it OK
@@ -804,9 +981,9 @@ func getMemoryRSSMB() float64 {
 	return 0
 }
 
-func (s *Server) countReadyAvatars() int {
+func (s *Server) countReadyAvatars() (int, error) {
 	var count int
-	_ = s.db.QueryRow(`
+	err := s.db.QueryRow(`
 		SELECT COUNT(*)
 		FROM assets a JOIN media_objects mo ON mo.object_id = a.object_id
 		WHERE a.asset_kind = 'avatar'
@@ -814,5 +991,5 @@ func (s *Server) countReadyAvatars() int {
 		  AND a.lifecycle_state = 'active'
 		  AND mo.published_revision > 0 AND mo.file_path != ''
 	`).Scan(&count)
-	return count
+	return count, err
 }

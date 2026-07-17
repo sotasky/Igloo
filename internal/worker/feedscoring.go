@@ -115,7 +115,8 @@ func (m *Manager) scoreFeedItems(ctx context.Context, forceRerank, forceRefill b
 		snap.buildDur, snap.writeDur, totalElapsed, snap.top)
 	log.Printf("[feed_scoring] %s", detail)
 	m.EmitFeed("feed_scoring", detail, "done")
-	m.setStatus("feed_scoring", workerStatus("feed_scoring", true, detail, ""))
+	summary := fmt.Sprintf("Scored %d \u00b7 refilled %d \u00b7 %d candidates \u00b7 %s", len(dirtyTweetIDs), refillLimit, snap.candidates, totalElapsed)
+	m.setStatus("feed_scoring", workerStatusWithSummary("feed_scoring", true, summary, detail, ""))
 }
 
 func (m *Manager) runScoringPhase() ([]string, bool) {

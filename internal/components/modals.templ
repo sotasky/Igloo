@@ -1137,231 +1137,353 @@ templ LogsModal(p PageProps) {
 	</div>
 }
 
-// logsServerPanel renders the Server tab shell. Content is HTMX-polled.
+// logsServerPanel renders the Server tab shell. Live worker state is polled
+// while the database inventory is refreshed separately and less often.
 templ logsServerPanel(p PageProps) {
 	<div class="logs-tab-panel active" data-logs-panel="server">
-		<div id="sv-panel-content"
-			hx-get="/api/server/status?fmt=html"
-			hx-trigger="logs-poll"
-			hx-swap="innerHTML"
-		>
-			<div style="padding:2rem; text-align:center; color:var(--text-secondary);">{ L(p, "status_loading", "Loading...") }</div>
+		<div id="sv-panel-content">
+			<div class="stat-strip">
+				<div id="sv-live-stats" class="sv-stat-group">
+					@serverDashboardLiveStatCardsLoading(p)
+				</div>
+				<div id="sv-static-stats" class="sv-stat-group">
+					@serverDashboardStaticStatCardsLoading(p)
+				</div>
+			</div>
+			<div class="sv-body">
+				<div id="sv-static-db"
+					hx-get="/api/server/status?fmt=html&part=stats"
+					hx-trigger="logs-stats-poll"
+					hx-swap="outerHTML"
+				>
+					@serverDashboardDatabaseLoading(p)
+				</div>
+				<div class="glass glass-col sv-activity-col">
+					<div id="sv-live-content"
+						hx-get="/api/server/status?fmt=html&part=live"
+						hx-trigger="logs-poll"
+						hx-swap="innerHTML"
+					>
+						@serverDashboardActivityLoading(p)
+					</div>
+					<div id="sv-raw-log-section"
+						hx-get="/api/logs/server/read?type=server&lines=80&filter_noise=1&fmt=html"
+						hx-trigger="logs-server-raw-load"
+						hx-swap="innerHTML"
+					>
+						@serverRawLogLoading(p)
+					</div>
+				</div>
+				<div id="sv-workers-content" class="glass glass-col sv-workers-col">
+					@serverDashboardWorkersLoading(p)
+				</div>
+			</div>
 		</div>
 	</div>
 }
 
-// ServerDashboard renders the full server dashboard content (HTMX fragment).
-templ ServerDashboard(p PageProps, d ServerDashboardData) {
-	<!-- Stat strip (7 cards) -->
-	<div class="stat-strip">
+templ serverDashboardLiveStatCardsLoading(p PageProps) {
+	for _, label := range []string{L(p, "logs_stat_uptime", "Uptime"), L(p, "logs_stat_errors_24h", "Errors (24h)"), L(p, "logs_stat_memory", "Memory")} {
 		<div class="glass stat-card">
-			<div class="sc-label">{ L(p, "logs_stat_uptime", "Uptime") }</div>
-			<div class="sc-value"><span class="g">{ d.UptimeText }</span></div>
-			<div class="sc-detail">{ fmt.Sprintf(L(p, "logs_since_timestamp", "since %s"), d.UptimeStarted) }</div>
+			<div class="sc-label">{ label }</div>
+			<div class="sc-value">&mdash;</div>
 		</div>
+	}
+}
+
+templ serverDashboardStaticStatCardsLoading(p PageProps) {
+	for _, label := range []string{L(p, "logs_stat_database", "Database"), L(p, "logs_stat_storage", "Storage"), L(p, "nav_videos", "Videos"), L(p, "logs_stat_sources", "Sources")} {
 		<div class="glass stat-card">
-			<div class="sc-label">{ L(p, "logs_stat_errors_24h", "Errors (24h)") }</div>
-			<div class="sc-value"><span class="r">{ fmt.Sprintf("%d", d.Errors24h) }</span></div>
-			<div class="sc-detail">{ fmt.Sprintf(L(p, "logs_delta_vs_yesterday", "%s%d vs yesterday"), ErrorsDeltaArrow(d.ErrorsDelta), Abs(d.ErrorsDelta)) }</div>
+			<div class="sc-label">{ label }</div>
+			<div class="sc-value">&mdash;</div>
 		</div>
-		<div class="glass stat-card">
-			<div class="sc-label">{ L(p, "logs_stat_memory", "Memory") }</div>
-			<div class="sc-value">{ fmt.Sprintf("%.1f", d.MemoryMB) }<span class="u">MB</span></div>
-			<div class="spark">
-				for _, bar := range SparklineBars(d.MemoryHistory) {
-					<i style={ fmt.Sprintf("height:%dpx;background:%s", bar.HeightPx, bar.Color) }></i>
-				}
+	}
+}
+
+templ serverDashboardDatabaseLoading(p PageProps) {
+	<div class="glass glass-col">
+		<div class="glass-col-header"><div class="glass-col-title">{ L(p, "logs_stat_database", "Database") }</div></div>
+		<div class="glass-col-body"><div class="log-line log-empty">{ L(p, "status_loading", "Loading...") }</div></div>
+	</div>
+}
+
+templ serverDashboardActivityLoading(p PageProps) {
+	<div class="glass-col-header"><div class="glass-col-title">{ L(p, "logs_activity", "Activity") }</div></div>
+	<div class="glass-col-body"><div class="log-line log-empty">{ L(p, "status_loading", "Loading...") }</div></div>
+}
+
+templ serverDashboardWorkersLoading(p PageProps) {
+	<div class="glass-col-header"><div class="glass-col-title">{ L(p, "logs_workers_errors", "Workers & Errors") }</div></div>
+	<div class="glass-col-body"><div class="log-line log-empty">{ L(p, "status_loading", "Loading...") }</div></div>
+}
+
+templ serverDashboardLiveStatCards(p PageProps, d ServerDashboardData) {
+	<div class="glass stat-card">
+		<div class="sc-label">{ L(p, "logs_stat_uptime", "Uptime") }</div>
+		<div class="sc-value"><span class="g">{ d.UptimeText }</span></div>
+		<div class="sc-detail">{ fmt.Sprintf(L(p, "logs_since_timestamp", "since %s"), d.UptimeStarted) }</div>
+	</div>
+	<div class="glass stat-card">
+		<div class="sc-label">{ L(p, "logs_stat_errors_24h", "Errors (24h)") }</div>
+		<div class="sc-value"><span class="r">{ fmt.Sprintf("%d", d.Errors24h) }</span></div>
+		<div class="sc-detail">{ fmt.Sprintf(L(p, "logs_delta_vs_yesterday", "%s%d vs yesterday"), ErrorsDeltaArrow(d.ErrorsDelta), Abs(d.ErrorsDelta)) }</div>
+	</div>
+	<div class="glass stat-card">
+		<div class="sc-label">{ L(p, "logs_stat_memory", "Memory") }</div>
+		<div class="sc-value">{ fmt.Sprintf("%.1f", d.MemoryMB) }<span class="u">MB</span></div>
+		<div class="spark">
+			for _, bar := range SparklineBars(d.MemoryHistory) {
+				<i style={ fmt.Sprintf("height:%dpx;background:%s", bar.HeightPx, bar.Color) }></i>
+			}
+		</div>
+	</div>
+}
+
+templ serverDashboardStaticStatCards(p PageProps, d ServerDashboardData) {
+	<div class="glass stat-card">
+		<div class="sc-label">{ L(p, "logs_stat_database", "Database") }</div>
+		<div class="sc-value"><span class="bl">{ fmt.Sprintf("%.1f", d.DBSizeMB) }</span><span class="u">MB</span></div>
+		<div class="sc-detail">{ fmt.Sprintf(L(p, "logs_wal_tables_detail", "WAL %s MB \u00b7 %d tables"), fmt.Sprintf("%.1f", d.WALSizeMB), d.TableCount) }</div>
+	</div>
+	<div class="glass stat-card">
+		<div class="sc-label">{ L(p, "logs_stat_storage", "Storage") }</div>
+		<div class="sc-value">{ fmt.Sprintf("%.1f", d.StorageGB) }<span class="u">GB</span></div>
+		<div class="sc-detail">{ fmt.Sprintf(L(p, "logs_video_rows_size_gb", "video rows %s GB"), fmt.Sprintf("%.1f", d.VideoStorageGB)) }</div>
+	</div>
+	<div class="glass stat-card">
+		<div class="sc-label">{ L(p, "nav_videos", "Videos") }</div>
+		<div class="ring-wrap">
+			@miniRing(BuildRingSegments([]RingSegment{
+				{Value: videoWatchedPct(d.VideosWatched, d.VideosTotal), Color: "var(--status-info)", Count: d.VideosWatched, Label: L(p, "logs_ring_watched", "watched")},
+			}), fmt.Sprintf("%.0f%%", videoWatchedPct(d.VideosWatched, d.VideosTotal)))
+		</div>
+	</div>
+	<div class="glass stat-card">
+		<div class="sc-label">{ L(p, "logs_stat_sources", "Sources") }</div>
+		<div class="ring-wrap">
+			@miniRing(BuildRingSegments([]RingSegment{
+				{Value: sourcePct(d.SourcesOK, d.SourcesOK+d.SourcesCool+d.SourcesFail), Color: "var(--status-success)", Count: d.SourcesOK, Label: L(p, "logs_ring_ok", "ok")},
+				{Value: sourcePct(d.SourcesCool, d.SourcesOK+d.SourcesCool+d.SourcesFail), Color: "var(--status-warning)", Count: d.SourcesCool, Label: L(p, "logs_ring_cooling", "cool")},
+				{Value: sourcePct(d.SourcesFail, d.SourcesOK+d.SourcesCool+d.SourcesFail), Color: "var(--status-error)", Count: d.SourcesFail, Label: L(p, "logs_ring_fail", "fail")},
+			}), FmtNum(d.SourcesOK + d.SourcesCool + d.SourcesFail))
+		</div>
+	</div>
+}
+
+// ServerDashboardStats updates the static server inventory without blocking
+// the worker/activity poll. The stat-strip update is applied out of band.
+templ ServerDashboardStats(p PageProps, d ServerDashboardData) {
+	<div id="sv-static-stats" hx-swap-oob="innerHTML">
+		@serverDashboardStaticStatCards(p, d)
+	</div>
+	<div id="sv-static-db"
+		hx-get="/api/server/status?fmt=html&part=stats"
+		hx-trigger="logs-stats-poll"
+		hx-swap="outerHTML"
+	>
+		@serverDashboardDatabase(p, d)
+	</div>
+}
+
+// ServerDashboardStatsLoading keeps the Server tab responsive while the first
+// inventory snapshot is calculated in the background.
+templ ServerDashboardStatsLoading(p PageProps) {
+	<div id="sv-static-stats" hx-swap-oob="innerHTML">
+		@serverDashboardStaticStatCardsLoading(p)
+	</div>
+	<div id="sv-static-db"
+		data-server-inventory-pending="true"
+		hx-get="/api/server/status?fmt=html&part=stats"
+		hx-trigger="logs-stats-poll"
+		hx-swap="outerHTML"
+	>
+		@serverDashboardDatabaseLoading(p)
+	</div>
+}
+
+templ serverDashboardDatabase(p PageProps, d ServerDashboardData) {
+	<div class="glass glass-col">
+		<div class="glass-col-header"><div class="glass-col-title">{ L(p, "logs_stat_database", "Database") }</div></div>
+		<div class="glass-col-body">
+			<div class="db-sec">
+				<div class="db-sec-title">{ L(p, "settings_section_content", "Content") }</div>
+				@dbRow(L(p, "nav_channels", "Channels"), FmtNum(d.ChannelsTotal))
+				@dbRowSub(L(p, "platform_youtube", "YouTube"), FmtNum(d.ChannelsByPlat["youtube"]))
+				@dbRowSub(L(p, "platform_tiktok", "TikTok"), FmtNum(d.ChannelsByPlat["tiktok"]))
+				@dbRowSub(L(p, "platform_instagram", "Instagram"), FmtNum(d.ChannelsByPlat["instagram"]))
+				@dbRowSub(L(p, "platform_x", "X"), FmtNum(d.ChannelsByPlat["twitter"]))
+				@dbRow(L(p, "nav_videos", "Videos"), FmtNum(d.VideosTotal))
+				@dbRow(L(p, "cache_feed_items", "Feed items"), FmtNum(d.FeedItemsCount))
+				@dbRow(L(p, "logs_local_feed", "Local feed"), FmtNum(d.LocalFeedCount))
+				@dbRow(L(p, "nav_bookmarks", "Bookmarks"), FmtNum(d.BookmarksCount))
+				@dbRow(L(p, "logs_comments", "Comments"), FmtNum(d.CommentsCount))
+				@dbRow(L(p, "cache_avatars", "Avatars"), FmtNum(d.AvatarCount))
 			</div>
-		</div>
-		<div class="glass stat-card">
-			<div class="sc-label">{ L(p, "logs_stat_database", "Database") }</div>
-			<div class="sc-value"><span class="bl">{ fmt.Sprintf("%.1f", d.DBSizeMB) }</span><span class="u">MB</span></div>
-			<div class="sc-detail">{ fmt.Sprintf(L(p, "logs_wal_tables_detail", "WAL %s MB \u00b7 %d tables"), fmt.Sprintf("%.1f", d.WALSizeMB), d.TableCount) }</div>
-		</div>
-		<div class="glass stat-card">
-			<div class="sc-label">{ L(p, "logs_stat_storage", "Storage") }</div>
-			<div class="sc-value">{ fmt.Sprintf("%.1f", d.StorageGB) }<span class="u">GB</span></div>
-			<div class="sc-detail">{ fmt.Sprintf(L(p, "logs_video_rows_size_gb", "video rows %s GB"), fmt.Sprintf("%.1f", d.VideoStorageGB)) }</div>
-		</div>
-		<div class="glass stat-card">
-			<div class="sc-label">{ L(p, "nav_videos", "Videos") }</div>
-			<div class="ring-wrap">
-				@miniRing(BuildRingSegments([]RingSegment{
-					{Value: videoWatchedPct(d.VideosWatched, d.VideosTotal), Color: "var(--status-info)", Count: d.VideosWatched, Label: L(p, "logs_ring_watched", "watched")},
-				}), fmt.Sprintf("%.0f%%", videoWatchedPct(d.VideosWatched, d.VideosTotal)))
+			<div class="db-sec">
+				<div class="db-sec-title">{ L(p, "logs_media_pipeline", "Media Pipeline") }</div>
+				@dbRowDot("ok", L(p, "logs_status_ready", "Ready"), "g", FmtNum(d.MediaReady))
+				@dbRowDot("wn", L(p, "logs_status_queued", "Queued"), "w", FmtNum(d.MediaQueued))
+				@dbRowDot("er", L(p, "logs_status_failed", "Failed"), "r", FmtNum(d.MediaFailed))
 			</div>
-		</div>
-		<div class="glass stat-card">
-			<div class="sc-label">{ L(p, "logs_stat_sources", "Sources") }</div>
-			<div class="ring-wrap">
-				@miniRing(BuildRingSegments([]RingSegment{
-					{Value: sourcePct(d.SourcesOK, d.SourcesOK+d.SourcesCool+d.SourcesFail), Color: "var(--status-success)", Count: d.SourcesOK, Label: L(p, "logs_ring_ok", "ok")},
-					{Value: sourcePct(d.SourcesCool, d.SourcesOK+d.SourcesCool+d.SourcesFail), Color: "var(--status-warning)", Count: d.SourcesCool, Label: L(p, "logs_ring_cooling", "cool")},
-					{Value: sourcePct(d.SourcesFail, d.SourcesOK+d.SourcesCool+d.SourcesFail), Color: "var(--status-error)", Count: d.SourcesFail, Label: L(p, "logs_ring_fail", "fail")},
-				}), FmtNum(d.SourcesOK + d.SourcesCool + d.SourcesFail))
+			<div class="db-sec">
+				<div class="db-sec-title">{ L(p, "logs_source_health", "Source Health") }</div>
+				@dbRowDot("ok", L(p, "logs_status_healthy", "Healthy"), "", FmtNum(d.SourceHealthOK))
+				@dbRowDot("wn", L(p, "logs_status_cooling", "Cooling"), "", FmtNum(d.SourceHealthCooling))
+				@dbRowDot("er", L(p, "logs_status_failed", "Failed"), "", FmtNum(d.SourceHealthFailed))
+				@dbRow(L(p, "logs_avg_latency", "Avg latency"), fmt.Sprintf("%d ms", d.SourceAvgLatencyMs))
+			</div>
+			<div class="db-sec">
+				<div class="db-sec-title">{ L(p, "logs_preview_queue", "Preview Queue") }</div>
+				@dbRow(L(p, "logs_status_ready", "Ready"), FmtNum(d.PreviewReady))
+				@dbRow(L(p, "logs_status_pending", "Pending"), FmtNum(d.PreviewPending))
+				@dbRow(L(p, "logs_status_unsupported", "Unsupported"), FmtNum(d.PreviewUnsupported))
+			</div>
+			<div class="db-sec">
+				<div class="db-sec-title">{ L(p, "logs_download_queue", "Download Queue") }</div>
+				@dbRow(L(p, "logs_status_pending", "Pending"), FmtNum(d.DownloadQueuePending))
+				<div class="db-row"><span class="l">{ L(p, "logs_status_failed", "Failed") }</span><span class="v"><span class="r">{ FmtNum(d.DownloadQueueFailed) }</span></span></div>
+			</div>
+			<div class="db-sec">
+				<div class="db-sec-title">{ L(p, "logs_sponsorblock", "SponsorBlock") }</div>
+				@dbRow(L(p, "logs_checked", "Checked"), FmtNum(d.SponsorBlockChecked))
+				@dbRow(L(p, "logs_segments", "Segments"), FmtNum(d.SponsorBlockSegments))
+			</div>
+			<div class="db-sec">
+				<div class="db-sec-title">{ L(p, "logs_analytics", "Analytics") }</div>
+				@dbRow(L(p, "logs_events", "Events"), FmtNum(d.AnalyticsTotal))
+				@dbRow(L(p, "logs_app_starts", "App starts"), FmtNum(d.AnalyticsAppStarts))
+				@dbRow(L(p, "logs_video_opens", "Video opens"), FmtNum(d.AnalyticsVideoOpens))
+				@dbRow(L(p, "logs_syncs", "Syncs"), FmtNum(d.AnalyticsSyncs))
 			</div>
 		</div>
 	</div>
-	<!-- 3-column body -->
-	<div class="sv-body">
-		<!-- Left: Database -->
-		<div class="glass glass-col">
-			<div class="glass-col-header"><div class="glass-col-title">{ L(p, "logs_stat_database", "Database") }</div></div>
-			<div class="glass-col-body">
-				<div class="db-sec">
-					<div class="db-sec-title">{ L(p, "settings_section_content", "Content") }</div>
-					@dbRow(L(p, "nav_channels", "Channels"), FmtNum(d.ChannelsTotal))
-					@dbRowSub(L(p, "platform_youtube", "YouTube"), FmtNum(d.ChannelsByPlat["youtube"]))
-					@dbRowSub(L(p, "platform_tiktok", "TikTok"), FmtNum(d.ChannelsByPlat["tiktok"]))
-					@dbRowSub(L(p, "platform_instagram", "Instagram"), FmtNum(d.ChannelsByPlat["instagram"]))
-					@dbRowSub(L(p, "platform_x", "X"), FmtNum(d.ChannelsByPlat["twitter"]))
-					@dbRow(L(p, "nav_videos", "Videos"), FmtNum(d.VideosTotal))
-					@dbRow(L(p, "cache_feed_items", "Feed items"), FmtNum(d.FeedItemsCount))
-					@dbRow(L(p, "logs_local_feed", "Local feed"), FmtNum(d.LocalFeedCount))
-					@dbRow(L(p, "nav_bookmarks", "Bookmarks"), FmtNum(d.BookmarksCount))
-					@dbRow(L(p, "logs_comments", "Comments"), FmtNum(d.CommentsCount))
-					@dbRow(L(p, "cache_avatars", "Avatars"), FmtNum(d.AvatarCount))
-				</div>
-				<div class="db-sec">
-					<div class="db-sec-title">{ L(p, "logs_media_pipeline", "Media Pipeline") }</div>
-					@dbRowDot("ok", L(p, "logs_status_ready", "Ready"), "g", FmtNum(d.MediaReady))
-					@dbRowDot("wn", L(p, "logs_status_queued", "Queued"), "w", FmtNum(d.MediaQueued))
-					@dbRowDot("er", L(p, "logs_status_failed", "Failed"), "r", FmtNum(d.MediaFailed))
-				</div>
-				<div class="db-sec">
-					<div class="db-sec-title">{ L(p, "logs_source_health", "Source Health") }</div>
-					@dbRowDot("ok", L(p, "logs_status_healthy", "Healthy"), "", FmtNum(d.SourceHealthOK))
-					@dbRowDot("wn", L(p, "logs_status_cooling", "Cooling"), "", FmtNum(d.SourceHealthCooling))
-					@dbRowDot("er", L(p, "logs_status_failed", "Failed"), "", FmtNum(d.SourceHealthFailed))
-					@dbRow(L(p, "logs_avg_latency", "Avg latency"), fmt.Sprintf("%d ms", d.SourceAvgLatencyMs))
-				</div>
-				<div class="db-sec">
-					<div class="db-sec-title">{ L(p, "logs_preview_queue", "Preview Queue") }</div>
-					@dbRow(L(p, "logs_status_ready", "Ready"), FmtNum(d.PreviewReady))
-					@dbRow(L(p, "logs_status_pending", "Pending"), FmtNum(d.PreviewPending))
-					@dbRow(L(p, "logs_status_unsupported", "Unsupported"), FmtNum(d.PreviewUnsupported))
-				</div>
-				<div class="db-sec">
-					<div class="db-sec-title">{ L(p, "logs_analytics", "Analytics") }</div>
-					@dbRow(L(p, "logs_events", "Events"), FmtNum(d.AnalyticsTotal))
-					@dbRow(L(p, "logs_app_starts", "App starts"), FmtNum(d.AnalyticsAppStarts))
-					@dbRow(L(p, "logs_video_opens", "Video opens"), FmtNum(d.AnalyticsVideoOpens))
-					@dbRow(L(p, "logs_syncs", "Syncs"), FmtNum(d.AnalyticsSyncs))
-				</div>
-			</div>
+}
+
+// ServerDashboardLive renders only the state that is safe to refresh every
+// few seconds. It updates the live stat cards and worker column out of band,
+// leaving the raw Server Log outside the timer-owned fragment.
+templ ServerDashboardLive(p PageProps, d ServerDashboardData) {
+	<div id="sv-live-stats" hx-swap-oob="innerHTML">
+		@serverDashboardLiveStatCards(p, d)
+	</div>
+	@serverDashboardActivity(p, d)
+	<div id="sv-workers-content" hx-swap-oob="innerHTML">
+		@serverDashboardWorkers(p, d)
+	</div>
+}
+
+templ serverDashboardActivity(p PageProps, d ServerDashboardData) {
+	<div class="glass-col-header">
+		<div class="glass-col-title">{ L(p, "logs_activity", "Activity") }</div>
+		<div class="sv-log-filters" style="margin-left:auto;">
+			for _, f := range []struct{ Key, Label string }{{"all",L(p, "logs_filter_all", "All")},{"errors",L(p, "logs_filter_errors", "Errors")},{"warnings",L(p, "logs_filter_warnings", "Warnings")},{"info",L(p, "logs_filter_info", "Info")}} {
+				<button
+					class={ "sv-log-filter" + dlFilterActiveClass(d.LogFilter, f.Key) }
+					data-server-activity-filter={ f.Key }
+					type="button"
+					hx-get={ "/api/server/status?fmt=html&part=live&log_filter=" + f.Key }
+					hx-target="#sv-live-content"
+					hx-swap="innerHTML"
+					>{ fmt.Sprintf("%s (%d)", f.Label, ServerLogFilterCount(d.Activity, f.Key)) }</button>
+			}
 		</div>
-		<!-- Center: Activity Log + Raw Server Log -->
-		<div class="glass glass-col">
-			<div class="glass-col-header">
-				<div class="glass-col-title">{ L(p, "logs_activity", "Activity") }</div>
-				<div class="sv-log-filters" style="margin-left:auto;">
-					for _, f := range []struct{ Key, Label string }{{"all",L(p, "logs_filter_all", "All")},{"errors",L(p, "logs_filter_errors", "Errors")},{"warnings",L(p, "logs_filter_warnings", "Warnings")},{"info",L(p, "logs_filter_info", "Info")}} {
-						<button
-							class={ "sv-log-filter" + dlFilterActiveClass(d.LogFilter, f.Key) }
-							type="button"
-							hx-get={ "/api/server/status?fmt=html&log_filter=" + f.Key }
-							hx-target="#sv-panel-content"
-							hx-swap="innerHTML"
-						>{ fmt.Sprintf("%s (%d)", f.Label, ServerLogFilterCount(d.Activity, f.Key)) }</button>
-					}
+		<button class="copy-log" type="button" onclick="var el=this.closest('.glass-col').querySelector('#sv-log-console');if(el&&window.MpaSiteBase)MpaSiteBase.copyText(el.innerText).then(function(){MpaSiteBase.showToast(window.IglooI18n&&window.IglooI18n.t?window.IglooI18n.t('toast_log_copied','Log copied'):'Log copied')})">{ L(p, "action_copy", "Copy") }</button>
+	</div>
+	<div class="glass-col-body sv-log-split" id="sv-log-console" style="padding:6px 12px;">
+		if ServerLogFilterCount(d.Activity, d.LogFilter) == 0 {
+			<div class="log-line log-empty">{ L(p, "logs_no_events", "No events.") }</div>
+		}
+		for _, e := range d.Activity {
+			if ServerLogFilterMatch(e, d.LogFilter) {
+				<div class="log-line">
+					<span class="log-ts">{ e.Time }</span>
+					{ " " }
+					<span class={ serverLevelClass(e.Status) }>{ serverLevelText(e.Status) }</span>
+					{ " " }
+					<span class="log-source">{ "[" + e.Source + "]" }</span>
+					{ " " }
+					<span class="log-msg">{ e.Message }</span>
 				</div>
-				<button class="copy-log" type="button" onclick="var el=this.closest('.glass-col').querySelector('#sv-log-console');if(el&&window.MpaSiteBase)MpaSiteBase.copyText(el.innerText).then(function(){MpaSiteBase.showToast(window.IglooI18n&&window.IglooI18n.t?window.IglooI18n.t('toast_log_copied','Log copied'):'Log copied')})">{ L(p, "action_copy", "Copy") }</button>
-			</div>
-			<div class="glass-col-body sv-log-split" id="sv-log-console" style="padding:6px 12px;">
-				if ServerLogFilterCount(d.Activity, d.LogFilter) == 0 {
-					<div class="log-line log-empty">{ L(p, "logs_no_events", "No events.") }</div>
-				}
-				for _, e := range d.Activity {
-					if ServerLogFilterMatch(e, d.LogFilter) {
-						<div class="log-line">
-							<span class="log-ts">{ e.Time }</span>
-							{ " " }
-							<span class={ serverLevelClass(e.Status) }>{ serverLevelText(e.Status) }</span>
-							{ " " }
-							<span class="log-source">{ "[" + e.Source + "]" }</span>
-							{ " " }
-							<span class="log-msg">{ e.Message }</span>
-						</div>
+			}
+		}
+	</div>
+}
+
+templ serverDashboardWorkers(p PageProps, d ServerDashboardData) {
+	<div class="glass-col-header"><div class="glass-col-title">{ L(p, "logs_workers_errors", "Workers & Errors") }</div></div>
+	<div class="glass-col-body">
+		<div class="db-sec">
+			<div class="db-sec-title">{ L(p, "logs_processes", "Processes") }</div>
+			if len(d.Processes) == 0 {
+				<div class="db-row"><span class="l">{ L(p, "logs_no_processes", "No processes") }</span></div>
+			}
+			for _, proc := range d.Processes {
+				<div class="wk-card">
+					<div class="wk-top">
+						<span class="wk-name" title={ proc.Name }>{ WorkerDisplayName(proc.Name) }</span>
+						<span class={ "wk-badge " + ServerProcessStatusClass(proc.Status) }>{ proc.Status }</span>
+					</div>
+					if proc.Summary != "" {
+						<div class="wk-summary">{ proc.Summary }</div>
 					}
-				}
-			</div>
-			<!-- Raw log: separate HTMX endpoint -->
-			<div id="sv-raw-log-section"
-				hx-get="/api/logs/server/read?type=server&lines=80&filter_noise=1&fmt=html"
-				hx-trigger="load, logs-poll"
-				hx-swap="innerHTML"
-			></div>
-		</div>
-		<!-- Right: Processes + Errors -->
-		<div class="glass glass-col">
-			<div class="glass-col-header"><div class="glass-col-title">{ L(p, "logs_workers_errors", "Workers & Errors") }</div></div>
-			<div class="glass-col-body">
-				<div class="db-sec">
-					<div class="db-sec-title">{ L(p, "logs_processes", "Processes") }</div>
-					if len(d.Processes) == 0 {
-						<div class="db-row"><span class="l">{ L(p, "logs_no_processes", "No processes") }</span></div>
-					}
-					for _, proc := range d.Processes {
-						<div class="wk-card">
-							<div class="wk-top">
-								<span class="wk-name">{ proc.Name }</span>
-								<span class={ "wk-badge " + ServerProcessStatusClass(proc.Status) }>{ proc.Status }</span>
-							</div>
-							if proc.Detail != "" {
-								<div class="wk-stats">
-									<div class="wk-stat"><span class="wl">{ L(p, "logs_detail", "Detail") }</span><span class="wv">{ proc.Detail }</span></div>
-								</div>
-							}
-						</div>
-					}
-				</div>
-				<div class="db-sec">
-					<div class="db-sec-title">{ L(p, "logs_filter_errors", "Errors") }</div>
-					if len(d.Errors) == 0 {
-						<div class="db-row"><span class="l log-empty">{ L(p, "logs_no_errors_session", "No errors this session") }</span></div>
-					}
-					for _, e := range d.Errors {
-						<div class="err-item">
-							<span class="err-time">{ e.Time }</span>
-							<span class="err-msg error">
-								{ e.Message }
-								if e.Count > 1 {
-									{ fmt.Sprintf(" \u00d7%d", e.Count) }
-								}
-							</span>
-						</div>
-					}
-				</div>
-				<div class="db-sec">
-					<div class="db-sec-title">{ L(p, "logs_filter_warnings", "Warnings") }</div>
-					if len(d.Warnings) == 0 {
-						<div class="db-row"><span class="l log-empty">{ L(p, "logs_no_warnings", "No warnings") }</span></div>
-					}
-					for i, w := range d.Warnings {
-						if i < 10 {
-							<div class="err-item">
-								<span class="err-time">{ w.Time }</span>
-								<span class="err-msg warning">{ w.Message }</span>
-							</div>
+					if proc.Detail != "" {
+						if proc.Summary != "" || WorkerDetailNeedsDisclosure(proc.Detail) {
+							<details class="wk-detail">
+								<summary>{ L(p, "logs_detail", "Detail") }</summary>
+								<div class="wk-detail-body">{ proc.Detail }</div>
+							</details>
+						} else {
+							<div class="wk-detail-short"><span>{ L(p, "logs_detail", "Detail") }</span><span>{ proc.Detail }</span></div>
 						}
 					}
-					if len(d.Warnings) > 10 {
-						<div class="err-item"><span class="err-msg log-empty">{ fmt.Sprintf(L(p, "logs_more_count", "+%d more"), len(d.Warnings)-10) }</span></div>
+					if proc.Error != "" {
+						<div class="wk-error">{ proc.Error }</div>
 					}
 				</div>
-				<div class="db-sec">
-					<div class="db-sec-title">{ L(p, "logs_download_queue", "Download Queue") }</div>
-					@dbRow(L(p, "logs_status_pending", "Pending"), FmtNum(d.DownloadQueuePending))
-					<div class="db-row"><span class="l">{ L(p, "logs_status_failed", "Failed") }</span><span class="v"><span class="r">{ FmtNum(d.DownloadQueueFailed) }</span></span></div>
-				</div>
-					<div class="db-sec">
-						<div class="db-sec-title">{ L(p, "logs_sponsorblock", "SponsorBlock") }</div>
-						@dbRow(L(p, "logs_checked", "Checked"), FmtNum(d.SponsorBlockChecked))
-						@dbRow(L(p, "logs_segments", "Segments"), FmtNum(d.SponsorBlockSegments))
-					</div>
-				</div>
-			</div>
+			}
 		</div>
+		<div class="db-sec">
+			<div class="db-sec-title">{ L(p, "logs_filter_errors", "Errors") }</div>
+			if len(d.Errors) == 0 {
+				<div class="db-row"><span class="l log-empty">{ L(p, "logs_no_errors_session", "No errors this session") }</span></div>
+			}
+			for _, e := range d.Errors {
+				<div class="err-item">
+					<span class="err-time">{ e.Time }</span>
+					<span class="err-msg error">
+						{ e.Message }
+						if e.Count > 1 {
+							{ fmt.Sprintf(" \u00d7%d", e.Count) }
+						}
+					</span>
+				</div>
+			}
+		</div>
+		<div class="db-sec">
+			<div class="db-sec-title">{ L(p, "logs_filter_warnings", "Warnings") }</div>
+			if len(d.Warnings) == 0 {
+				<div class="db-row"><span class="l log-empty">{ L(p, "logs_no_warnings", "No warnings") }</span></div>
+			}
+			for i, w := range d.Warnings {
+				if i < 10 {
+					<div class="err-item">
+						<span class="err-time">{ w.Time }</span>
+						<span class="err-msg warning">{ w.Message }</span>
+					</div>
+				}
+			}
+			if len(d.Warnings) > 10 {
+				<div class="err-item"><span class="err-msg log-empty">{ fmt.Sprintf(L(p, "logs_more_count", "+%d more"), len(d.Warnings)-10) }</span></div>
+			}
+		</div>
+	</div>
+}
+
+templ serverRawLogLoading(p PageProps) {
+	<div class="glass-col-header sv-raw-log-header">
+		<div class="glass-col-title">{ L(p, "logs_server_log", "Server Log") }</div>
+	</div>
+	<div class="glass-col-body"><div class="log-line log-empty">{ L(p, "status_loading", "Loading...") }</div></div>
 }
 
 // ServerRawLog renders the raw server log section (HTMX fragment).
@@ -1381,9 +1503,14 @@ templ ServerRawLog(p PageProps, d ServerRawLogData) {
 					hx-get={ "/api/logs/server/read?type=server&lines=80&filter_noise=1&fmt=html&raw_filter=" + f.Key }
 					hx-target="#sv-raw-log-section"
 					hx-swap="innerHTML"
-				>{ fmt.Sprintf("%s (%d)", f.Label, ServerRawLogFilterCount(d.Lines, f.Key)) }</button>
+					>{ fmt.Sprintf("%s (%d)", f.Label, ServerRawLogFilterCount(d.Lines, f.Key)) }</button>
 			}
 		</div>
+		<button class="copy-log" type="button"
+			hx-get={ "/api/logs/server/read?type=server&lines=80&filter_noise=1&fmt=html&raw_filter=" + d.Filter }
+			hx-target="#sv-raw-log-section"
+			hx-swap="innerHTML"
+			>{ L(p, "action_refresh", "Refresh") }</button>
 		<button class="copy-log" type="button" onclick="var el=this.closest('.glass-col').querySelector('#sv-raw-log-console');if(el&&window.MpaSiteBase)MpaSiteBase.copyText(el.innerText).then(function(){MpaSiteBase.showToast(window.IglooI18n&&window.IglooI18n.t?window.IglooI18n.t('toast_server_log_copied','Server log copied'):'Server log copied')})">{ L(p, "action_copy", "Copy") }</button>
 	</div>
 	<div class="glass-col-body sv-log-split" id="sv-raw-log-console" style="padding:6px 12px;">
@@ -1609,7 +1736,13 @@ templ AndroidDashboard(p PageProps, d AndroidDashboardData) {
 					{ L(p, "logs_no_sync_report", "No report") }
 				}
 			</div>
-			<div class="sc-detail">{ d.SyncCompletedHMS }</div>
+			<div class="sc-detail">
+				{ d.SyncCompletedHMS }
+				if d.SyncCompletedHMS != "" && d.SyncStatus != "" {
+					{ " · " }
+				}
+				{ d.SyncStatus }
+			</div>
 		</div>
 		<div class="glass stat-card">
 			<div class="sc-label">{ L(p, "logs_android_device_assets", "Device assets") }</div>
@@ -1653,6 +1786,16 @@ templ AndroidDashboard(p PageProps, d AndroidDashboardData) {
 								<div class="an-cache-bar-wrap"><div class={ "an-cache-bar " + c.BarCSS } style={ fmt.Sprintf("width:%d%%", c.Percent) }></div></div>
 								<span class="an-cache-stat">{ fmt.Sprintf("%d/%d", c.Cached, c.Total) }</span>
 							</div>
+						}
+					</div>
+				}
+				if d.SyncStatus != "" || d.RetentionText != "" {
+					<div class="an-sync-summary">
+						if d.SyncStatus != "" {
+							<div class="an-sync-row"><span>{ L(p, "settings_section_sync", "Sync") }</span><span>{ d.SyncStatus }</span></div>
+						}
+						if d.RetentionText != "" {
+							<div class="an-sync-row"><span>{ L(p, "settings_section_retention", "Retention") }</span><span>{ d.RetentionText }</span></div>
 						}
 					</div>
 				}
@@ -1734,21 +1877,96 @@ templ AndroidDashboard(p PageProps, d AndroidDashboardData) {
 	</div>
 }
 
-// logsFeedPanel renders the Feed (Twitter) tab shell. Content is HTMX-polled.
+// logsFeedPanel renders the Feed tab shell. Activity is live-polled while the
+// sources table stays in place until the user explicitly refreshes it.
 templ logsFeedPanel(p PageProps) {
 	<div class="logs-tab-panel" data-logs-panel="twitter">
-		<div id="feed-panel-content"
-			hx-get="/api/feed/status?fmt=html"
-			hx-trigger="logs-poll"
-			hx-swap="innerHTML"
-		>
-			<div style="padding:2rem; text-align:center; color:var(--text-secondary);">{ L(p, "status_loading", "Loading...") }</div>
+		<div id="feed-panel-content">
+			<div id="feed-live-stats">
+				@feedDashboardStatsLoading(p)
+			</div>
+			<div class="feed-body">
+				@feedDashboardActivityLoading(p)
+				@feedDashboardSourcesLoading(p)
+			</div>
+		</div>
+	</div>
+}
+
+templ feedDashboardStatsLoading(p PageProps) {
+	<div class="stat-strip" style="grid-template-columns: repeat(3, 1fr);">
+		for _, label := range []string{L(p, "logs_ingest_label", "Ingest"), L(p, "logs_stat_parsed", "Parsed"), L(p, "logs_filter_media", "Media")} {
+			<div class="glass stat-card">
+				<div class="sc-label">{ label }</div>
+				<div class="sc-value">&mdash;</div>
+			</div>
+		}
+	</div>
+}
+
+templ feedDashboardActivityLoading(p PageProps) {
+	<div id="feed-live-content"
+		hx-get="/api/feed/status?fmt=html&part=live"
+		hx-trigger="logs-poll"
+		hx-swap="outerHTML"
+	>
+		<div class="glass glass-col">
+			<div class="glass-col-header"><div class="glass-col-title">{ L(p, "logs_activity", "Activity") }</div></div>
+			<div class="glass-col-body"><div class="log-line log-empty">{ L(p, "status_loading", "Loading...") }</div></div>
+		</div>
+	</div>
+}
+
+templ feedDashboardSourcesLoading(p PageProps) {
+	<div id="feed-sources-content"
+		hx-get="/api/feed/status?fmt=html&part=sources"
+		hx-trigger="logs-feed-sources-load"
+		hx-swap="outerHTML"
+	>
+		<div class="glass glass-col">
+			<div class="glass-col-header"><div class="glass-col-title">{ L(p, "logs_stat_sources", "Sources") }</div></div>
+			<div class="glass-col-body"><div class="log-line log-empty">{ L(p, "status_loading", "Loading...") }</div></div>
 		</div>
 	</div>
 }
 
 // FeedDashboard renders the full feed dashboard content (HTMX fragment).
 templ FeedDashboard(p PageProps, d FeedDashboardData) {
+	@feedDashboardStats(p, d)
+	<div class="feed-body">
+		@feedDashboardActivityCard(p, d)
+		@feedDashboardSourcesCard(p, d)
+	</div>
+}
+
+// FeedDashboardLive updates the lightweight feed activity and stat strip
+// without replacing the scrollable sources table.
+templ FeedDashboardLive(p PageProps, d FeedDashboardData) {
+	<div id="feed-live-stats" hx-swap-oob="innerHTML">
+		@feedDashboardStats(p, d)
+	</div>
+	<div id="feed-live-content"
+		hx-get="/api/feed/status?fmt=html&part=live"
+		hx-trigger="logs-poll"
+		hx-swap="outerHTML"
+	>
+		@feedDashboardActivityCard(p, d)
+	</div>
+}
+
+// FeedDashboardSources returns the user-controlled source table. It is not
+// part of the three-second live refresh, so scrolling and selection stay put.
+templ FeedDashboardSources(p PageProps, d FeedDashboardData) {
+	<div id="feed-sources-content"
+		hx-get={ "/api/feed/status?fmt=html&part=sources&filter=" + d.Filter }
+		hx-trigger="logs-feed-sources-load"
+		hx-swap="outerHTML"
+	>
+		@feedDashboardSourcesCard(p, d)
+	</div>
+}
+
+templ feedDashboardStats(p PageProps, d FeedDashboardData) {
 	if d.XIngestStatus != "" && d.XIngestStatus != "healthy" {
 		<div class="glass feed-warning">{ fmt.Sprintf(L(p, "logs_x_ingest_status", "X ingest: %s"), d.XIngestStatus) }</div>
 	}
@@ -1817,16 +2035,16 @@ templ FeedDashboard(p PageProps, d FeedDashboardData) {
 			</div>
 		</div>
 	</div>
-	<!-- Body -->
-	<div class="feed-body">
-		<!-- Activity -->
-		<div class="glass glass-col">
+	}
+
+templ feedDashboardActivityCard(p PageProps, d FeedDashboardData) {
+	<div class="glass glass-col">
 			<div class="glass-col-header">
 				<div class="glass-col-title">{ L(p, "logs_activity", "Activity") }</div>
 				<button class="glass-btn" type="button"
 					hx-post="/api/feed/ingest/pause"
 					hx-swap="none"
-					hx-on::after-request="htmx.trigger(document.getElementById('feed-panel-content'),'logs-poll')"
+					hx-on::after-request="htmx.trigger(document.getElementById('feed-live-content'),'logs-poll')"
 					if d.IngestPaused {
 						disabled?={ !d.IngestEnabled }
 					} else {
@@ -1865,9 +2083,11 @@ templ FeedDashboard(p PageProps, d FeedDashboardData) {
 					</div>
 				}
 			</div>
-		</div>
-		<!-- Sources table -->
-		<div class="glass glass-col">
+			</div>
+}
+
+templ feedDashboardSourcesCard(p PageProps, d FeedDashboardData) {
+	<div class="glass glass-col">
 			<div class="glass-col-header">
 				<div class="glass-col-title">{ L(p, "logs_stat_sources", "Sources") }</div>
 				<input id="feed-source-search" class="feed-source-search" type="search" placeholder={ L(p, "action_filter", "Filter...") } autocomplete="off"/>
@@ -1876,12 +2096,17 @@ templ FeedDashboard(p PageProps, d FeedDashboardData) {
 						<button
 							class={ "log-filter" + dlFilterActiveClass(d.Filter, f.Key) }
 							type="button"
-							hx-get={ "/api/feed/status?fmt=html&filter=" + f.Key }
-							hx-target="#feed-panel-content"
-							hx-swap="innerHTML"
-						>{ f.Label + " (" + fmt.Sprintf("%d", FeedSourceFilterCount(d.Sources, f.Key)) + ")" }</button>
-					}
-				</div>
+							hx-get={ "/api/feed/status?fmt=html&part=sources&filter=" + f.Key }
+							hx-target="#feed-sources-content"
+							hx-swap="outerHTML"
+							>{ f.Label + " (" + fmt.Sprintf("%d", FeedSourceFilterCount(d.Sources, f.Key)) + ")" }</button>
+						}
+					</div>
+					<button class="glass-btn" type="button"
+						hx-get={ "/api/feed/status?fmt=html&part=sources&filter=" + d.Filter }
+						hx-target="#feed-sources-content"
+						hx-swap="outerHTML"
+					>{ L(p, "action_refresh", "Refresh") }</button>
 			</div>
 			<div class="glass-col-body" id="feed-sources-body">
 				if len(d.Sources) > 0 {
@@ -1940,7 +2165,6 @@ templ FeedDashboard(p PageProps, d FeedDashboardData) {
 				}
 			</div>
 		</div>
-	</div>
 }
 
 // ConfirmModal renders the generic confirmation modal.

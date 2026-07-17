@@ -32,6 +32,11 @@ func init() {
 	gob.Register([]string{})
 }
 
+type serverDashboardInventory struct {
+	data      components.ServerDashboardData
+	updatedAt time.Time
+}
+
 type Server struct {
 	db          *db.DB
 	cfg         *config.Config
@@ -46,6 +51,10 @@ type Server struct {
 	channelPreviewVids map[string][]model.Video
 	channelPreviewFeed map[string][]model.FeedItem
 	channelPreviewAt   time.Time
+
+	dashboardInventoryMu         sync.RWMutex
+	dashboardInventory           *serverDashboardInventory
+	dashboardInventoryRefreshing bool
 
 	downloaderReportMu     sync.Mutex
 	downloaderReportLatest *downloaderReport
@@ -70,6 +79,7 @@ func NewServer(database *db.DB, cfg *config.Config, workers *worker.Manager, sta
 		i18n:        catalog,
 		authLimiter: newAuthAttemptLimiter(time.Now),
 	}
+	s.loadServerDashboardInventory()
 
 	mux := http.NewServeMux()
 

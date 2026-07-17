@@ -738,6 +738,12 @@
 
   var logsActiveTab = 'server';
   var logsPollTimer = 0;
+  var logsServerStatsPolledAt = 0;
+  var logsServerStatsRefreshMs = 60 * 1000;
+  var logsServerStatsPendingRetryMs = 2 * 1000;
+  var logsFeedSourcesLoaded = false;
+  var logsServerRawLogLoaded = false;
+  var logsServerActivityFilter = 'all';
   var _serverTzOffsetSec = 0; // populated from API responses
 
   // Convert UTC epoch seconds to HH:MM:SS in server local time
@@ -753,15 +759,60 @@
   function logsPanelSelector(tab) {
     if (tab === 'downloads') return '#dl-panel-content';
     if (tab === 'android') return '#an-panel-content';
-    if (tab === 'twitter') return '#feed-panel-content';
-    return '#sv-panel-content';
+    if (tab === 'twitter') return '#feed-live-content';
+    return '#sv-live-content';
+  }
+
+  function pollServerStats(force) {
+    if (!logsModal || logsModal.classList.contains('hidden')) return;
+    if (typeof htmx === 'undefined') return;
+    var el = doc.getElementById('sv-static-db');
+    if (!el) return;
+    if (el.dataset.serverInventoryPending === 'true') force = true;
+    var now = Date.now();
+    if (!force && now - logsServerStatsPolledAt < logsServerStatsRefreshMs) return;
+    logsServerStatsPolledAt = now;
+    htmx.trigger(el, 'logs-stats-poll');
+  }
+
+  function setServerLiveRequest() {
+    var el = doc.getElementById('sv-live-content');
+    if (!el) return;
+    el.setAttribute('hx-get', '/api/server/status?fmt=html&part=live&log_filter=' + encodeURIComponent(logsServerActivityFilter));
+  }
+
+  function loadFeedSources() {
+    if (logsFeedSourcesLoaded || !logsModal || logsModal.classList.contains('hidden')) return;
+    if (typeof htmx === 'undefined') return;
+    var el = doc.getElementById('feed-sources-content');
+    if (!el) return;
+    logsFeedSourcesLoaded = true;
+    htmx.trigger(el, 'logs-feed-sources-load');
+  }
+
+  function loadServerRawLog() {
+    if (logsServerRawLogLoaded || !logsModal || logsModal.classList.contains('hidden')) return;
+    if (typeof htmx === 'undefined') return;
+    var el = doc.getElementById('sv-raw-log-section');
+    if (!el) return;
+    logsServerRawLogLoaded = true;
+    htmx.trigger(el, 'logs-server-raw-load');
   }
 
   function pollActiveLogsPanel() {
     if (!logsModal || logsModal.classList.contains('hidden')) return;
     if (typeof htmx === 'undefined') return;
+    if (logsActiveTab === 'server') {
+      loadServerRawLog();
+      if (doc.querySelector('#sv-workers-content .wk-detail[open]')) return;
+	  setServerLiveRequest();
+    }
+    if (logsActiveTab === 'twitter') loadFeedSources();
     var el = doc.querySelector(logsPanelSelector(logsActiveTab));
     if (el) htmx.trigger(el, 'logs-poll');
+    if (logsActiveTab === 'server') {
+      window.setTimeout(function () { pollServerStats(false); }, 50);
+    }
   }
 
   function stopLogsPolling() {
@@ -794,6 +845,42 @@
     });
   });
 
+  doc.addEventListener('click', function (event) {
+    var filter = event.target && event.target.closest ? event.target.closest('[data-server-activity-filter]') : null;
+    if (!filter) return;
+    logsServerActivityFilter = filter.getAttribute('data-server-activity-filter') || 'all';
+    setServerLiveRequest();
+  }, true);
+
+  doc.addEventListener('toggle', function (event) {
+    var detail = event.target;
+    if (!detail || !detail.matches || !detail.matches('#sv-workers-content .wk-detail')) return;
+    if (detail.open || logsActiveTab !== 'server' || !logsModal || logsModal.classList.contains('hidden')) return;
+    pollActiveLogsPanel();
+  }, true);
+
+  doc.addEventListener('htmx:beforeSwap', function (event) {
+    var target = event.detail && event.detail.target;
+    if (!target || target.id !== 'sv-live-content') return;
+    if (doc.querySelector('#sv-workers-content .wk-detail[open]')) event.detail.shouldSwap = false;
+  });
+
+  doc.addEventListener('htmx:oobBeforeSwap', function (event) {
+    var target = event.detail && event.detail.target;
+    if (!target || target.id !== 'sv-workers-content') return;
+    if (doc.querySelector('#sv-workers-content .wk-detail[open]')) event.detail.shouldSwap = false;
+  });
+
+  doc.addEventListener('htmx:afterSwap', function (event) {
+    var target = event.detail && event.detail.target;
+    if (!target || target.id !== 'sv-static-db') return;
+    var inventory = doc.getElementById('sv-static-db');
+    if (!inventory || inventory.dataset.serverInventoryPending !== 'true') return;
+    window.setTimeout(function () {
+      if (logsActiveTab === 'server' && logsModal && !logsModal.classList.contains('hidden')) pollServerStats(true);
+    }, logsServerStatsPendingRetryMs);
+  });
+
   // Left/Right arrow keys to switch logs tabs
   doc.addEventListener('keydown', function (e) {
     if (!logsModal || logsModal.classList.contains('hidden')) return;
@@ -814,9 +901,7 @@
 
   // ── Android Dashboard — extracted to dashboard_android.js ──
 
-  // ── Feed Dashboard — search + scroll persistence across HTMX swaps ──
-  var _feedSourceSearch = '';
-  var _feedSourceScrollTop = 0;
+  // ── Feed Dashboard — source filtering stays local to the stable table ──
 
   function applyFeedSourceSearch(val) {
     var tbody = doc.querySelector('#feed-panel-content .feed-source-table tbody');
@@ -829,42 +914,24 @@
     });
   }
 
-  function feedHasActiveSelection() {
-    var sel = window.getSelection && window.getSelection();
-    if (!sel || sel.isCollapsed || sel.rangeCount === 0) return false;
-    var panel = doc.getElementById('feed-panel-content');
-    if (!panel) return false;
-    var node = sel.anchorNode;
-    return node && panel.contains(node);
-  }
-
-  doc.addEventListener('htmx:beforeSwap', function (e) {
-    if (!e.target || e.target.id !== 'feed-panel-content') return;
-    // Don't wipe the user's text selection mid-copy.
-    if (feedHasActiveSelection()) { e.detail.shouldSwap = false; return; }
-    // Don't interrupt typing in the search box.
-    var active = doc.activeElement;
-    if (active && active.id === 'feed-source-search') { e.detail.shouldSwap = false; return; }
-    var inp = doc.getElementById('feed-source-search');
-    if (inp) _feedSourceSearch = inp.value;
-    var body = doc.getElementById('feed-sources-body');
-    if (body) _feedSourceScrollTop = body.scrollTop;
-  });
-
-  doc.addEventListener('htmx:afterSettle', function (e) {
-    if (!e.target || e.target.id !== 'feed-panel-content') return;
-    var inp = doc.getElementById('feed-source-search');
-    if (inp) {
-      if (_feedSourceSearch) { inp.value = _feedSourceSearch; applyFeedSourceSearch(_feedSourceSearch); }
-    }
-    var body = doc.getElementById('feed-sources-body');
-    if (body && _feedSourceScrollTop) body.scrollTop = _feedSourceScrollTop;
-  });
-
   doc.addEventListener('input', function (e) {
     if (!e.target || e.target.id !== 'feed-source-search') return;
-    _feedSourceSearch = e.target.value;
-    applyFeedSourceSearch(_feedSourceSearch);
+    applyFeedSourceSearch(e.target.value);
+  });
+
+  function resetOneShotLogLoad(e) {
+    var target = e.target || (e.detail && e.detail.elt);
+    if (target && target.id === 'feed-sources-content') logsFeedSourcesLoaded = false;
+    if (target && target.id === 'sv-raw-log-section') logsServerRawLogLoaded = false;
+  }
+
+  ['htmx:responseError', 'htmx:sendError', 'htmx:timeout', 'htmx:abort'].forEach(function (eventName) {
+    doc.addEventListener(eventName, resetOneShotLogLoad);
+  });
+
+  doc.addEventListener('htmx:responseError', function (e) {
+    var target = e.target || (e.detail && e.detail.elt);
+    if (target && target.id === 'sv-static-db') logsServerStatsPolledAt = 0;
   });
 
   function toggleLogsModal() {

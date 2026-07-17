@@ -37,15 +37,18 @@ func (s *Server) handleAndroidStatus(w http.ResponseWriter, r *http.Request) {
 		slog.Warn("android dashboard health failed", "err", err)
 	}
 
+	isHTML := r.URL.Query().Get("fmt") == "html"
 	ready, missing := 0, 0
-	if err := s.db.QueryRow(`
-		SELECT
-			COALESCE(SUM(mo.published_revision > 0 AND mo.file_path != ''), 0),
-			COALESCE(SUM(mo.published_revision = 0 AND mo.job_state IN ('server_missing', 'permanent_missing')), 0)
-		FROM assets a JOIN media_objects mo ON mo.object_id = a.desired_object_id
-		WHERE a.lifecycle_state != 'pruned'
-	`).Scan(&ready, &missing); err != nil {
-		slog.Warn("android dashboard asset summary failed", "err", err)
+	if health == nil || !isHTML {
+		if err := s.db.QueryRow(`
+			SELECT
+				COALESCE(SUM(mo.published_revision > 0 AND mo.file_path != ''), 0),
+				COALESCE(SUM(mo.published_revision = 0 AND mo.job_state IN ('server_missing', 'permanent_missing')), 0)
+			FROM assets a JOIN media_objects mo ON mo.object_id = a.desired_object_id
+			WHERE a.lifecycle_state != 'pruned'
+		`).Scan(&ready, &missing); err != nil {
+			slog.Warn("android dashboard asset summary failed", "err", err)
+		}
 	}
 
 	entries := readAndroidStatusLogEntries(s.cfg.Storage.StateRoot(), 500)
@@ -55,7 +58,7 @@ func (s *Server) handleAndroidStatus(w http.ResponseWriter, r *http.Request) {
 		retention = health.Retention
 	}
 
-	if r.URL.Query().Get("fmt") == "html" {
+	if isHTML {
 		filter := r.URL.Query().Get("filter")
 		if filter == "" {
 			filter = "all"
@@ -74,6 +77,10 @@ func (s *Server) handleAndroidStatus(w http.ResponseWriter, r *http.Request) {
 			data.DeviceBytes = formatAndroidStatusBytes(health.VerifiedBytes)
 			data.SyncCompletedHMS = time.UnixMilli(health.ReportedAtMs).Local().Format("15:04:05")
 			data.SyncAgo = formatAndroidStatusAgo(time.Since(time.UnixMilli(health.ReportedAtMs)))
+		}
+		data.SyncStatus = androidStatusSyncState(clock, health, time.Now())
+		if health != nil && health.HasRetention {
+			data.RetentionText = androidStatusRetentionText(retention)
 		}
 		data.CacheHealth = androidStatusAssetRows(health, ready+missing > 0, ready, missing)
 		for _, entry := range activity {
@@ -163,11 +170,118 @@ func summarizeAndroidStatusLogs(entries []androidStatusLogEntry) ([]androidStatu
 
 func androidStatusMessage(entry androidStatusLogEntry) string {
 	for _, key := range []string{"message", "error", "reason"} {
-		if value, ok := entry.Fields[key].(string); ok && strings.TrimSpace(value) != "" {
+		if value := androidStatusFieldText(entry.Fields, key); value != "" {
 			return value
 		}
 	}
-	return ""
+
+	switch entry.Event {
+	case "android_sync_health_reported":
+		var parts []string
+		if uploaded, ok := entry.Fields["uploaded"].(bool); ok {
+			if uploaded {
+				parts = append(parts, "uploaded")
+			} else {
+				parts = append(parts, "upload failed")
+			}
+		}
+		verified, hasVerified := androidStatusFieldInt(entry.Fields, "verified")
+		total, hasTotal := androidStatusFieldInt(entry.Fields, "total")
+		if hasVerified && hasTotal {
+			parts = append(parts, fmt.Sprintf("%d/%d verified", verified, total))
+		} else if hasVerified {
+			parts = append(parts, fmt.Sprintf("%d verified", verified))
+		}
+		if pending, ok := androidStatusFieldInt(entry.Fields, "pending"); ok {
+			parts = append(parts, fmt.Sprintf("%d pending", pending))
+		}
+		if missing, ok := androidStatusFieldInt(entry.Fields, "missing"); ok {
+			parts = append(parts, fmt.Sprintf("%d missing", missing))
+		}
+		if elapsed, ok := androidStatusFieldInt(entry.Fields, "upload_elapsed_ms"); ok {
+			parts = append(parts, fmt.Sprintf("%d ms", elapsed))
+		}
+		return strings.Join(parts, " · ")
+	case "android_sync_asset_drain_done":
+		var parts []string
+		if downloaded, ok := androidStatusFieldInt(entry.Fields, "downloaded"); ok {
+			parts = append(parts, fmt.Sprintf("%d downloaded", downloaded))
+		}
+		if existing, ok := androidStatusFieldInt(entry.Fields, "verified_existing"); ok {
+			parts = append(parts, fmt.Sprintf("%d already present", existing))
+		}
+		if deferred, ok := androidStatusFieldInt(entry.Fields, "deferred"); ok {
+			parts = append(parts, fmt.Sprintf("%d deferred", deferred))
+		}
+		return strings.Join(parts, " · ")
+	case "android_sync_metadata_retry":
+		var parts []string
+		if label := androidStatusFieldText(entry.Fields, "label"); label != "" {
+			parts = append(parts, label)
+		}
+		if attempt, ok := androidStatusFieldInt(entry.Fields, "attempt"); ok {
+			parts = append(parts, fmt.Sprintf("attempt %d", attempt))
+		}
+		return strings.Join(parts, " · ")
+	default:
+		return ""
+	}
+}
+
+func androidStatusFieldText(fields map[string]any, key string) string {
+	value, ok := fields[key].(string)
+	if !ok {
+		return ""
+	}
+	value = strings.TrimSpace(value)
+	if len(value) > 180 {
+		return value[:180] + "…"
+	}
+	return value
+}
+
+func androidStatusFieldInt(fields map[string]any, key string) (int64, bool) {
+	switch value := fields[key].(type) {
+	case int:
+		return int64(value), true
+	case int64:
+		return value, true
+	case float64:
+		return int64(value), true
+	case json.Number:
+		result, err := value.Int64()
+		return result, err == nil
+	default:
+		return 0, false
+	}
+}
+
+func androidStatusSyncState(clock db.AndroidSyncClock, health *db.AndroidSyncHealthReport, now time.Time) string {
+	if health == nil {
+		return "No report"
+	}
+	cursor, err := decodeAndroidSyncCursor(health.Cursor)
+	if err != nil || cursor.Mode != "changes" || cursor.Version != androidSyncModelVersion || cursor.Epoch != clock.Epoch {
+		return "Stale"
+	}
+	if now.Sub(time.UnixMilli(health.ReportedAtMs)) > androidSyncHealthReportMaxAge {
+		return "Stale"
+	}
+	if health.MissingAssets > 0 {
+		return fmt.Sprintf("%d missing assets", health.MissingAssets)
+	}
+	if pending := max(int64(0), clock.Revision-cursor.Revision); pending > 0 {
+		return fmt.Sprintf("%d revisions behind", pending)
+	}
+	return "Current"
+}
+
+func androidStatusRetentionText(retention db.AndroidRetentionSettings) string {
+	return fmt.Sprintf("Feed %s · Videos %s · Moments %s",
+		androidDashboardRetentionLabel("feed", retention),
+		androidDashboardRetentionLabel("videos", retention),
+		androidDashboardRetentionLabel("moments", retention),
+	)
 }
 
 func androidStatusClock(timestampMs int64) string {

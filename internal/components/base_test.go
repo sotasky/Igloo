@@ -585,7 +585,7 @@ func TestPrefsBodyAllowsThreeSecondFetchDelay(t *testing.T) {
 	}
 }
 
-func TestServerDashboardLoadsRawServerLogUnderActivity(t *testing.T) {
+func TestServerDashboardKeepsRawServerLogOutsideLivePoll(t *testing.T) {
 	p := newTestPageProps()
 	data := ServerDashboardData{
 		UptimeText:     "1m",
@@ -600,27 +600,55 @@ func TestServerDashboardLoadsRawServerLogUnderActivity(t *testing.T) {
 		}},
 	}
 	var buf bytes.Buffer
-	if err := ServerDashboard(p, data).Render(context.Background(), &buf); err != nil {
+	if err := ServerDashboardLive(p, data).Render(context.Background(), &buf); err != nil {
+		t.Fatal(err)
+	}
+	liveHTML := buf.String()
+	if !strings.Contains(liveHTML, `activity stays concise`) {
+		t.Fatalf("activity log should keep rendering existing activity entries:\n%s", liveHTML)
+	}
+	if strings.Contains(liveHTML, `sv-raw-log-section`) {
+		t.Fatalf("live poll must not contain the raw server log:\n%s", liveHTML)
+	}
+	if !strings.Contains(liveHTML, `id="sv-workers-content" hx-swap-oob="innerHTML"`) {
+		t.Fatalf("live poll should update workers out of band:\n%s", liveHTML)
+	}
+
+	buf.Reset()
+	if err := logsServerPanel(p).Render(context.Background(), &buf); err != nil {
+		t.Fatal(err)
+	}
+	shellHTML := buf.String()
+	rawIdx := strings.Index(shellHTML, `id="sv-raw-log-section"`)
+	if rawIdx < 0 {
+		t.Fatalf("server shell should include a stable raw log section:\n%s", shellHTML)
+	}
+	rawHTML := shellHTML[rawIdx:]
+	if !strings.Contains(rawHTML, `hx-get="/api/logs/server/read?type=server&lines=80&filter_noise=1&fmt=html"`) || !strings.Contains(rawHTML, `hx-trigger="logs-server-raw-load"`) {
+		t.Fatalf("raw server log should load only from its own one-shot trigger:\n%s", rawHTML)
+	}
+	if strings.Contains(rawHTML, `logs-poll`) {
+		t.Fatalf("raw server log must not be attached to the live polling trigger:\n%s", rawHTML)
+	}
+}
+
+func TestServerDashboardLiveUsesReadableWorkerSummaryAndExpandableDetail(t *testing.T) {
+	p := newTestPageProps()
+	data := ServerDashboardData{Processes: []ServerProcessCard{{
+		Name:    "feed_scoring",
+		Status:  "running",
+		Summary: "Scored 21 · refilled 500 · 2000 candidates · 3.2s",
+		Detail:  "scored=21 refill=500 candidates=2000 replies=4/5 snap=1836/2.999s query=575ms build=4ms write=120ms total=3.2s top=[long diagnostic payload]",
+	}}}
+	var buf bytes.Buffer
+	if err := ServerDashboardLive(p, data).Render(context.Background(), &buf); err != nil {
 		t.Fatal(err)
 	}
 	html := buf.String()
-
-	activityIdx := strings.Index(html, `id="sv-log-console"`)
-	rawIdx := strings.Index(html, `id="sv-raw-log-section"`)
-	if activityIdx < 0 || rawIdx < 0 {
-		t.Fatalf("server dashboard should render activity and raw log sections:\n%s", html)
-	}
-	if rawIdx < activityIdx {
-		t.Fatalf("raw server log should render under the activity log:\n%s", html)
-	}
-	if !strings.Contains(html, `activity stays concise`) {
-		t.Fatalf("activity log should keep rendering existing activity entries:\n%s", html)
-	}
-	if !strings.Contains(html, `hx-get="/api/logs/server/read?type=server&lines=80&filter_noise=1&fmt=html"`) {
-		t.Fatalf("raw server log section should load verbose server log endpoint:\n%s", html)
-	}
-	if !strings.Contains(html, `hx-trigger="load, logs-poll"`) {
-		t.Fatalf("raw server log section should self-load after the server panel swaps in:\n%s", html)
+	for _, want := range []string{"Feed ranking", "Scored 21", "<details", "top=[long diagnostic payload]", `title="feed_scoring"`} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("live dashboard missing %q:\n%s", want, html)
+		}
 	}
 }
 

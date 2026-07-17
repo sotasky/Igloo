@@ -328,3 +328,32 @@ func (db *DB) CountFeedItemsBySource() (map[string]int, error) {
 	}
 	return counts, rows.Err()
 }
+
+// CountFeedItemsBySourceChannel returns source_channel_id → count directly
+// from the canonical feed rows. Dashboard callers that already have channel
+// IDs do not need the resolved presentation view just to count them.
+func (db *DB) CountFeedItemsBySourceChannel() (map[string]int, error) {
+	rows, err := db.conn.Query(`
+		SELECT source_channel_id, COUNT(*)
+		FROM feed_items
+		WHERE COALESCE(source_channel_id, '') != ''
+		GROUP BY source_channel_id
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		_ = rows.Close()
+	}()
+
+	counts := make(map[string]int)
+	for rows.Next() {
+		var channelID string
+		var count int
+		if err := rows.Scan(&channelID, &count); err != nil {
+			return nil, err
+		}
+		counts[channelID] = count
+	}
+	return counts, rows.Err()
+}

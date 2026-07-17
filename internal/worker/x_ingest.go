@@ -483,3 +483,9 @@ func workerStatus(name string, running bool, detail, errMsg string) WorkerStatus
 		Error:     errMsg,
 	}
 }
+
+func workerStatusWithSummary(name string, running bool, summary, detail, errMsg string) WorkerStatus {
+	status := workerStatus(name, running, detail, errMsg)
+	status.Summary = summary
+	return status
+}

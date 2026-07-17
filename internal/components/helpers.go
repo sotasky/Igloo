@@ -996,9 +996,40 @@ type ServerErrorEntry struct {
 
 // ServerProcessCard is a worker/process card.
 type ServerProcessCard struct {
-	Name   string
-	Status string // "running", "idle", "stopped"
-	Detail string
+	Name    string
+	Status  string // "running", "idle", "stopped"
+	Summary string
+	Detail  string
+	Error   string
+}
+
+// WorkerDisplayName keeps worker implementation names out of the compact
+// dashboard cards while leaving the canonical name available as the title.
+func WorkerDisplayName(name string) string {
+	switch name {
+	case "x_ingest":
+		return "X feed"
+	case "x_status_enrichment":
+		return "X status"
+	case "media_current":
+		return "Current media"
+	case "media_backfill":
+		return "Media backfill"
+	case "profile_refresh":
+		return "Profiles"
+	case "feed_scoring":
+		return "Feed ranking"
+	case "downloader_operation_prune":
+		return "Download cleanup"
+	default:
+		return name
+	}
+}
+
+// WorkerDetailNeedsDisclosure keeps long diagnostic payloads readable without
+// clipping them or forcing a horizontal scrollbar into the worker column.
+func WorkerDetailNeedsDisclosure(detail string) bool {
+	return len(detail) > 120 || strings.Contains(detail, "\n")
 }
 
 // ServerLogFilterMatch returns true if the activity entry matches the filter.
@@ -1236,6 +1267,8 @@ func ServerRawLogFilterCount(lines []ServerRawLogLine, filter string) int {
 type AndroidDashboardData struct {
 	SyncAgo          string
 	SyncCompletedHMS string
+	SyncStatus       string
+	RetentionText    string
 	DevicePercent    int
 	DeviceVerified   int
 	DevicePending    int

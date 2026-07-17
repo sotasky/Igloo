@@ -185,6 +185,15 @@ func (s *Server) handleLogsServer(w http.ResponseWriter, r *http.Request) {
 	lines, err := readLastLines(path, n)
 	if err != nil {
 		if os.IsNotExist(err) {
+			if r.URL.Query().Get("fmt") == "html" {
+				filter := r.URL.Query().Get("raw_filter")
+				if filter == "" {
+					filter = "all"
+				}
+				w.Header().Set("Content-Type", "text/html")
+				_ = components.ServerRawLog(s.pageProps(w, r), components.ServerRawLogData{Filter: filter}).Render(r.Context(), w)
+				return
+			}
 			writeJSON(w, 200, map[string]any{"success": true, "content": "", "type": logType})
 			return
 		}

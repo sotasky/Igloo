@@ -6815,7 +6815,8 @@ body.shorts-mode .sidebar {
 #logs-modal .glass::after { display: none; }
 
 /* ── Stat strip ── */
-#logs-modal .stat-strip { display: grid; grid-template-columns: repeat(7, 1fr); gap: 8px; }
+#logs-modal .stat-strip { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 8px; }
+#logs-modal .sv-stat-group { display: contents; }
 #logs-modal .stat-card { padding: 10px 12px; transition: border-color 0.2s, box-shadow 0.2s; }
 #logs-modal .sc-label { font-size: 0.6rem; text-transform: uppercase; letter-spacing: 0.6px; color: var(--text-secondary); font-weight: 600; margin-bottom: 4px; }
 #logs-modal .sc-value { font-size: 1.2rem; font-weight: 700; color: var(--text-primary); font-variant-numeric: tabular-nums; line-height: 1.2; }
@@ -6850,6 +6851,7 @@ body.shorts-mode .sidebar {
     display: flex;
     flex-direction: column;
     overflow: hidden;
+    min-width: 0;
 }
 #logs-modal .glass-col-header {
     padding: 10px 12px 8px;
@@ -6870,6 +6872,7 @@ body.shorts-mode .sidebar {
     flex: 1;
     overflow-y: auto;
     min-height: 0;
+    min-width: 0;
 }
 
 /* ── DB sections ── */
@@ -6999,11 +7002,12 @@ body.shorts-mode .sidebar {
     transition: border-color 0.15s;
 }
 #logs-modal .wk-card:hover { border-color: rgba(var(--text-primary-rgb), 0.12); }
-#logs-modal .wk-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
-#logs-modal .wk-name { font-size: 0.72rem; font-weight: 600; color: var(--text-primary); }
+#logs-modal .wk-top { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 4px 6px; margin-bottom: 4px; min-width: 0; }
+#logs-modal .wk-name { flex: 1 1 min(7rem, 100%); min-width: min(7rem, 100%); font-size: 0.72rem; font-weight: 600; color: var(--text-primary); overflow-wrap: anywhere; }
 #logs-modal .wk-badge {
     font-size: 0.55rem; font-weight: 600; padding: 1px 6px; border-radius: 4px;
     text-transform: uppercase; letter-spacing: 0.3px;
+    flex-shrink: 0;
 }
 #logs-modal .wk-badge.running { color: var(--status-success); background: rgba(var(--status-success-rgb), 0.1); border: 1px solid rgba(var(--status-success-rgb), 0.15); }
 #logs-modal .wk-badge.idle { color: var(--status-muted); background: rgba(var(--text-muted-rgb), 0.1); border: 1px solid rgba(var(--text-muted-rgb), 0.12); }
@@ -7012,6 +7016,23 @@ body.shorts-mode .sidebar {
 #logs-modal .wk-stat { display: flex; justify-content: space-between; }
 #logs-modal .wk-stat .wl { font-size: 0.6rem; color: var(--text-secondary); }
 #logs-modal .wk-stat .wv { font-size: 0.6rem; color: var(--status-muted); font-variant-numeric: tabular-nums; font-weight: 500; }
+#logs-modal .wk-summary { color: var(--status-muted); font-size: 0.62rem; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+#logs-modal .wk-detail { margin-top: 5px; min-width: 0; }
+#logs-modal .wk-detail summary { color: var(--text-secondary); cursor: pointer; font-size: 0.6rem; }
+#logs-modal .wk-detail-body,
+#logs-modal .wk-error {
+    color: var(--status-muted);
+    font-family: 'SF Mono', 'JetBrains Mono', monospace;
+    font-size: 0.58rem;
+    line-height: 1.45;
+    margin-top: 4px;
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+#logs-modal .wk-detail-short { display: grid; gap: 2px; color: var(--status-muted); font-size: 0.6rem; overflow-wrap: anywhere; }
+#logs-modal .wk-detail-short > :first-child { color: var(--text-secondary); }
+#logs-modal .wk-error { color: var(--status-error); }
 
 /* ── Error items ── */
 #logs-modal .err-item {
@@ -8798,6 +8819,10 @@ body.shorts-mode .sidebar {
 #logs-modal .feed-body { display: flex; flex-direction: column; gap: 10px; flex: 1; min-height: 0; }
 #logs-modal .dl-body > .glass-col,
 #logs-modal .feed-body > .glass-col { flex: 1; min-height: 0; }
+#logs-modal .feed-body > #feed-live-content,
+#logs-modal .feed-body > #feed-sources-content { display: flex; flex: 1; min-height: 0; }
+#logs-modal #feed-live-content > .glass-col,
+#logs-modal #feed-sources-content > .glass-col { flex: 1; min-height: 0; }
 
 /* HTMX panel-content wrappers inherit the logs-tab-panel flex layout so
    their body grids can claim remaining height (otherwise flex:1 has no
@@ -8813,10 +8838,8 @@ body.shorts-mode .sidebar {
     min-height: 0;
 }
 
-/* Raw server-log section is HTMX-loaded into the center glass-col alongside
-   the Activity body. Give it flex:1 + flex-column so Activity and Server Log
-   share the column equally instead of raw log's 80 lines pushing Activity
-   down to 0 height. */
+/* The raw Server Log is a stable sibling of live Activity. Each gets half of
+   the center card, so the three-second live poll never replaces its scroller. */
 #sv-raw-log-section {
     display: flex;
     flex-direction: column;
@@ -8838,7 +8861,7 @@ body.shorts-mode .sidebar {
 /* Server body 3-column */
 #logs-modal .sv-body {
     display: grid;
-    grid-template-columns: repeat(7, 1fr);
+    grid-template-columns: repeat(7, minmax(0, 1fr));
     gap: 8px;
     flex: 1;
     min-height: 0;
@@ -8847,6 +8870,14 @@ body.shorts-mode .sidebar {
 #logs-modal .sv-body > :nth-child(1) { grid-column: 1; }
 #logs-modal .sv-body > :nth-child(2) { grid-column: 2 / 7; }
 #logs-modal .sv-body > :nth-child(3) { grid-column: 7; }
+#logs-modal #sv-static-db { display: flex; grid-column: 1; min-width: 0; min-height: 0; }
+#logs-modal #sv-static-db > .glass-col { flex: 1; min-height: 0; }
+#logs-modal #sv-live-content {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+}
 
 /* Split center column into two equal halves */
 #logs-modal .sv-log-split { flex: 1; }
@@ -8879,7 +8910,7 @@ body.shorts-mode .sidebar {
 /* Android body 3-column */
 #logs-modal .an-body {
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 8px;
     flex: 1;
     min-height: 0;
@@ -8894,6 +8925,7 @@ body.shorts-mode .sidebar {
 #logs-modal .an-col-errors {
     display: flex;
     flex-direction: column;
+    min-width: 0;
     min-height: 0;
     overflow: hidden;
 }
@@ -8901,9 +8933,29 @@ body.shorts-mode .sidebar {
 /* Pipeline (android tab) */
 #logs-modal .an-pipeline-scroll {
     flex: 1;
+    min-width: 0;
+    overflow-x: hidden;
     overflow-y: auto;
     min-height: 0;
     padding: 0 0.5rem 0.5rem;
+}
+#logs-modal .an-sync-summary {
+    border-top: 1px solid var(--border-color);
+    color: var(--text-secondary);
+    font-size: 0.6rem;
+    margin-top: 8px;
+    padding-top: 8px;
+}
+#logs-modal .an-sync-row {
+    display: grid;
+    gap: 4px;
+    grid-template-columns: auto minmax(0, 1fr);
+    margin-top: 4px;
+}
+#logs-modal .an-sync-row > :last-child {
+    color: var(--text-primary);
+    overflow-wrap: anywhere;
+    text-align: right;
 }
 #logs-modal .an-pipeline-step {
     display: flex;
@@ -8957,9 +9009,9 @@ body.shorts-mode .sidebar {
 }
 #logs-modal .an-cache-row {
     display: grid;
-    grid-template-columns: minmax(82px, 1fr) 38px minmax(64px, 1.2fr) max-content;
+    grid-template-columns: minmax(0, 1fr) max-content minmax(24px, 0.8fr) max-content;
     align-items: center;
-    gap: 0.5rem;
+    gap: 0.25rem;
     padding: 0.25rem 0;
     font-size: 0.72rem;
 }
@@ -8969,8 +9021,8 @@ body.shorts-mode .sidebar {
     font-size: 0.72rem;
 }
 #logs-modal .an-cache-bar-wrap {
-    flex: 1;
     height: 6px;
+    min-width: 0;
     background: rgba(var(--text-primary-rgb), 0.06);
     border-radius: 3px;
     overflow: hidden;
@@ -9653,6 +9705,8 @@ body.shorts-mode .sidebar {
     #logs-modal .an-body > :nth-child(3) {
         grid-column: 1;
     }
+
+    #logs-modal #sv-live-content { overflow: visible; }
 
     #logs-modal .sv-body > .glass-col,
     #logs-modal .an-body > .glass-col,

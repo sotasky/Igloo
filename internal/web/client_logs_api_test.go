@@ -103,6 +103,31 @@ func TestLogPathForTypeRejectsTraversalType(t *testing.T) {
 	}
 }
 
+func TestServerRawLogHTMLKeepsShellWhenLogIsAbsent(t *testing.T) {
+	srv := newTestServer(t)
+	setTestStateRoot(t, srv.cfg, t.TempDir())
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/api/logs/server/read?type=server&fmt=html&raw_filter=errors", nil)
+	srv.handleLogsServer(rec, req)
+
+	if rec.Code != 200 {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.HasPrefix(rec.Header().Get("Content-Type"), "text/html") {
+		t.Fatalf("content type = %q, want HTML", rec.Header().Get("Content-Type"))
+	}
+	body := rec.Body.String()
+	for _, want := range []string{"Server Log", `id="sv-raw-log-console"`, "Errors"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("empty raw log fragment missing %q:\n%s", want, body)
+		}
+	}
+	if strings.Contains(body, `"success"`) {
+		t.Fatalf("empty raw log fragment rendered JSON:\n%s", body)
+	}
+}
+
 func TestClientLogMomentsWritesPersistentJSONL(t *testing.T) {
 	srv := newTestServer(t)
 	dataDir := t.TempDir()
@@ -248,12 +273,50 @@ func TestAndroidStatusRendersPersistentSyncHealth(t *testing.T) {
 		t.Fatalf("status %d - %s", rec.Code, rec.Body.String())
 	}
 	body := rec.Body.String()
-	for _, want := range []string{"Device assets", "75%", "75/100", "Asset Health", "Server missing"} {
+	for _, want := range []string{"Device assets", "75%", "75/100", "Asset Health", "Server missing", "5 missing assets", "Feed 7 days"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("dashboard missing %q:\n%s", want, body)
 		}
 	}
 	if strings.Contains(body, "Never") {
 		t.Fatalf("dashboard should not render transient Never state:\n%s", body)
+	}
+}
+
+func TestAndroidStatusRendersStructuredActivityDetails(t *testing.T) {
+	srv := newTestServer(t)
+	dataDir := t.TempDir()
+	setTestStateRoot(t, srv.cfg, dataDir)
+	logPath := filepath.Join(dataDir, "logs", "android", "server.log")
+	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	entries := strings.Join([]string{
+		`{"timestamp_ms":1,"level":"info","event":"android_sync_health_reported","fields":{"cursor":"opaque-cursor-value","uploaded":true,"verified":75,"pending":20,"missing":5,"total":100,"upload_elapsed_ms":120}}`,
+		`{"timestamp_ms":2,"level":"info","event":"android_sync_asset_drain_done","fields":{"downloaded":2,"verified_existing":5,"deferred":1}}`,
+		`{"timestamp_ms":3,"level":"info","event":"android_sync_metadata_retry","fields":{"label":"changes","attempt":2}}`,
+	}, "\n")
+	if err := os.WriteFile(logPath, []byte(entries+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/api/logs/android/status?fmt=html", nil)
+	srv.handleAndroidStatus(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("status %d - %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	for _, want := range []string{
+		"uploaded · 75/100 verified · 20 pending · 5 missing · 120 ms",
+		"2 downloaded · 5 already present · 1 deferred",
+		"changes · attempt 2",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("dashboard missing %q:\n%s", want, body)
+		}
+	}
+	if strings.Contains(body, "opaque-cursor-value") {
+		t.Fatalf("dashboard exposed raw activity fields:\n%s", body)
 	}
 }

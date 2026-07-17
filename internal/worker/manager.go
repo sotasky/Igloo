@@ -24,6 +24,7 @@ type WorkerStatus struct {
 	Name      string    `json:"name"`
 	Running   bool      `json:"running"`
 	LastRunAt time.Time `json:"last_run_at,omitempty"`
+	Summary   string    `json:"summary,omitempty"`
 	Detail    string    `json:"detail,omitempty"`
 	Error     string    `json:"error,omitempty"`
 }

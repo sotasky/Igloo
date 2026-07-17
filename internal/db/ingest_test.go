@@ -4,6 +4,8 @@ import (
 	"math"
 	"testing"
 	"time"
+
+	"github.com/screwys/igloo/internal/model"
 )
 
 func TestGetIngestStateNew(t *testing.T) {
@@ -21,6 +23,27 @@ func TestGetIngestStateNew(t *testing.T) {
 	}
 	if s.NextRetryAt != 0 {
 		t.Errorf("expected zero next_retry_at, got %f", s.NextRetryAt)
+	}
+}
+
+func TestCountFeedItemsBySourceChannelUsesCanonicalRows(t *testing.T) {
+	d := openWritableTestDB(t)
+	now := time.Now().UTC()
+	items := []model.FeedItem{
+		{TweetID: "sample_source_count_one", SourceHandle: "sample_one", AuthorHandle: "sample_one", BodyText: "one", PublishedAt: &now, FetchedAt: now},
+		{TweetID: "sample_source_count_two", SourceHandle: "sample_one", AuthorHandle: "sample_one", BodyText: "two", PublishedAt: &now, FetchedAt: now},
+		{TweetID: "sample_source_count_three", SourceHandle: "sample_two", AuthorHandle: "sample_two", BodyText: "three", PublishedAt: &now, FetchedAt: now},
+	}
+	if _, err := d.UpsertFeedItems(items); err != nil {
+		t.Fatalf("seed feed items: %v", err)
+	}
+
+	counts, err := d.CountFeedItemsBySourceChannel()
+	if err != nil {
+		t.Fatalf("CountFeedItemsBySourceChannel: %v", err)
+	}
+	if counts["twitter_sample_one"] != 2 || counts["twitter_sample_two"] != 1 {
+		t.Fatalf("counts = %#v", counts)
 	}
 }
 

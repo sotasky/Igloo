@@ -9,24 +9,38 @@ import (
 // GetDashboardStats returns aggregate statistics for the server status dashboard.
 func (db *DB) GetDashboardStats() (map[string]any, error) {
 	stats := map[string]any{}
+	var queryErr error
 
-	// Each query is wrapped in a helper that returns 0 on error (table may not exist).
+	// Keep the existing map shape for callers that choose to display a partial
+	// dashboard, but report the first failed query so derived caches never
+	// publish a zeroed inventory as a complete snapshot.
 	queryInt := func(query string) int {
+		if queryErr != nil {
+			return 0
+		}
 		var n int
-		_ = db.conn.QueryRow(query).Scan(&n)
+		if err := db.conn.QueryRow(query).Scan(&n); err != nil {
+			queryErr = err
+		}
 		return n
 	}
 	queryInt64 := func(query string) int64 {
+		if queryErr != nil {
+			return 0
+		}
 		var n int64
-		_ = db.conn.QueryRow(query).Scan(&n)
+		if err := db.conn.QueryRow(query).Scan(&n); err != nil {
+			queryErr = err
+		}
 		return n
 	}
 
 	stats["channels_total"] = queryInt("SELECT COUNT(*) FROM channel_follows")
-	stats["videos_total"] = queryInt(`
+	videosTotal := queryInt(`
 		SELECT COUNT(*) FROM videos v
 		WHERE ` + readyVideoMediaExistsSQL("v") + `
 	`)
+	stats["videos_total"] = videosTotal
 	stats["videos_watched"] = queryInt(`
 		SELECT COUNT(*) FROM videos v
 		WHERE ` + videoFullyWatchedSQL("v") + `
@@ -59,50 +73,63 @@ func (db *DB) GetDashboardStats() (map[string]any, error) {
 
 	// Channels by platform
 	channelsByPlatform := map[string]int{}
-	platformRows, err := db.conn.Query(`
-		SELECT c.platform, COUNT(*) FROM channels c
-		INNER JOIN channel_follows cf ON cf.channel_id = c.channel_id
-		GROUP BY c.platform
-	`)
-	if err == nil {
-		defer func() {
-			_ = platformRows.Close()
-		}()
-		for platformRows.Next() {
-			var platform string
-			var count int
-			if platformRows.Scan(&platform, &count) == nil {
+	if queryErr == nil {
+		platformRows, err := db.conn.Query(`
+			SELECT c.platform, COUNT(*) FROM channels c
+			INNER JOIN channel_follows cf ON cf.channel_id = c.channel_id
+			GROUP BY c.platform
+		`)
+		if err != nil {
+			queryErr = err
+		} else {
+			for platformRows.Next() {
+				var platform string
+				var count int
+				if err := platformRows.Scan(&platform, &count); err != nil {
+					queryErr = err
+					break
+				}
 				channelsByPlatform[platform] = count
 			}
+			if err := platformRows.Err(); err != nil && queryErr == nil {
+				queryErr = err
+			}
+			_ = platformRows.Close()
 		}
 	}
 	stats["channels_by_platform"] = channelsByPlatform
 
 	// Source health from ingest_state
 	stats["source_health"] = map[string]any{
-		"ok":      queryInt("SELECT COUNT(*) FROM ingest_state WHERE fail_count=0 AND last_success_at>0"),
-		"cooling": queryInt("SELECT COUNT(*) FROM ingest_state WHERE fail_count BETWEEN 1 AND 3"),
-		"failed":  queryInt("SELECT COUNT(*) FROM ingest_state WHERE fail_count>3"),
-		"avg_latency_ms": func() int {
-			var n int
-			_ = db.conn.QueryRow("SELECT COALESCE(CAST(AVG(avg_latency_ms) AS INTEGER),0) FROM ingest_state WHERE avg_latency_ms>0").Scan(&n)
-			return n
-		}(),
+		"ok":             queryInt("SELECT COUNT(*) FROM ingest_state WHERE fail_count=0 AND last_success_at>0"),
+		"cooling":        queryInt("SELECT COUNT(*) FROM ingest_state WHERE fail_count BETWEEN 1 AND 3"),
+		"failed":         queryInt("SELECT COUNT(*) FROM ingest_state WHERE fail_count>3"),
+		"avg_latency_ms": queryInt("SELECT COALESCE(CAST(AVG(avg_latency_ms) AS INTEGER),0) FROM ingest_state WHERE avg_latency_ms>0"),
 	}
 
 	// Storage totals
 	totalVideoBytes := queryInt64(`
-		SELECT COALESCE(SUM(size_bytes), 0) FROM (
-			SELECT mo.file_path, MAX(mo.size_bytes) AS size_bytes
-			FROM media_objects mo JOIN assets a ON a.object_id = mo.object_id
+		WITH video_rows AS (
+			SELECT mo.file_path, mo.size_bytes
+			FROM assets a
+			JOIN media_objects mo ON mo.object_id = a.object_id
+			WHERE a.asset_kind = 'video_stream'
+			  AND mo.published_revision > 0 AND mo.file_path != ''
+
+			UNION ALL
+
+			SELECT mo.file_path, mo.size_bytes
+			FROM media_objects mo
 			WHERE mo.published_revision > 0 AND mo.file_path != ''
-			  AND (a.asset_kind = 'video_stream' OR mo.content_type LIKE 'video/%')
-			GROUP BY mo.file_path
+			  AND mo.content_type LIKE 'video/%'
+			  AND EXISTS (SELECT 1 FROM assets a WHERE a.object_id = mo.object_id)
 		)
-	`)
-	videosTotal := queryInt(`
-		SELECT COUNT(*) FROM videos v
-		WHERE ` + readyVideoMediaExistsSQL("v") + `
+		SELECT COALESCE(SUM(size_bytes), 0)
+		FROM (
+			SELECT file_path, MAX(size_bytes) AS size_bytes
+			FROM video_rows
+			GROUP BY file_path
+		)
 	`)
 	totalStorageBytes := queryInt64(`
 		SELECT COALESCE(SUM(size_bytes), 0)
@@ -163,7 +190,7 @@ func (db *DB) GetDashboardStats() (map[string]any, error) {
 		"syncs":       queryInt("SELECT COUNT(*) FROM analytics_events WHERE event_type='sync_success'"),
 	}
 
-	return stats, nil
+	return stats, queryErr
 }
 
 // CountFeedItemsWithMedia returns count of feed items that have media.

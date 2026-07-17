@@ -55,3 +55,14 @@ func TestDashboardStatsUseCanonicalAssets(t *testing.T) {
 		t.Fatalf("download_queue = %+v, want terminal block exposed as failed", downloadQueue)
 	}
 }
+
+func TestDashboardStatsReportsQueryFailure(t *testing.T) {
+	d := openWritableTestDB(t)
+	if err := d.Close(); err != nil {
+		t.Fatalf("close test database: %v", err)
+	}
+
+	if _, err := d.GetDashboardStats(); err == nil {
+		t.Fatal("GetDashboardStats succeeded after its database was closed")
+	}
+}
