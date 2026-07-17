@@ -210,7 +210,9 @@ func (m *Manager) DownloadTemp(ctx context.Context, rawURL string, saveChannel b
 	}
 	m.removeTransientFiles(ctx, download.MediaLaneBulkForeground, files)
 
-	m.RequestVideoPreview(videoID)
+	if platform == "youtube" {
+		m.RequestVideoPreview(videoID)
+	}
 
 	// Channel creation owns the durable profile job. Wake its consumer without
 	// creating a synchronous render-time identity path.

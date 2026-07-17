@@ -22,6 +22,7 @@
 	let currentCard = null;
 	let currentChannelID = null;
 	let currentAnchor = null;
+	let pointerAnchor = null;
 	let openGen = 0;
 
 	function i18nText(key, fallback) {
@@ -126,6 +127,7 @@
 		}
 		currentChannelID = null;
 		currentAnchor = null;
+		pointerAnchor = null;
 	}
 
 	function positionCard(card, anchor) {
@@ -504,13 +506,15 @@
 		closeTimer = setTimeout(dismiss, CLOSE_DELAY);
 	}
 
-	document.addEventListener('mouseover', (e) => {
+	document.addEventListener('mousemove', (e) => {
 		if (eventIsOnCurrentCard(e)) { clearTimers(); return; }
 		const anchor = triggerFromTarget(e.target);
-		if (!anchor) return;
+		if (!anchor) { pointerAnchor = null; return; }
 		const cid = channelIDFor(anchor);
 		if (!cid) return;
 		if (cid === currentChannelID && currentCard) { clearTimers(); return; }
+		if (anchor === pointerAnchor) return;
+		pointerAnchor = anchor;
 		scheduleOpen(anchor, cid);
 	});
 
@@ -519,6 +523,8 @@
 		const anchor = triggerFromTarget(e.target);
 		if (!anchor) return;
 		const related = e.relatedTarget;
+		if (related && anchor.contains(related)) return;
+		pointerAnchor = null;
 		if (currentCard && related && currentCard.contains(related)) return;
 		if (!currentCard) { clearTimers(); return; }
 		scheduleClose();

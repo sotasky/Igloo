@@ -1,9 +1,16 @@
 package worker
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"image"
+	"image/color"
+	"image/draw"
+	"image/jpeg"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -13,29 +20,74 @@ import (
 	"github.com/screwys/igloo/internal/db"
 )
 
-func TestPreviewFrameCount(t *testing.T) {
-	tests := []struct {
-		duration float64
-		want     int
-	}{
-		{1, 1},       // 1 second
-		{10, 2},      // 10 seconds
-		{60, 12},     // 1 minute
-		{600, 80},    // 10 minutes
-		{2700, 80},   // 45 minutes
-		{2701, 120},  // just over 45 min
-		{7200, 120},  // 2 hours
-		{10800, 120}, // 3 hours
-		{10801, 160}, // just over 3 hours
-		{21600, 160}, // 6 hours
-		{21601, 200}, // just over 6 hours
-		{0, 0},       // zero duration
+func installTestYouTubeStoryboard(t *testing.T, m *Manager, callsPath string) {
+	t.Helper()
+	sheet := image.NewRGBA(image.Rect(0, 0, 320, 90))
+	draw.Draw(sheet, image.Rect(0, 0, 160, 90), image.NewUniform(color.RGBA{R: 180, A: 255}), image.Point{}, draw.Src)
+	draw.Draw(sheet, image.Rect(160, 0, 320, 90), image.NewUniform(color.RGBA{G: 180, A: 255}), image.Point{}, draw.Src)
+	var sheetJPEG bytes.Buffer
+	if err := jpeg.Encode(&sheetJPEG, sheet, &jpeg.Options{Quality: 90}); err != nil {
+		t.Fatal(err)
 	}
-	for _, tt := range tests {
-		got := previewFrameCount(tt.duration)
-		if got != tt.want {
-			t.Errorf("previewFrameCount(%.0f) = %d, want %d", tt.duration, got, tt.want)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "image/jpeg")
+		_, _ = w.Write(sheetJPEG.Bytes())
+	}))
+	t.Cleanup(server.Close)
+
+	info, err := json.Marshal(map[string]any{
+		"_type": "video", "id": "sample_video", "title": "Sample video", "duration": 10,
+		"formats": []any{map[string]any{
+			"format_id": "sb0", "format_note": "storyboard", "protocol": "mhtml", "ext": "mhtml",
+			"width": 160, "height": 90, "columns": 2, "rows": 1, "fps": 0.4,
+			"fragments": []any{
+				map[string]any{"url": server.URL + "/sheet-1.jpg", "duration": 5},
+				map[string]any{"url": server.URL + "/sheet-2.jpg", "duration": 5},
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	binDir := t.TempDir()
+	script := "#!/bin/sh\nset -eu\n"
+	if callsPath != "" {
+		script += fmt.Sprintf("printf '1\\n' >> %q\n", callsPath)
+	}
+	script += fmt.Sprintf("printf '%%s\\n' %q\n", string(info))
+	if err := os.WriteFile(filepath.Join(binDir, "yt-dlp"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	m.downloader.HTTP.Client = server.Client()
+	m.downloader.HTTP.AllowPrivateHosts = true
+}
+
+func TestSelectYouTubeStoryboardUsesBestBoundedNativeLevel(t *testing.T) {
+	format := func(width, height, columns, rows, sheets int, fps float64) map[string]any {
+		fragments := make([]any, sheets)
+		for i := range fragments {
+			fragments[i] = map[string]any{"url": fmt.Sprintf("https://i.example/sheet-%d.jpg", i)}
 		}
+		return map[string]any{
+			"format_note": "storyboard", "width": float64(width), "height": float64(height),
+			"columns": float64(columns), "rows": float64(rows), "fps": fps, "fragments": fragments,
+		}
+	}
+	info := map[string]any{"formats": []any{
+		nil,
+		format(48, 27, 10, 10, 1, 0.0123),
+		format(80, 45, 10, 10, 9, 0.1),
+		format(160, 90, 5, 5, 33, 0.1),
+		format(320, 180, 3, 3, 91, 0.1),
+	}}
+
+	storyboard, err := selectYouTubeStoryboard(info, 8136)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if storyboard.Width != 80 || storyboard.Height != 45 || storyboard.FrameCount != 814 || len(storyboard.Fragments) != 9 {
+		t.Fatalf("selected storyboard = %+v", storyboard)
 	}
 }
 
@@ -100,7 +152,7 @@ func TestPreviewReconciliationDoesNotDependOnCompletionHint(t *testing.T) {
 	}
 	if err := m.db.StoreCompletedVideo(db.CompletedVideo{
 		VideoID: "sample_clip", ChannelID: "youtube_sample", OwnerKind: "youtube_video",
-		Assets: []db.Asset{{AssetKind: "video_stream", FilePath: streamKey}},
+		Duration: 10, Assets: []db.Asset{{AssetKind: "video_stream", FilePath: streamKey}},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -109,18 +161,8 @@ func TestPreviewReconciliationDoesNotDependOnCompletionHint(t *testing.T) {
 		t.Fatalf("stream: %+v %v", stream, err)
 	}
 
-	binDir := t.TempDir()
-	callsPath := filepath.Join(binDir, "calls")
-	ffmpegPath := filepath.Join(binDir, "ffmpeg")
-	ffmpeg := "#!/bin/sh\nset -eu\nprintf '1\\n' >> \"$PREVIEW_FFMPEG_CALLS\"\nfor output do :; done\nprintf 'sprite' > \"$output\"\n"
-	if err := os.WriteFile(ffmpegPath, []byte(ffmpeg), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(binDir, "ffprobe"), []byte("#!/bin/sh\nprintf '10\\n'\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
-	t.Setenv("PREVIEW_FFMPEG_CALLS", callsPath)
+	callsPath := filepath.Join(t.TempDir(), "calls")
+	installTestYouTubeStoryboard(t, m, callsPath)
 
 	req := PreviewRequest{
 		VideoID: "sample_clip", OwnerKind: "youtube_video", FilePath: streamPath,
@@ -140,7 +182,31 @@ func TestPreviewReconciliationDoesNotDependOnCompletionHint(t *testing.T) {
 		t.Fatal(err)
 	}
 	if string(calls) != "1\n" {
-		t.Fatalf("ffmpeg calls = %q, want one", calls)
+		t.Fatalf("yt-dlp calls = %q, want one storyboard lookup", calls)
+	}
+	trackAsset, _ := m.db.GetAssetByOwnerIdentity("preview_track_json", "youtube_video", "sample_clip", 0)
+	spriteAsset, _ := m.db.GetAssetByOwnerIdentity("preview_sprite", "youtube_video", "sample_clip", 0)
+	trackPath, _ := m.cfg.Storage.Path(trackAsset.FilePath)
+	spritePath, _ := m.cfg.Storage.Path(spriteAsset.FilePath)
+	trackRaw, err := os.ReadFile(trackPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var track PreviewTrack
+	if err := json.Unmarshal(trackRaw, &track); err != nil {
+		t.Fatal(err)
+	}
+	spriteFile, err := os.Open(spritePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spriteConfig, err := jpeg.DecodeConfig(spriteFile)
+	_ = spriteFile.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if track.Columns != 2 || len(track.Cues) != 4 || spriteConfig.Width != 320 || spriteConfig.Height != 180 {
+		t.Fatalf("native preview geometry = track %+v sprite %dx%d", track, spriteConfig.Width, spriteConfig.Height)
 	}
 }
 
@@ -219,15 +285,8 @@ func TestPreviewHistoricalFillIsPaced(t *testing.T) {
 		}
 	}
 
-	binDir := t.TempDir()
-	callsPath := filepath.Join(binDir, "calls")
-	ffmpegPath := filepath.Join(binDir, "ffmpeg")
-	ffmpeg := "#!/bin/sh\nset -eu\nprintf '1\\n' >> \"$PREVIEW_FFMPEG_CALLS\"\nfor output do :; done\nprintf 'sprite' > \"$output\"\n"
-	if err := os.WriteFile(ffmpegPath, []byte(ffmpeg), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
-	t.Setenv("PREVIEW_FFMPEG_CALLS", callsPath)
+	callsPath := filepath.Join(t.TempDir(), "calls")
+	installTestYouTubeStoryboard(t, m, callsPath)
 
 	now := time.Now()
 	m.previewBackfillNotBefore = time.Time{}
@@ -246,7 +305,7 @@ func TestPreviewHistoricalFillIsPaced(t *testing.T) {
 		t.Fatal(err)
 	}
 	if string(calls) != "1\n1\n" {
-		t.Fatalf("ffmpeg calls = %q, want two paced passes", calls)
+		t.Fatalf("yt-dlp calls = %q, want two paced previews", calls)
 	}
 }
 
@@ -295,13 +354,7 @@ func TestPreviewBackfillScansPastCoolingCandidates(t *testing.T) {
 		}
 	}
 
-	binDir := t.TempDir()
-	ffmpegPath := filepath.Join(binDir, "ffmpeg")
-	ffmpeg := "#!/bin/sh\nset -eu\nfor output do :; done\nprintf 'sprite' > \"$output\"\n"
-	if err := os.WriteFile(ffmpegPath, []byte(ffmpeg), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	installTestYouTubeStoryboard(t, m, "")
 
 	m.previewBackfillNotBefore = time.Time{}
 	worked, _ := m.processPreviewBatch(context.Background(), now)

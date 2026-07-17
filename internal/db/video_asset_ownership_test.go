@@ -490,8 +490,9 @@ func TestPendingVideoPreviewsDeriveFromCanonicalStreamRevision(t *testing.T) {
 	}
 
 	ready := store("sample_ready", "youtube_video", "media/youtube/sample_ready.mp4", 100)
-	store("sample_old", "instagram_reel", "media/instagram/sample_old.mp4", 200)
-	store("sample_new", "tiktok_video", "media/tiktok/sample_new.mp4", 300)
+	store("sample_ignored_reel", "instagram_reel", "media/instagram/sample_ignored_reel.mp4", 200)
+	store("sample_ignored_clip", "tiktok_video", "media/tiktok/sample_ignored_clip.mp4", 300)
+	store("sample_pending", "youtube_video", "media/youtube/sample_pending.mp4", 400)
 	track := "thumbnails/previews/sample_ready/track.json"
 	sprite := "thumbnails/previews/sample_ready/sprite.jpg"
 	for path, body := range map[string]string{track: `{}`, sprite: "sprite"} {
@@ -509,14 +510,14 @@ func TestPendingVideoPreviewsDeriveFromCanonicalStreamRevision(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(candidates) != 2 || candidates[0].VideoID != "sample_new" || candidates[1].VideoID != "sample_old" {
+	if len(candidates) != 1 || candidates[0].VideoID != "sample_pending" {
 		t.Fatalf("pending previews = %+v", candidates)
 	}
-	if candidates[0].OwnerKind != "tiktok_video" || candidates[0].InputRevision <= 0 || candidates[0].Duration != 30 {
+	if candidates[0].OwnerKind != "youtube_video" || candidates[0].InputRevision <= 0 || candidates[0].Duration != 30 {
 		t.Fatalf("newest candidate lost canonical input: %+v", candidates[0])
 	}
 	count, err := d.CountPendingVideoPreviews()
-	if err != nil || count != 2 {
+	if err != nil || count != 1 {
 		t.Fatalf("pending count = %d, %v", count, err)
 	}
 	if candidate, err := d.GetPendingVideoPreview("sample_ready"); err != nil || candidate != nil {

@@ -484,7 +484,7 @@ const pendingVideoPreviewFromSQL = `
 	 AND preview_sprite_asset.owner_id = v.video_id
 	 AND preview_sprite_asset.media_index = 0
 	LEFT JOIN media_objects preview_sprite ON preview_sprite.object_id = preview_sprite_asset.object_id
-	WHERE v.owner_kind IN ('youtube_video', 'instagram_reel', 'tiktok_video')
+	WHERE v.owner_kind = 'youtube_video'
 	  AND stream.published_revision > 0
 	  AND stream.file_path != ''
 	  AND stream_asset.revision > 0

@@ -4,8 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"image"
+	"image/draw"
+	"image/jpeg"
 	"log"
 	"math"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -18,9 +22,9 @@ import (
 )
 
 const (
-	previewTileColumns = 5
-	previewTileWidth   = 160
-	previewTileHeight  = 90
+	previewMaxSheets          = 64
+	previewMaxSpritePixels    = 4 * 1024 * 1024
+	previewMaxSpriteDimension = 65535
 )
 
 const (
@@ -53,6 +57,15 @@ type PreviewCue struct {
 	Y       int   `json:"y"`
 	W       int   `json:"w"`
 	H       int   `json:"h"`
+}
+
+type youtubeStoryboard struct {
+	Width      int
+	Height     int
+	Columns    int
+	Rows       int
+	FrameCount int
+	Fragments  []string
 }
 
 type previewRetryState struct {
@@ -276,17 +289,6 @@ func (m *Manager) generatePreview(ctx context.Context, req PreviewRequest) error
 		return nil
 	}
 
-	frameCount := previewFrameCount(req.Duration)
-	jsonContent, err := buildPreviewTrackJSON(
-		req.Duration,
-		frameCount,
-		previewTileColumns,
-		previewTileWidth,
-		previewTileHeight,
-	)
-	if err != nil {
-		return err
-	}
 	// Create temp directory on the same filesystem as the output to allow os.Rename.
 	tmpParent, err := m.cfg.Storage.WritePath("tmp")
 	if err != nil {
@@ -305,41 +307,10 @@ func (m *Manager) generatePreview(ctx context.Context, req PreviewRequest) error
 		_ = os.RemoveAll(tmpDir)
 	}()
 
-	rows := (frameCount + previewTileColumns - 1) / previewTileColumns
 	tmpSprite := filepath.Join(tmpDir, "sprite.jpg")
-	sampleRate := float64(frameCount) / req.Duration
-	filter := fmt.Sprintf(
-		"setpts=PTS-STARTPTS,tpad=stop_mode=clone:stop_duration=%.6f,trim=duration=%.6f,"+
-			"fps=fps=%.12f:start_time=0:round=up:eof_action=pass,"+
-			"scale=%d:%d:force_original_aspect_ratio=decrease,"+
-			"pad=%d:%d:(ow-iw)/2:(oh-ih)/2:black,"+
-			"tile=layout=%dx%d:nb_frames=%d:color=black",
-		req.Duration,
-		req.Duration,
-		sampleRate,
-		previewTileWidth,
-		previewTileHeight,
-		previewTileWidth,
-		previewTileHeight,
-		previewTileColumns,
-		rows,
-		frameCount,
-	)
-	args := []string{
-		"-y", "-nostdin", "-hide_banner", "-loglevel", "error",
-		"-skip_frame", "nokey",
-		"-i", req.FilePath,
-		"-map", "0:v:0",
-		"-an", "-sn", "-dn",
-		"-vf", filter,
-		"-frames:v", "1",
-		"-q:v", "4",
-		"-strict", "unofficial",
-		tmpSprite,
-	}
-	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("ffmpeg preview pass: %w\n%s", err, out)
+	jsonContent, frameCount, err := m.downloadYouTubeStoryboard(ctx, req, tmpDir, tmpSprite)
+	if err != nil {
+		return err
 	}
 
 	previewRoot, err := m.cfg.Storage.WritePath("thumbnails/previews")
@@ -380,8 +351,142 @@ func (m *Manager) generatePreview(ctx context.Context, req PreviewRequest) error
 		return err
 	}
 	published = true
-	log.Printf("[preview] generated preview for %s (%d frames, %dx%d tile)", req.VideoID, frameCount, previewTileColumns, rows)
+	log.Printf("[preview] generated preview for %s (%d frames)", req.VideoID, frameCount)
 	return nil
+}
+
+func (m *Manager) downloadYouTubeStoryboard(ctx context.Context, req PreviewRequest, tmpDir, spritePath string) ([]byte, int, error) {
+	if req.OwnerKind != "youtube_video" {
+		return nil, 0, fmt.Errorf("preview owner is not youtube: %s", req.OwnerKind)
+	}
+	cookies, browser := m.cookiesFor("youtube")
+	info, err := m.downloader.YtDlp.FetchInfo(ctx,
+		"https://www.youtube.com/watch?v="+url.QueryEscape(req.VideoID),
+		download.Opts{Cookies: cookies, CookiesFromBrowser: browser},
+	)
+	if err != nil {
+		return nil, 0, err
+	}
+	storyboard, err := selectYouTubeStoryboard(info, req.Duration)
+	if err != nil {
+		return nil, 0, err
+	}
+	if err := m.renderYouTubeStoryboard(ctx, storyboard, tmpDir, spritePath); err != nil {
+		return nil, 0, err
+	}
+	track, err := buildPreviewTrackJSON(
+		req.Duration, storyboard.FrameCount, storyboard.Columns, storyboard.Width, storyboard.Height,
+	)
+	return track, storyboard.FrameCount, err
+}
+
+func selectYouTubeStoryboard(info map[string]any, duration float64) (youtubeStoryboard, error) {
+	formats, _ := info["formats"].([]any)
+	bestTilePixels := 0
+	var best youtubeStoryboard
+	for _, raw := range formats {
+		format, _ := raw.(map[string]any)
+		if format == nil {
+			continue
+		}
+		formatNote, _ := format["format_note"].(string)
+		if !strings.Contains(strings.ToLower(formatNote), "storyboard") {
+			continue
+		}
+		width := jsonInt(format["width"])
+		height := jsonInt(format["height"])
+		columns := jsonInt(format["columns"])
+		rows := jsonInt(format["rows"])
+		if width <= 0 || height <= 0 || width > 1280 || height > 720 || columns <= 0 || columns > 100 || rows <= 0 || rows > 100 {
+			continue
+		}
+		fragmentsRaw, _ := format["fragments"].([]any)
+		fragments := make([]string, 0, len(fragmentsRaw))
+		for _, fragmentRaw := range fragmentsRaw {
+			fragment, _ := fragmentRaw.(map[string]any)
+			fragmentURL, _ := fragment["url"].(string)
+			fragmentURL = strings.TrimSpace(fragmentURL)
+			lowerURL := strings.ToLower(fragmentURL)
+			if fragmentURL == "" || (!strings.Contains(lowerURL, ".jpg") && !strings.Contains(lowerURL, ".jpeg")) {
+				fragments = nil
+				break
+			}
+			fragments = append(fragments, fragmentURL)
+		}
+		if len(fragments) == 0 || len(fragments) > previewMaxSheets {
+			continue
+		}
+		spriteWidth := columns * width
+		spriteHeight := rows * height * len(fragments)
+		spritePixels := int64(spriteWidth) * int64(spriteHeight)
+		if spriteWidth > previewMaxSpriteDimension || spriteHeight > previewMaxSpriteDimension || spritePixels > previewMaxSpritePixels {
+			continue
+		}
+		capacity := len(fragments) * columns * rows
+		fps, _ := format["fps"].(float64)
+		frameCount := int(math.Round(fps * duration))
+		if frameCount <= 0 || frameCount > capacity {
+			frameCount = capacity
+		}
+		if frameCount <= 0 {
+			continue
+		}
+		tilePixels := width * height
+		if tilePixels > bestTilePixels {
+			bestTilePixels = tilePixels
+			best = youtubeStoryboard{
+				Width: width, Height: height, Columns: columns, Rows: rows,
+				FrameCount: frameCount, Fragments: fragments,
+			}
+		}
+	}
+	if best.FrameCount == 0 {
+		return youtubeStoryboard{}, fmt.Errorf("youtube did not provide a usable JPEG storyboard")
+	}
+	return best, nil
+}
+
+func (m *Manager) renderYouTubeStoryboard(ctx context.Context, storyboard youtubeStoryboard, tmpDir, spritePath string) error {
+	sheetWidth := storyboard.Columns * storyboard.Width
+	sheetHeight := storyboard.Rows * storyboard.Height
+	sprite := image.NewRGBA(image.Rect(0, 0, sheetWidth, sheetHeight*len(storyboard.Fragments)))
+	for i, fragmentURL := range storyboard.Fragments {
+		path, err := m.downloader.HTTP.DownloadFileWithOptions(
+			ctx, fragmentURL, tmpDir, fmt.Sprintf("sheet-%03d.jpg", i),
+			download.HTTPDownloadOptions{MaxBytes: 4 << 20, Timeout: 30 * time.Second},
+		)
+		if err != nil {
+			return fmt.Errorf("download youtube storyboard sheet %d: %w", i, err)
+		}
+		file, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		sheet, err := jpeg.Decode(file)
+		_ = file.Close()
+		if err != nil {
+			return fmt.Errorf("decode youtube storyboard sheet %d: %w", i, err)
+		}
+		bounds := sheet.Bounds()
+		if bounds.Dx() < sheetWidth || bounds.Dy() < sheetHeight {
+			return fmt.Errorf("youtube storyboard sheet %d is %dx%d, expected at least %dx%d", i, bounds.Dx(), bounds.Dy(), sheetWidth, sheetHeight)
+		}
+		draw.Draw(sprite, image.Rect(0, i*sheetHeight, sheetWidth, (i+1)*sheetHeight), sheet, bounds.Min, draw.Src)
+	}
+	file, err := os.Create(spritePath)
+	if err != nil {
+		return err
+	}
+	if err := jpeg.Encode(file, sprite, &jpeg.Options{Quality: 82}); err != nil {
+		_ = file.Close()
+		return err
+	}
+	return file.Close()
+}
+
+func jsonInt(value any) int {
+	number, _ := value.(float64)
+	return int(number)
 }
 
 func (m *Manager) previewState(req PreviewRequest) (ready, current bool, err error) {
@@ -433,28 +538,6 @@ func previewPathLooksVideo(path string) bool {
 	default:
 		return false
 	}
-}
-
-// previewFrameCount targets one frame per five seconds without exceeding the
-// existing sprite limits for long videos.
-func previewFrameCount(duration float64) int {
-	if duration <= 0 {
-		return 0
-	}
-	count := int(math.Ceil(duration / 5))
-	limit := 200
-	switch {
-	case duration <= 2700:
-		limit = 80
-	case duration <= 10800:
-		limit = 120
-	case duration <= 21600:
-		limit = 160
-	}
-	if count > limit {
-		return limit
-	}
-	return count
 }
 
 func buildPreviewTrackJSON(duration float64, frameCount, columns, tileW, tileH int) ([]byte, error) {

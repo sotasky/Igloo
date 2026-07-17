@@ -307,6 +307,9 @@ export async function openBookmarkMenu(anchorEl, root, opts) {
   // Build popover DOM
   var popover = document.createElement('div')
   popover.className = 'bookmark-popover'
+  popover.addEventListener('click', function (event) {
+    event.stopPropagation()
+  })
   var titleDiv = document.createElement('div')
   titleDiv.className = 'bookmark-popover-title'
   titleDiv.textContent = isBookmarked ? t('bookmark_move_to', 'Move bookmark to\u2026') : t('bookmark_save_to', 'Save bookmark to\u2026')

@@ -299,16 +299,26 @@ function addOverlayHeadline(document) {
 	return { headline, author, actionButton };
 }
 
+function addShortsRepostTarget(document) {
+	const repost = new FakeElement('a', {
+		classes: ['shorts-repost-link'],
+		attrs: { 'data-channel-id': 'tiktok_reposter' },
+		rect: { left: 8, top: 8, right: 120, bottom: 36 },
+	});
+	document.body.appendChild(repost);
+	return repost;
+}
+
 test('profile hover ignores underlying triggers when the pointer is inside the open card', async () => {
 	const { document, requests } = await loadProfileHover();
 	const { repost, author } = addFeedTargets(document);
 
-	document.dispatch('mouseover', mouseEvent(repost, 12, 18));
+	document.dispatch('mousemove', mouseEvent(repost, 12, 18));
 	await flush();
 
 	assert.deepEqual(requests, ['/api/profile-card/twitter_reposter']);
 
-	document.dispatch('mouseover', mouseEvent(author, 120, 120, repost));
+	document.dispatch('mousemove', mouseEvent(author, 120, 120, repost));
 	await flush();
 
 	assert.deepEqual(requests, ['/api/profile-card/twitter_reposter']);
@@ -318,10 +328,10 @@ test('profile hover can still switch targets after the pointer leaves the open c
 	const { document, requests } = await loadProfileHover();
 	const { repost, author } = addFeedTargets(document);
 
-	document.dispatch('mouseover', mouseEvent(repost, 12, 18));
+	document.dispatch('mousemove', mouseEvent(repost, 12, 18));
 	await flush();
 
-	document.dispatch('mouseover', mouseEvent(author, 20, 420, repost));
+	document.dispatch('mousemove', mouseEvent(author, 20, 420, repost));
 	await flush();
 
 	assert.deepEqual(requests, [
@@ -334,7 +344,7 @@ test('profile hover opens from feed media overlay poster headline', async () => 
 	const { document, requests } = await loadProfileHover();
 	const { author } = addOverlayHeadline(document);
 
-	document.dispatch('mouseover', mouseEvent(author, 70, 32));
+	document.dispatch('mousemove', mouseEvent(author, 70, 32));
 	await flush();
 
 	assert.deepEqual(requests, ['/api/profile-card/twitter_poster']);
@@ -344,8 +354,23 @@ test('profile hover ignores feed media overlay poster action buttons', async () 
 	const { document, requests } = await loadProfileHover();
 	const { actionButton } = addOverlayHeadline(document);
 
-	document.dispatch('mouseover', mouseEvent(actionButton, 190, 30));
+	document.dispatch('mousemove', mouseEvent(actionButton, 190, 30));
 	await flush();
 
 	assert.deepEqual(requests, []);
+});
+
+test('profile hover ignores a Moments repost that moves under a stationary pointer', async () => {
+	const { document, requests } = await loadProfileHover();
+	const repost = addShortsRepostTarget(document);
+
+	document.dispatch('mouseover', mouseEvent(repost, 20, 20));
+	await flush();
+
+	assert.deepEqual(requests, []);
+
+	document.dispatch('mousemove', mouseEvent(repost, 21, 20));
+	await flush();
+
+	assert.deepEqual(requests, ['/api/profile-card/tiktok_reposter']);
 });

@@ -457,7 +457,7 @@ func (m *Manager) downloadVideo(ctx context.Context, job db.DownloadWork, platfo
 		log.Printf("[downloadpool] CompleteDownloadWork %s: %v", job.VideoID, err)
 	}
 
-	if job.Lane == db.DownloadLaneCurrent {
+	if job.Lane == db.DownloadLaneCurrent && platform == "youtube" {
 		m.RequestVideoPreview(job.VideoID)
 	}
 
