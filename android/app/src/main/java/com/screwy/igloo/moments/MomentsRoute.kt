@@ -151,6 +151,7 @@ fun MomentsRoute(
             onDismissRequest = vm::dismissMomentActions,
             onRepostsEnabledChanged = vm::setRepostsEnabled,
             onChannelMutedChanged = vm::setChannelMuted,
+            onUnfollowChannel = vm::unfollowChannel,
         )
     }
 }

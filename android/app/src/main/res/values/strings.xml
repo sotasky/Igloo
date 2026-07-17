@@ -109,6 +109,7 @@
     <string name="action_unfavourite_account">Unfavourite account</string>
     <string name="action_unfollow">Unfollow</string>
     <string name="action_unfollow_account">Unfollow account</string>
+    <string name="action_unfollow_account_label">Unfollow %1$s</string>
     <string name="action_unlike">Unlike</string>
     <string name="action_unmute">Unmute</string>
     <string name="action_unmute_account">Unmute account</string>

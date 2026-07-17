@@ -108,6 +108,7 @@
     <string name="action_unfavourite_account">Favorilerden çıkar</string>
     <string name="action_unfollow">Takibi bırak</string>
     <string name="action_unfollow_account">Takibi bırak</string>
+    <string name="action_unfollow_account_label">%1$s hesabını takipten çık</string>
     <string name="action_unlike">Beğeniyi geri al</string>
     <string name="action_unmute">Sesi aç</string>
     <string name="action_unmute_account">Sessizden çıkar</string>

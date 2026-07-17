@@ -139,7 +139,7 @@ class MomentsPlayerTest {
     }
 
     @Test
-    fun repost_actions_are_available_only_for_a_repost_and_mute_only_for_an_unfollowed_author() {
+    fun repost_actions_unfollow_the_reposter_and_mute_only_an_unfollowed_author() {
         val direct = storyItem("direct", "tiktok_author")
         val repostFromUnfollowedAuthor =
             direct.copy(
@@ -150,17 +150,31 @@ class MomentsPlayerTest {
         val repostFromFollowedAuthor = repostFromUnfollowedAuthor.copy(isAuthorFollowed = true)
 
         assertEquals(
-            MomentActionAvailability(canToggleReposts = false, canToggleMute = false),
+            MomentActionAvailability(
+                canToggleReposts = false,
+                canToggleMute = false,
+                canUnfollowReposter = false,
+            ),
             momentActionAvailability(direct),
         )
         assertEquals(
-            MomentActionAvailability(canToggleReposts = true, canToggleMute = true),
+            MomentActionAvailability(
+                canToggleReposts = true,
+                canToggleMute = true,
+                canUnfollowReposter = true,
+            ),
             momentActionAvailability(repostFromUnfollowedAuthor),
         )
         assertEquals(
-            MomentActionAvailability(canToggleReposts = true, canToggleMute = false),
+            MomentActionAvailability(
+                canToggleReposts = true,
+                canToggleMute = false,
+                canUnfollowReposter = true,
+            ),
             momentActionAvailability(repostFromFollowedAuthor),
         )
+        assertEquals("tiktok_sample_reposter", momentUnfollowTarget(repostFromUnfollowedAuthor))
+        assertNull(momentUnfollowTarget(direct))
     }
 
     @Test

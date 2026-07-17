@@ -46,12 +46,12 @@ class IglooThemeTest {
     }
 
     @Test
-    fun resolve_default_theme_uses_occult_amber() {
+    fun resolve_default_theme_uses_occult_umbral_accent() {
         val colors = resolveIglooColors(DefaultThemeId, DefaultThemeAccentHex, systemDark = false)
 
         assertEquals(Color(0xFF0A0A12), colors.background)
         assertEquals(Color(0xFFE4DED2), colors.onSurface)
-        assertEquals(Color(0xFFE6C27A), colors.primary)
+        assertEquals(Color(0xFF8B2E2E), colors.primary)
     }
 
     @Test

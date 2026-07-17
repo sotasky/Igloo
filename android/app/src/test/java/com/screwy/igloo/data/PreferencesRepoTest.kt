@@ -1,5 +1,7 @@
 package com.screwy.igloo.data
 
+import com.screwy.igloo.ui.theme.DefaultThemeAccentHex
+import com.screwy.igloo.ui.theme.DefaultThemeId
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -69,6 +71,8 @@ class PreferencesRepoTest {
         assertEquals(PreferencesRepo.Defaults.DEBUG_MODE, repo.debugMode().first())
         assertEquals(PreferencesRepo.Defaults.THEME_ID, repo.themeId().first())
         assertEquals(PreferencesRepo.Defaults.THEME_ACCENT_HEX, repo.themeAccentHex().first())
+        assertEquals(DefaultThemeId, PreferencesRepo.Defaults.THEME_ID)
+        assertEquals(DefaultThemeAccentHex, PreferencesRepo.Defaults.THEME_ACCENT_HEX)
         assertEquals(PreferencesRepo.Defaults.THEME_CUSTOM_CSS, repo.themeCustomCss().first())
         assertEquals(
             PreferencesRepo.Defaults.RETENTION_DAYS_MOMENTS,

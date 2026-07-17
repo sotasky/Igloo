@@ -58,6 +58,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -83,9 +84,10 @@ import com.screwy.igloo.ui.theme.iglooColors
 import org.koin.compose.koinInject
 
 /**
- * Drawer body. Identity row, wide-only primary navigation, filterable Accounts
- * (Starred / All), then Settings / Logs / Logout. Accounts fill remaining
- * vertical space via `Modifier.weight(1f)` on the LazyColumn.
+ * Drawer body. Identity row, Liked shortcut on compact layouts and primary
+ * navigation on wide layouts, filterable Accounts (Starred / All), then
+ * Settings / Logs / Logout. Accounts fill remaining vertical space via
+ * `Modifier.weight(1f)` on the LazyColumn.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -100,7 +102,7 @@ fun AppDrawer(
             onCloseDrawer = onCloseDrawer,
             onLogoutClick = onLogoutClick,
             dense = false,
-            showPrimaryNavigation = false,
+            widePrimaryNavigation = false,
         )
     }
 }
@@ -125,7 +127,7 @@ fun PermanentAppSidebar(
             onCloseDrawer = {},
             onLogoutClick = onLogoutClick,
             dense = true,
-            showPrimaryNavigation = true,
+            widePrimaryNavigation = true,
         )
     }
 }
@@ -137,7 +139,7 @@ private fun AppDrawerContent(
     onCloseDrawer: () -> Unit,
     onLogoutClick: () -> Unit,
     dense: Boolean,
-    showPrimaryNavigation: Boolean,
+    widePrimaryNavigation: Boolean,
 ) {
     val authRepo: AuthRepo = koinInject()
     val channelReadDao: ChannelReadDao = koinInject()
@@ -187,7 +189,7 @@ private fun AppDrawerContent(
     val rowModifier = if (dense) Modifier.height(44.dp) else Modifier
     val outerVerticalPadding = if (dense) 8.dp else 12.dp
     val rowSpacing = if (dense) 4.dp else 8.dp
-    val primaryDestinations = drawerPrimaryDestinations(showPrimaryNavigation)
+    val primaryDestinations = drawerPrimaryDestinations(widePrimaryNavigation)
 
     Column(
         modifier = Modifier
@@ -212,56 +214,19 @@ private fun AppDrawerContent(
             HorizontalDivider()
 
             if (primaryDestinations.isNotEmpty()) {
-                NavigationDrawerItem(
-                    modifier = rowModifier,
-                    label = { Text(stringResource(R.string.nav_feed)) },
-                    icon = { Icon(Icons.Default.DynamicFeed, contentDescription = null) },
-                    selected = drawerDestinationSelected(currentRoute, IglooDestination.Feed),
-                    onClick = {
-                        navigator.openDestination(IglooDestination.Feed, IglooNavigationSource.Drawer)
-                    },
-                    colors = NavigationDrawerItemDefaults.colors(),
-                )
-                NavigationDrawerItem(
-                    modifier = rowModifier,
-                    label = { Text(stringResource(R.string.nav_videos)) },
-                    icon = { Icon(Icons.Default.VideoLibrary, contentDescription = null) },
-                    selected = drawerDestinationSelected(currentRoute, IglooDestination.Videos),
-                    onClick = {
-                        navigator.openDestination(IglooDestination.Videos, IglooNavigationSource.Drawer)
-                    },
-                    colors = NavigationDrawerItemDefaults.colors(),
-                )
-                NavigationDrawerItem(
-                    modifier = rowModifier,
-                    label = { Text(stringResource(R.string.nav_moments)) },
-                    icon = { Icon(Icons.Default.PlayCircle, contentDescription = null) },
-                    selected = drawerDestinationSelected(currentRoute, IglooDestination.Moments),
-                    onClick = {
-                        navigator.openDestination(IglooDestination.Moments, IglooNavigationSource.Drawer)
-                    },
-                    colors = NavigationDrawerItemDefaults.colors(),
-                )
-                NavigationDrawerItem(
-                    modifier = rowModifier,
-                    label = { Text(stringResource(R.string.nav_bookmarks)) },
-                    icon = { Icon(Icons.Default.Bookmark, contentDescription = null) },
-                    selected = drawerDestinationSelected(currentRoute, IglooDestination.Bookmarks),
-                    onClick = {
-                        navigator.openDestination(IglooDestination.Bookmarks, IglooNavigationSource.Drawer)
-                    },
-                    colors = NavigationDrawerItemDefaults.colors(),
-                )
-                NavigationDrawerItem(
-                    modifier = rowModifier,
-                    label = { Text(stringResource(R.string.nav_liked)) },
-                    icon = { Icon(Icons.Default.Favorite, contentDescription = null) },
-                    selected = drawerDestinationSelected(currentRoute, IglooDestination.Liked),
-                    onClick = {
-                        navigator.openDestination(IglooDestination.Liked, IglooNavigationSource.Drawer)
-                    },
-                    colors = NavigationDrawerItemDefaults.colors(),
-                )
+                primaryDestinations.forEach { destination ->
+                    val item = primaryDrawerItem(destination)
+                    NavigationDrawerItem(
+                        modifier = rowModifier,
+                        label = { Text(stringResource(item.labelRes)) },
+                        icon = { Icon(item.icon, contentDescription = null) },
+                        selected = drawerDestinationSelected(currentRoute, destination),
+                        onClick = {
+                            navigator.openDestination(destination, IglooNavigationSource.Drawer)
+                        },
+                        colors = NavigationDrawerItemDefaults.colors(),
+                    )
+                }
 
                 HorizontalDivider()
             }
@@ -388,8 +353,24 @@ private val WideDrawerPrimaryDestinations = listOf(
     IglooDestination.Liked,
 )
 
-internal fun drawerPrimaryDestinations(showPrimaryNavigation: Boolean): List<IglooDestination> =
-    if (showPrimaryNavigation) WideDrawerPrimaryDestinations else emptyList()
+private val CompactDrawerPrimaryDestinations = listOf(IglooDestination.Liked)
+
+private data class PrimaryDrawerItem(
+    val labelRes: Int,
+    val icon: ImageVector,
+)
+
+private fun primaryDrawerItem(destination: IglooDestination): PrimaryDrawerItem = when (destination) {
+    IglooDestination.Feed -> PrimaryDrawerItem(R.string.nav_feed, Icons.Default.DynamicFeed)
+    IglooDestination.Videos -> PrimaryDrawerItem(R.string.nav_videos, Icons.Default.VideoLibrary)
+    IglooDestination.Moments -> PrimaryDrawerItem(R.string.nav_moments, Icons.Default.PlayCircle)
+    IglooDestination.Bookmarks -> PrimaryDrawerItem(R.string.nav_bookmarks, Icons.Default.Bookmark)
+    IglooDestination.Liked -> PrimaryDrawerItem(R.string.nav_liked, Icons.Default.Favorite)
+    else -> error("Unsupported primary drawer destination: $destination")
+}
+
+internal fun drawerPrimaryDestinations(widePrimaryNavigation: Boolean): List<IglooDestination> =
+    if (widePrimaryNavigation) WideDrawerPrimaryDestinations else CompactDrawerPrimaryDestinations
 
 internal fun drawerDestinationSelected(currentRoute: String?, destination: IglooDestination): Boolean {
     val route = currentRoute?.trim().orEmpty()

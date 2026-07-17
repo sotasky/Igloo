@@ -8,7 +8,7 @@ import kotlin.math.pow
 
 const val SystemThemeId = "system"
 const val DefaultThemeId = "occult-umbral"
-const val DefaultThemeAccentHex = "#e6c27a"
+const val DefaultThemeAccentHex = "#8b2e2e"
 
 internal data class ThemeSpec(
     val id: String,

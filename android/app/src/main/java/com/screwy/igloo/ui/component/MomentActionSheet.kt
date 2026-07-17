@@ -5,14 +5,19 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
@@ -25,6 +30,7 @@ import org.koin.compose.koinInject
 internal data class MomentActionAvailability(
     val canToggleReposts: Boolean,
     val canToggleMute: Boolean,
+    val canUnfollowReposter: Boolean,
 )
 
 internal fun momentActionAvailability(item: MomentItem): MomentActionAvailability {
@@ -32,8 +38,12 @@ internal fun momentActionAvailability(item: MomentItem): MomentActionAvailabilit
     return MomentActionAvailability(
         canToggleReposts = isRepost,
         canToggleMute = isRepost && !item.isAuthorFollowed,
+        canUnfollowReposter = isRepost,
     )
 }
+
+internal fun momentUnfollowTarget(item: MomentItem): String? =
+    item.reposterChannelId?.takeIf { momentActionAvailability(item).canUnfollowReposter }
 
 /** A display target for the account affected by a moment action. */
 internal data class MomentActionAccountLabels(
@@ -73,6 +83,11 @@ internal fun momentActionAccountLabels(item: MomentItem): MomentActionAccountLab
 private fun momentAccountHandleLabel(platform: String, raw: String?): String? =
     platformHandleCandidate(platform, raw).takeIf { it.isNotBlank() }?.let { "@$it" }
 
+internal fun momentUnfollowAuthorLabel(item: MomentItem): String =
+    item.authorDisplayName?.trim()?.takeIf { it.isNotBlank() }
+        ?: item.authorHandle.trim().takeIf { it.isNotBlank() }
+        ?: item.channelId
+
 @Composable
 @OptIn(ExperimentalMaterial3Api::class)
 internal fun MomentActionSheet(
@@ -80,12 +95,14 @@ internal fun MomentActionSheet(
     onDismissRequest: () -> Unit,
     onRepostsEnabledChanged: (channelId: String, enabled: Boolean) -> Unit,
     onChannelMutedChanged: (channelId: String, muted: Boolean) -> Unit,
+    onUnfollowChannel: (channelId: String) -> Unit,
 ) {
     val actions = momentActionAvailability(item)
-    if (!actions.canToggleReposts && !actions.canToggleMute) return
+    if (!actions.canToggleReposts && !actions.canToggleMute && !actions.canUnfollowReposter) return
 
     val db: IglooDatabase = koinInject()
     val reposterChannelId = item.reposterChannelId.orEmpty()
+    val unfollowChannelId = momentUnfollowTarget(item)
     val reposterSetting by
         db.channelSettingDao()
             .getByIdFlow(reposterChannelId)
@@ -98,13 +115,14 @@ internal fun MomentActionSheet(
     val authorMuted = mutedAuthor != null
     val accountLabels = momentActionAccountLabels(item)
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false)
+    var showUnfollowConfirmation by remember(item.videoId, reposterChannelId) { mutableStateOf(false) }
 
     ModalBottomSheet(
         onDismissRequest = onDismissRequest,
         sheetState = sheetState,
     ) {
-        // Do not let a two-action context menu claim player-sized vertical space. With the
-        // partial sheet state above, this wraps to these compact rows on phones as well.
+        // Do not let this context menu claim player-sized vertical space. With the partial sheet
+        // state above, it wraps to compact rows on phones as well.
         Column(modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp)) {
             if (actions.canToggleReposts) {
                 MomentActionRow(
@@ -128,8 +146,48 @@ internal fun MomentActionSheet(
                     onClick = { onChannelMutedChanged(item.channelId, !authorMuted) },
                 )
             }
+            if (unfollowChannelId != null) {
+                MomentActionRow(
+                    label = stringResource(R.string.action_unfollow_account_label, accountLabels.reposter),
+                    onClick = { showUnfollowConfirmation = true },
+                )
+            }
         }
     }
+    if (showUnfollowConfirmation) {
+        MomentUnfollowConfirmation(
+            accountLabel = accountLabels.reposter,
+            onDismissRequest = { showUnfollowConfirmation = false },
+            onConfirm = {
+                showUnfollowConfirmation = false
+                onDismissRequest()
+                unfollowChannelId?.let(onUnfollowChannel)
+            },
+        )
+    }
+}
+
+@Composable
+internal fun MomentUnfollowConfirmation(
+    accountLabel: String,
+    onDismissRequest: () -> Unit,
+    onConfirm: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismissRequest,
+        title = { Text(stringResource(R.string.confirm_unfollow_account_title)) },
+        text = { Text(stringResource(R.string.confirm_unfollow_channel_delete_media_body, accountLabel)) },
+        confirmButton = {
+            TextButton(onClick = onConfirm) {
+                Text(stringResource(R.string.action_unfollow))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismissRequest) {
+                Text(stringResource(R.string.action_cancel))
+            }
+        },
+    )
 }
 
 @Composable

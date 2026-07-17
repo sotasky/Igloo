@@ -12,9 +12,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.VerticalPager
 import androidx.compose.foundation.pager.rememberPagerState
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -30,14 +27,12 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.media3.common.MediaItem
-import com.screwy.igloo.R
 import com.screwy.igloo.data.dao.AndroidSyncDao
 import com.screwy.igloo.log.Logger
 import com.screwy.igloo.media.MediaUri
@@ -507,30 +502,12 @@ fun MomentsPlayer(
             )
         }
         pendingUnfollowItem?.let { target ->
-            val label =
-                target.authorDisplayName?.takeIf { it.isNotBlank() }
-                    ?: target.authorHandle.takeIf { it.isNotBlank() }
-                    ?: target.channelId
-            AlertDialog(
+            MomentUnfollowConfirmation(
+                accountLabel = momentUnfollowAuthorLabel(target),
                 onDismissRequest = { pendingUnfollowItem = null },
-                title = { Text(stringResource(R.string.confirm_unfollow_account_title)) },
-                text = {
-                    Text(stringResource(R.string.confirm_unfollow_channel_delete_media_body, label))
-                },
-                confirmButton = {
-                    TextButton(
-                        onClick = {
-                            pendingUnfollowItem = null
-                            onUnfollowChannel(target.channelId)
-                        }
-                    ) {
-                        Text(stringResource(R.string.action_unfollow))
-                    }
-                },
-                dismissButton = {
-                    TextButton(onClick = { pendingUnfollowItem = null }) {
-                        Text(stringResource(R.string.action_cancel))
-                    }
+                onConfirm = {
+                    pendingUnfollowItem = null
+                    onUnfollowChannel(target.channelId)
                 },
             )
         }

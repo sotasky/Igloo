@@ -111,10 +111,10 @@ class AppDrawerTest {
     }
 
     @Test
-    fun primary_drawer_destinations_are_wide_only() {
+    fun compact_drawer_keeps_liked_while_wide_drawer_shows_all_primary_destinations() {
         assertEquals(
-            emptyList<IglooDestination>(),
-            drawerPrimaryDestinations(showPrimaryNavigation = false),
+            listOf(IglooDestination.Liked),
+            drawerPrimaryDestinations(widePrimaryNavigation = false),
         )
         assertEquals(
             listOf(
@@ -124,7 +124,7 @@ class AppDrawerTest {
                 IglooDestination.Bookmarks,
                 IglooDestination.Liked,
             ),
-            drawerPrimaryDestinations(showPrimaryNavigation = true),
+            drawerPrimaryDestinations(widePrimaryNavigation = true),
         )
     }
 
