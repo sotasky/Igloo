@@ -59,6 +59,56 @@ class FeedMediaCellDescriptorTest {
     }
 
     @Test
+    fun video_stream_dimensions_override_mismatched_media_metadata() {
+        val json =
+            """[
+            {
+                "type":"video",
+                "url":"https://video.twimg.com/ext_tw_video/1/pu/vid/avc1/1920x1080/clip.mp4",
+                "width":1080,
+                "height":1920
+            }
+        ]"""
+
+        val cells = describeFeedMediaCells(json)
+
+        assertEquals(1, cells.size)
+        assertEquals(1920f / 1080f, cells.single().aspectRatio, 0.0001f)
+    }
+
+    @Test
+    fun video_preview_item_uses_stream_dimensions_when_metadata_conflicts() {
+        val media = File.createTempFile("igloo-sync-video", ".mp4").also { it.deleteOnExit() }
+        val json =
+            """[
+            {
+                "type":"video",
+                "url":"https://video.twimg.com/ext_tw_video/1/pu/vid/avc1/1920x1080/clip.mp4",
+                "width":1080,
+                "height":1920
+            }
+        ]"""
+
+        val items =
+            buildFeedPreviewItemsByIndex(
+                ownerId = "sample_video",
+                rawJson = json,
+                assetRows =
+                    listOf(
+                        syncPostMedia(
+                            assetId = "twitter_tweet_sample_video_post_media_0",
+                            ownerId = "sample_video",
+                            localPath = media.absolutePath,
+                            contentType = "video/mp4",
+                        )
+                    ),
+                baseUrl = "https://igloo.example",
+            )
+
+        assertEquals(1920f / 1080f, (items.getValue(0) as MediaItem.Video).aspectRatio, 0.0001f)
+    }
+
+    @Test
     fun image_without_dimensions_uses_square_full_width_default() {
         val json =
             """[

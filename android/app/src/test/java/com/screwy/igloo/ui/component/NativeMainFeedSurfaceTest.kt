@@ -122,6 +122,10 @@ class NativeMainFeedSurfaceTest {
         )
         assertEquals(
             ImageView.ScaleType.CENTER_CROP,
+            nativeMediaScaleTypeFor(cell(1.25f, isVideo = true), isSingle = true),
+        )
+        assertEquals(
+            ImageView.ScaleType.CENTER_CROP,
             nativeMediaScaleTypeFor(cell(1f, known = false), isSingle = true),
         )
     }

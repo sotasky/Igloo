@@ -1,5 +1,6 @@
 package com.screwy.igloo.ui.component
 
+import android.view.View
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.unit.IntSize
@@ -13,6 +14,14 @@ class MediaStateTest {
         assertEquals(true, shouldRenderVideoPosterOverlay(hasPlayer = false, firstFrameRendered = false))
         assertEquals(true, shouldRenderVideoPosterOverlay(hasPlayer = true, firstFrameRendered = false))
         assertEquals(false, shouldRenderVideoPosterOverlay(hasPlayer = true, firstFrameRendered = true))
+        assertEquals(
+            View.VISIBLE,
+            nativeInlineVideoPosterVisibility(hasPlayer = true, firstFrameRendered = false),
+        )
+        assertEquals(
+            View.GONE,
+            nativeInlineVideoPosterVisibility(hasPlayer = true, firstFrameRendered = true),
+        )
     }
 
     @Test

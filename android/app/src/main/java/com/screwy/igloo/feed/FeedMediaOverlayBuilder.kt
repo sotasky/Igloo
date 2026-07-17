@@ -31,9 +31,13 @@ internal data class FeedMediaDescriptor(
             ?: aspectRatioFromUrl(url)
             ?: aspectRatioFromUrl(thumbnailUrl)
 
-    fun aspectRatio(defaultValue: Float = 1f): Float {
-        return aspectRatioOrNull() ?: defaultValue
-    }
+    fun streamAspectRatioOrNull(): Float? = aspectRatioFromUrl(url)
+
+    fun displayAspectRatioOrNull(isVideo: Boolean): Float? =
+        if (isVideo) streamAspectRatioOrNull() ?: aspectRatioOrNull() else aspectRatioOrNull()
+
+    fun displayAspectRatio(isVideo: Boolean, defaultValue: Float = 1f): Float =
+        displayAspectRatioOrNull(isVideo) ?: defaultValue
 }
 
 data class FeedMediaCellDescriptor(
@@ -52,7 +56,7 @@ internal fun describeFeedMediaCells(rawJson: String?): List<FeedMediaCellDescrip
     parseFeedMediaDescriptors(rawJson).map { descriptor ->
         val type = descriptor.type.lowercase()
         val isVideo = type == "video" || type == "gif" || type == "animated_gif"
-        val aspectRatio = descriptor.aspectRatioOrNull()
+        val aspectRatio = descriptor.displayAspectRatioOrNull(isVideo)
         FeedMediaCellDescriptor(
             isVideo = isVideo,
             aspectRatio = aspectRatio ?: FeedUnknownMediaAspectRatio,
@@ -193,9 +197,10 @@ private fun buildMediaItem(
     allowRemote: Boolean,
 ): MediaItem? {
     if (row == null) return null
-    val aspectRatio = descriptor?.aspectRatio() ?: 1f
     val mediaUri = row.toMediaUri(baseUrl, allowRemote) ?: return null
     val contentType = row.contentType?.trim()?.lowercase().orEmpty()
+    val isVideo = contentType.startsWith("video/") || contentType == "image/gif"
+    val aspectRatio = descriptor?.displayAspectRatio(isVideo) ?: 1f
 
     return when {
         contentType.startsWith("video/") -> MediaItem.Video(

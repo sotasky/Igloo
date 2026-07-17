@@ -66,6 +66,12 @@ internal fun nativeInlineVideoSwitchDecision(
             NativeInlineVideoSwitchDecision.PrepareNewStream
     }
 
+internal fun nativeInlineVideoPosterVisibility(
+    hasPlayer: Boolean,
+    firstFrameRendered: Boolean,
+): Int =
+    if (shouldRenderVideoPosterOverlay(hasPlayer, firstFrameRendered)) View.VISIBLE else View.GONE
+
 internal class NativeInlineVideoManager(
     private val player: ExoPlayer,
 ) {
@@ -80,6 +86,7 @@ internal class NativeInlineVideoManager(
             firstFrameRendered = true
             activePlayerView?.visibility = View.VISIBLE
             activePlayerView?.alpha = 1f
+            updateActivePosterVisibility()
         }
     }
 
@@ -122,10 +129,10 @@ internal class NativeInlineVideoManager(
         }
 
         val mediaItem = selected.streamUri.toMedia3ItemOrNull() ?: return
+        firstFrameRendered = false
         attachTo(slot, keepPrepared = false)
         activeKey = selected.key
         activeStreamUri = selected.streamUri
-        firstFrameRendered = false
         player.setMediaItem(mediaItem)
         player.prepare()
         player.playWhenReady = true
@@ -160,7 +167,15 @@ internal class NativeInlineVideoManager(
         }
         slot.playerView.visibility = View.VISIBLE
         slot.playerView.alpha = if (keepPrepared && firstFrameRendered) 1f else 0f
-        slot.poster.visibility = View.VISIBLE
+        updateActivePosterVisibility()
+    }
+
+    private fun updateActivePosterVisibility() {
+        activePoster?.visibility =
+            nativeInlineVideoPosterVisibility(
+                hasPlayer = activePlayerView?.player != null,
+                firstFrameRendered = firstFrameRendered,
+            )
     }
 
     private fun clearActive(pause: Boolean) {
@@ -266,7 +281,11 @@ internal fun nativeMediaScaleTypeFor(
     cell: com.screwy.igloo.feed.FeedMediaCellDescriptor,
     isSingle: Boolean = false,
 ): ImageView.ScaleType =
-    if (isSingle && cell.aspectRatioKnown) ImageView.ScaleType.FIT_START else ImageView.ScaleType.CENTER_CROP
+    if (isSingle && cell.aspectRatioKnown && !cell.isVideo) {
+        ImageView.ScaleType.FIT_START
+    } else {
+        ImageView.ScaleType.CENTER_CROP
+    }
 
 internal fun FeedMediaCellModel.artworkUri(): MediaUri {
     when (val item = previewItem) {
