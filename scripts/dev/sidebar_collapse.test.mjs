@@ -53,6 +53,10 @@ test("compact download opens its own popup without expanding the sidebar", () =>
   assert.doesNotMatch(siteBase, /sidebarCompactDownload[\s\S]{0,180}?setSidebarWidth\(SIDEBAR_FULL_MIN_WIDTH/);
 });
 
+test("modal popups retain the document's scrollbar gutter", () => {
+  assert.match(css, /html\s*\{[\s\S]*?scrollbar-gutter:\s*stable;/);
+});
+
 test("the fully hidden mode remains the small-screen drawer", () => {
   assert.match(css, /@media screen and \(max-width:\s*768px\)[\s\S]*?\.sidebar\s*\{[\s\S]*?transform:\s*translateX\(-100%\);/);
   assert.match(css, /\.sidebar-open \.sidebar\s*\{[\s\S]*?transform:\s*translateX\(0\);/);

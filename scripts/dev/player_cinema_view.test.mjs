@@ -124,9 +124,9 @@ test("player controls use a shared square hit area and icon size", () => {
   );
 });
 
-test("cinema's narrow rectangle is optically balanced between volume and fullscreen", () => {
-  assert.match(
+test("cinema icon remains centered in its own control", () => {
+  assert.doesNotMatch(
     css,
-    /#player-cinema-btn svg\s*\{[\s\S]*?transform:\s*translateX\(6px\);/,
+    /#player-cinema-btn svg\s*\{[\s\S]*?transform:\s*translateX/,
   );
 });

@@ -14,6 +14,11 @@
     --transition-normal: 0.3s ease;
 }
 
+html {
+    /* Keep the document width stable while modal scroll locking hides the bar. */
+    scrollbar-gutter: stable;
+}
+
 * {
     margin: 0;
     padding: 0;
@@ -3786,11 +3791,6 @@ select.input.themed-select-native {
     height: var(--player-control-icon-size);
     flex: 0 0 auto;
     display: block;
-}
-
-/* The rectangle has narrower visible bounds than the neighbouring corner icon. */
-.dashboard-media-controller:not(.dashboard-media-controller-mini) #player-cinema-btn svg {
-    transform: translateX(6px);
 }
 
 .dashboard-media-controller:not(.dashboard-media-controller-mini) .mc-custom-btn:focus-visible {
