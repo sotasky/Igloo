@@ -1350,13 +1350,6 @@ templ serverDashboardDatabase(p PageProps, d ServerDashboardData) {
 				@dbRow(L(p, "logs_checked", "Checked"), FmtNum(d.SponsorBlockChecked))
 				@dbRow(L(p, "logs_segments", "Segments"), FmtNum(d.SponsorBlockSegments))
 			</div>
-			<div class="db-sec">
-				<div class="db-sec-title">{ L(p, "logs_analytics", "Analytics") }</div>
-				@dbRow(L(p, "logs_events", "Events"), FmtNum(d.AnalyticsTotal))
-				@dbRow(L(p, "logs_app_starts", "App starts"), FmtNum(d.AnalyticsAppStarts))
-				@dbRow(L(p, "logs_video_opens", "Video opens"), FmtNum(d.AnalyticsVideoOpens))
-				@dbRow(L(p, "logs_syncs", "Syncs"), FmtNum(d.AnalyticsSyncs))
-			</div>
 		</div>
 	</div>
 }

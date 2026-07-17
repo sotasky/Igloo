@@ -182,14 +182,6 @@ func (db *DB) GetDashboardStats() (map[string]any, error) {
 	// Video file size total
 	stats["total_video_bytes"] = totalVideoBytes
 
-	// Analytics summary for server dashboard
-	stats["analytics_summary"] = map[string]int{
-		"total":       queryInt("SELECT COUNT(*) FROM analytics_events"),
-		"app_starts":  queryInt("SELECT COUNT(*) FROM analytics_events WHERE event_type='app_start'"),
-		"video_opens": queryInt("SELECT COUNT(*) FROM analytics_events WHERE event_type='open_video'"),
-		"syncs":       queryInt("SELECT COUNT(*) FROM analytics_events WHERE event_type='sync_success'"),
-	}
-
 	return stats, queryErr
 }
 

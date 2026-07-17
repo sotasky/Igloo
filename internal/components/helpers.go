@@ -962,10 +962,6 @@ type ServerDashboardData struct {
 	PreviewReady         int
 	PreviewPending       int
 	PreviewUnsupported   int
-	AnalyticsTotal       int
-	AnalyticsAppStarts   int
-	AnalyticsVideoOpens  int
-	AnalyticsSyncs       int
 	DownloadQueuePending int
 	DownloadQueueFailed  int
 	SponsorBlockChecked  int

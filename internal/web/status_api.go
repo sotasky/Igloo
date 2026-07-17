@@ -753,12 +753,6 @@ func (s *Server) populateServerDashboardStats(d *components.ServerDashboardData,
 		d.PreviewPending = pq["pending"]
 		d.PreviewUnsupported = pq["unsupported"]
 	}
-	if an, ok := dbStats["analytics_summary"].(map[string]int); ok {
-		d.AnalyticsTotal = an["total"]
-		d.AnalyticsAppStarts = an["app_starts"]
-		d.AnalyticsVideoOpens = an["video_opens"]
-		d.AnalyticsSyncs = an["syncs"]
-	}
 	if dq, ok := dbStats["download_queue"].(map[string]int); ok {
 		d.DownloadQueuePending = dq["pending"]
 		d.DownloadQueueFailed = dq["failed"]
