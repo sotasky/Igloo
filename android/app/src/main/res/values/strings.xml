@@ -53,6 +53,7 @@
     <string name="action_more">More</string>
     <string name="action_mute">Mute</string>
     <string name="action_mute_account_handle">Mute @%1$s</string>
+    <string name="action_mute_account_label">Mute %1$s</string>
     <string name="action_next">Next</string>
     <string name="action_next_slide">Next slide</string>
     <string name="action_ok">OK</string>
@@ -100,6 +101,10 @@
     <string name="action_toggle_fullscreen">Toggle fullscreen</string>
     <string name="action_toggle_sidebar">Toggle sidebar</string>
     <string name="action_translate">Translate</string>
+    <string name="action_turn_off_reposts_for_account">Turn off reposts for %1$s</string>
+    <string name="action_turn_off_retweets_for_account">Turn off retweets for %1$s</string>
+    <string name="action_turn_on_reposts_for_account">Turn on reposts for %1$s</string>
+    <string name="action_turn_on_retweets_for_account">Turn on retweets for %1$s</string>
     <string name="action_unbookmark">Unbookmark</string>
     <string name="action_unfavourite_account">Unfavourite account</string>
     <string name="action_unfollow">Unfollow</string>
@@ -108,6 +113,7 @@
     <string name="action_unmute">Unmute</string>
     <string name="action_unmute_account">Unmute account</string>
     <string name="action_unmute_account_handle">Unmute @%1$s</string>
+    <string name="action_unmute_account_label">Unmute %1$s</string>
     <string name="action_unpin_temp_video">Unpin temp video</string>
     <string name="action_unsave">Unsave</string>
     <string name="action_unstar">Unstar</string>

@@ -229,7 +229,7 @@ func TestGetVideosExcludesNativeStoriesFromNormalMoments(t *testing.T) {
 	}
 }
 
-func TestGetVideosAllMomentsUsesRepostEventForFollowedAuthor(t *testing.T) {
+func TestGetVideosAllMomentsKeepsFollowedAuthorAtCanonicalTime(t *testing.T) {
 	d := openWritableTestDB(t)
 	if err := d.SetSetting("moments_include_reposts_default", "true"); err != nil {
 		t.Fatalf("SetSetting moments_include_reposts_default: %v", err)
@@ -272,20 +272,20 @@ func TestGetVideosAllMomentsUsesRepostEventForFollowedAuthor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetVideos all moments: %v", err)
 	}
-	if got := videoIDs(all); len(got) != 2 || got[0] != "sample_plain_middle_clip" || got[1] != "sample_old_author_reposted_late" {
-		t.Fatalf("all moments ids = %v, want [sample_plain_middle_clip sample_old_author_reposted_late]", got)
+	if got := videoIDs(all); len(got) != 2 || got[0] != "sample_old_author_reposted_late" || got[1] != "sample_plain_middle_clip" {
+		t.Fatalf("all moments ids = %v, want [sample_old_author_reposted_late sample_plain_middle_clip]", got)
 	}
-	reposted := all[1]
-	if !reposted.RepostIntroduced || reposted.EffectiveMomentAtMs != 100 {
-		t.Fatalf("reposted event fields = introduced %v effective %d, want true/100", reposted.RepostIntroduced, reposted.EffectiveMomentAtMs)
+	reposted := all[0]
+	if !reposted.RepostIntroduced || reposted.ReposterChannelID != "tiktok_sample_reposter" || reposted.EffectiveMomentAtMs != 10 {
+		t.Fatalf("reposted event fields = introduced %v reposter %q effective %d, want true/tiktok_sample_reposter/10", reposted.RepostIntroduced, reposted.ReposterChannelID, reposted.EffectiveMomentAtMs)
 	}
 
 	ordinal, ok, err := d.GetShortsOrdinal("sample_old_author_reposted_late", "all")
 	if err != nil {
 		t.Fatalf("GetShortsOrdinal all: %v", err)
 	}
-	if !ok || ordinal != 2 {
-		t.Fatalf("reposted ordinal = %d/%v, want 2/true", ordinal, ok)
+	if !ok || ordinal != 1 {
+		t.Fatalf("reposted ordinal = %d/%v, want 1/true", ordinal, ok)
 	}
 
 	following, err := d.GetVideos(GetVideosOpts{Platform: "shorts", MomentsMode: "following", OrderAsc: true, Limit: 10})

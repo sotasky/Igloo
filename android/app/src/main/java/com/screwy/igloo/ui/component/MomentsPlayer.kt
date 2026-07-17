@@ -75,8 +75,11 @@ data class MomentItem(
     val slideCount: Int = 0,
     val ownerKind: OwnerKind,
     val isAuthorFollowed: Boolean = true,
+    val repostIntroduced: Boolean = false,
+    val reposterChannelId: String? = null,
     val repostAuthorLabel: String? = null,
     val repostOtherCount: Int = 0,
+    val sortAtMs: Long = 0L,
     val storyRingState: StoryRingState = StoryRingState.None,
     val storyFirstVideoId: String = "",
     /**
@@ -197,7 +200,7 @@ fun MomentsPlayer(
     muteDefault: Boolean = true,
     onAutoSwipeChanged: (Boolean) -> Unit = {},
     onMuteChanged: (Boolean) -> Unit = {},
-    onIndexChange: (Int) -> Unit,
+    onIndexChange: (MomentItem) -> Unit,
     onViewEvent: (videoId: String) -> Unit,
     onChannelClick: (channelId: String) -> Unit,
     onBookmarkToggle: (MomentItem) -> Unit,
@@ -205,6 +208,7 @@ fun MomentsPlayer(
     onShare: (MomentItem) -> Unit = {},
     onFollowChannel: (channelId: String) -> Unit = {},
     onUnfollowChannel: (channelId: String) -> Unit = {},
+    onRequestMomentActions: (MomentItem) -> Unit = {},
     onMentionClick: (handle: String) -> Unit,
     onSwipeLeftToChannel: (channelId: String) -> Unit,
     onOpenAllMomentsGrid: (() -> Unit)? = null,
@@ -228,9 +232,11 @@ fun MomentsPlayer(
     val reachability: Reachability = koinInject()
     val logger: Logger = koinInject()
     val drawerController = LocalDrawerController.current
+    // IglooPlayerFactory resolves the bearer token for each media request. Rotating a
+    // token must not throw away a slideshow's current audio position.
     val slideshowAudioPlayer =
-        remember(authTokens.bearerTokenSync()) {
-            buildIglooPlayer(context, authTokens, iglooHostProvider).also {}
+        remember(context, authTokens, iglooHostProvider) {
+            buildIglooPlayer(context, authTokens, iglooHostProvider)
         }
     DisposableEffect(slideshowAudioPlayer) { onDispose { slideshowAudioPlayer.release() } }
 
@@ -242,18 +248,37 @@ fun MomentsPlayer(
     LaunchedEffect(autoSwipeDefault) { autoSwipeState = autoSwipeDefault }
     val effectiveAutoSwipe = forceAutoSwipe || autoSwipeState
 
-    val safeStart = momentPagerStartIndex(items, startVideoId, startIndex)
-    val pagerState = rememberPagerState(initialPage = safeStart, pageCount = { items.size })
+    val initialPage = momentPagerStartIndex(items, startVideoId, startIndex)
+    val pagerState = rememberPagerState(initialPage = initialPage, pageCount = { items.size })
     val currentIndex = pagerState.currentPage.coerceIn(0, items.lastIndex)
+    var lastAppliedStartRequest by remember { mutableStateOf<MomentPagerStartRequest?>(null) }
+    var settledVideoId by remember { mutableStateOf(items[initialPage].videoId) }
     val storyMode = exitOnEnd
     val storyProgressWindow =
         remember(storyMode, currentIndex, items) {
             if (storyMode) storyProgressWindow(items, currentIndex)
             else StoryProgressWindow(index = 0, count = 0)
         }
-    LaunchedEffect(safeStart, items.size) {
-        if (safeStart in items.indices && pagerState.currentPage != safeStart) {
-            pagerState.scrollToPage(safeStart)
+    // The pager is keyed by video ID below, so it keeps the current video anchored as Room
+    // inserts, removes, or reorders rows. A start ID is a one-shot navigation request, not a
+    // reason to move an already-playing video whenever its index changes.
+    LaunchedEffect(items, startVideoId, activeTab) {
+        val startRequest = momentPagerStartRequest(activeTab, startVideoId)
+        if (startRequest == null) {
+            lastAppliedStartRequest = null
+            return@LaunchedEffect
+        }
+        val requestedPage =
+            pendingMomentPagerStartIndex(
+                items = items,
+                startRequest = startRequest,
+                lastAppliedStartRequest = lastAppliedStartRequest,
+            )
+        if (requestedPage != null) {
+            lastAppliedStartRequest = startRequest
+            if (pagerState.currentPage != requestedPage) {
+                pagerState.scrollToPage(requestedPage)
+            }
         }
     }
 
@@ -277,19 +302,20 @@ fun MomentsPlayer(
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    // Drive view-event + onIndexChange from the pager's selected page. The
-    // platform pager owns drag/fling physics; the shared video player follows
-    // the current page so swipes do not build and release a player per page.
+    // Drive view-event + onIndexChange from the pager's settled page. The
+    // platform pager owns drag/fling physics; waiting for a settled video ID
+    // prevents Room reindexing from becoming a cursor change or a rewind.
     var lastFiredVideoId by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(pagerState, items) {
-        snapshotFlow { pagerState.currentPage.coerceIn(0, items.lastIndex) }
+        snapshotFlow { pagerState.settledPage.coerceIn(0, items.lastIndex) }
             .distinctUntilChanged()
             .collect { page ->
                 if (page !in items.indices) return@collect
 
                 val videoId = items[page].videoId
+                settledVideoId = videoId
                 if (lastFiredVideoId != videoId) {
-                    onIndexChange(page)
+                    onIndexChange(items[page])
                     onViewEvent(videoId)
                     lastFiredVideoId = videoId
                 }
@@ -421,6 +447,7 @@ fun MomentsPlayer(
                 isActive =
                     lifecycleStarted &&
                         shouldPlayMomentPage(page == currentIndex, pagerState.isScrollInProgress),
+                settledVideoId = settledVideoId,
                 pagerScrolling = pagerState.isScrollInProgress,
                 shouldPrepare = abs(page - currentIndex) <= MOMENTS_PREPARE_RADIUS,
                 onAutoAdvance = { advanceTick++ },
@@ -432,6 +459,7 @@ fun MomentsPlayer(
                 onShare = onShare,
                 onFollowChannel = onFollowChannel,
                 onRequestUnfollowChannel = { pendingUnfollowItem = it },
+                onRequestMomentActions = onRequestMomentActions,
                 onSwipeLeftToChannel = onSwipeLeftToChannel,
                 onSwipeRightFromEdge = drawerController::open,
                 logger = logger,
@@ -520,4 +548,30 @@ internal fun momentPagerStartIndex(
         items.indexOfFirst { it.videoId == requested }.takeIf { it >= 0 }?.let { return it }
     }
     return fallbackIndex.coerceIn(0, items.lastIndex)
+}
+
+/**
+ * Returns a page only for a start-video request that has not already been applied.
+ *
+ * Pager item keys preserve the current item when the list changes. Re-applying an already
+ * consumed request would override that preservation and turn a Room reorder into navigation.
+ */
+internal data class MomentPagerStartRequest(
+    val scope: String?,
+    val videoId: String,
+)
+
+internal fun momentPagerStartRequest(
+    scope: String?,
+    startVideoId: String?,
+): MomentPagerStartRequest? =
+    startVideoId?.takeIf(String::isNotBlank)?.let { MomentPagerStartRequest(scope, it) }
+
+internal fun pendingMomentPagerStartIndex(
+    items: List<MomentItem>,
+    startRequest: MomentPagerStartRequest,
+    lastAppliedStartRequest: MomentPagerStartRequest?,
+): Int? {
+    if (startRequest == lastAppliedStartRequest) return null
+    return items.indexOfFirst { it.videoId == startRequest.videoId }.takeIf { it >= 0 }
 }

@@ -209,6 +209,15 @@ class ChannelViewModel(
         .map { rows -> rows.mapTo(linkedSetOf()) { it.channelId } }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), emptySet())
 
+    /** Per-account state for the profile overflow menu. */
+    val repostsEnabled: StateFlow<Boolean> = db.channelSettingDao().getByIdFlow(channelId)
+        .map { setting -> setting?.includeReposts?.let { it != 0 } ?: true }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), true)
+
+    val isChannelMuted: StateFlow<Boolean> = db.mutedChannelDao().getByIdFlow(channelId)
+        .map { it != null }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), false)
+
     private val _pendingBookmark = MutableStateFlow<BookmarkTarget?>(null)
     val pendingBookmark: StateFlow<BookmarkTarget?> = _pendingBookmark.asStateFlow()
 
@@ -241,6 +250,25 @@ class ChannelViewModel(
         val action = if (newValue) OutboxKind.Action.Set else OutboxKind.Action.Clear
         viewModelScope.launch {
             outboxWriter.enqueue(OutboxKind.Star(channelId = channelId, action = action))
+        }
+    }
+
+    fun setRepostsEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            outboxWriter.enqueue(
+                OutboxKind.ChannelSetting(
+                    channelId = channelId,
+                    settingField = "include_reposts",
+                    value = if (enabled) 1 else 0,
+                )
+            )
+        }
+    }
+
+    fun setChannelMuted(muted: Boolean) {
+        val action = if (muted) OutboxKind.Action.Set else OutboxKind.Action.Clear
+        viewModelScope.launch {
+            outboxWriter.enqueue(OutboxKind.Mute(channelId = channelId, action = action))
         }
     }
 

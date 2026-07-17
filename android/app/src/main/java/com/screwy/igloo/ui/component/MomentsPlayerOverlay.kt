@@ -10,6 +10,7 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.PressInteraction
 import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.foundation.text.ClickableText
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
@@ -294,6 +295,7 @@ internal fun CollapsedDescription(
     expanded: Boolean,
     onMentionClick: (String) -> Unit,
     onChannelClick: (String) -> Unit,
+    onReposterChannelClick: (String) -> Unit,
     onExpandedChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -325,17 +327,10 @@ internal fun CollapsedDescription(
                 ),
             verticalArrangement = Arrangement.spacedBy(3.dp),
         ) {
-            momentRepostLabel(item)?.let { label ->
-                Text(
-                    text = label,
-                    style =
-                        MaterialTheme.typography.labelSmall.copy(
-                            fontWeight = FontWeight.SemiBold,
-                            shadow = CaptionShadow,
-                        ),
-                    color = Color.White,
-                )
-            }
+            MomentRepostAttribution(
+                item = item,
+                onReposterChannelClick = onReposterChannelClick,
+            )
             val timestamp = localizedRelativeTime(item.publishedAt)
             if (item.publishedAt > 0L && timestamp.isNotEmpty()) {
                 Text(
@@ -385,6 +380,56 @@ internal fun CollapsedDescription(
         }
     }
 }
+
+@Composable
+private fun MomentRepostAttribution(
+    item: MomentItem,
+    onReposterChannelClick: (String) -> Unit,
+) {
+    val label = momentRepostLabel(item) ?: return
+    val author = item.repostAuthorLabel?.takeIf { it.isNotBlank() } ?: return
+    val channelId = item.reposterChannelId?.takeIf { it.isNotBlank() }
+    val style =
+        MaterialTheme.typography.labelSmall.copy(
+            fontWeight = FontWeight.SemiBold,
+            shadow = CaptionShadow,
+            color = Color.White,
+        )
+    val authorRange = repostAuthorRange(label, author)
+    if (channelId == null || authorRange == null) {
+        Text(text = label, style = style)
+        return
+    }
+    val annotated =
+        remember(label, authorRange, channelId) {
+            androidx.compose.ui.text.buildAnnotatedString {
+                append(label)
+                addStringAnnotation(
+                    tag = MomentReposterAnnotationTag,
+                    annotation = channelId,
+                    start = authorRange.first,
+                    end = authorRange.last + 1,
+                )
+            }
+        }
+    ClickableText(
+        text = annotated,
+        style = style,
+        onClick = { offset ->
+            annotated
+                .getStringAnnotations(MomentReposterAnnotationTag, offset, offset)
+                .firstOrNull()
+                ?.let { onReposterChannelClick(it.item) }
+        },
+    )
+}
+
+internal fun repostAuthorRange(label: String, author: String): IntRange? {
+    val start = label.indexOf(author)
+    return if (start < 0) null else start until (start + author.length)
+}
+
+private const val MomentReposterAnnotationTag = "moment-reposter"
 
 private val MomentCaptionWhitespace = Regex("\\s+")
 private val MomentCollapsedCaptionBottomPadding = 4.dp

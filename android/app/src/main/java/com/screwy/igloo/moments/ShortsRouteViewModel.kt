@@ -138,6 +138,8 @@ class ShortsRouteViewModel(
 
     private val _pendingBookmark = MutableStateFlow<BookmarkTarget?>(null)
     val pendingBookmark: StateFlow<BookmarkTarget?> = _pendingBookmark.asStateFlow()
+    private val _pendingMomentActions = MutableStateFlow<PlayerMomentItem?>(null)
+    val pendingMomentActions: StateFlow<PlayerMomentItem?> = _pendingMomentActions.asStateFlow()
 
     val bookmarkCategories: StateFlow<List<BookmarkCategoryDisplay>> =
         db.bookmarkCategoryDao().allFlow()
@@ -152,12 +154,16 @@ class ShortsRouteViewModel(
         viewModelScope.launch { prefs.setMuteDefault(enabled) }
     }
 
-    fun onIndexChange(index: Int) {
-        val item = items.value.getOrNull(index) ?: return
+    fun onIndexChange(item: PlayerMomentItem) {
         activeVideoId.value = item.videoId
         if (!playlistSpec.recordsMomentsCursor) return
         viewModelScope.launch {
-            outboxWriter.recordMomentsCursor(item.videoId, 0L, momentsCursorScope)
+            outboxWriter.recordMomentsCursor(
+                item.videoId,
+                0L,
+                momentsCursorScope,
+                item.sortAtMs.takeIf { it > 0L } ?: item.publishedAt,
+            )
         }
     }
 
@@ -265,6 +271,38 @@ class ShortsRouteViewModel(
         }
     }
 
+    fun requestMomentActions(item: PlayerMomentItem) {
+        if (!item.repostIntroduced || item.reposterChannelId.isNullOrBlank()) return
+        _pendingMomentActions.value = item
+    }
+
+    fun dismissMomentActions() {
+        _pendingMomentActions.value = null
+    }
+
+    fun setRepostsEnabled(channelId: String, enabled: Boolean) {
+        viewModelScope.launch {
+            outboxWriter.enqueue(
+                OutboxKind.ChannelSetting(
+                    channelId = channelId,
+                    settingField = "include_reposts",
+                    value = if (enabled) 1L else 0L,
+                )
+            )
+        }
+    }
+
+    fun setChannelMuted(channelId: String, muted: Boolean) {
+        viewModelScope.launch {
+            outboxWriter.enqueue(
+                OutboxKind.Mute(
+                    channelId = channelId,
+                    action = if (muted) OutboxKind.Action.Set else OutboxKind.Action.Clear,
+                )
+            )
+        }
+    }
+
     @OptIn(ExperimentalCoroutinesApi::class)
     private fun playlistFlow() = when (playlistSpec.type) {
         ShortsPlaylistType.Moments -> db.momentReadDao()
@@ -332,8 +370,11 @@ class ShortsRouteViewModel(
 			ownerKind = ownerKindFromAssetOwnerKind(video.ownerKind),
             publishedAt = video.publishedAt,
             isAuthorFollowed = row.channelIsFollowed == 1,
+            repostIntroduced = row.repostIntroduced == 1,
+            reposterChannelId = row.reposterChannelId?.takeIf { it.isNotBlank() },
             repostAuthorLabel = repost?.authorLabel,
             repostOtherCount = repost?.otherCount ?: 0,
+            sortAtMs = row.effectiveMomentAtMs.takeIf { it > 0L } ?: video.publishedAt,
         )
     }
 

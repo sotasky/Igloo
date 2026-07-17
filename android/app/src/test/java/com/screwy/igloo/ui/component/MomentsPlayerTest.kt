@@ -73,12 +73,150 @@ class MomentsPlayerTest {
     }
 
     @Test
-    fun moments_resume_follows_video_identity_when_rows_are_inserted_before_it() {
+    fun moment_pager_start_uses_video_identity_before_fallback_index() {
         val initial = listOf(storyItem("older", "tiktok_a"), storyItem("active", "tiktok_b"))
         val expanded = listOf(storyItem("backfill", "tiktok_c")) + initial
 
         assertEquals(1, momentPagerStartIndex(initial, "active", fallbackIndex = 1))
         assertEquals(2, momentPagerStartIndex(expanded, "active", fallbackIndex = 1))
+    }
+
+    @Test
+    fun consumed_start_request_does_not_reposition_a_reordered_active_video() {
+        val initial = listOf(storyItem("older", "tiktok_a"), storyItem("active", "tiktok_b"))
+        val reordered = listOf(storyItem("backfill", "tiktok_c")) + initial
+        val request = momentPagerStartRequest(scope = "all", startVideoId = "active")!!
+
+        assertNull(
+            pendingMomentPagerStartIndex(
+                items = reordered,
+                startRequest = request,
+                lastAppliedStartRequest = request,
+            )
+        )
+    }
+
+    @Test
+    fun new_start_request_selects_the_requested_video_once() {
+        val items = listOf(storyItem("older", "tiktok_a"), storyItem("active", "tiktok_b"))
+        val request = momentPagerStartRequest(scope = "all", startVideoId = "active")!!
+
+        assertEquals(
+            1,
+            pendingMomentPagerStartIndex(
+                items = items,
+                startRequest = request,
+                lastAppliedStartRequest =
+                    momentPagerStartRequest(scope = "all", startVideoId = "older"),
+            )
+        )
+    }
+
+    @Test
+    fun start_request_reapplies_after_an_absent_request_or_playlist_scope_change() {
+        val items = listOf(storyItem("older", "tiktok_a"), storyItem("active", "tiktok_b"))
+        val allRequest = momentPagerStartRequest(scope = "all", startVideoId = "active")!!
+        val followingRequest =
+            momentPagerStartRequest(scope = "following", startVideoId = "active")!!
+
+        assertNull(momentPagerStartRequest(scope = "following", startVideoId = null))
+        assertEquals(
+            1,
+            pendingMomentPagerStartIndex(
+                items = items,
+                startRequest = allRequest,
+                lastAppliedStartRequest = null,
+            )
+        )
+        assertEquals(
+            1,
+            pendingMomentPagerStartIndex(
+                items = items,
+                startRequest = allRequest,
+                lastAppliedStartRequest = followingRequest,
+            )
+        )
+    }
+
+    @Test
+    fun repost_actions_are_available_only_for_a_repost_and_mute_only_for_an_unfollowed_author() {
+        val direct = storyItem("direct", "tiktok_author")
+        val repostFromUnfollowedAuthor =
+            direct.copy(
+                repostIntroduced = true,
+                reposterChannelId = "tiktok_sample_reposter",
+                isAuthorFollowed = false,
+            )
+        val repostFromFollowedAuthor = repostFromUnfollowedAuthor.copy(isAuthorFollowed = true)
+
+        assertEquals(
+            MomentActionAvailability(canToggleReposts = false, canToggleMute = false),
+            momentActionAvailability(direct),
+        )
+        assertEquals(
+            MomentActionAvailability(canToggleReposts = true, canToggleMute = true),
+            momentActionAvailability(repostFromUnfollowedAuthor),
+        )
+        assertEquals(
+            MomentActionAvailability(canToggleReposts = true, canToggleMute = false),
+            momentActionAvailability(repostFromFollowedAuthor),
+        )
+    }
+
+    @Test
+    fun moment_action_labels_name_the_reposter_and_original_author() {
+        val item =
+            storyItem("sample_moment", "tiktok_sample_author").copy(
+                authorDisplayName = "Account B",
+                authorHandle = "@sample_author",
+                repostIntroduced = true,
+                reposterChannelId = "tiktok_sample_reposter",
+                repostAuthorLabel = "Account A",
+            )
+
+        assertEquals(
+            MomentActionAccountLabels(reposter = "Account A", author = "@sample_author"),
+            momentActionAccountLabels(item),
+        )
+    }
+
+    @Test
+    fun moment_action_labels_keep_platform_handles_and_fall_back_to_display_names() {
+        val tiktok =
+            storyItem("sample_tiktok_moment", "tiktok_sample_author").copy(
+                authorDisplayName = "Account B",
+                authorHandle = "",
+                reposterChannelId = "tiktok_sample_reposter",
+            )
+        val instagram =
+            storyItem("sample_instagram_moment", "instagram_sample_author").copy(
+                authorHandle = "@sample_author",
+                reposterChannelId = "instagram_sample_reposter",
+            )
+        val x =
+            storyItem("sample_x_moment", "twitter_sample_author").copy(
+                authorHandle = "sample_author",
+                reposterChannelId = "twitter_sample_reposter",
+            )
+
+        assertEquals(
+            MomentActionAccountLabels(reposter = "@sample_reposter", author = "Account B"),
+            momentActionAccountLabels(tiktok),
+        )
+        assertEquals(
+            MomentActionAccountLabels(reposter = "@sample_reposter", author = "@sample_author"),
+            momentActionAccountLabels(instagram),
+        )
+        assertEquals(
+            MomentActionAccountLabels(reposter = "@sample_reposter", author = "@sample_author"),
+            momentActionAccountLabels(x),
+        )
+    }
+
+    @Test
+    fun repost_author_click_range_covers_only_the_reposter_name() {
+        assertEquals(0..7, repostAuthorRange("Sample A reposted", "Sample A"))
+        assertNull(repostAuthorRange("Sample A reposted", "Sample B"))
     }
 
     @Test
@@ -773,11 +911,22 @@ class MomentsPlayerTest {
     }
 
     @Test
-    fun inactive_prepared_moment_rewinds_only_matching_loaded_media() {
+    fun inactive_prepared_moment_rewinds_only_after_a_different_video_settles() {
+        assertFalse(
+            shouldRewindInactiveMomentPlayback(
+                currentMediaId = "demo",
+                expectedVideoId = "demo",
+                settledVideoId = "demo",
+                loadedVideoId = "demo",
+                mediaItemCount = 1,
+                currentPositionMs = 1_250L,
+            )
+        )
         assertTrue(
             shouldRewindInactiveMomentPlayback(
                 currentMediaId = "demo",
                 expectedVideoId = "demo",
+                settledVideoId = "next",
                 loadedVideoId = "demo",
                 mediaItemCount = 1,
                 currentPositionMs = 1_250L,
@@ -787,6 +936,7 @@ class MomentsPlayerTest {
             shouldRewindInactiveMomentPlayback(
                 currentMediaId = "demo",
                 expectedVideoId = "demo",
+                settledVideoId = "next",
                 loadedVideoId = "demo",
                 mediaItemCount = 1,
                 currentPositionMs = 0L,
@@ -796,6 +946,7 @@ class MomentsPlayerTest {
             shouldRewindInactiveMomentPlayback(
                 currentMediaId = "other",
                 expectedVideoId = "demo",
+                settledVideoId = "next",
                 loadedVideoId = "demo",
                 mediaItemCount = 1,
                 currentPositionMs = 1_250L,
@@ -805,6 +956,7 @@ class MomentsPlayerTest {
             shouldRewindInactiveMomentPlayback(
                 currentMediaId = "demo",
                 expectedVideoId = "demo",
+                settledVideoId = "next",
                 loadedVideoId = "other",
                 mediaItemCount = 1,
                 currentPositionMs = 1_250L,

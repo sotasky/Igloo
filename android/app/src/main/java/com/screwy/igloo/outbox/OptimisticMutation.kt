@@ -57,6 +57,8 @@ internal suspend fun applyOptimisticMutation(db: IglooDatabase, row: OutboxEntit
         OutboxKind.CODE_MUTE ->
             if (payload.text("action") == "set") {
                 db.mutedChannelDao().upsert(MutedChannelEntity(itemId, updatedAt))
+            } else if (payload.text("action") == "clear") {
+                db.mutedChannelDao().delete(itemId)
             }
         OutboxKind.CODE_CHANNEL_SETTING -> {
             val field = row.field ?: payload.text("field").orEmpty()

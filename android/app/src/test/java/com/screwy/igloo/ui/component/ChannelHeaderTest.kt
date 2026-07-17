@@ -4,6 +4,7 @@ import com.screwy.igloo.data.entity.ChannelDisplay
 import com.screwy.igloo.data.entity.ChannelEntity
 import com.screwy.igloo.data.entity.ChannelProfileEntity
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -166,6 +167,68 @@ class ChannelHeaderTest {
             )
         assertEquals("YouTube", youtube.platformLabel)
         assertEquals(listOf("25 Follows", "12.3K Subs"), youtube.stats)
+    }
+
+    @Test
+    fun channelProfileOverflowControls_limits_reposts_and_mute_to_the_requested_accounts() {
+        val followed =
+            channelProfileOverflowControls(
+                platform = Platform.TikTok,
+                isFollowed = true,
+                repostsEnabled = true,
+                isMuted = false,
+            )
+        assertTrue(followed.canToggleReposts)
+        assertFalse(followed.canToggleMute)
+
+        val unfollowed =
+            channelProfileOverflowControls(
+                platform = Platform.Instagram,
+                isFollowed = false,
+                repostsEnabled = true,
+                isMuted = false,
+            )
+        assertFalse(unfollowed.canToggleReposts)
+        assertTrue(unfollowed.canToggleMute)
+
+        val mutedThenFollowed =
+            channelProfileOverflowControls(
+                platform = Platform.TikTok,
+                isFollowed = true,
+                repostsEnabled = false,
+                isMuted = true,
+            )
+        assertTrue(mutedThenFollowed.canToggleReposts)
+        assertTrue(mutedThenFollowed.canToggleMute)
+        assertFalse(mutedThenFollowed.repostsEnabled)
+
+        val unsupported =
+            channelProfileOverflowControls(
+                platform = Platform.YouTube,
+                isFollowed = false,
+                repostsEnabled = true,
+                isMuted = false,
+            )
+        assertFalse(unsupported.canToggleReposts)
+        assertFalse(unsupported.canToggleMute)
+    }
+
+    @Test
+    fun profileOverflowLabels_prefer_display_name_and_handle() {
+        val header =
+            ChannelProfileHeaderUiModel(
+                channelId = "tiktok_sample_creator",
+                platform = Platform.TikTok,
+                displayName = "Sample Creator",
+                handle = "sample_creator",
+                platformLabel = "TikTok",
+                openLabel = "TikTok",
+                platformUrl = null,
+                protectedText = "Locked",
+            )
+
+        assertEquals("Sample Creator", profileOverflowAccountLabel(header))
+        assertEquals("@sample_creator", profileOverflowMuteLabel(header))
     }
 
     private fun channel(

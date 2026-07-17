@@ -17,6 +17,7 @@ import androidx.navigation.NavController
 import com.screwy.igloo.data.PreferencesRepo
 import com.screwy.igloo.ui.UiStateSwitch
 import com.screwy.igloo.ui.component.BookmarkSheet
+import com.screwy.igloo.ui.component.MomentActionSheet
 import com.screwy.igloo.ui.component.MomentsPlayer
 import com.screwy.igloo.ui.component.sharePlainText
 import com.screwy.igloo.ui.nav.IglooNavigationSource
@@ -46,6 +47,7 @@ fun ShortsRoute(
     val autoplayEnabled by vm.autoplayEnabled.collectAsStateWithLifecycle()
     val muted by vm.muted.collectAsStateWithLifecycle()
     val pendingBookmark by vm.pendingBookmark.collectAsStateWithLifecycle()
+    val pendingMomentActions by vm.pendingMomentActions.collectAsStateWithLifecycle()
     val categories by vm.bookmarkCategories.collectAsStateWithLifecycle()
     val currentVideoId by vm.currentVideoId.collectAsStateWithLifecycle()
     val storyChannels by vm.storyChannels.collectAsStateWithLifecycle()
@@ -71,6 +73,7 @@ fun ShortsRoute(
             MomentsPlayer(
                 items = items,
                 startIndex = startIndex,
+                startVideoId = currentVideoId,
                 autoSwipeDefault = autoplayEnabled,
                 muteDefault = muted,
                 onAutoSwipeChanged = vm::setAutoplayEnabled,
@@ -92,6 +95,7 @@ fun ShortsRoute(
                 onRequestBookmarkSheet = vm::requestBookmarkSheet,
                 onFollowChannel = vm::followChannel,
                 onUnfollowChannel = vm::unfollowChannel,
+                onRequestMomentActions = vm::requestMomentActions,
                 onShare = { item ->
                     sharePlainText(context, item.canonicalUrl, useEmbedFriendlyShareLinks)
                 },
@@ -158,6 +162,14 @@ fun ShortsRoute(
             onRemove = vm::removePendingBookmark,
             onDismiss = vm::dismissBookmarkSheet,
             onCreateCategory = vm::createCategory,
+        )
+    }
+    pendingMomentActions?.let { item ->
+        MomentActionSheet(
+            item = item,
+            onDismissRequest = vm::dismissMomentActions,
+            onRepostsEnabledChanged = vm::setRepostsEnabled,
+            onChannelMutedChanged = vm::setChannelMuted,
         )
     }
 }

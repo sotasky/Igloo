@@ -16,7 +16,8 @@ import (
 type CommandRunner struct{}
 
 type CommandOptions struct {
-	Timeout time.Duration
+	Timeout    time.Duration
+	WorkingDir string
 }
 
 type CommandResult struct {
@@ -55,12 +56,12 @@ func (r CommandRunner) Run(ctx context.Context, tool string, args []string, opts
 	defer cancel()
 
 	var stdout, stderr bytes.Buffer
-	err := runCommand(runCtx, tool, args, &stdout, &stderr)
+	err := runCommand(runCtx, tool, args, &stdout, &stderr, opts.WorkingDir)
 	if executableNotFound(err) {
 		toolenv.ApplyCommonToolPaths()
 		stdout.Reset()
 		stderr.Reset()
-		err = runCommand(runCtx, tool, args, &stdout, &stderr)
+		err = runCommand(runCtx, tool, args, &stdout, &stderr, opts.WorkingDir)
 	}
 	ended := time.Now()
 	exitCode := 0
@@ -122,8 +123,9 @@ func (r CommandRunner) RunBuilt(ctx context.Context, cmd *exec.Cmd) CommandResul
 	}
 }
 
-func runCommand(ctx context.Context, tool string, args []string, stdout, stderr *bytes.Buffer) error {
+func runCommand(ctx context.Context, tool string, args []string, stdout, stderr *bytes.Buffer, workingDir string) error {
 	cmd := exec.CommandContext(ctx, tool, args...)
+	cmd.Dir = workingDir
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 	return cmd.Run()

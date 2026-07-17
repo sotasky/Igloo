@@ -237,8 +237,11 @@ class MomentsViewModel(
                             ownerKind = ownerKindFromAssetOwnerKind(video.ownerKind),
                             publishedAt = video.publishedAt,
                             isAuthorFollowed = row.channelIsFollowed == 1,
+                            repostIntroduced = row.repostIntroduced == 1,
+                            reposterChannelId = row.reposterChannelId?.takeIf { it.isNotBlank() },
                             repostAuthorLabel = repost?.authorLabel,
                             repostOtherCount = repost?.otherCount ?: 0,
+                            sortAtMs = momentSortAtMs(row),
                             storyRingState = storyStatus.storyRingState(),
                             storyFirstVideoId = storyStatus?.startVideoId().orEmpty(),
                         )
@@ -377,6 +380,8 @@ class MomentsViewModel(
     /** Non-null when the bookmark sheet is open for the carried target. */
     private val _pendingBookmark = MutableStateFlow<BookmarkTarget?>(null)
     val pendingBookmark: StateFlow<BookmarkTarget?> = _pendingBookmark.asStateFlow()
+    private val _pendingMomentActions = MutableStateFlow<PlayerMomentItem?>(null)
+    val pendingMomentActions: StateFlow<PlayerMomentItem?> = _pendingMomentActions.asStateFlow()
 
     /** Category chip rows — same stream FeedViewModel uses. */
     val bookmarkCategories: StateFlow<List<BookmarkCategoryDisplay>> =
@@ -386,17 +391,13 @@ class MomentsViewModel(
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), emptyList())
 
     /** Settled page changed — record the cursor so moments resume at the selected short. */
-    fun onIndexChange(idx: Int) {
+    fun onIndexChange(item: PlayerMomentItem) {
         viewModelScope.launch {
-            val rows = playerRowsRaw.value ?: return@launch
-            if (idx !in rows.indices) return@launch
-            val row = rows[idx]
-            val videoId = row.video.videoId
             val scope = activeTab.value
-            val sortAtMs = momentSortAtMs(row)
+            val sortAtMs = item.sortAtMs.takeIf { it > 0L } ?: item.publishedAt
             activeCursor.value =
-                ActiveCursor(videoId = videoId, sortAtMs = sortAtMs, scope = scope)
-            outboxWriter.recordMomentsCursor(videoId, 0L, scope, sortAtMs)
+                ActiveCursor(videoId = item.videoId, sortAtMs = sortAtMs, scope = scope)
+            outboxWriter.recordMomentsCursor(item.videoId, 0L, scope, sortAtMs)
         }
     }
 
@@ -528,6 +529,38 @@ class MomentsViewModel(
         viewModelScope.launch {
             outboxWriter.enqueue(
                 OutboxKind.Follow(channelId = channelId, action = OutboxKind.Action.Clear)
+            )
+        }
+    }
+
+    fun requestMomentActions(item: PlayerMomentItem) {
+        if (!item.repostIntroduced || item.reposterChannelId.isNullOrBlank()) return
+        _pendingMomentActions.value = item
+    }
+
+    fun dismissMomentActions() {
+        _pendingMomentActions.value = null
+    }
+
+    fun setRepostsEnabled(channelId: String, enabled: Boolean) {
+        viewModelScope.launch {
+            outboxWriter.enqueue(
+                OutboxKind.ChannelSetting(
+                    channelId = channelId,
+                    settingField = "include_reposts",
+                    value = if (enabled) 1L else 0L,
+                )
+            )
+        }
+    }
+
+    fun setChannelMuted(channelId: String, muted: Boolean) {
+        viewModelScope.launch {
+            outboxWriter.enqueue(
+                OutboxKind.Mute(
+                    channelId = channelId,
+                    action = if (muted) OutboxKind.Action.Set else OutboxKind.Action.Clear,
+                )
             )
         }
     }

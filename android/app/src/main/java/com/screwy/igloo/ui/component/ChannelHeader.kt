@@ -109,6 +109,30 @@ internal data class ChannelProfileHeaderUiModel(
     val linkColorRole: ChannelProfileHeaderLinkColorRole = ChannelProfileHeaderLinkColorRole.Primary,
 )
 
+internal data class ChannelProfileOverflowControls(
+    val canToggleReposts: Boolean = false,
+    val repostsEnabled: Boolean = true,
+    val canToggleMute: Boolean = false,
+    val isMuted: Boolean = false,
+)
+
+/** Reposts belong to followed accounts; mute is available for other accounts. */
+internal fun channelProfileOverflowControls(
+    platform: Platform?,
+    isFollowed: Boolean,
+    repostsEnabled: Boolean,
+    isMuted: Boolean,
+): ChannelProfileOverflowControls {
+    val supportsReposts = platform == Platform.TikTok || platform == Platform.Instagram
+    return ChannelProfileOverflowControls(
+        canToggleReposts = supportsReposts && isFollowed,
+        repostsEnabled = repostsEnabled,
+        // A previously muted account can always be unmuted, including after a follow.
+        canToggleMute = supportsReposts && (!isFollowed || isMuted),
+        isMuted = isMuted,
+    )
+}
+
 @Composable
 internal fun ComposeChannelHeader(
     header: ChannelProfileHeaderUiModel,
@@ -119,6 +143,9 @@ internal fun ComposeChannelHeader(
     onStoryClick: (channelId: String, firstVideoId: String) -> Unit = { _, _ -> },
     onMentionClick: (handle: String) -> Unit,
     onOpenUrl: (url: String) -> Unit,
+    overflowControls: ChannelProfileOverflowControls = ChannelProfileOverflowControls(),
+    onRepostsEnabledChange: (Boolean) -> Unit = {},
+    onMutedChange: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val colors: IglooColors = MaterialTheme.iglooColors
@@ -138,6 +165,8 @@ internal fun ComposeChannelHeader(
     val storyTarget = header.storyFirstVideoId.takeIf {
         it.isNotBlank() && header.storyRingState != StoryRingState.None
     }
+    val profileAccountLabel = profileOverflowAccountLabel(header)
+    val profileAccountMuteLabel = profileOverflowMuteLabel(header)
 
     Column(
         modifier = modifier
@@ -223,6 +252,12 @@ internal fun ComposeChannelHeader(
                         onOpenInPlatform = onOpenInPlatform,
                         canOpenInPlatform = !header.platformUrl.isNullOrBlank(),
                         openLabel = header.openLabel,
+                        platform = header.platform,
+                        accountLabel = profileAccountLabel,
+                        accountMuteLabel = profileAccountMuteLabel,
+                        overflowControls = overflowControls,
+                        onRepostsEnabledChange = onRepostsEnabledChange,
+                        onMutedChange = onMutedChange,
                     )
                 }
             } else {
@@ -253,6 +288,12 @@ internal fun ComposeChannelHeader(
                         onOpenInPlatform = onOpenInPlatform,
                         canOpenInPlatform = !header.platformUrl.isNullOrBlank(),
                         openLabel = header.openLabel,
+                        platform = header.platform,
+                        accountLabel = profileAccountLabel,
+                        accountMuteLabel = profileAccountMuteLabel,
+                        overflowControls = overflowControls,
+                        onRepostsEnabledChange = onRepostsEnabledChange,
+                        onMutedChange = onMutedChange,
                     )
                 }
             }
@@ -388,6 +429,12 @@ private fun HeaderActionRow(
     onOpenInPlatform: () -> Unit,
     canOpenInPlatform: Boolean,
     openLabel: String,
+    platform: Platform?,
+    accountLabel: String,
+    accountMuteLabel: String,
+    overflowControls: ChannelProfileOverflowControls,
+    onRepostsEnabledChange: (Boolean) -> Unit,
+    onMutedChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Row(
@@ -444,6 +491,45 @@ private fun HeaderActionRow(
                         onFollowToggle(!isFollowed)
                     },
                 )
+                if (overflowControls.canToggleReposts) {
+                    DropdownMenuItem(
+                        text = {
+                            Text(
+                                stringResource(
+                                    profileRepostsToggleLabelRes(
+                                        platform = platform,
+                                        repostsEnabled = overflowControls.repostsEnabled,
+                                    ),
+                                    accountLabel,
+                                ),
+                            )
+                        },
+                        onClick = {
+                            onMenuOpenChange(false)
+                            onRepostsEnabledChange(!overflowControls.repostsEnabled)
+                        },
+                    )
+                }
+                if (overflowControls.canToggleMute) {
+                    DropdownMenuItem(
+                        text = {
+                            Text(
+                                stringResource(
+                                    if (overflowControls.isMuted) {
+                                        R.string.action_unmute_account_label
+                                    } else {
+                                        R.string.action_mute_account_label
+                                    },
+                                    accountMuteLabel,
+                                ),
+                            )
+                        },
+                        onClick = {
+                            onMenuOpenChange(false)
+                            onMutedChange(!overflowControls.isMuted)
+                        },
+                    )
+                }
                 DropdownMenuItem(
                     text = { Text(stringResource(R.string.action_refresh_channel)) },
                     onClick = {
@@ -471,6 +557,34 @@ private fun HeaderActionRow(
         }
     }
 }
+
+internal fun profileOverflowAccountLabel(header: ChannelProfileHeaderUiModel): String =
+    header.displayName.trim().takeIf { it.isNotBlank() }
+        ?: header.handle.trim().takeIf { it.isNotBlank() }
+        ?: header.channelId
+
+internal fun profileOverflowMuteLabel(header: ChannelProfileHeaderUiModel): String {
+    val handle = normalizeHandle(header.handle)
+    return if (handle.isNotBlank()) "@$handle" else profileOverflowAccountLabel(header)
+}
+
+private fun profileRepostsToggleLabelRes(platform: Platform?, repostsEnabled: Boolean): Int =
+    when (platform) {
+        Platform.Twitter -> {
+            if (repostsEnabled) {
+                R.string.action_turn_off_retweets_for_account
+            } else {
+                R.string.action_turn_on_retweets_for_account
+            }
+        }
+        else -> {
+            if (repostsEnabled) {
+                R.string.action_turn_off_reposts_for_account
+            } else {
+                R.string.action_turn_on_reposts_for_account
+            }
+        }
+    }
 
 @Composable
 private fun VerifiedBadge(

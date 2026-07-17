@@ -549,6 +549,9 @@ interface MutedChannelDao {
     @Query("SELECT * FROM muted_channels WHERE channel_id = :channelId")
     suspend fun getById(channelId: String): MutedChannelEntity?
 
+    @Query("SELECT * FROM muted_channels WHERE channel_id = :channelId")
+    fun getByIdFlow(channelId: String): Flow<MutedChannelEntity?>
+
     @Query("SELECT * FROM muted_channels ORDER BY channel_id ASC")
     fun allFlow(): Flow<List<MutedChannelEntity>>
 

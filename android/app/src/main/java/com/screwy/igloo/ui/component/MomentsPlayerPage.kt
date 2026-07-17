@@ -138,12 +138,14 @@ private fun replaceMomentPlayerMediaItem(
 internal fun shouldRewindInactiveMomentPlayback(
     currentMediaId: String?,
     expectedVideoId: String,
+    settledVideoId: String?,
     loadedVideoId: String?,
     mediaItemCount: Int,
     currentPositionMs: Long,
 ): Boolean =
     mediaItemCount > 0 &&
         currentMediaId == expectedVideoId &&
+        settledVideoId != expectedVideoId &&
         loadedVideoId == expectedVideoId &&
         currentPositionMs > 0L
 
@@ -158,6 +160,7 @@ internal fun MomentPage(
     onAutoSwipeToggle: () -> Unit,
     showAutoSwipeControl: Boolean,
     isActive: Boolean,
+    settledVideoId: String?,
     pagerScrolling: Boolean,
     shouldPrepare: Boolean,
     onAutoAdvance: () -> Unit,
@@ -169,6 +172,7 @@ internal fun MomentPage(
     onShare: (MomentItem) -> Unit,
     onFollowChannel: (channelId: String) -> Unit,
     onRequestUnfollowChannel: (MomentItem) -> Unit,
+    onRequestMomentActions: (MomentItem) -> Unit,
     onSwipeLeftToChannel: (channelId: String) -> Unit,
     onSwipeRightFromEdge: () -> Unit,
     logger: Logger,
@@ -203,6 +207,7 @@ internal fun MomentPage(
     val isBookmarked = bookmarkRow != null
     val bookmarkItem =
         if (isBookmarked == item.isBookmarked) item else item.copy(isBookmarked = isBookmarked)
+    val actionAvailability = momentActionAvailability(item)
 
     val pageModifier =
         if (storyMode) {
@@ -254,10 +259,17 @@ internal fun MomentPage(
                     thumbnailUri = thumbnailUri,
                     muted = muted,
                     isActive = isActive,
+                    settledVideoId = settledVideoId,
                     pagerScrolling = pagerScrolling,
                     shouldPrepare = shouldPrepare,
                     autoSwipe = autoSwipe,
                     onAutoAdvance = onAutoAdvance,
+                    onLongPress =
+                        if (actionAvailability.canToggleReposts) {
+                            { onRequestMomentActions(item) }
+                        } else {
+                            null
+                        },
                     logger = logger,
                     storyMode = storyMode,
                     sharedVideoPlayer = sharedVideoPlayer,
@@ -265,6 +277,17 @@ internal fun MomentPage(
                     modifier = Modifier.fillMaxSize(),
                 )
             }
+        }
+
+        if (
+            !storyMode &&
+                mediaMode != MomentMediaMode.Video &&
+                actionAvailability.canToggleReposts
+        ) {
+            MomentRepostLongPressLayer(
+                onLongPress = { onRequestMomentActions(item) },
+                modifier = Modifier.fillMaxSize(),
+            )
         }
 
         if (storyMode) {
@@ -359,6 +382,20 @@ internal fun MomentPage(
             )
         }
 
+        // Keep the drawer's left-edge gesture below the caption. Otherwise its
+        // full-height hit target wins over the repost author's profile link.
+        if (!storyMode) {
+            MomentDrawerGestureHandle(
+                onOpenDrawer = onSwipeRightFromEdge,
+                onLongPress =
+                    if (actionAvailability.canToggleReposts) {
+                        { onRequestMomentActions(item) }
+                    } else {
+                        null
+                    },
+            )
+        }
+
         // Bottom overlay — timestamp + description. Tapping overflowing text
         // only changes the description line limit; the caption stays anchored.
         val captionBaseBottomPadding = momentCaptionBaseBottomPaddingDp(mediaMode).dp
@@ -373,13 +410,11 @@ internal fun MomentPage(
             expanded = expanded,
             onMentionClick = onMentionClick,
             onChannelClick = onChannelClick,
+            onReposterChannelClick = onChannelClick,
             onExpandedChange = { expanded = it },
             modifier = Modifier.align(Alignment.BottomStart).padding(bottom = captionBottomPadding),
         )
 
-        if (!storyMode) {
-            MomentDrawerGestureHandle(onOpenDrawer = onSwipeRightFromEdge)
-        }
     }
 }
 
@@ -395,16 +430,28 @@ private fun StoryTapAdvanceLayer(onTap: () -> Unit, modifier: Modifier = Modifie
 }
 
 @Composable
+private fun MomentRepostLongPressLayer(onLongPress: () -> Unit, modifier: Modifier = Modifier) {
+    Box(
+        modifier =
+            modifier.pointerInput(onLongPress) {
+                detectTapGestures(onLongPress = { onLongPress() })
+            }
+    )
+}
+
+@Composable
 private fun BoxScope.MomentVideoLayer(
     pageIndex: Int,
     item: MomentItem,
     thumbnailUri: MediaUri,
     muted: Boolean,
     isActive: Boolean,
+    settledVideoId: String?,
     pagerScrolling: Boolean,
     shouldPrepare: Boolean,
     autoSwipe: Boolean,
     onAutoAdvance: () -> Unit,
+    onLongPress: (() -> Unit)?,
     logger: Logger,
     storyMode: Boolean,
     sharedVideoPlayer: ExoPlayer? = null,
@@ -437,7 +484,7 @@ private fun BoxScope.MomentVideoLayer(
     val playerIsShared = sharedVideoPlayer != null
     val player =
         sharedVideoPlayer
-            ?: remember(item.videoId, authTokens.bearerTokenSync()) {
+            ?: remember(item.videoId, context, authTokens, iglooHostProvider) {
                 buildIglooPlayer(context, authTokens, iglooHostProvider).apply {
                     repeatMode = Player.REPEAT_MODE_OFF
                 }
@@ -493,7 +540,14 @@ private fun BoxScope.MomentVideoLayer(
 
     LaunchedEffect(player, muted) { player.volume = if (muted) 0f else 1f }
     if (!playerIsShared || isActive) {
-        LaunchedEffect(player, isActive, shouldPreparePlayer, loadedKey, pagerScrolling) {
+        LaunchedEffect(
+            player,
+            isActive,
+            settledVideoId,
+            shouldPreparePlayer,
+            loadedKey,
+            pagerScrolling,
+        ) {
             if (isActive && shouldPreparePlayer && loadedKey != null) {
                 hasBeenActive = true
 
@@ -509,6 +563,7 @@ private fun BoxScope.MomentVideoLayer(
                         shouldRewindInactiveMomentPlayback(
                             currentMediaId = player.currentMediaItem?.mediaId,
                             expectedVideoId = item.videoId,
+                            settledVideoId = settledVideoId,
                             loadedVideoId = momentStreamLoadKeyVideoId(loadedKey),
                             mediaItemCount = player.mediaItemCount,
                             currentPositionMs = player.currentPosition,
@@ -596,8 +651,23 @@ private fun BoxScope.MomentVideoLayer(
                 modifier = Modifier.zIndex(momentVideoFallbackZIndex()),
             )
         }
+        val momentActionLongPress = onLongPress
         if (!storyMode && isActive && playbackStreamUri !is MediaUri.Missing && !remoteOffline) {
-            MomentVideoGestureLayer(player = player, modifier = Modifier.fillMaxSize())
+            MomentVideoGestureLayer(
+                player = player,
+                onLongPress = momentActionLongPress,
+                modifier = Modifier.fillMaxSize(),
+            )
+        } else if (
+            shouldUseMomentActionFallbackLongPress(storyMode, momentActionLongPress != null) &&
+                momentActionLongPress != null
+        ) {
+            // Repost account actions do not depend on a stream being ready. Keep them
+            // available while media is loading or unavailable offline.
+            MomentRepostLongPressLayer(
+                onLongPress = momentActionLongPress,
+                modifier = Modifier.fillMaxSize(),
+            )
         }
         MomentBottomScrim(modifier = Modifier.align(Alignment.BottomCenter))
         if (
@@ -639,11 +709,15 @@ private fun MomentBottomScrim(modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun BoxScope.MomentVideoGestureLayer(player: ExoPlayer, modifier: Modifier = Modifier) {
+private fun BoxScope.MomentVideoGestureLayer(
+    player: ExoPlayer,
+    onLongPress: (() -> Unit)?,
+    modifier: Modifier = Modifier,
+) {
     var seekIndicator by remember(player) { mutableStateOf<SeekIndicator?>(null) }
     Box(
         modifier =
-            modifier.pointerInput(player) {
+            modifier.pointerInput(player, onLongPress) {
                 detectTapGestures(
                     onTap = {
                         seekIndicator = null
@@ -656,6 +730,10 @@ private fun BoxScope.MomentVideoGestureLayer(player: ExoPlayer, modifier: Modifi
                         val target = (player.currentPosition + deltaMs).coerceIn(0L, duration)
                         player.seekTo(target)
                         seekIndicator = if (isLeft) SeekIndicator.Back else SeekIndicator.Forward
+                    },
+                    onLongPress = {
+                        seekIndicator = null
+                        onLongPress?.invoke()
                     },
                 )
             }
@@ -686,15 +764,37 @@ private fun BoxScope.MomentVideoGestureLayer(player: ExoPlayer, modifier: Modifi
     }
 }
 
+internal fun shouldUseMomentActionFallbackLongPress(
+    storyMode: Boolean,
+    hasMomentActions: Boolean,
+): Boolean =
+    !storyMode && hasMomentActions
+
 @Composable
-private fun BoxScope.MomentDrawerGestureHandle(onOpenDrawer: () -> Unit) {
+internal fun BoxScope.MomentDrawerGestureHandle(
+    onOpenDrawer: () -> Unit,
+    onLongPress: (() -> Unit)? = null,
+    modifier: Modifier = Modifier,
+) {
     val thresholdPx = with(LocalDensity.current) { 56.dp.toPx() }
+    val longPressModifier =
+        if (onLongPress == null) {
+            Modifier
+        } else {
+            Modifier.pointerInput(onLongPress) {
+                detectTapGestures(onLongPress = { onLongPress() })
+            }
+        }
     Box(
         modifier =
             Modifier.align(Alignment.CenterStart)
                 .fillMaxHeight()
                 .width(96.dp)
                 .systemGestureExclusion()
+                .then(modifier)
+                // The edge owns both gestures. A horizontal drag consumes the long-press
+                // detector, while a stationary press opens the Moment actions.
+                .then(longPressModifier)
                 .pointerInput(onOpenDrawer, thresholdPx) {
                     var totalDragX = 0f
                     var opened = false

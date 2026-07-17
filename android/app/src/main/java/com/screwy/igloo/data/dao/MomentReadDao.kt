@@ -29,13 +29,16 @@ interface MomentReadDao {
                    COUNT(*) OVER (PARTITION BY vrs.video_id) AS repost_count,
                    ROW_NUMBER() OVER (
                        PARTITION BY vrs.video_id
-                       ORDER BY COALESCE(NULLIF(vrs.reposted_at_ms, 0), vrs.first_seen_at_ms) DESC,
+                       ORDER BY CASE WHEN vrs.reposted_at_ms > 0 THEN 0 ELSE 1 END,
+                                COALESCE(NULLIF(vrs.reposted_at_ms, 0), vrs.first_seen_at_ms) DESC,
                                 vrs.reposter_channel_id ASC
                    ) AS rn
             FROM video_repost_sources vrs
             INNER JOIN channel_follows rcf ON rcf.channel_id = vrs.reposter_channel_id
             LEFT JOIN channel_settings rcs ON rcs.channel_id = vrs.reposter_channel_id
+            LEFT JOIN muted_channels rmc ON rmc.channel_id = vrs.reposter_channel_id
             WHERE COALESCE(rcs.include_reposts, 1) != 0
+              AND rmc.channel_id IS NULL
         ),
         repost_heads AS (
             SELECT * FROM allowed_reposts WHERE rn = 1
@@ -52,7 +55,7 @@ interface MomentReadDao {
                COALESCE(NULLIF(rp.display_name, ''), '@' || LTRIM(rp.handle, '@'), '') AS repost_author_label,
                COALESCE(rh.repost_count, 0)                        AS repost_count,
                CASE WHEN rh.video_id IS NOT NULL THEN 1 ELSE 0 END AS repost_introduced,
-               CASE WHEN rh.video_id IS NOT NULL
+               CASE WHEN rh.video_id IS NOT NULL AND cf.channel_id IS NULL
                     THEN COALESCE(NULLIF(rh.reposted_at_ms, 0), NULLIF(rh.first_seen_at_ms, 0), v.published_at)
                     ELSE COALESCE(v.published_at, 0)
                 END AS effective_moment_at_ms
@@ -65,6 +68,7 @@ interface MomentReadDao {
         WHERE (v.channel_id LIKE 'tiktok_%' OR v.channel_id LIKE 'instagram_%')
           AND COALESCE(v.source_kind, '') != 'story'
           AND (cf.channel_id IS NOT NULL OR rh.video_id IS NOT NULL)
+          AND NOT EXISTS (SELECT 1 FROM muted_channels mc WHERE mc.channel_id = v.channel_id)
         ORDER BY effective_moment_at_ms ASC, v.video_id ASC
         """
     )
@@ -92,6 +96,7 @@ interface MomentReadDao {
         INNER JOIN channel_follows cf ON cf.channel_id = v.channel_id
         WHERE (v.channel_id LIKE 'tiktok_%' OR v.channel_id LIKE 'instagram_%')
           AND COALESCE(v.source_kind, '') != 'story'
+          AND NOT EXISTS (SELECT 1 FROM muted_channels mc WHERE mc.channel_id = v.channel_id)
         ORDER BY v.published_at ASC, v.video_id ASC
         """
     )
@@ -112,13 +117,16 @@ interface MomentReadDao {
                    COUNT(*) OVER (PARTITION BY vrs.video_id) AS repost_count,
                    ROW_NUMBER() OVER (
                        PARTITION BY vrs.video_id
-                       ORDER BY COALESCE(NULLIF(vrs.reposted_at_ms, 0), vrs.first_seen_at_ms) DESC,
+                       ORDER BY CASE WHEN vrs.reposted_at_ms > 0 THEN 0 ELSE 1 END,
+                                COALESCE(NULLIF(vrs.reposted_at_ms, 0), vrs.first_seen_at_ms) DESC,
                                 vrs.reposter_channel_id ASC
                    ) AS rn
             FROM video_repost_sources vrs
             INNER JOIN channel_follows rcf ON rcf.channel_id = vrs.reposter_channel_id
             LEFT JOIN channel_settings rcs ON rcs.channel_id = vrs.reposter_channel_id
+            LEFT JOIN muted_channels rmc ON rmc.channel_id = vrs.reposter_channel_id
             WHERE COALESCE(rcs.include_reposts, 1) != 0
+              AND rmc.channel_id IS NULL
         ),
         repost_heads AS (
             SELECT * FROM allowed_reposts WHERE rn = 1
@@ -135,7 +143,7 @@ interface MomentReadDao {
                COALESCE(NULLIF(rp.display_name, ''), '@' || LTRIM(rp.handle, '@'), '') AS repost_author_label,
                COALESCE(rh.repost_count, 0)                      AS repost_count,
                CASE WHEN rh.video_id IS NOT NULL THEN 1 ELSE 0 END AS repost_introduced,
-               CASE WHEN rh.video_id IS NOT NULL
+               CASE WHEN rh.video_id IS NOT NULL AND cf.channel_id IS NULL
                     THEN COALESCE(NULLIF(rh.reposted_at_ms, 0), NULLIF(rh.first_seen_at_ms, 0), v.published_at)
                     ELSE COALESCE(v.published_at, 0)
                 END AS effective_moment_at_ms
@@ -147,6 +155,7 @@ interface MomentReadDao {
         WHERE (v.channel_id LIKE 'tiktok_%' OR v.channel_id LIKE 'instagram_%')
           AND COALESCE(v.source_kind, '') != 'story'
           AND (cf.channel_id IS NOT NULL OR rh.video_id IS NOT NULL)
+          AND NOT EXISTS (SELECT 1 FROM muted_channels mc WHERE mc.channel_id = v.channel_id)
         ORDER BY effective_moment_at_ms ASC, v.video_id ASC
         """
     )
@@ -173,6 +182,7 @@ interface MomentReadDao {
         INNER JOIN channel_follows cf ON cf.channel_id = v.channel_id
         WHERE (v.channel_id LIKE 'tiktok_%' OR v.channel_id LIKE 'instagram_%')
           AND COALESCE(v.source_kind, '') != 'story'
+          AND NOT EXISTS (SELECT 1 FROM muted_channels mc WHERE mc.channel_id = v.channel_id)
         ORDER BY v.published_at ASC, v.video_id ASC
         """
     )
@@ -180,9 +190,36 @@ interface MomentReadDao {
 
     @Query(
         """
-        SELECT COALESCE(published_at, 0)
-        FROM videos
-        WHERE video_id = :videoId
+        WITH allowed_reposts AS (
+            SELECT vrs.*,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY vrs.video_id
+                       ORDER BY CASE WHEN vrs.reposted_at_ms > 0 THEN 0 ELSE 1 END,
+                                COALESCE(NULLIF(vrs.reposted_at_ms, 0), vrs.first_seen_at_ms) DESC,
+                                vrs.reposter_channel_id ASC
+                   ) AS rn
+            FROM video_repost_sources vrs
+            INNER JOIN channel_follows rcf ON rcf.channel_id = vrs.reposter_channel_id
+            LEFT JOIN channel_settings rcs ON rcs.channel_id = vrs.reposter_channel_id
+            LEFT JOIN muted_channels rmc ON rmc.channel_id = vrs.reposter_channel_id
+            WHERE COALESCE(rcs.include_reposts, 1) != 0
+              AND rmc.channel_id IS NULL
+        ),
+        repost_heads AS (
+            SELECT * FROM allowed_reposts WHERE rn = 1
+        )
+        SELECT CASE WHEN rh.video_id IS NOT NULL AND cf.channel_id IS NULL
+                    THEN COALESCE(NULLIF(rh.reposted_at_ms, 0), NULLIF(rh.first_seen_at_ms, 0), v.published_at)
+                    ELSE COALESCE(v.published_at, 0)
+                END
+        FROM videos v
+        LEFT JOIN channel_follows cf ON cf.channel_id = v.channel_id
+        LEFT JOIN repost_heads rh ON rh.video_id = v.video_id
+        WHERE v.video_id = :videoId
+          AND (v.channel_id LIKE 'tiktok_%' OR v.channel_id LIKE 'instagram_%')
+          AND COALESCE(v.source_kind, '') != 'story'
+          AND (cf.channel_id IS NOT NULL OR rh.video_id IS NOT NULL)
+          AND NOT EXISTS (SELECT 1 FROM muted_channels mc WHERE mc.channel_id = v.channel_id)
         LIMIT 1
         """
     )
@@ -203,6 +240,7 @@ interface MomentReadDao {
             WHERE COALESCE(c.platform, '') IN ('tiktok', 'instagram')
               AND COALESCE(v.source_kind, '') = 'story'
               AND (:cutoffMs <= 0 OR COALESCE(v.published_at, 0) >= :cutoffMs)
+              AND NOT EXISTS (SELECT 1 FROM muted_channels mc WHERE mc.channel_id = v.channel_id)
         )
         SELECT a.channel_id,
                COALESCE(NULLIF(cp.display_name, ''), NULLIF(c.name, ''), NULLIF(cp.handle, ''), a.channel_id) AS channel_name,
@@ -247,9 +285,11 @@ interface MomentReadDao {
             INNER JOIN videos v ON v.video_id = vrs.video_id
             INNER JOIN channel_follows rcf ON rcf.channel_id = vrs.reposter_channel_id
             LEFT JOIN channel_settings rcs ON rcs.channel_id = vrs.reposter_channel_id
+            LEFT JOIN muted_channels rmc ON rmc.channel_id = vrs.reposter_channel_id
             WHERE COALESCE(v.channel_id, '') != ''
               AND COALESCE(v.source_kind, '') != 'story'
               AND COALESCE(rcs.include_reposts, 1) != 0
+              AND rmc.channel_id IS NULL
               AND (
                 :cutoffMs <= 0 OR
                 COALESCE(NULLIF(vrs.updated_at_ms, 0), NULLIF(vrs.first_seen_at_ms, 0), NULLIF(vrs.reposted_at_ms, 0), COALESCE(v.published_at, 0)) >= :cutoffMs
@@ -267,6 +307,7 @@ interface MomentReadDao {
             WHERE COALESCE(c.platform, '') IN ('tiktok', 'instagram')
               AND COALESCE(sv.source_kind, '') = 'story'
               AND (:cutoffMs <= 0 OR COALESCE(sv.published_at, 0) >= :cutoffMs)
+              AND NOT EXISTS (SELECT 1 FROM muted_channels mc WHERE mc.channel_id = sv.channel_id)
               AND (
                 cf.channel_id IS NOT NULL
                 OR EXISTS (SELECT 1 FROM eligible_repost_channels erc WHERE erc.channel_id = sv.channel_id)
@@ -379,6 +420,7 @@ interface MomentReadDao {
               AND COALESCE(v.source_kind, '') = 'story'
               AND (:cutoffMs <= 0 OR COALESCE(v.published_at, 0) >= :cutoffMs)
               AND v.channel_id = :channelId
+              AND NOT EXISTS (SELECT 1 FROM muted_channels mc WHERE mc.channel_id = v.channel_id)
         ),
         channel_order AS (
             SELECT a.channel_id,
@@ -430,9 +472,11 @@ interface MomentReadDao {
             INNER JOIN videos v ON v.video_id = vrs.video_id
             INNER JOIN channel_follows rcf ON rcf.channel_id = vrs.reposter_channel_id
             LEFT JOIN channel_settings rcs ON rcs.channel_id = vrs.reposter_channel_id
+            LEFT JOIN muted_channels rmc ON rmc.channel_id = vrs.reposter_channel_id
             WHERE COALESCE(v.channel_id, '') != ''
               AND COALESCE(v.source_kind, '') != 'story'
               AND COALESCE(rcs.include_reposts, 1) != 0
+              AND rmc.channel_id IS NULL
               AND (
                 :cutoffMs <= 0 OR
                 COALESCE(NULLIF(vrs.updated_at_ms, 0), NULLIF(vrs.first_seen_at_ms, 0), NULLIF(vrs.reposted_at_ms, 0), COALESCE(v.published_at, 0)) >= :cutoffMs
@@ -450,6 +494,7 @@ interface MomentReadDao {
             WHERE COALESCE(c.platform, '') IN ('tiktok', 'instagram')
               AND COALESCE(v.source_kind, '') = 'story'
               AND (:cutoffMs <= 0 OR COALESCE(v.published_at, 0) >= :cutoffMs)
+              AND NOT EXISTS (SELECT 1 FROM muted_channels mc WHERE mc.channel_id = v.channel_id)
               AND (
                 cf.channel_id IS NOT NULL
                 OR EXISTS (SELECT 1 FROM eligible_repost_channels erc WHERE erc.channel_id = v.channel_id)

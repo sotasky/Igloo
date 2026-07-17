@@ -1,6 +1,9 @@
 package download
 
 import (
+	"context"
+	"os"
+	"path/filepath"
 	"slices"
 	"testing"
 )
@@ -15,6 +18,39 @@ func TestTikTokRepostArgsUseExtractorRange(t *testing.T) {
 	}
 	if !slices.Contains(args, "--cookies") || !slices.Contains(args, "/tmp/cookies.txt") {
 		t.Fatalf("args should preserve cookies: %#v", args)
+	}
+	if !slices.Contains(args, "--write-pages") {
+		t.Fatalf("args should capture the raw repost response: %#v", args)
+	}
+}
+
+func TestTikTokRepostsCaptureEventTimeFromRawList(t *testing.T) {
+	bin := t.TempDir()
+	writeExecutable(t, filepath.Join(bin, "gallery-dl"), `#!/bin/sh
+case "$PWD" in
+  */igloo-tiktok-reposts-*) ;;
+  *) exit 41 ;;
+esac
+case " $* " in
+  *" --write-pages "*) ;;
+  *) exit 42 ;;
+esac
+echo '{"itemList":[{"id":9000000000000000000,"repost_time":1710003600}]}' > "$PWD/01_https___www.tiktok.com_api_repost_item_list_.txt"
+echo '[[2,{"id":"9000000000000000000","url":"https://www.tiktok.com/@sample_author/video/9000000000000000000","author":{"uniqueId":"sample_author"},"createTime":"1710000000"}]]'
+`)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	refs, err := (&GalleryDLWrapper{Runner: CommandRunner{}}).Reposts(
+		context.Background(), "sample_reposter", 1, "",
+	)
+	if err != nil {
+		t.Fatalf("Reposts: %v", err)
+	}
+	if len(refs) != 1 {
+		t.Fatalf("refs = %#v", refs)
+	}
+	if refs[0].RepostedAtMs != 1710003600000 {
+		t.Fatalf("RepostedAtMs = %d, want raw repost event time", refs[0].RepostedAtMs)
 	}
 }
 

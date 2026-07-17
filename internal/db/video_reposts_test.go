@@ -1,6 +1,7 @@
 package db
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/screwys/igloo/internal/model"
@@ -78,7 +79,7 @@ func TestVideoRepostSourcesReplaceAndMomentsTabs(t *testing.T) {
 	}
 }
 
-func TestMomentsRepostOrderingUsesActualTimestampOrCanonicalPublishTime(t *testing.T) {
+func TestMomentsRepostOrderingUsesActualTimestampOrFirstSeenTime(t *testing.T) {
 	d := openWritableTestDB(t)
 
 	for _, stmt := range []string{
@@ -132,16 +133,23 @@ func TestMomentsRepostOrderingUsesActualTimestampOrCanonicalPublishTime(t *testi
 	if err != nil {
 		t.Fatalf("GetVideos all: %v", err)
 	}
-	if got := videoIDs(all); len(got) != 3 || got[0] != "sample_repost_older" || got[1] != "sample_orig_newer" || got[2] != "sample_repost_dated" {
-		t.Fatalf("all ids = %v, want [sample_repost_older sample_orig_newer sample_repost_dated]", got)
+	if got := videoIDs(all); len(got) != 3 || got[0] != "sample_orig_newer" || got[1] != "sample_repost_older" || got[2] != "sample_repost_dated" {
+		t.Fatalf("all ids = %v, want [sample_orig_newer sample_repost_older sample_repost_dated]", got)
 	}
-	if all[0].EffectiveMomentAtMs != 1000 {
-		t.Fatalf("unknown-date repost effective time = %d, want canonical published_at 1000", all[0].EffectiveMomentAtMs)
+	if all[1].EffectiveMomentAtMs != 5000 {
+		t.Fatalf("unknown-date repost effective time = %d, want discovery time 5000", all[1].EffectiveMomentAtMs)
 	}
 	if all[2].EffectiveMomentAtMs != 6000 || all[2].ReposterChannelID != "tiktok_sample_source" {
 		t.Fatalf("dated repost = %+v, want actual repost timestamp and dated source", all[2])
 	}
-	for i, videoID := range []string{"sample_repost_older", "sample_orig_newer", "sample_repost_dated"} {
+	count, err := d.GetVideoCount(GetVideosOpts{Platform: "shorts", MomentsMode: "all"})
+	if err != nil {
+		t.Fatalf("GetVideoCount all: %v", err)
+	}
+	if count != len(all) {
+		t.Fatalf("GetVideoCount all = %d, want %d", count, len(all))
+	}
+	for i, videoID := range []string{"sample_orig_newer", "sample_repost_older", "sample_repost_dated"} {
 		ordinal, visible, err := d.GetShortsOrdinal(videoID, "all")
 		if err != nil {
 			t.Fatalf("GetShortsOrdinal %s: %v", videoID, err)
@@ -149,6 +157,151 @@ func TestMomentsRepostOrderingUsesActualTimestampOrCanonicalPublishTime(t *testi
 		if !visible || ordinal != i+1 {
 			t.Fatalf("GetShortsOrdinal %s = %d, %v; want %d, true", videoID, ordinal, visible, i+1)
 		}
+	}
+	for videoID, wantSortAt := range map[string]int64{
+		"sample_orig_newer":   2000,
+		"sample_repost_older": 5000,
+		"sample_repost_dated": 6000,
+	} {
+		sortAt, visible, err := d.GetShortsVisibleSortAt(videoID, "all")
+		if err != nil {
+			t.Fatalf("GetShortsVisibleSortAt %s: %v", videoID, err)
+		}
+		if !visible || sortAt != wantSortAt {
+			t.Fatalf("GetShortsVisibleSortAt %s = %d, %v; want %d, true", videoID, sortAt, visible, wantSortAt)
+		}
+	}
+}
+
+func TestMomentsVisibilitySkipsMutedOwnersAndRepostSources(t *testing.T) {
+	d := openWritableTestDB(t)
+	if err := d.SetSetting("moments_include_reposts_default", "true"); err != nil {
+		t.Fatalf("SetSetting moments_include_reposts_default: %v", err)
+	}
+
+	for _, stmt := range []string{
+		`INSERT INTO channels (channel_id, source_id, name, platform) VALUES
+			('tiktok_sample_source_direct_open', 'sample_source_direct_open', 'Direct Open', 'tiktok'),
+			('tiktok_sample_muted_direct', 'sample_muted_direct', 'Direct Muted', 'tiktok'),
+			('tiktok_sample_source_owner', 'sample_source_owner', 'Source Owner', 'tiktok'),
+			('tiktok_sample_muted_reposter', 'sample_muted_reposter', 'Muted Reposter', 'tiktok'),
+			('tiktok_sample_reposter_open', 'sample_reposter_open', 'Open Reposter', 'tiktok'),
+			('tiktok_sample_muted_source_owner', 'sample_muted_source_owner', 'Muted Source Owner', 'tiktok')`,
+		`INSERT INTO channel_follows (channel_id, followed_at) VALUES
+			('tiktok_sample_source_direct_open', 1),
+			('tiktok_sample_muted_direct', 1),
+			('tiktok_sample_muted_reposter', 1),
+			('tiktok_sample_reposter_open', 1)`,
+		`INSERT INTO muted_channels (channel_id, muted_at) VALUES
+			('tiktok_sample_muted_direct', 1),
+			('tiktok_sample_muted_reposter', 1),
+			('tiktok_sample_muted_source_owner', 1)`,
+		`INSERT INTO videos (video_id, channel_id, owner_kind, title, duration, published_at) VALUES
+			('sample_video_direct_open', 'tiktok_sample_source_direct_open', 'tiktok_video', 'Direct Open', 0, 100),
+			('sample_video_direct_muted', 'tiktok_sample_muted_direct', 'tiktok_video', 'Direct Muted', 0, 200),
+			('sample_video_source_only_muted', 'tiktok_sample_source_owner', 'tiktok_video', 'Muted Source', 0, 300),
+			('sample_video_source_open', 'tiktok_sample_source_owner', 'tiktok_video', 'Open Source', 0, 400),
+			('sample_video_shared_sources', 'tiktok_sample_source_owner', 'tiktok_video', 'Shared Sources', 0, 500),
+			('sample_video_muted_owner_reposted', 'tiktok_sample_muted_source_owner', 'tiktok_video', 'Muted Owner', 0, 600)`,
+	} {
+		if err := d.ExecRaw(stmt); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+	}
+	if _, err := d.UpsertVideoRepostSources([]model.VideoRepostSource{
+		{
+			VideoID: "sample_video_source_only_muted", ReposterChannelID: "tiktok_sample_muted_reposter",
+			ReposterHandle: "sample_muted_reposter", RepostedAtMs: 650, FirstSeenAtMs: 650,
+		},
+		{
+			VideoID: "sample_video_source_open", ReposterChannelID: "tiktok_sample_reposter_open",
+			ReposterHandle: "sample_reposter_open", RepostedAtMs: 700, FirstSeenAtMs: 700,
+		},
+		{
+			VideoID: "sample_video_shared_sources", ReposterChannelID: "tiktok_sample_muted_reposter",
+			ReposterHandle: "sample_muted_reposter", RepostedAtMs: 800, FirstSeenAtMs: 800,
+		},
+		{
+			VideoID: "sample_video_shared_sources", ReposterChannelID: "tiktok_sample_reposter_open",
+			ReposterHandle: "sample_reposter_open", RepostedAtMs: 900, FirstSeenAtMs: 900,
+		},
+		{
+			VideoID: "sample_video_muted_owner_reposted", ReposterChannelID: "tiktok_sample_reposter_open",
+			ReposterHandle: "sample_reposter_open", RepostedAtMs: 950, FirstSeenAtMs: 950,
+		},
+	}); err != nil {
+		t.Fatalf("UpsertVideoRepostSources: %v", err)
+	}
+
+	all, err := d.GetVideos(GetVideosOpts{Platform: "shorts", MomentsMode: "all", OrderAsc: true, Limit: 10})
+	if err != nil {
+		t.Fatalf("GetVideos all: %v", err)
+	}
+	if got, want := videoIDs(all), []string{"sample_video_direct_open", "sample_video_source_open", "sample_video_shared_sources"}; !slices.Equal(got, want) {
+		t.Fatalf("all ids = %v, want %v", got, want)
+	}
+	if all[2].ReposterChannelID != "tiktok_sample_reposter_open" || all[2].RepostCount != 1 {
+		t.Fatalf("shared source presentation = %+v, want unmuted source only", all[2])
+	}
+
+	count, err := d.GetVideoCount(GetVideosOpts{Platform: "shorts", MomentsMode: "all"})
+	if err != nil {
+		t.Fatalf("GetVideoCount all: %v", err)
+	}
+	if count != len(all) {
+		t.Fatalf("GetVideoCount all = %d, want %d", count, len(all))
+	}
+
+	for index, videoID := range []string{"sample_video_direct_open", "sample_video_source_open", "sample_video_shared_sources"} {
+		ordinal, visible, err := d.GetShortsOrdinal(videoID, "all")
+		if err != nil {
+			t.Fatalf("GetShortsOrdinal %s: %v", videoID, err)
+		}
+		if !visible || ordinal != index+1 {
+			t.Fatalf("GetShortsOrdinal %s = %d, %v; want %d, true", videoID, ordinal, visible, index+1)
+		}
+	}
+	for _, videoID := range []string{
+		"sample_video_direct_muted",
+		"sample_video_source_only_muted",
+		"sample_video_muted_owner_reposted",
+	} {
+		ordinal, visible, err := d.GetShortsOrdinal(videoID, "all")
+		if err != nil {
+			t.Fatalf("GetShortsOrdinal hidden %s: %v", videoID, err)
+		}
+		if visible || ordinal != 0 {
+			t.Fatalf("GetShortsOrdinal hidden %s = %d, %v; want 0, false", videoID, ordinal, visible)
+		}
+		if _, visible, err := d.GetShortsVisibleSortAt(videoID, "all"); err != nil || visible {
+			t.Fatalf("GetShortsVisibleSortAt hidden %s = visible %v, err %v; want false, nil", videoID, visible, err)
+		}
+	}
+
+	targetID, ordinal, found, err := d.GetNearestShortsCursorTarget("sample_video_source_only_muted", "all", 750)
+	if err != nil {
+		t.Fatalf("GetNearestShortsCursorTarget: %v", err)
+	}
+	if !found || targetID != "sample_video_shared_sources" || ordinal != 3 {
+		t.Fatalf("nearest muted-source target = %q, %d, %v; want sample_video_shared_sources, 3, true", targetID, ordinal, found)
+	}
+
+	following, err := d.GetVideos(GetVideosOpts{Platform: "shorts", MomentsMode: "following", OrderAsc: true, Limit: 10})
+	if err != nil {
+		t.Fatalf("GetVideos following: %v", err)
+	}
+	if got, want := videoIDs(following), []string{"sample_video_direct_open"}; !slices.Equal(got, want) {
+		t.Fatalf("following ids = %v, want %v", got, want)
+	}
+	followingCount, err := d.GetVideoCount(GetVideosOpts{Platform: "shorts", MomentsMode: "following"})
+	if err != nil {
+		t.Fatalf("GetVideoCount following: %v", err)
+	}
+	if followingCount != 1 {
+		t.Fatalf("GetVideoCount following = %d, want 1", followingCount)
+	}
+	if ordinal, visible, err := d.GetShortsOrdinal("sample_video_direct_muted", "following"); err != nil || visible || ordinal != 0 {
+		t.Fatalf("GetShortsOrdinal muted following = %d, %v, %v; want 0, false, nil", ordinal, visible, err)
 	}
 }
 

@@ -40,6 +40,7 @@ import com.screwy.igloo.ui.component.NativeFeedSurface
 import com.screwy.igloo.ui.component.Platform
 import com.screwy.igloo.ui.component.VideoGrid
 import com.screwy.igloo.ui.component.channelProfileHeaderUiModel
+import com.screwy.igloo.ui.component.channelProfileOverflowControls
 import com.screwy.igloo.ui.component.normalizeHandle
 import com.screwy.igloo.ui.component.parsePlatform
 import com.screwy.igloo.ui.nav.ApplyOverlayChrome
@@ -79,6 +80,8 @@ fun ChannelRoute(
     val pendingBookmark by vm.pendingBookmark.collectAsStateWithLifecycle()
     val bookmarkCategories by vm.bookmarkCategories.collectAsStateWithLifecycle()
     val mutedChannelIds by vm.mutedChannelIds.collectAsStateWithLifecycle()
+    val repostsEnabled by vm.repostsEnabled.collectAsStateWithLifecycle()
+    val isChannelMuted by vm.isChannelMuted.collectAsStateWithLifecycle()
     var confirmUnfollow by remember { mutableStateOf(false) }
     val navigator = rememberIglooNavigator(navController)
 
@@ -124,6 +127,12 @@ fun ChannelRoute(
         }
 
         fun headerContent(profileHeader: ChannelProfileHeaderUiModel): @Composable () -> Unit = {
+            val overflowControls = channelProfileOverflowControls(
+                platform = profileHeader.platform,
+                isFollowed = profileHeader.isFollowed,
+                repostsEnabled = repostsEnabled,
+                isMuted = isChannelMuted,
+            )
             ComposeChannelHeader(
                 header = profileHeader,
                 onFollowToggle = { newValue ->
@@ -148,6 +157,9 @@ fun ChannelRoute(
                 },
                 onMentionClick = vm::resolveMentionAndNavigate,
                 onOpenUrl = uriHandler::openUri,
+                overflowControls = overflowControls,
+                onRepostsEnabledChange = vm::setRepostsEnabled,
+                onMutedChange = vm::setChannelMuted,
             )
         }
 

@@ -4,6 +4,7 @@ import com.screwy.igloo.data.IglooDatabase
 import com.screwy.igloo.data.PreferencesRepo
 import com.screwy.igloo.data.RoomTestSupport
 import com.screwy.igloo.data.entity.FeedLikeEntity
+import com.screwy.igloo.data.entity.MutedChannelEntity
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -16,6 +17,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -98,6 +100,27 @@ class OutboxWriterTest {
         val payload =
             Json.parseToJsonElement(db.outboxDao().pendingRows().single().payloadJson).jsonObject
         assertEquals("channel-1", payload.getValue("channel_id").jsonPrimitive.content)
+    }
+
+    @Test
+    fun clearMuteRemovesOptimisticLocalMuteImmediately() = runBlocking {
+        db.mutedChannelDao().upsert(MutedChannelEntity("channel-1", 1L))
+
+        writer.enqueue(OutboxKind.Mute("channel-1", OutboxKind.Action.Clear))
+
+        assertFalse(db.mutedChannelDao().exists("channel-1"))
+        val payload =
+            Json.parseToJsonElement(db.outboxDao().pendingRows().single().payloadJson).jsonObject
+        assertEquals("clear", payload.getValue("action").jsonPrimitive.content)
+    }
+
+    @Test
+    fun includeRepostsIsOptimisticForAnyPlatformChannelId() = runBlocking {
+        writer.enqueue(OutboxKind.ChannelSetting("tiktok_channel", "include_reposts", 0))
+        writer.enqueue(OutboxKind.ChannelSetting("instagram_channel", "include_reposts", 0))
+
+        assertEquals(0, db.channelSettingDao().getById("tiktok_channel")?.includeReposts)
+        assertEquals(0, db.channelSettingDao().getById("instagram_channel")?.includeReposts)
     }
 
     @Test

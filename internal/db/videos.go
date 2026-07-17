@@ -54,6 +54,41 @@ func videoFullyWatchedSQL(alias string) string {
 	)`
 }
 
+// momentOwnerUnmutedSQL keeps a muted canonical author out of every Moments
+// view, even when an otherwise eligible account reposted that video.
+func momentOwnerUnmutedSQL(videoAlias string) string {
+	return `NOT EXISTS (
+		SELECT 1
+		FROM muted_channels muted_owner
+		WHERE muted_owner.channel_id = ` + videoAlias + `.channel_id
+	)`
+}
+
+// momentReposterUnmutedSQL removes a muted repost source before the canonical
+// video's single repost head is selected. Another eligible source can still
+// introduce that same video.
+func momentReposterUnmutedSQL(repostAlias string) string {
+	return `NOT EXISTS (
+		SELECT 1
+		FROM muted_channels muted_reposter
+		WHERE muted_reposter.channel_id = ` + repostAlias + `.reposter_channel_id
+	)`
+}
+
+// momentRepostHeadOrderSQL chooses the one repost source used to present a
+// canonical video, preferring a real event time over an observed fallback.
+func momentRepostHeadOrderSQL(repostAlias string) string {
+	return `CASE WHEN NULLIF(` + repostAlias + `.reposted_at_ms, 0) IS NOT NULL THEN 0 ELSE 1 END,
+		COALESCE(NULLIF(` + repostAlias + `.reposted_at_ms, 0), NULLIF(` + repostAlias + `.first_seen_at_ms, 0), 0) DESC,
+		` + repostAlias + `.reposter_channel_id ASC`
+}
+
+// momentRepostTimeSQL uses a source-provided repost event time when available.
+// first_seen_at_ms is only the best available discovery-time fallback.
+func momentRepostTimeSQL(repostAlias, videoAlias string) string {
+	return `COALESCE(NULLIF(` + repostAlias + `.reposted_at_ms, 0), NULLIF(` + repostAlias + `.first_seen_at_ms, 0), ` + videoAlias + `.published_at, 0)`
+}
+
 // GetVideo returns a single video by ID with joined channel info.
 func (db *DB) GetVideo(videoID string) (*model.Video, error) {
 	row := db.conn.QueryRow(`
@@ -299,6 +334,7 @@ func (db *DB) GetVideos(opts GetVideosOpts) ([]model.Video, error) {
 	if opts.Platform == "shorts" {
 		where = append(where, "COALESCE(c.platform,'') IN ('tiktok','instagram')")
 		if isMomentsQuery {
+			where = append(where, momentOwnerUnmutedSQL("v"))
 			if includeSourceWindows {
 				where = append(where, "(cf.channel_id IS NOT NULL OR mr.video_id IS NOT NULL)")
 			} else {
@@ -364,15 +400,14 @@ func (db *DB) GetVideos(opts GetVideosOpts) ([]model.Video, error) {
 			       COUNT(*) OVER (PARTITION BY vrs.video_id) AS repost_count,
 			       ROW_NUMBER() OVER (
 			           PARTITION BY vrs.video_id
-			           ORDER BY CASE WHEN COALESCE(vrs.reposted_at_ms, 0) > 0 THEN 0 ELSE 1 END,
-			                    COALESCE(vrs.reposted_at_ms, 0) DESC,
-			                    vrs.reposter_channel_id ASC
+			           ORDER BY ` + momentRepostHeadOrderSQL("vrs") + `
 			       ) AS rn
 			FROM video_repost_sources_resolved vrs
 			INNER JOIN videos owner ON owner.video_id = vrs.video_id
 			INNER JOIN channel_follows rcf ON rcf.channel_id = vrs.reposter_channel_id
 			LEFT JOIN channel_settings rcs ON rcs.channel_id = vrs.reposter_channel_id
 			WHERE COALESCE(rcs.include_reposts, 1) != 0
+			  AND ` + momentReposterUnmutedSQL("vrs") + `
 			  AND ` + sourceWindowPlatformEnabledClause("owner", includeMomentReposts, includeInstagramTagged) + `
 		),
 		moments_repost_heads AS (
@@ -387,8 +422,8 @@ func (db *DB) GetVideos(opts GetVideosOpts) ([]model.Video, error) {
 		       COALESCE(mr.reposter_display_name, '') AS reposter_display_name,
 		       COALESCE(mr.repost_count, 0) AS repost_count,
 		       CASE WHEN mr.video_id IS NOT NULL THEN 1 ELSE 0 END AS repost_introduced,
-		       CASE WHEN mr.video_id IS NOT NULL
-		            THEN COALESCE(NULLIF(mr.reposted_at_ms, 0), v.published_at, 0)
+		       CASE WHEN cf.channel_id IS NULL AND mr.video_id IS NOT NULL
+		            THEN ` + momentRepostTimeSQL("mr", "v") + `
 		            ELSE COALESCE(v.published_at, 0)
 		        END AS effective_moment_at_ms`
 		orderExpr = "effective_moment_at_ms"
@@ -643,6 +678,7 @@ func (db *DB) GetVideoCount(opts GetVideosOpts) (int, error) {
 	if opts.Platform == "shorts" {
 		where = append(where, "COALESCE(c.platform,'') IN ('tiktok','instagram')")
 		if isMomentsQuery {
+			where = append(where, momentOwnerUnmutedSQL("v"))
 			if includeSourceWindows {
 				where = append(where, `(cf.channel_id IS NOT NULL OR EXISTS (
 					SELECT 1
@@ -651,6 +687,7 @@ func (db *DB) GetVideoCount(opts GetVideosOpts) (int, error) {
 					LEFT JOIN channel_settings rcs ON rcs.channel_id = vrs.reposter_channel_id
 					WHERE vrs.video_id = v.video_id
 					  AND COALESCE(rcs.include_reposts, 1) != 0
+					  AND `+momentReposterUnmutedSQL("vrs")+`
 					  AND `+sourceWindowPlatformEnabledClause("v", includeMomentReposts, includeInstagramTagged)+`
 				))`)
 			} else {
@@ -706,7 +743,7 @@ func (db *DB) GetShortsOrdinal(videoID, momentsMode string) (int, bool, error) {
 	includeMomentReposts := momentsMode == "all" && db.MomentsIncludeRepostsEnabled()
 	includeInstagramTagged := momentsMode == "all" && db.InstagramIncludeTaggedEnabled()
 	includeSourceWindows := includeMomentReposts || includeInstagramTagged
-	visibility := "cf.channel_id IS NOT NULL"
+	visibility := "cf.channel_id IS NOT NULL AND " + momentOwnerUnmutedSQL("v")
 
 	var ordinal int
 	if !includeSourceWindows {
@@ -738,7 +775,7 @@ func (db *DB) GetShortsOrdinal(videoID, momentsMode string) (int, bool, error) {
 		}
 		return ordinal, ordinal > 0, nil
 	}
-	visibility = "(cf.channel_id IS NOT NULL OR mr.video_id IS NOT NULL)"
+	visibility = "(cf.channel_id IS NOT NULL OR mr.video_id IS NOT NULL) AND " + momentOwnerUnmutedSQL("v")
 
 	err := db.conn.QueryRow(`
 		WITH allowed_moment_reposts AS (
@@ -746,15 +783,14 @@ func (db *DB) GetShortsOrdinal(videoID, momentsMode string) (int, bool, error) {
 			       COUNT(*) OVER (PARTITION BY vrs.video_id) AS repost_count,
 			       ROW_NUMBER() OVER (
 			           PARTITION BY vrs.video_id
-			           ORDER BY CASE WHEN COALESCE(vrs.reposted_at_ms, 0) > 0 THEN 0 ELSE 1 END,
-			                    COALESCE(vrs.reposted_at_ms, 0) DESC,
-			                    vrs.reposter_channel_id ASC
+			           ORDER BY `+momentRepostHeadOrderSQL("vrs")+`
 			       ) AS rn
 			FROM video_repost_sources vrs
 			INNER JOIN videos owner ON owner.video_id = vrs.video_id
 			INNER JOIN channel_follows rcf ON rcf.channel_id = vrs.reposter_channel_id
 			LEFT JOIN channel_settings rcs ON rcs.channel_id = vrs.reposter_channel_id
 			WHERE COALESCE(rcs.include_reposts, 1) != 0
+			  AND `+momentReposterUnmutedSQL("vrs")+`
 			  AND `+sourceWindowPlatformEnabledClause("owner", includeMomentReposts, includeInstagramTagged)+`
 		),
 		moments_repost_heads AS (
@@ -764,8 +800,8 @@ func (db *DB) GetShortsOrdinal(videoID, momentsMode string) (int, bool, error) {
 		),
 		visible AS (
 			SELECT v.video_id,
-			       CASE WHEN mr.video_id IS NOT NULL
-			            THEN COALESCE(NULLIF(mr.reposted_at_ms, 0), v.published_at, 0)
+			       CASE WHEN cf.channel_id IS NULL AND mr.video_id IS NOT NULL
+			            THEN `+momentRepostTimeSQL("mr", "v")+`
 			            ELSE COALESCE(v.published_at, 0)
 			        END AS effective_moment_at_ms
 			FROM videos v
@@ -900,6 +936,7 @@ func (db *DB) shortsVisibleCTE(momentsMode string) string {
 			  AND COALESCE(v.source_kind, '') != 'story'
 			  AND COALESCE(v.is_temp,0) = 0
 			  AND cf.channel_id IS NOT NULL
+			  AND ` + momentOwnerUnmutedSQL("v") + `
 		)`
 	}
 	return `
@@ -908,15 +945,14 @@ func (db *DB) shortsVisibleCTE(momentsMode string) string {
 			       COUNT(*) OVER (PARTITION BY vrs.video_id) AS repost_count,
 			       ROW_NUMBER() OVER (
 			           PARTITION BY vrs.video_id
-			           ORDER BY CASE WHEN COALESCE(vrs.reposted_at_ms, 0) > 0 THEN 0 ELSE 1 END,
-			                    COALESCE(vrs.reposted_at_ms, 0) DESC,
-			                    vrs.reposter_channel_id ASC
+			           ORDER BY ` + momentRepostHeadOrderSQL("vrs") + `
 			       ) AS rn
 			FROM video_repost_sources vrs
 			INNER JOIN videos owner ON owner.video_id = vrs.video_id
 			INNER JOIN channel_follows rcf ON rcf.channel_id = vrs.reposter_channel_id
 			LEFT JOIN channel_settings rcs ON rcs.channel_id = vrs.reposter_channel_id
 			WHERE COALESCE(rcs.include_reposts, 1) != 0
+			  AND ` + momentReposterUnmutedSQL("vrs") + `
 			  AND ` + sourceWindowPlatformEnabledClause("owner", includeMomentReposts, includeInstagramTagged) + `
 		),
 		moments_repost_heads AS (
@@ -926,8 +962,8 @@ func (db *DB) shortsVisibleCTE(momentsMode string) string {
 		),
 		visible AS (
 			SELECT v.video_id,
-			       CASE WHEN mr.video_id IS NOT NULL
-			            THEN COALESCE(NULLIF(mr.reposted_at_ms, 0), v.published_at, 0)
+			       CASE WHEN cf.channel_id IS NULL AND mr.video_id IS NOT NULL
+			            THEN ` + momentRepostTimeSQL("mr", "v") + `
 			            ELSE COALESCE(v.published_at, 0)
 			        END AS effective_moment_at_ms
 			FROM videos v
@@ -938,6 +974,7 @@ func (db *DB) shortsVisibleCTE(momentsMode string) string {
 			  AND COALESCE(v.source_kind, '') != 'story'
 			  AND COALESCE(v.is_temp,0) = 0
 			  AND (cf.channel_id IS NOT NULL OR mr.video_id IS NOT NULL)
+			  AND ` + momentOwnerUnmutedSQL("v") + `
 		)`
 }
 

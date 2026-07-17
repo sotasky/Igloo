@@ -1,6 +1,7 @@
 package download
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -98,15 +99,25 @@ func (g *GalleryDLWrapper) Reposts(ctx context.Context, handle string, limit int
 	if limit <= 0 {
 		limit = 20
 	}
+	captureDir, err := os.MkdirTemp("", "igloo-tiktok-reposts-*")
+	if err != nil {
+		return nil, fmt.Errorf("gallery-dl repost capture dir: %w", err)
+	}
+	defer func() {
+		_ = os.RemoveAll(captureDir)
+	}()
 	rawURL := "https://www.tiktok.com/@" + handle + "/reposts"
 	args := tiktokRepostArgs(limit, cookiesFile, rawURL)
-	result := g.Run(ctx, "tiktok.reposts", "tiktok", rawURL, args, cookiesFile, CommandOptions{Timeout: 90 * time.Second})
+	result := g.Run(ctx, "tiktok.reposts", "tiktok", rawURL, args, cookiesFile, CommandOptions{
+		Timeout:    90 * time.Second,
+		WorkingDir: captureDir,
+	})
 	output := result.CombinedOutput()
-	err := result.Err
+	err = result.Err
 	if err != nil {
 		return nil, fmt.Errorf("gallery-dl reposts: %w: %s", err, RedactText(string(output)))
 	}
-	return parseTikTokRepostDump(output, handle), nil
+	return applyTikTokRepostCaptureTimes(parseTikTokRepostDump(output, handle), captureDir), nil
 }
 
 func tiktokRepostArgs(limit int, cookiesFile, rawURL string) []string {
@@ -116,6 +127,7 @@ func tiktokRepostArgs(limit int, cookiesFile, rawURL string) []string {
 	args := []string{
 		"--dump-json",
 		"--simulate",
+		"--write-pages",
 		"-o", "tiktok-range=1-" + strconv.Itoa(limit),
 	}
 	if cookiesFile != "" {
@@ -145,6 +157,65 @@ func parseTikTokRepostDump(output []byte, reposterHandle string) []VideoRef {
 		}
 	}
 	return refs
+}
+
+// applyTikTokRepostCaptureTimes preserves a true repost event time from the
+// same gallery-dl request when TikTok exposes it in repost/item_list. The
+// normal gallery-dl dump contains refetched post details and drops the raw
+// list entry, so it cannot provide this field by itself.
+func applyTikTokRepostCaptureTimes(refs []VideoRef, captureDir string) []VideoRef {
+	times := tiktokRepostTimesFromCaptureDir(captureDir)
+	for i := range refs {
+		if refs[i].RepostedAtMs <= 0 {
+			refs[i].RepostedAtMs = times[refs[i].VideoID]
+		}
+	}
+	return refs
+}
+
+func tiktokRepostTimesFromCaptureDir(captureDir string) map[string]int64 {
+	times := make(map[string]int64)
+	entries, err := os.ReadDir(captureDir)
+	if err != nil {
+		return times
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.Contains(strings.ToLower(entry.Name()), "repost_item_list") {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil || info.Size() < 1 || info.Size() > maxGalleryDLMetadataBytes {
+			continue
+		}
+		payload, err := os.ReadFile(filepath.Join(captureDir, entry.Name()))
+		if err != nil {
+			continue
+		}
+		var response struct {
+			ItemList []map[string]any `json:"itemList"`
+		}
+		decoder := json.NewDecoder(bytes.NewReader(payload))
+		decoder.UseNumber()
+		if decoder.Decode(&response) != nil {
+			continue
+		}
+		for _, item := range response.ItemList {
+			videoID := firstString(item, "video_id", "aweme_id", "id", "post_id")
+			if videoID == "" {
+				continue
+			}
+			repostedAt := firstMillis(item, "reposted_at", "repost_time", "repostedAt", "repostTime")
+			if repostedAt == 0 {
+				if parsed := firstTime(item, "reposted_at", "repost_time", "repostedAt", "repostTime"); parsed != nil {
+					repostedAt = parsed.UnixMilli()
+				}
+			}
+			if repostedAt > times[videoID] {
+				times[videoID] = repostedAt
+			}
+		}
+	}
+	return times
 }
 
 func galleryDLJSONPayloads(output []byte) []any {
