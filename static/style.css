@@ -3,6 +3,7 @@
     --sidebar-panel-width: clamp(220px, 20vw, 320px);
     --sidebar-compact-width: 72px;
     --sidebar-width: var(--sidebar-panel-width);
+    --player-sidebar-width: 320px;
     --header-height: 0px;
     --border-radius: 16px;
     --border-radius-sm: 10px;
@@ -829,32 +830,39 @@ body.feed-media-overlay-open {
     transform: scale(0.97);
 }
 
-.sidebar-collapse-btn {
-    appearance: none;
-    width: 36px;
-    height: 36px;
-    flex: 0 0 36px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    color: var(--text-secondary);
-    background: transparent;
-    border: 1px solid transparent;
-    border-radius: 9px;
-    cursor: pointer;
-    transition: color var(--transition-fast), background var(--transition-fast), border-color var(--transition-fast);
-}
-
-.sidebar-collapse-btn:hover,
-.sidebar-collapse-btn:focus-visible {
-    color: var(--text-primary);
-    background: rgba(var(--surface-soft-rgb), 0.72);
-    border-color: rgba(255, 255, 255, 0.12);
-}
-
-.sidebar-panel-expand-icon,
-.sidebar-compact-actions {
+.sidebar-compact-actions,
+.sidebar-resize-handle {
     display: none;
+}
+
+.sidebar-resize-handle {
+    position: absolute;
+    top: 0;
+    right: -5px;
+    bottom: 0;
+    width: 10px;
+    z-index: 3;
+    cursor: col-resize;
+    touch-action: none;
+    outline: none;
+}
+
+.sidebar-resize-handle::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    right: 4px;
+    bottom: 0;
+    width: 2px;
+    background: rgba(var(--accent-primary-rgb), 0.75);
+    opacity: 0;
+    transition: opacity var(--transition-fast);
+}
+
+.sidebar-resize-handle:hover::after,
+.sidebar-resize-handle:focus-visible::after,
+html.sidebar-resizing .sidebar-resize-handle::after {
+    opacity: 1;
 }
 
 .sidebar-compact-actions {
@@ -892,11 +900,6 @@ body.feed-media-overlay-open {
     outline-offset: 2px;
 }
 
-.sidebar-collapse-btn:focus-visible {
-    outline: 2px solid rgba(var(--accent-primary-rgb), 0.85);
-    outline-offset: 2px;
-}
-
 .btn-danger {
     background: rgba(var(--accent-primary-rgb), 0.22);
     color: var(--accent-secondary);
@@ -918,12 +921,27 @@ body.feed-media-overlay-open {
 }
 
 @media (min-width: 769px) {
+    .sidebar-resize-handle {
+        display: block;
+    }
+
     html.sidebar-ready .sidebar {
         transition: width var(--transition-normal);
     }
 
     html.sidebar-ready .main {
         transition: margin-left var(--transition-normal);
+    }
+
+    html.sidebar-resizing,
+    html.sidebar-resizing * {
+        cursor: col-resize !important;
+        user-select: none !important;
+    }
+
+    html.sidebar-resizing .sidebar,
+    html.sidebar-resizing .main {
+        transition: none;
     }
 
     html.sidebar-collapsed {
@@ -939,13 +957,18 @@ body.feed-media-overlay-open {
         justify-content: center;
     }
 
-    html.sidebar-collapsed .sidebar-header .logo,
-    html.sidebar-collapsed .sidebar-panel-collapse-icon {
+    html.sidebar-collapsed .sidebar-header .logo > span {
         display: none;
     }
 
-    html.sidebar-collapsed .sidebar-panel-expand-icon {
-        display: block;
+    html.sidebar-collapsed .sidebar-header .logo {
+        flex: 0 0 auto;
+        gap: 0;
+    }
+
+    html.sidebar-collapsed .sidebar-header .logo-icon {
+        width: 36px;
+        height: 36px;
     }
 
     html.sidebar-collapsed .nav {
@@ -1005,6 +1028,32 @@ body.feed-media-overlay-open {
     background: rgba(var(--surface-soft-rgb), 0.75);
     backdrop-filter: blur(8px);
     border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+@media (min-width: 1025px) {
+    .main:has(> #player-root) > .floating-header {
+        width: calc(var(--player-sidebar-width) - 2rem);
+    }
+
+    .main:has(> #player-root) > .floating-header .header-search {
+        flex: 1 1 auto;
+        min-width: 0;
+        width: auto;
+    }
+
+    .main:has(> #player-root) > .floating-header .header-search.is-expanded {
+        width: auto;
+    }
+
+    .main:has(> #player-root) > .floating-header .header-search .input {
+        width: 100%;
+        min-width: 0;
+    }
+
+    .main:has(> #player-root) > .floating-header #stop-play-container,
+    .main:has(> #player-root) > .floating-header .btn-prefs {
+        flex: 0 0 auto;
+    }
 }
 
 /* Page actions bar (channel, playlist, etc.) */
@@ -3368,7 +3417,7 @@ select.input.themed-select-native {
 /* Player Layout */
 .player-layout {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 320px);
+    grid-template-columns: minmax(0, 1fr) minmax(0, var(--player-sidebar-width));
     min-height: calc(100vh - var(--header-height));
     min-width: 0;
     transition: grid-template-columns var(--transition-normal);
@@ -3428,15 +3477,17 @@ select.input.themed-select-native {
 }
 
 .dashboard-media-controller {
+    --player-control-size: 36px;
+    --player-control-icon-size: 18px;
     --media-primary-color: var(--text-primary);
     --media-secondary-color: rgba(255, 255, 255, 0.8);
     --media-control-background: transparent;
     --media-control-hover-background: rgba(var(--accent-primary-rgb), 0.14);
-    --media-control-padding: 0 7px;
-    --media-button-padding: 0 7px;
-    --media-control-height: 36px;
-    --media-button-icon-width: 18px;
-    --media-button-icon-height: 18px;
+    --media-control-padding: 0;
+    --media-button-padding: 0;
+    --media-control-height: var(--player-control-size);
+    --media-button-icon-width: var(--player-control-icon-size);
+    --media-button-icon-height: var(--player-control-icon-size);
     --media-range-track-height: 4px;
     --media-range-thumb-width: 12px;
     --media-range-thumb-height: 12px;
@@ -3681,7 +3732,16 @@ select.input.themed-select-native {
 .dashboard-media-controller:not(.dashboard-media-controller-mini) media-play-button,
 .dashboard-media-controller:not(.dashboard-media-controller-mini) media-captions-button,
 .dashboard-media-controller:not(.dashboard-media-controller-mini) media-mute-button,
-.dashboard-media-controller:not(.dashboard-media-controller-mini) media-volume-range {
+.dashboard-media-controller:not(.dashboard-media-controller-mini) .mc-custom-btn {
+    box-sizing: border-box;
+    flex: 0 0 var(--player-control-size);
+    width: var(--player-control-size);
+    min-width: var(--player-control-size);
+    height: var(--player-control-size);
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     border-radius: 10px;
 }
 
@@ -3697,15 +3757,9 @@ select.input.themed-select-native {
     background: transparent;
     color: var(--text-primary);
     border-radius: 10px;
-    min-width: 34px;
-    height: 36px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
     gap: 0.08rem;
     cursor: pointer;
     transition: color var(--transition-fast), background var(--transition-fast), transform var(--transition-fast);
-    padding: 0 0.38rem;
     margin: 0;
     font-size: 0.9rem;
     line-height: 1;
@@ -3722,8 +3776,21 @@ select.input.themed-select-native {
     background: rgba(var(--accent-primary-rgb), 0.2);
 }
 
-.dashboard-media-controller:not(.dashboard-media-controller-mini) #player-cinema-btn svg {
+.dashboard-media-controller:not(.dashboard-media-controller-mini) #player-cinema-btn svg,
+.dashboard-media-controller:not(.dashboard-media-controller-mini) #player-fullscreen-btn svg {
     display: block;
+}
+
+.dashboard-media-controller:not(.dashboard-media-controller-mini) .mc-custom-btn svg {
+    width: var(--player-control-icon-size);
+    height: var(--player-control-icon-size);
+    flex: 0 0 auto;
+    display: block;
+}
+
+/* The rectangle has narrower visible bounds than the neighbouring corner icon. */
+.dashboard-media-controller:not(.dashboard-media-controller-mini) #player-cinema-btn svg {
+    transform: translateX(6px);
 }
 
 .dashboard-media-controller:not(.dashboard-media-controller-mini) .mc-custom-btn:focus-visible {
@@ -3737,13 +3804,7 @@ select.input.themed-select-native {
 }
 
 .dashboard-media-controller:not(.dashboard-media-controller-mini) .mc-seek-btn {
-    min-width: 34px;
-}
-
-.dashboard-media-controller:not(.dashboard-media-controller-mini) .mc-seek-btn svg {
-    width: 20px;
-    height: 20px;
-    display: block;
+    min-width: var(--player-control-size);
 }
 
 .dashboard-media-controller:not(.dashboard-media-controller-mini) .mc-speed-menu-wrap {
@@ -4799,6 +4860,25 @@ select.input.themed-select-native {
     padding: 0.5rem 0.75rem 0.75rem;
 }
 
+.quick-download-modal-content {
+    width: min(420px, calc(100vw - 2rem));
+    padding: 1.25rem;
+}
+
+.quick-download-modal-content .modal-header {
+    margin-bottom: 0.6rem;
+}
+
+.quick-download-modal-content .modal-header h2 {
+    margin: 0;
+    font-size: 1.1rem;
+}
+
+.quick-download-modal-content .quick-download {
+    padding-inline: 0;
+    padding-bottom: 0;
+}
+
 .quick-download-bar {
     display: flex;
     align-items: center;
@@ -5158,6 +5238,14 @@ select.input.themed-select-native {
     /* Show sidebar toggle button on mobile */
     .sidebar-toggle {
         display: flex;
+    }
+
+    .sidebar-resize-handle {
+        display: none;
+    }
+
+    .sidebar-open .sidebar-toggle {
+        z-index: 20002;
     }
 
     body.shorts-mode .sidebar-toggle {

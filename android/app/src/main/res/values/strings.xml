@@ -79,6 +79,7 @@
     <string name="action_remove_channel_and_files">Remove Channel &amp; Files</string>
     <string name="action_rename">Rename</string>
     <string name="action_replace">Replace</string>
+    <string name="action_resize_sidebar">Resize sidebar</string>
     <string name="action_resume">Resume</string>
     <string name="action_resume_downloads">Resume downloads</string>
     <string name="action_retry_failed">Retry Failed</string>

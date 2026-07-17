@@ -15,18 +15,6 @@ templ Sidebar(p PageProps) {
 				<img class="logo-icon" src={ p.StaticV("favicon.svg") } alt="" aria-hidden="true"/>
 				<span data-i18n="app_name">{ L(p, "app_name", "Igloo") }</span>
 			</a>
-			<button id="sidebar-collapse" class="sidebar-collapse-btn" type="button" aria-controls="app-sidebar" aria-expanded="true" title={ L(p, "action_toggle_sidebar", "Toggle sidebar") } aria-label={ L(p, "action_toggle_sidebar", "Toggle sidebar") } data-i18n-title="action_toggle_sidebar" data-i18n-aria-label="action_toggle_sidebar">
-				<svg class="sidebar-panel-collapse-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-					<rect x="3" y="3" width="18" height="18" rx="2"></rect>
-					<path d="M9 3v18"></path>
-					<path d="m16 9-3 3 3 3"></path>
-				</svg>
-				<svg class="sidebar-panel-expand-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-					<rect x="3" y="3" width="18" height="18" rx="2"></rect>
-					<path d="M9 3v18"></path>
-					<path d="m14 9 3 3-3 3"></path>
-				</svg>
-			</button>
 		</div>
 		<nav class="nav">
 			if p.PlatformsContain("youtube") {
@@ -107,19 +95,7 @@ templ Sidebar(p PageProps) {
 			</div>
 		</div>
 		<div class="sidebar-footer">
-			<form class="quick-download"
-				hx-post="/api/quick-download"
-				hx-target="#quick-dl-status"
-				hx-swap="innerHTML"
-				hx-on::before-request="this.querySelector('.quick-dl-icon').className='quick-dl-icon downloading';this.querySelector('.quick-dl-icon').textContent='⟳';this.querySelector('#quick-dl-status').className='quick-dl-status hidden'"
-				hx-on::after-request="var b=this.querySelector('.quick-dl-icon'),ok=event.detail.successful;b.className='quick-dl-icon '+(ok?'success':'error');b.textContent=ok?'✓':'✕';var s=this.querySelector('#quick-dl-status');s.className='quick-dl-status';if(ok)this.querySelector('#quick-dl-input').value='';var that=this;setTimeout(function(){b.className='quick-dl-icon';b.textContent='↓'},3000)"
-			>
-				<div class="quick-download-bar">
-					<input type="text" name="url" id="quick-dl-input" class="input" autocomplete="off" placeholder={ L(p, "download_url_placeholder", "Paste URL to download...") } data-i18n-placeholder="download_url_placeholder"/>
-					<button class="quick-dl-icon" type="submit" title={ L(p, "action_download", "Download") } data-i18n-title="action_download">&#x2193;</button>
-				</div>
-				<div id="quick-dl-status" class="quick-dl-status hidden"></div>
-			</form>
+			@sidebarQuickDownloadForm(p, "quick-dl-input", "quick-dl-status")
 			<div class="sidebar-status"
 				id="sidebar-status"
 				hx-get="/api/sidebar-status"
@@ -139,7 +115,47 @@ templ Sidebar(p PageProps) {
 				</div>
 			</div>
 		</div>
+		<div
+			id="sidebar-resize-handle"
+			class="sidebar-resize-handle"
+			role="separator"
+			tabindex="0"
+			aria-orientation="vertical"
+			aria-valuemin="72"
+			aria-valuemax="420"
+			aria-valuenow="320"
+			title={ L(p, "action_resize_sidebar", "Resize sidebar") }
+			aria-label={ L(p, "action_resize_sidebar", "Resize sidebar") }
+			data-i18n-title="action_resize_sidebar"
+			data-i18n-aria-label="action_resize_sidebar"
+		></div>
 	</aside>
+	<div id="quick-download-modal" class="modal hidden" aria-hidden="true">
+		<div class="modal-backdrop"></div>
+		<div class="modal-content quick-download-modal-content">
+			<div class="modal-header">
+				<h2>{ L(p, "action_download", "Download") }</h2>
+				<button class="modal-close" type="button" aria-label={ L(p, "action_close", "Close") } data-i18n-aria-label="action_close">&times;</button>
+			</div>
+			@sidebarQuickDownloadForm(p, "compact-quick-dl-input", "compact-quick-dl-status")
+		</div>
+	</div>
+}
+
+templ sidebarQuickDownloadForm(p PageProps, inputID string, statusID string) {
+	<form class="quick-download"
+		hx-post="/api/quick-download"
+		hx-target={ "#" + statusID }
+		hx-swap="innerHTML"
+		hx-on::before-request="this.querySelector('.quick-dl-icon').className='quick-dl-icon downloading';this.querySelector('.quick-dl-icon').textContent='⟳';this.querySelector('.quick-dl-status').className='quick-dl-status hidden'"
+		hx-on::after-request="var b=this.querySelector('.quick-dl-icon'),ok=event.detail.successful;b.className='quick-dl-icon '+(ok?'success':'error');b.textContent=ok?'✓':'✕';var s=this.querySelector('.quick-dl-status');s.className='quick-dl-status';if(ok)this.querySelector('.quick-download-bar .input').value='';setTimeout(function(){b.className='quick-dl-icon';b.textContent='↓'},3000)"
+	>
+		<div class="quick-download-bar">
+			<input type="text" name="url" id={ inputID } class="input" autocomplete="off" placeholder={ L(p, "download_url_placeholder", "Paste URL to download...") } data-i18n-placeholder="download_url_placeholder"/>
+			<button class="quick-dl-icon" type="submit" title={ L(p, "action_download", "Download") } data-i18n-title="action_download">&#x2193;</button>
+		</div>
+		<div id={ statusID } class="quick-dl-status hidden"></div>
+	</form>
 }
 
 func sidebarGroupI18nKey(g model.ChannelGroup) string {

@@ -222,7 +222,7 @@ func Base(p PageProps) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 15, "\"><link id=\"igloo-theme-css\" rel=\"stylesheet\" href=\"/api/theme.css\"><style>#page-title-actions:empty{display:none}</style><script>try{if(localStorage.getItem('igloo.sidebar.collapsed.v1')==='1')document.documentElement.classList.add('sidebar-collapsed')}catch(_){}</script></head><body hx-headers=\"")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 15, "\"><link id=\"igloo-theme-css\" rel=\"stylesheet\" href=\"/api/theme.css\"><style>#page-title-actions:empty{display:none}</style><script>try{var w=Number(localStorage.getItem('igloo.sidebar.width.v1'));if(w===72){document.documentElement.classList.add('sidebar-collapsed');document.documentElement.style.setProperty('--sidebar-panel-width','72px')}else if(w>=200&&w<=420){document.documentElement.style.setProperty('--sidebar-panel-width',w+'px')}}catch(_){}</script></head><body hx-headers=\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
