@@ -74,3 +74,8 @@ test("the fully hidden mode remains the small-screen drawer", () => {
   assert.match(css, /@media screen and \(max-width:\s*768px\)[\s\S]*?\.sidebar-resize-handle\s*\{[\s\S]*?display:\s*none;/);
   assert.match(siteBase, /#app-sidebar a\[href\]/);
 });
+
+test("the hamburger shares the floating header's top alignment", () => {
+  assert.match(css, /\.floating-header\s*\{[\s\S]*?top:\s*0\.1rem;/);
+  assert.match(css, /\.sidebar-toggle\s*\{[\s\S]*?top:\s*0\.1rem;/);
+});

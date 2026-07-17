@@ -132,7 +132,7 @@ test("the player header search fills the available right sidebar width", () => {
 test("the player reserves a top lane for floating navigation controls", () => {
   assert.match(
     css,
-    /\.player-main\s*\{[\s\S]*?padding:\s*4\.5rem\s+1\.5rem\s+1\.5rem;/,
+    /\.player-main\s*\{[\s\S]*?padding:\s*3\.75rem\s+1\.5rem\s+1\.5rem;/,
   );
 });
 

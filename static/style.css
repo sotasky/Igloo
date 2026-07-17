@@ -1226,7 +1226,7 @@ html.sidebar-resizing .sidebar-resize-handle::after {
 .sidebar-toggle {
     display: none;
     position: fixed;
-    top: 0.6rem;
+    top: 0.1rem;
     left: 0.75rem;
     z-index: 50;
     background: rgba(var(--surface-soft-rgb), 0.75);
@@ -3457,7 +3457,7 @@ select.input.themed-select-native {
 
 .player-main {
     /* Keep the video below the fixed navigation controls on narrow desktop layouts. */
-    padding: 4.5rem 1.5rem 1.5rem;
+    padding: 3.75rem 1.5rem 1.5rem;
     min-width: 0;
 }
 
