@@ -1,23 +1,10 @@
-export const CINEMA_TARGET_PLAYER_WIDTH = 1000
-export const CINEMA_MIN_PLAYER_WIDTH = CINEMA_TARGET_PLAYER_WIDTH
+export const CINEMA_MIN_PLAYER_WIDTH = 720
 export const PLAYER_SIDEBAR_WIDTH = 320
 export const PLAYER_MAIN_HORIZONTAL_PADDING = 48
-export const SIDEBAR_COMPACT_WIDTH = 72
 
 export function shouldAutoEnableCinema(layoutWidth, sidebarIsStacked) {
   if (sidebarIsStacked) return false
   return layoutWidth - PLAYER_SIDEBAR_WIDTH - PLAYER_MAIN_HORIZONTAL_PADDING < CINEMA_MIN_PLAYER_WIDTH
-}
-
-export function cinemaLeftSidebarMode(viewportWidth, sidebarWidth, cinemaEnabled, desktopSidebarVisible) {
-  if (!cinemaEnabled || !desktopSidebarVisible) return false
-  if (viewportWidth - sidebarWidth - PLAYER_MAIN_HORIZONTAL_PADDING >= CINEMA_TARGET_PLAYER_WIDTH) {
-    return 'full'
-  }
-  if (viewportWidth - SIDEBAR_COMPACT_WIDTH - PLAYER_MAIN_HORIZONTAL_PADDING >= CINEMA_TARGET_PLAYER_WIDTH) {
-    return 'compact'
-  }
-  return 'hidden'
 }
 
 export function initCinemaView({ root, button, onCinemaRequested }) {
@@ -25,42 +12,16 @@ export function initCinemaView({ root, button, onCinemaRequested }) {
   if (!root || !button || !sidebar) return
 
   const stackedSidebar = window.matchMedia('(max-width: 1024px)')
-  const desktopSidebar = window.matchMedia('(min-width: 769px)')
-  const appSidebar = root.ownerDocument && root.ownerDocument.getElementById('app-sidebar')
   let manualChoice = null
   let suspendedForFullscreen = false
-  let normalSidebarWidth = appSidebar ? appSidebar.getBoundingClientRect().width : 0
 
-  function captureNormalSidebarWidth() {
-    if (!desktopSidebar.matches || !appSidebar) return
-    if (root.classList.contains('cinema-left-sidebar-compact') || root.classList.contains('cinema-left-sidebar-hidden')) return
-    normalSidebarWidth = appSidebar.getBoundingClientRect().width
-  }
-
-  function normalLayoutWidth() {
-    captureNormalSidebarWidth()
-    if (desktopSidebar.matches && appSidebar) {
-      return window.innerWidth - normalSidebarWidth
-    }
-    return root.getBoundingClientRect().width
-  }
-
-  function setCinemaView(enabled) {
-    captureNormalSidebarWidth()
+  function setCinemaView(enabled, defaultSidebarMode, notifySidebar) {
+    const changed = root.classList.contains('cinema-view') !== enabled
     root.classList.toggle('cinema-view', enabled)
-    const leftSidebarMode = cinemaLeftSidebarMode(
-      window.innerWidth,
-      normalSidebarWidth,
-      enabled,
-      desktopSidebar.matches && !!appSidebar,
-    )
-    const leftSidebarHidden = leftSidebarMode === 'hidden'
-    root.classList.toggle('cinema-left-sidebar-compact', leftSidebarMode === 'compact')
-    root.classList.toggle('cinema-left-sidebar-hidden', leftSidebarHidden)
-    if (typeof CustomEvent === 'function' && typeof root.dispatchEvent === 'function') {
+    if (changed && notifySidebar !== false && typeof CustomEvent === 'function' && typeof root.dispatchEvent === 'function') {
       root.dispatchEvent(new CustomEvent('igloo:cinema-sidebar-change', {
         bubbles: true,
-        detail: { leftSidebarHidden, leftSidebarMode },
+        detail: { enabled, defaultSidebarMode: enabled ? defaultSidebarMode : null },
       }))
     }
     sidebar.setAttribute('aria-hidden', enabled ? 'true' : 'false')
@@ -69,13 +30,19 @@ export function initCinemaView({ root, button, onCinemaRequested }) {
   }
 
   function recommendedCinemaView() {
-    return shouldAutoEnableCinema(normalLayoutWidth(), stackedSidebar.matches)
+    return shouldAutoEnableCinema(root.getBoundingClientRect().width, stackedSidebar.matches)
   }
 
   function syncCinemaView() {
     if (suspendedForFullscreen) return
     const recommendation = recommendedCinemaView()
-    setCinemaView(manualChoice === null ? recommendation : manualChoice)
+    const defaultSidebarMode = root.getBoundingClientRect().width < CINEMA_MIN_PLAYER_WIDTH
+      ? 'hidden'
+      : 'compact'
+    setCinemaView(
+      manualChoice === null ? recommendation : manualChoice,
+      manualChoice === null && recommendation ? defaultSidebarMode : null,
+    )
   }
 
   button.addEventListener('click', function () {
@@ -92,19 +59,18 @@ export function initCinemaView({ root, button, onCinemaRequested }) {
     window.addEventListener('resize', syncCinemaView)
   }
   stackedSidebar.addEventListener('change', syncCinemaView)
-  desktopSidebar.addEventListener('change', syncCinemaView)
   syncCinemaView()
 
   return {
     suspendForFullscreen() {
       const wasEnabled = root.classList.contains('cinema-view')
       suspendedForFullscreen = true
-      setCinemaView(false)
+      setCinemaView(false, null, false)
       return wasEnabled
     },
     restoreAfterFullscreen(enabled) {
       suspendedForFullscreen = false
-      setCinemaView(enabled)
+      setCinemaView(enabled, null, false)
     },
   }
 }

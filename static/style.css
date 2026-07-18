@@ -926,43 +926,18 @@ html.sidebar-resizing .sidebar-resize-handle::after {
 }
 
 @media (min-width: 769px) {
-    body:has(#player-root.cinema-view.cinema-left-sidebar-compact) {
-        --sidebar-width: var(--sidebar-compact-width);
-    }
-
-    body:has(#player-root.cinema-view.cinema-left-sidebar-hidden) {
+    html.sidebar-hidden {
         --sidebar-width: 0px;
     }
 
-    body:has(#player-root.cinema-view.cinema-left-sidebar-compact) .sidebar {
-        width: var(--sidebar-compact-width);
-    }
-
-    body:has(#player-root.cinema-view.cinema-left-sidebar-compact) .sidebar-resize-handle {
-        display: none;
-    }
-
-    body:has(#player-root.cinema-view.cinema-left-sidebar-hidden) .sidebar {
+    html.sidebar-hidden .sidebar {
         transform: translateX(-100%);
         pointer-events: none;
     }
 
-    body:has(#player-root.cinema-view.cinema-left-sidebar-hidden) .sidebar-toggle {
+    html.sidebar-hidden .sidebar-toggle {
         display: flex;
         z-index: 20002;
-    }
-
-    body.sidebar-open:has(#player-root.cinema-view.cinema-left-sidebar-hidden) .sidebar {
-        transform: translateX(0);
-        pointer-events: auto;
-    }
-
-    body.sidebar-open:has(#player-root.cinema-view.cinema-left-sidebar-hidden) .sidebar-overlay {
-        display: block;
-    }
-
-    body.sidebar-open:has(#player-root.cinema-view.cinema-left-sidebar-hidden) .sidebar-toggle {
-        left: calc(var(--sidebar-panel-width) + 0.75rem);
     }
 
     .sidebar-resize-handle {
@@ -988,38 +963,38 @@ html.sidebar-resizing .sidebar-resize-handle::after {
         transition: none;
     }
 
-    :is(html.sidebar-collapsed, body:has(#player-root.cinema-view.cinema-left-sidebar-compact)) {
+    html.sidebar-collapsed {
         --sidebar-width: var(--sidebar-compact-width);
     }
 
-    :is(html.sidebar-collapsed, body:has(#player-root.cinema-view.cinema-left-sidebar-compact)) .sidebar {
+    html.sidebar-collapsed .sidebar {
         width: var(--sidebar-compact-width);
     }
 
-    :is(html.sidebar-collapsed, body:has(#player-root.cinema-view.cinema-left-sidebar-compact)) .sidebar-header {
+    html.sidebar-collapsed .sidebar-header {
         padding-inline: 0.75rem;
         justify-content: center;
     }
 
-    :is(html.sidebar-collapsed, body:has(#player-root.cinema-view.cinema-left-sidebar-compact)) .sidebar-header .logo > span {
+    html.sidebar-collapsed .sidebar-header .logo > span {
         display: none;
     }
 
-    :is(html.sidebar-collapsed, body:has(#player-root.cinema-view.cinema-left-sidebar-compact)) .sidebar-header .logo {
+    html.sidebar-collapsed .sidebar-header .logo {
         flex: 0 0 auto;
         gap: 0;
     }
 
-    :is(html.sidebar-collapsed, body:has(#player-root.cinema-view.cinema-left-sidebar-compact)) .sidebar-header .logo-icon {
+    html.sidebar-collapsed .sidebar-header .logo-icon {
         width: 36px;
         height: 36px;
     }
 
-    :is(html.sidebar-collapsed, body:has(#player-root.cinema-view.cinema-left-sidebar-compact)) .nav {
+    html.sidebar-collapsed .nav {
         padding: 0.35rem 0.5rem 0.6rem;
     }
 
-    :is(html.sidebar-collapsed, body:has(#player-root.cinema-view.cinema-left-sidebar-compact)) .nav-item {
+    html.sidebar-collapsed .nav-item {
         justify-content: center;
         gap: 0;
         min-height: 42px;
@@ -1027,20 +1002,20 @@ html.sidebar-resizing .sidebar-resize-handle::after {
         margin-bottom: 0.25rem;
     }
 
-    :is(html.sidebar-collapsed, body:has(#player-root.cinema-view.cinema-left-sidebar-compact)) .nav-item > span,
-    :is(html.sidebar-collapsed, body:has(#player-root.cinema-view.cinema-left-sidebar-compact)) .sidebar-section-block,
-    :is(html.sidebar-collapsed, body:has(#player-root.cinema-view.cinema-left-sidebar-compact)) .filter-row,
-    :is(html.sidebar-collapsed, body:has(#player-root.cinema-view.cinema-left-sidebar-compact)) .sidebar-scroll,
-    :is(html.sidebar-collapsed, body:has(#player-root.cinema-view.cinema-left-sidebar-compact)) .sidebar-footer {
+    html.sidebar-collapsed .nav-item > span,
+    html.sidebar-collapsed .sidebar-section-block,
+    html.sidebar-collapsed .filter-row,
+    html.sidebar-collapsed .sidebar-scroll,
+    html.sidebar-collapsed .sidebar-footer {
         display: none;
     }
 
-    :is(html.sidebar-collapsed, body:has(#player-root.cinema-view.cinema-left-sidebar-compact)) .nav-icon {
+    html.sidebar-collapsed .nav-icon {
         width: 22px;
         height: 22px;
     }
 
-    :is(html.sidebar-collapsed, body:has(#player-root.cinema-view.cinema-left-sidebar-compact)) .sidebar-compact-actions {
+    html.sidebar-collapsed .sidebar-compact-actions {
         display: flex;
     }
 }
@@ -3546,6 +3521,7 @@ select.input.themed-select-native {
     --dashboard-media-aspect-ratio: 16 / 9;
     aspect-ratio: var(--dashboard-media-aspect-ratio);
     min-width: 0;
+    container-type: inline-size;
 }
 
 /* Main YouTube player control bar transparency (do not affect shorts/native audio controls). */
@@ -3997,6 +3973,41 @@ select.input.themed-select-native {
 
     .dashboard-media-controller:not(.dashboard-media-controller-mini) .mc-separator {
         margin: 0 0.04rem;
+    }
+}
+
+@container (max-width: 760px) {
+    .dashboard-media-controller:not(.dashboard-media-controller-mini) media-control-bar {
+        gap: 0;
+        padding-inline: 0.18rem;
+    }
+
+    .dashboard-media-controller:not(.dashboard-media-controller-mini) .dashboard-media-control-bar > media-volume-range {
+        flex: 0 0 52px;
+        width: 52px;
+        min-width: 52px;
+    }
+
+    .dashboard-media-controller:not(.dashboard-media-controller-mini) #player-cinema-btn {
+        margin-inline-start: 0;
+    }
+}
+
+@container (max-width: 620px) {
+    .dashboard-media-controller:not(.dashboard-media-controller-mini) .dashboard-media-control-bar > media-volume-range,
+    .dashboard-media-controller:not(.dashboard-media-controller-mini) .mc-separator {
+        display: none;
+    }
+
+    .dashboard-media-controller:not(.dashboard-media-controller-mini) .mc-speed-btn {
+        min-width: var(--player-control-size);
+        padding-inline: 0;
+    }
+}
+
+@container (max-width: 440px) {
+    .dashboard-media-controller:not(.dashboard-media-controller-mini) media-time-display {
+        display: none;
     }
 }
 

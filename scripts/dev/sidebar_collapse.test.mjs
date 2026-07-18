@@ -18,7 +18,7 @@ test("desktop sidebar can be resized down to the compact rail", () => {
   assert.match(css, /\.sidebar-resize-handle[\s\S]*?cursor:\s*col-resize;/);
   assert.match(
     css,
-    /:is\(html\.sidebar-collapsed, body:has\(#player-root\.cinema-view\.cinema-left-sidebar-compact\)\)\s*\{[\s\S]*?--sidebar-width:\s*var\(--sidebar-compact-width\);[\s\S]*?:is\(html\.sidebar-collapsed, body:has\(#player-root\.cinema-view\.cinema-left-sidebar-compact\)\) \.sidebar\s*\{[\s\S]*?width:\s*var\(--sidebar-compact-width\);/,
+    /html\.sidebar-collapsed\s*\{[\s\S]*?--sidebar-width:\s*var\(--sidebar-compact-width\);[\s\S]*?html\.sidebar-collapsed \.sidebar\s*\{[\s\S]*?width:\s*var\(--sidebar-compact-width\);/,
   );
   assert.doesNotMatch(css, /html\.sidebar-collapsed \.sidebar\s*\{[^}]*translateX\(-100%\)/);
 });
@@ -48,13 +48,22 @@ test("Z toggles compact mode without discarding the saved full width", () => {
   assert.match(modalsTemplate, /data-sc="global\.sidebar"/);
 });
 
+test("automatic cinema sidebar modes remain user-overridable", () => {
+  assert.match(siteBase, /defaultSidebarMode[\s\S]*?hasStoredSidebarWidth\(\)/);
+  assert.match(siteBase, /stored !== null && Number\.isFinite\(Number\(stored\)\)/);
+  assert.match(siteBase, /setSidebarWidth\(SIDEBAR_COMPACT_WIDTH, false, false\)/);
+  assert.match(css, /html\.sidebar-hidden[\s\S]*?--sidebar-width:\s*0px;/);
+  assert.match(css, /html\.sidebar-hidden \.sidebar-toggle[\s\S]*?display:\s*flex;/);
+  assert.match(siteBase, /sidebar-hidden[\s\S]*?setSidebarHidden\(false\)/);
+});
+
 test("compact mode keeps its page and utility controls", () => {
   assert.match(sidebarTemplate, /data-sidebar-compact-add/);
   assert.match(sidebarTemplate, /data-sidebar-compact-download/);
   assert.match(sidebarTemplate, /data-sidebar-compact-logs/);
-  assert.match(css, /:is\(html\.sidebar-collapsed, body:has\(#player-root\.cinema-view\.cinema-left-sidebar-compact\)\) \.sidebar-compact-actions\s*\{[\s\S]*?display:\s*flex;/);
-  assert.match(css, /:is\(html\.sidebar-collapsed, body:has\(#player-root\.cinema-view\.cinema-left-sidebar-compact\)\) \.sidebar-header \.logo > span\s*\{[\s\S]*?display:\s*none;/);
-  assert.doesNotMatch(css, /:is\(html\.sidebar-collapsed, body:has\(#player-root\.cinema-view\.cinema-left-sidebar-compact\)\) \.sidebar-header \.logo\s*\{[^}]*display:\s*none;/);
+  assert.match(css, /html\.sidebar-collapsed \.sidebar-compact-actions\s*\{[\s\S]*?display:\s*flex;/);
+  assert.match(css, /html\.sidebar-collapsed \.sidebar-header \.logo > span\s*\{[\s\S]*?display:\s*none;/);
+  assert.doesNotMatch(css, /html\.sidebar-collapsed \.sidebar-header \.logo\s*\{[^}]*display:\s*none;/);
 });
 
 test("compact download opens its own popup without expanding the sidebar", () => {

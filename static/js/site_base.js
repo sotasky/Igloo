@@ -556,6 +556,7 @@
   let currentSidebarWidth = 0;
   let fullSidebarWidth = 0;
   let resizingPointerId = null;
+  let cinemaSidebarDefaultMode = null;
 
   function sidebarMaxWidth() {
     return Math.max(SIDEBAR_FULL_MIN_WIDTH, Math.min(SIDEBAR_MAX_WIDTH, window.innerWidth - 320));
@@ -604,18 +605,52 @@
   }
 
   function syncSidebarControls() {
-    var cinemaHidesSidebar = !!q('#player-root.cinema-left-sidebar-hidden');
-    var expanded = cinemaHidesSidebar ? body.classList.contains('sidebar-open') : desktopSidebar.matches || body.classList.contains('sidebar-open');
+    var expanded = desktopSidebar.matches && !doc.documentElement.classList.contains('sidebar-hidden');
+    expanded = expanded || body.classList.contains('sidebar-open');
     if (sidebarToggle) sidebarToggle.setAttribute('aria-expanded', expanded ? 'true' : 'false');
   }
 
+  function setSidebarHidden(hidden) {
+    doc.documentElement.classList.toggle('sidebar-hidden', hidden);
+  }
+
+  function hasStoredSidebarWidth() {
+    try {
+      var stored = window.localStorage.getItem(sidebarStorageKey);
+      return stored !== null && Number.isFinite(Number(stored));
+    } catch (_) {
+      return false;
+    }
+  }
+
   doc.addEventListener('igloo:cinema-sidebar-change', function (event) {
-    if (!event.detail || !event.detail.leftSidebarHidden) body.classList.remove('sidebar-open');
+    if (!event.detail || !desktopSidebar.matches) return;
+    if (!event.detail.enabled) {
+      if (cinemaSidebarDefaultMode && !hasStoredSidebarWidth()) {
+        setSidebarHidden(false);
+        setSidebarWidth(fullSidebarWidth, false, false);
+      }
+      cinemaSidebarDefaultMode = null;
+      syncSidebarControls();
+      return;
+    }
+    if (!event.detail.defaultSidebarMode || hasStoredSidebarWidth()) return;
+    cinemaSidebarDefaultMode = event.detail.defaultSidebarMode;
+    setSidebarHidden(cinemaSidebarDefaultMode === 'hidden');
+    if (cinemaSidebarDefaultMode === 'compact') {
+      setSidebarWidth(SIDEBAR_COMPACT_WIDTH, false, false);
+    }
     syncSidebarControls();
   });
 
   if (sidebarToggle) {
     sidebarToggle.addEventListener('click', function () {
+      if (desktopSidebar.matches && doc.documentElement.classList.contains('sidebar-hidden')) {
+        cinemaSidebarDefaultMode = null;
+        setSidebarHidden(false);
+        syncSidebarControls();
+        return;
+      }
       body.classList.toggle('sidebar-open');
       syncSidebarControls();
     });
@@ -628,6 +663,7 @@
     sidebarResizeHandle.addEventListener('pointerdown', function (event) {
       if (!desktopSidebar.matches || event.button !== 0) return;
       event.preventDefault();
+      cinemaSidebarDefaultMode = null;
       resizingPointerId = event.pointerId;
       sidebarResizeHandle.setPointerCapture(event.pointerId);
       doc.documentElement.classList.add('sidebar-resizing');
@@ -662,6 +698,7 @@
           : currentSidebarWidth + 16;
       } else return;
       event.preventDefault();
+      cinemaSidebarDefaultMode = null;
       setSidebarWidth(nextWidth, true);
     });
   }
@@ -700,6 +737,7 @@
     var activeEl = doc.activeElement;
     if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA' || activeEl.tagName === 'SELECT' || activeEl.isContentEditable)) return;
     event.preventDefault();
+    cinemaSidebarDefaultMode = null;
     setSidebarWidth(
       currentSidebarWidth === SIDEBAR_COMPACT_WIDTH ? fullSidebarWidth : SIDEBAR_COMPACT_WIDTH,
       true,
