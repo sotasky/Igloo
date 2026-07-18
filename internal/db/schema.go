@@ -3,13 +3,13 @@ package db
 import (
 	"database/sql"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 )
 
-// EnsureSchema creates all tables the server needs.
-// Called from Open() only (not OpenReadOnly).
-// All statements use IF NOT EXISTS, so they are safe to re-run on every start.
+// EnsureSchema creates the current schema for a new database. Existing
+// databases advance through ApplySchemaMigrations before validation.
 func EnsureSchema(conn *sql.DB) error {
 	return EnsureSchemaWithOptions(conn, EnsureSchemaOptions{})
 }
@@ -99,8 +99,8 @@ func schemaPresent(conn *sql.DB) (bool, error) {
 	return present, err
 }
 
-// ValidateCurrentSchema rejects databases that were not built from the exact
-// current schema. Existing databases are never migrated at normal startup.
+// ValidateCurrentSchema rejects databases that do not match the current
+// logical schema after ordered migrations have completed.
 func ValidateCurrentSchema(conn *sql.DB) error {
 	actual, err := schemaSignature(conn)
 	if err != nil {
@@ -110,6 +110,7 @@ func ValidateCurrentSchema(conn *sql.DB) error {
 	if err != nil {
 		return err
 	}
+	expectedDB.SetMaxOpenConns(1)
 	if err := EnsureSchema(expectedDB); err != nil {
 		_ = expectedDB.Close()
 		return err
@@ -123,9 +124,31 @@ func ValidateCurrentSchema(conn *sql.DB) error {
 		return closeErr
 	}
 	if strings.Join(actual, "\n") != strings.Join(expected, "\n") {
-		return fmt.Errorf("database schema does not match the current contract")
+		return fmt.Errorf("database schema does not match the current contract: %s", schemaSignatureDifference(actual, expected))
 	}
 	return nil
+}
+
+func schemaSignatureDifference(actual, expected []string) string {
+	actualSet := make(map[string]bool, len(actual))
+	for _, entry := range actual {
+		actualSet[entry] = true
+	}
+	for _, entry := range expected {
+		if !actualSet[entry] {
+			return "missing " + strings.ReplaceAll(entry, "\x00", " ")
+		}
+	}
+	expectedSet := make(map[string]bool, len(expected))
+	for _, entry := range expected {
+		expectedSet[entry] = true
+	}
+	for _, entry := range actual {
+		if !expectedSet[entry] {
+			return "unexpected " + strings.ReplaceAll(entry, "\x00", " ")
+		}
+	}
+	return "different object definitions"
 }
 
 func schemaSignature(conn *sql.DB) ([]string, error) {
@@ -140,16 +163,18 @@ func schemaSignature(conn *sql.DB) ([]string, error) {
 		return nil, err
 	}
 	var signature []string
-	var tables []string
+	tableDefinitions := make(map[string]string)
 	for rows.Next() {
 		var objectType, name, table, definition string
 		if err := rows.Scan(&objectType, &name, &table, &definition); err != nil {
 			_ = rows.Close()
 			return nil, err
 		}
-		signature = append(signature, strings.Join([]string{"object", objectType, name, table, strings.TrimSpace(definition)}, "\x00"))
 		if objectType == "table" {
-			tables = append(tables, name)
+			signature = append(signature, strings.Join([]string{"object", objectType, name, table}, "\x00"))
+			tableDefinitions[name] = definition
+		} else {
+			signature = append(signature, strings.Join([]string{"object", objectType, name, table, strings.TrimSpace(definition)}, "\x00"))
 		}
 	}
 	if err := rows.Err(); err != nil {
@@ -159,33 +184,194 @@ func schemaSignature(conn *sql.DB) ([]string, error) {
 	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	for _, table := range tables {
-		columns, err := conn.Query(`PRAGMA table_xinfo(` + quoteSchemaIdentifier(table) + `)`)
+	for table, definition := range tableDefinitions {
+		tableSignature, err := logicalTableSignature(conn, table, definition)
 		if err != nil {
 			return nil, err
 		}
-		for columns.Next() {
-			var cid, notNull, primaryKey, hidden int
-			var name, columnType string
-			var defaultValue sql.NullString
-			if err := columns.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey, &hidden); err != nil {
-				_ = columns.Close()
-				return nil, err
-			}
-			signature = append(signature, fmt.Sprintf(
-				"column\x00%s\x00%d\x00%s\x00%s\x00%d\x00%s\x00%d\x00%d",
-				table, cid, name, columnType, notNull, defaultValue.String, primaryKey, hidden,
-			))
-		}
-		if err := columns.Err(); err != nil {
+		signature = append(signature, tableSignature...)
+	}
+	sort.Strings(signature)
+	return signature, nil
+}
+
+// logicalTableSignature deliberately reads SQLite's schema pragmas rather
+// than comparing CREATE TABLE text. ADD COLUMN preserves data but changes the
+// stored SQL and column order, neither of which changes the table contract.
+func logicalTableSignature(conn *sql.DB, table, definition string) ([]string, error) {
+	var signature []string
+	for _, option := range tableOptions(definition) {
+		signature = append(signature, "table_option\x00"+table+"\x00"+option)
+	}
+	columns, err := conn.Query(`PRAGMA table_xinfo(` + quoteSchemaIdentifier(table) + `)`)
+	if err != nil {
+		return nil, err
+	}
+	for columns.Next() {
+		var cid, notNull, primaryKey, hidden int
+		var name, columnType string
+		var defaultValue sql.NullString
+		if err := columns.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey, &hidden); err != nil {
 			_ = columns.Close()
 			return nil, err
 		}
-		if err := columns.Close(); err != nil {
+		signature = append(signature, fmt.Sprintf(
+			"column\x00%s\x00%s\x00%s\x00%d\x00%s\x00%d\x00%d",
+			table, name, columnType, notNull, defaultValue.String, primaryKey, hidden,
+		))
+	}
+	if err := columns.Err(); err != nil {
+		_ = columns.Close()
+		return nil, err
+	}
+	if err := columns.Close(); err != nil {
+		return nil, err
+	}
+
+	foreignKeys, err := conn.Query(`PRAGMA foreign_key_list(` + quoteSchemaIdentifier(table) + `)`)
+	if err != nil {
+		return nil, err
+	}
+	for foreignKeys.Next() {
+		var id, sequence int
+		var referencedTable, from, to, onUpdate, onDelete, match string
+		if err := foreignKeys.Scan(&id, &sequence, &referencedTable, &from, &to, &onUpdate, &onDelete, &match); err != nil {
+			_ = foreignKeys.Close()
+			return nil, err
+		}
+		signature = append(signature, strings.Join([]string{"foreign_key", table, referencedTable, from, to, onUpdate, onDelete, match}, "\x00"))
+	}
+	if err := foreignKeys.Err(); err != nil {
+		_ = foreignKeys.Close()
+		return nil, err
+	}
+	if err := foreignKeys.Close(); err != nil {
+		return nil, err
+	}
+
+	indexes, err := conn.Query(`PRAGMA index_list(` + quoteSchemaIdentifier(table) + `)`)
+	if err != nil {
+		return nil, err
+	}
+	type schemaIndex struct {
+		name string
+	}
+	var schemaIndexes []schemaIndex
+	for indexes.Next() {
+		var sequence, unique, partial int
+		var name, origin string
+		if err := indexes.Scan(&sequence, &name, &unique, &origin, &partial); err != nil {
+			_ = indexes.Close()
+			return nil, err
+		}
+		signature = append(signature, fmt.Sprintf("index\x00%s\x00%s\x00%d\x00%s\x00%d", table, name, unique, origin, partial))
+		schemaIndexes = append(schemaIndexes, schemaIndex{name: name})
+	}
+	if err := indexes.Err(); err != nil {
+		_ = indexes.Close()
+		return nil, err
+	}
+	if err := indexes.Close(); err != nil {
+		return nil, err
+	}
+	for _, index := range schemaIndexes {
+		indexColumns, err := conn.Query(`PRAGMA index_xinfo(` + quoteSchemaIdentifier(index.name) + `)`)
+		if err != nil {
+			return nil, err
+		}
+		for indexColumns.Next() {
+			var indexSequence, columnID, descending, key int
+			var columnName sql.NullString
+			var collation string
+			if err := indexColumns.Scan(&indexSequence, &columnID, &columnName, &descending, &collation, &key); err != nil {
+				_ = indexColumns.Close()
+				return nil, err
+			}
+			signature = append(signature, fmt.Sprintf(
+				"index_column\x00%s\x00%s\x00%d\x00%s\x00%d\x00%s\x00%d",
+				table, index.name, indexSequence, columnName.String, descending, collation, key,
+			))
+		}
+		if err := indexColumns.Err(); err != nil {
+			_ = indexColumns.Close()
+			return nil, err
+		}
+		if err := indexColumns.Close(); err != nil {
 			return nil, err
 		}
 	}
+
+	for _, check := range tableCheckExpressions(definition) {
+		signature = append(signature, "check\x00"+table+"\x00"+check)
+	}
+	sort.Strings(signature)
 	return signature, nil
+}
+
+func tableOptions(definition string) []string {
+	normalized := strings.Join(strings.Fields(strings.ToUpper(definition)), " ")
+	var options []string
+	if strings.HasSuffix(normalized, " WITHOUT ROWID") {
+		options = append(options, "without_rowid")
+	}
+	if strings.HasSuffix(normalized, " STRICT") || strings.HasSuffix(normalized, " STRICT, WITHOUT ROWID") || strings.HasSuffix(normalized, " WITHOUT ROWID, STRICT") {
+		options = append(options, "strict")
+	}
+	return options
+}
+
+func tableCheckExpressions(definition string) []string {
+	upper := strings.ToUpper(definition)
+	var checks []string
+	for offset := 0; offset < len(upper); {
+		index := strings.Index(upper[offset:], "CHECK")
+		if index < 0 {
+			break
+		}
+		index += offset
+		open := index + len("CHECK")
+		for open < len(definition) && (definition[open] == ' ' || definition[open] == '\n' || definition[open] == '\t' || definition[open] == '\r') {
+			open++
+		}
+		if open == len(definition) || definition[open] != '(' {
+			offset = open
+			continue
+		}
+		depth := 0
+		quote := byte(0)
+		for end := open; end < len(definition); end++ {
+			ch := definition[end]
+			if quote != 0 {
+				if ch == quote {
+					if end+1 < len(definition) && definition[end+1] == quote {
+						end++
+						continue
+					}
+					quote = 0
+				}
+				continue
+			}
+			if ch == '\'' || ch == '"' || ch == '`' {
+				quote = ch
+				continue
+			}
+			switch ch {
+			case '(':
+				depth++
+			case ')':
+				depth--
+				if depth == 0 {
+					checks = append(checks, strings.Join(strings.Fields(definition[open:end+1]), " "))
+					offset = end + 1
+					goto next
+				}
+			}
+		}
+		break
+	next:
+	}
+	sort.Strings(checks)
+	return checks
 }
 
 func quoteSchemaIdentifier(value string) string {

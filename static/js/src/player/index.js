@@ -426,6 +426,9 @@ if (root && video) {
   // --- Fullscreen ---
 
   var playerLayout = root.closest('.player-layout') || root
+  var cinemaView
+  var cinemaBeforeFullscreen = false
+  var cinemaOnFullscreenExit = null
 
   function setFullscreenMode(mode) {
     var immersive = mode === 'immersive'
@@ -480,10 +483,18 @@ if (root && video) {
         setFullscreenMode('immersive')
         playerLayout.scrollTop = 0
         if (speedMenu && speedMenu.parentNode !== playerLayout) playerLayout.appendChild(speedMenu)
+        if (cinemaView) cinemaBeforeFullscreen = cinemaView.suspendForFullscreen()
       } else if (!doc.fullscreenElement && !doc.webkitFullscreenElement) {
         playerLayout.classList.remove('fullscreen-immersive', 'fullscreen-browse')
         playerLayout.scrollTop = 0
         if (speedMenu && speedMenu.parentNode !== doc.body) doc.body.appendChild(speedMenu)
+        if (cinemaView) {
+          cinemaView.restoreAfterFullscreen(
+            cinemaOnFullscreenExit === null ? cinemaBeforeFullscreen : cinemaOnFullscreenExit,
+          )
+        }
+        cinemaBeforeFullscreen = false
+        cinemaOnFullscreenExit = null
       }
     }
     doc.addEventListener('fullscreenchange', onFullscreenChange)
@@ -751,7 +762,16 @@ if (root && video) {
     setupPlayerActions()
     setupSeekButtons()
     setupFullscreenButton()
-    initCinemaView({ root, button: cinemaBtn })
+    cinemaView = initCinemaView({
+      root,
+      button: cinemaBtn,
+      onCinemaRequested: function (enabled) {
+        if (!isPlayerLayoutFullscreen()) return false
+        cinemaOnFullscreenExit = enabled
+        toggleFullscreen()
+        return true
+      },
+    })
     setupSpeedMenu()
     setupPlayerControlsVisibility()
     setupChannelInlineActions()

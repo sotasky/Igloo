@@ -2,6 +2,7 @@ package db
 
 func schemaCreateStatements() []string {
 	groups := [][]string{
+		schemaMigrationStatements(),
 		schemaArchiveStatements(),
 		schemaUserStateStatements(),
 		schemaDiagnosticStatements(),

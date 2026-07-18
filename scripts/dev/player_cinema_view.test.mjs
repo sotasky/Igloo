@@ -73,7 +73,7 @@ test("a manual cinema choice survives sidebar width changes", () => {
     },
   };
 
-  initCinemaView({ root, button });
+  const cinemaView = initCinemaView({ root, button });
   assert.equal(classes.has("cinema-view"), true);
 
   buttonListeners.get("click")();
@@ -86,6 +86,13 @@ test("a manual cinema choice survives sidebar width changes", () => {
   assert.equal(classes.has("cinema-view"), false);
 
   buttonListeners.get("click")();
+  assert.equal(classes.has("cinema-view"), true);
+
+  assert.equal(cinemaView.suspendForFullscreen(), true);
+  assert.equal(classes.has("cinema-view"), false);
+  resize();
+  assert.equal(classes.has("cinema-view"), false);
+  cinemaView.restoreAfterFullscreen(true);
   assert.equal(classes.has("cinema-view"), true);
 
   layoutWidth = layoutAtVideoWidth(999);
@@ -127,6 +134,22 @@ test("cinema compacts the left sidebar before hiding it", () => {
     css,
     /body\.sidebar-open:has\(#player-root\.cinema-view\.cinema-left-sidebar-hidden\) \.sidebar-toggle\s*\{[\s\S]*?left:\s*calc\(var\(--sidebar-panel-width\) \+ 0\.75rem\);/,
   );
+});
+
+test("fullscreen browse suspends cinema layout changes", () => {
+  assert.match(
+    css,
+    /\.player-layout\.cinema-view:not\(\.fullscreen-browse\):not\(\.fullscreen-immersive\)\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0,\s*1fr\)\s+minmax\(0,\s*0px\);/,
+  );
+});
+
+test("requesting cinema from fullscreen exits into cinema view", () => {
+  assert.match(
+    playerIndex,
+    /onCinemaRequested:\s*function \(enabled\)\s*\{[\s\S]*?isPlayerLayoutFullscreen\(\)[\s\S]*?cinemaOnFullscreenExit = enabled[\s\S]*?toggleFullscreen\(\)[\s\S]*?return true/,
+  );
+  assert.match(playerIndex, /cinemaView\.suspendForFullscreen\(\)/);
+  assert.match(playerIndex, /cinemaView\.restoreAfterFullscreen\(/);
 });
 
 test("the player header search fills the available right sidebar width", () => {

@@ -20,7 +20,7 @@ export function cinemaLeftSidebarMode(viewportWidth, sidebarWidth, cinemaEnabled
   return 'hidden'
 }
 
-export function initCinemaView({ root, button }) {
+export function initCinemaView({ root, button, onCinemaRequested }) {
   const sidebar = root && root.querySelector('.player-sidebar')
   if (!root || !button || !sidebar) return
 
@@ -28,6 +28,7 @@ export function initCinemaView({ root, button }) {
   const desktopSidebar = window.matchMedia('(min-width: 769px)')
   const appSidebar = root.ownerDocument && root.ownerDocument.getElementById('app-sidebar')
   let manualChoice = null
+  let suspendedForFullscreen = false
   let normalSidebarWidth = appSidebar ? appSidebar.getBoundingClientRect().width : 0
 
   function captureNormalSidebarWidth() {
@@ -72,13 +73,17 @@ export function initCinemaView({ root, button }) {
   }
 
   function syncCinemaView() {
+    if (suspendedForFullscreen) return
     const recommendation = recommendedCinemaView()
     setCinemaView(manualChoice === null ? recommendation : manualChoice)
   }
 
   button.addEventListener('click', function () {
-    manualChoice = !root.classList.contains('cinema-view')
-    setCinemaView(manualChoice)
+    const wasEnabled = root.classList.contains('cinema-view')
+    const enabled = !wasEnabled
+    if (typeof onCinemaRequested === 'function' && onCinemaRequested(enabled)) return
+    manualChoice = enabled
+    setCinemaView(enabled)
   })
 
   if (typeof window.ResizeObserver === 'function') {
@@ -89,4 +94,17 @@ export function initCinemaView({ root, button }) {
   stackedSidebar.addEventListener('change', syncCinemaView)
   desktopSidebar.addEventListener('change', syncCinemaView)
   syncCinemaView()
+
+  return {
+    suspendForFullscreen() {
+      const wasEnabled = root.classList.contains('cinema-view')
+      suspendedForFullscreen = true
+      setCinemaView(false)
+      return wasEnabled
+    },
+    restoreAfterFullscreen(enabled) {
+      suspendedForFullscreen = false
+      setCinemaView(enabled)
+    },
+  }
 }

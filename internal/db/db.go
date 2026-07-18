@@ -117,9 +117,15 @@ func openPathWithOptions(path string, layout storage.Layout, opts OpenOptions) (
 	phaseStart = time.Now()
 	present, err := schemaPresent(conn)
 	if err == nil && present {
-		err = ValidateCurrentSchema(conn)
+		err = ApplySchemaMigrations(conn)
+		if err == nil {
+			err = ValidateCurrentSchema(conn)
+		}
 	} else if err == nil {
 		err = EnsureSchemaWithOptions(conn, EnsureSchemaOptions(opts))
+		if err == nil {
+			err = ApplySchemaMigrations(conn)
+		}
 	}
 	if err != nil {
 		_ = conn.Close()

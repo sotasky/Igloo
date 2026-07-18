@@ -265,6 +265,9 @@ CREATE TABLE profile_jobs ( channel_id TEXT PRIMARY KEY, requested_revision INTE
 -- table: retweet_sources on retweet_sources
 CREATE TABLE retweet_sources ( content_hash TEXT NOT NULL, retweeter_channel_id TEXT NOT NULL, tweet_id TEXT NOT NULL, published_at INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (content_hash, retweeter_channel_id) );
 
+-- table: schema_migrations on schema_migrations
+CREATE TABLE schema_migrations ( name TEXT PRIMARY KEY, applied_at_ms INTEGER NOT NULL ) WITHOUT ROWID;
+
 -- table: search_channels_fts on search_channels_fts
 CREATE VIRTUAL TABLE search_channels_fts USING fts5( channel_id_pk UNINDEXED, name, source_id, display_name, handle, tokenize = 'unicode61' );
 
