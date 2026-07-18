@@ -1,24 +1,33 @@
 package com.screwy.igloo.ui.component
 
+import android.os.Build
+import android.view.Window
 import android.view.WindowManager
+import android.window.OnBackInvokedCallback
+import android.window.OnBackInvokedDispatcher
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
@@ -40,7 +49,9 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
@@ -49,18 +60,22 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -303,6 +318,17 @@ fun BookmarkSheet(
 
     val backdropInteraction = remember { MutableInteractionSource() }
     val panelInteraction = remember { MutableInteractionSource() }
+    val density = LocalDensity.current
+    val bottomInsetPx = maxOf(
+        WindowInsets.ime.getBottom(density),
+        WindowInsets.navigationBars.getBottom(density),
+    )
+    val keyboardVisible = WindowInsets.ime.getBottom(density) > WindowInsets.navigationBars.getBottom(density)
+    var keyboardInsetObserved by remember(target.itemId) { mutableStateOf(false) }
+
+    LaunchedEffect(keyboardVisible) {
+        if (keyboardVisible) keyboardInsetObserved = true
+    }
 
     BackHandler(onBack = onDismiss)
 
@@ -317,8 +343,11 @@ fun BookmarkSheet(
         SideEffect {
             dialogWindow?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING)
         }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            DialogOverlayBackHandler(window = dialogWindow, onDismiss = onDismiss)
+        }
 
-        Box(
+        BoxWithConstraints(
             modifier = Modifier
                 .fillMaxSize()
                 .clickable(
@@ -328,31 +357,40 @@ fun BookmarkSheet(
                 )
                 .padding(horizontal = 10.dp),
         ) {
+            val panelHeight = with(density) {
+                val headerBottomPx = WindowInsets.statusBars.getTop(this) +
+                    TopAppBarDefaults.TopAppBarExpandedHeight.roundToPx()
+                val visibleHeightPx = maxHeight.roundToPx() - bottomInsetPx - headerBottomPx
+                visibleHeightPx.coerceAtLeast(0).toDp()
+            }
+
             Surface(
                 color = colors.surface,
                 shape = RoundedCornerShape(16.dp),
                 tonalElevation = 8.dp,
                 shadowElevation = 12.dp,
                 modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .statusBarsPadding()
-                    .padding(top = 52.dp)
+                    .align(Alignment.BottomCenter)
+                    .offset { IntOffset(x = 0, y = -bottomInsetPx) }
                     .widthIn(max = 520.dp)
                     .fillMaxWidth()
-                    .heightIn(max = 620.dp)
+                    .height(panelHeight)
+                    .alpha(if (keyboardInsetObserved) 1f else 0f)
                     .clickable(
                         interactionSource = panelInteraction,
                         indication = null,
                         onClick = {},
                     ),
             ) {
-                Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .verticalScroll(rememberScrollState())
-                    .padding(horizontal = 14.dp, vertical = 12.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
+                Column(modifier = Modifier.fillMaxSize()) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f)
+                            .verticalScroll(rememberScrollState())
+                            .padding(horizontal = 14.dp, vertical = 12.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
                 Text(
                     text = stringResource(
                         if (isEditing) R.string.action_manage_bookmark else R.string.action_bookmark,
@@ -628,9 +666,12 @@ fun BookmarkSheet(
             }
 
             Spacer(modifier = Modifier.height(4.dp))
+                    }
 
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 14.dp, vertical = 12.dp),
                 horizontalArrangement = Arrangement.End,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -648,10 +689,24 @@ fun BookmarkSheet(
                 }
             }
 
-            Spacer(modifier = Modifier.height(12.dp))
         }
         }
         }
+    }
+}
+
+@Composable
+@androidx.annotation.RequiresApi(Build.VERSION_CODES.TIRAMISU)
+private fun DialogOverlayBackHandler(window: Window?, onDismiss: () -> Unit) {
+    val currentOnDismiss by rememberUpdatedState(onDismiss)
+
+    DisposableEffect(window) {
+        val dispatcher = window?.onBackInvokedDispatcher
+        if (dispatcher == null) return@DisposableEffect onDispose { }
+
+        val callback = OnBackInvokedCallback { currentOnDismiss() }
+        dispatcher.registerOnBackInvokedCallback(OnBackInvokedDispatcher.PRIORITY_OVERLAY, callback)
+        onDispose { dispatcher.unregisterOnBackInvokedCallback(callback) }
     }
 }
 
