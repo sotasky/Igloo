@@ -25,6 +25,7 @@ interface CacheActions {
     suspend fun stats(): List<CacheStats>
     suspend fun clearCache(bucket: String? = null)
     suspend fun clearCaches(buckets: Collection<String>)
+    suspend fun clearYoutubeDownloads()
     suspend fun clearOwner(ownerKind: String, ownerId: String)
 }
 
@@ -85,6 +86,30 @@ class CacheOps(
             logger.info(
                 event = "cache_cleared",
                 fields = mapOf("buckets" to normalized.joinToString(",")),
+            )
+            deletionFailure?.let { throw it }
+        } finally {
+            if (demoted) syncTrigger()
+        }
+    }
+
+    /**
+     * Clears only locally playable YouTube streams, preserving cached thumbnails,
+     * subtitles, and preview data.
+     */
+    override suspend fun clearYoutubeDownloads() {
+        var demoted = false
+        try {
+            val paths = syncDao.verifiedLocalPathsForYoutubeVideoPrimaryAssets(youtubeVideoBuckets)
+            youtubeVideoBuckets.forEach { bucket ->
+                syncDao.markOfflineYoutubeDownloadsRemovedForPrimaryAssets(bucket, nowMsProvider())
+            }
+            syncDao.resetVerifiedLocalPathsForYoutubeVideoPrimaryAssets(youtubeVideoBuckets)
+            demoted = true
+            val deletionFailure = deleteRecordedFilesOnIo(paths)
+            logger.info(
+                event = "cache_cleared",
+                fields = mapOf("buckets" to youtubeVideoBuckets.joinToString(",")),
             )
             deletionFailure?.let { throw it }
         } finally {
@@ -153,5 +178,9 @@ class CacheOps(
         if (file.exists() && (!file.isFile || !file.delete())) {
             throw IOException("failed to clear recorded asset")
         }
+    }
+
+    private companion object {
+        val youtubeVideoBuckets = listOf("youtube_videos", "videos")
     }
 }

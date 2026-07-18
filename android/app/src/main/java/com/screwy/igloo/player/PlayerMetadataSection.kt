@@ -13,6 +13,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.BookmarkBorder
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.PersonRemove
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Star
@@ -44,6 +45,7 @@ import com.screwy.igloo.data.stripPlatformPrefix
 import com.screwy.igloo.data.entity.ChannelEntity
 import com.screwy.igloo.data.entity.VideoEntity
 import com.screwy.igloo.ui.component.Avatar
+import com.screwy.igloo.ui.component.VideoBinaryAction
 import com.screwy.igloo.ui.component.localizedRelativeTime
 import com.screwy.igloo.ui.theme.iglooColors
 
@@ -56,14 +58,14 @@ internal fun VideoMetaBlock(
     isBookmarked: Boolean,
     isFollowed: Boolean,
     isStarred: Boolean,
-    hasLocalVideo: Boolean,
+    videoBinaryAction: VideoBinaryAction,
     onChannelClick: (channelId: String) -> Unit,
     shareEnabled: Boolean = true,
     onShare: () -> Unit,
     onBookmark: () -> Unit,
     onToggleStar: () -> Unit,
     onUnfollow: () -> Unit,
-    onDeleteLocal: () -> Unit,
+    onVideoBinaryAction: () -> Unit,
     onMentionClick: (String) -> Unit,
     onUrlClick: (String) -> Unit,
     onTimestampClick: (Long) -> Unit,
@@ -156,11 +158,11 @@ internal fun VideoMetaBlock(
         StatsRow(
             metadataCounts = metadataCounts,
             isBookmarked = isBookmarked,
-            hasLocalVideo = hasLocalVideo,
+            videoBinaryAction = videoBinaryAction,
             shareEnabled = shareEnabled,
             onShare = onShare,
             onBookmark = onBookmark,
-            onDeleteLocal = onDeleteLocal,
+            onVideoBinaryAction = onVideoBinaryAction,
         )
 
         val body = video?.description.orEmpty()
@@ -179,11 +181,11 @@ internal fun VideoMetaBlock(
 private fun StatsRow(
     metadataCounts: VideoMetadataCounts,
     isBookmarked: Boolean,
-    hasLocalVideo: Boolean,
+    videoBinaryAction: VideoBinaryAction,
     shareEnabled: Boolean,
     onShare: () -> Unit,
     onBookmark: () -> Unit,
-    onDeleteLocal: () -> Unit,
+    onVideoBinaryAction: () -> Unit,
 ) {
     val colors = MaterialTheme.iglooColors
     Surface(
@@ -237,12 +239,21 @@ private fun StatsRow(
                     tint = if (isBookmarked) colors.primary else colors.onSurfaceMuted,
                 )
             }
-            IconButton(onClick = onDeleteLocal, enabled = hasLocalVideo) {
-                Icon(
-                    imageVector = Icons.Default.Delete,
-                    contentDescription = stringResource(R.string.action_delete_downloaded_video),
-                    tint = if (hasLocalVideo) colors.onSurfaceMuted else colors.onSurfaceFaint,
-                )
+            when (videoBinaryAction) {
+                VideoBinaryAction.Download -> IconButton(onClick = onVideoBinaryAction) {
+                    Icon(
+                        imageVector = Icons.Default.Download,
+                        contentDescription = stringResource(R.string.action_download),
+                        tint = colors.onSurfaceMuted,
+                    )
+                }
+                VideoBinaryAction.Delete -> IconButton(onClick = onVideoBinaryAction) {
+                    Icon(
+                        imageVector = Icons.Default.Delete,
+                        contentDescription = stringResource(R.string.action_delete_downloaded_video),
+                        tint = colors.onSurfaceMuted,
+                    )
+                }
             }
         }
     }

@@ -4,6 +4,7 @@ import androidx.room.Dao
 import androidx.room.Query
 import androidx.room.Upsert
 import com.screwy.igloo.data.entity.OfflineVideoDownloadEntity
+import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface OfflineVideoDownloadDao {
@@ -11,6 +12,9 @@ interface OfflineVideoDownloadDao {
 
     @Query("SELECT * FROM offline_video_downloads WHERE video_id = :videoId")
     suspend fun get(videoId: String): OfflineVideoDownloadEntity?
+
+    @Query("SELECT * FROM offline_video_downloads WHERE video_id = :videoId")
+    fun flow(videoId: String): Flow<OfflineVideoDownloadEntity?>
 
     @Query("DELETE FROM offline_video_downloads WHERE video_id = :videoId")
     suspend fun delete(videoId: String)

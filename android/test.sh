@@ -18,6 +18,12 @@ ensure_android_sdk
 export GRADLE_USER_HOME="${GRADLE_USER_HOME:-$SCRIPT_DIR/.gradle-home}"
 mkdir -p "$GRADLE_USER_HOME"
 
+if [ "${IGLOO_ANDROID_SCRIPT_LOCK_HELD:-}" != "1" ]; then
+    mkdir -p "$SCRIPT_DIR/.gradle-home"
+    export IGLOO_ANDROID_SCRIPT_LOCK_HELD=1
+    exec flock "$SCRIPT_DIR/.gradle-home/igloo-android.lock" "$SCRIPT_DIR/$(basename "$0")" "$@"
+fi
+
 test_args=(":app:testDevtestUnitTest")
 if [ $# -gt 0 ]; then
     test_args+=("--tests" "$@")
@@ -32,7 +38,7 @@ cleanup() {
 trap cleanup EXIT
 
 set +e
-./gradlew "${test_args[@]}" --no-daemon 2>&1 | tee "$test_log"
+./gradlew "${test_args[@]}" 2>&1 | tee "$test_log"
 gradle_status="${PIPESTATUS[0]}"
 set -e
 if [ "$gradle_status" -ne 0 ]; then

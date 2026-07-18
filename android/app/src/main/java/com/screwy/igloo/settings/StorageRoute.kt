@@ -8,10 +8,15 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -59,6 +64,7 @@ fun StorageRoute(
     val storiesWindowHours by storageVm.storiesWindowHours.collectAsStateWithLifecycle()
     val stats by storageVm.stats.collectAsStateWithLifecycle()
     val statsLoading by storageVm.statsLoading.collectAsStateWithLifecycle()
+    var pendingCacheClear by remember { mutableStateOf<CacheClearAction?>(null) }
 
     SettingsSubScreen(
         title = stringResource(R.string.settings_storage_sync),
@@ -101,15 +107,17 @@ fun StorageRoute(
             stats.isEmpty() -> SectionDescription(stringResource(R.string.settings_no_cached_media))
             else -> stats.forEach { row -> StatsRow(row) }
         }
-        TextActionRow(label = stringResource(R.string.action_clear_all_cache)) { storageVm.clearCache(null) }
+        TextActionRow(label = stringResource(R.string.action_clear_all_cache)) {
+            pendingCacheClear = CacheClearAction.All
+        }
         TextActionRow(label = stringResource(R.string.action_clear_youtube_cache)) {
-            storageVm.clearCacheBuckets(YoutubeDownloadBuckets)
+            pendingCacheClear = CacheClearAction.Youtube
         }
         TextActionRow(label = stringResource(R.string.action_clear_moments_cache)) {
-            storageVm.clearCacheBuckets(MomentsDownloadBuckets)
+            pendingCacheClear = CacheClearAction.Moments
         }
         TextActionRow(label = stringResource(R.string.action_clear_x_cache)) {
-            storageVm.clearCacheBuckets(XDownloadBuckets)
+            pendingCacheClear = CacheClearAction.X
         }
 
         SectionHeader(stringResource(R.string.settings_section_export))
@@ -119,11 +127,52 @@ fun StorageRoute(
             uiEffects.emit(UiEffect.Toast(exportUnavailable))
         }
     }
+
+    pendingCacheClear?.let { action ->
+        AlertDialog(
+            onDismissRequest = { pendingCacheClear = null },
+            title = {
+                Text(
+                    stringResource(
+                        R.string.settings_clear_cache_title,
+                        stringResource(action.labelRes),
+                    )
+                )
+            },
+            text = { Text(stringResource(R.string.settings_clear_cache_help)) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        pendingCacheClear = null
+                        when (action) {
+                            CacheClearAction.All -> storageVm.clearCache(null)
+                            CacheClearAction.Youtube -> storageVm.clearYoutubeDownloads()
+                            CacheClearAction.Moments -> storageVm.clearCacheBuckets(MomentsDownloadBuckets)
+                            CacheClearAction.X -> storageVm.clearCacheBuckets(XDownloadBuckets)
+                        }
+                    },
+                ) {
+                    Text(stringResource(R.string.action_clear))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingCacheClear = null }) {
+                    Text(stringResource(R.string.action_cancel))
+                }
+            },
+        )
+    }
 }
 
-private val YoutubeDownloadBuckets = listOf("youtube_videos", "videos")
 private val MomentsDownloadBuckets = listOf("shorts_videos")
 private val XDownloadBuckets = listOf("twitter_media")
+
+private enum class CacheClearAction(val labelRes: Int) {
+    All(R.string.action_clear_all_cache),
+    Youtube(R.string.action_clear_youtube_cache),
+    Moments(R.string.action_clear_moments_cache),
+    X(R.string.action_clear_x_cache),
+}
 
 @Composable
 private fun StatsRow(row: CacheStats) {

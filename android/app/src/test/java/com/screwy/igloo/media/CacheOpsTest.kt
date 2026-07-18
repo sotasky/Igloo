@@ -109,8 +109,19 @@ class CacheOpsTest {
     }
 
     @Test
-    fun clearingManualYoutubePrimaryBytesMarksTheDownloadRemoved() = runBlocking {
+    fun clearingYoutubeDownloadsPreservesMetadataAndRemovesEveryPrimaryStream() = runBlocking {
+        val automaticStream = assetFile("youtube_videos/automatic.mp4", 3)
         val stream = assetFile("youtube_videos/manual.mp4", 5)
+        val thumbnail = assetFile("youtube_videos/manual.jpg", 7)
+        val subtitles = assetFile("youtube_videos/manual.vtt", 11)
+        insertAsset(
+            assetId = "automatic_stream",
+            ownerKind = "youtube_video",
+            ownerId = "automatic_video",
+            bucket = "youtube_videos",
+            file = automaticStream,
+            assetKind = "video_stream",
+        )
         insertAsset(
             assetId = "manual_stream",
             ownerKind = "youtube_video",
@@ -119,13 +130,36 @@ class CacheOpsTest {
             file = stream,
             assetKind = "video_stream",
         )
+        insertAsset(
+            assetId = "manual_thumbnail",
+            ownerKind = "youtube_video",
+            ownerId = "sample_video",
+            bucket = "youtube_videos",
+            file = thumbnail,
+            assetKind = "post_thumbnail",
+        )
+        insertAsset(
+            assetId = "manual_subtitles",
+            ownerKind = "youtube_video",
+            ownerId = "sample_video",
+            bucket = "youtube_videos",
+            file = subtitles,
+            assetKind = "subtitle",
+        )
         db.offlineVideoDownloadDao().upsert(
             OfflineVideoDownloadEntity("sample_video", state = "downloaded", updatedAtMs = 1L),
         )
 
-        buildCacheOps().clearCache("youtube_videos")
+        buildCacheOps().clearYoutubeDownloads()
 
+        assertFalse(automaticStream.exists())
         assertFalse(stream.exists())
+        assertTrue(thumbnail.exists())
+        assertTrue(subtitles.exists())
+        assertNull(db.androidSyncDao().asset("automatic_stream")?.localPath)
+        assertNull(db.androidSyncDao().asset("manual_stream")?.localPath)
+        assertEquals(thumbnail.absolutePath, db.androidSyncDao().asset("manual_thumbnail")?.localPath)
+        assertEquals(subtitles.absolutePath, db.androidSyncDao().asset("manual_subtitles")?.localPath)
         assertEquals("removed", db.offlineVideoDownloadDao().get("sample_video")?.state)
     }
 
@@ -142,7 +176,7 @@ class CacheOpsTest {
             OfflineVideoDownloadEntity("sample_video", state = "requested", updatedAtMs = 1L),
         )
 
-        buildCacheOps().clearCache("youtube_videos")
+        buildCacheOps().clearYoutubeDownloads()
 
         assertEquals("removed", db.offlineVideoDownloadDao().get("sample_video")?.state)
     }

@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -33,6 +34,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -185,14 +187,15 @@ private const val VideoGridLoadMoreThreshold = 6
 enum class VideoBinaryAction {
     Download,
     Delete,
-    Unavailable,
 }
 
-internal fun videoBinaryAction(streamUri: MediaUri): VideoBinaryAction =
-    when (streamUri) {
-        is MediaUri.Local -> VideoBinaryAction.Delete
-        is MediaUri.Remote -> VideoBinaryAction.Download
-        MediaUri.Missing -> VideoBinaryAction.Unavailable
+internal fun videoBinaryAction(
+    streamUri: MediaUri,
+    isManualDownload: Boolean = streamUri is MediaUri.Local,
+): VideoBinaryAction =
+    when {
+        isManualDownload -> VideoBinaryAction.Delete
+        else -> VideoBinaryAction.Download
     }
 
 internal fun videoGridChannelLabel(item: VideoGridItem): String {
@@ -233,13 +236,20 @@ private fun VideoCell(
     channelLabel: String,
 ) {
     val colors = MaterialTheme.iglooColors
+    val title =
+        Dearrow.resolveTitle(
+            dearrowMode,
+            item.video.title,
+            item.video.dearrowTitle,
+            item.video.dearrowTitleCasual,
+        ).ifEmpty { stringResource(R.string.common_untitled) }
+    val titleLineHeight = with(LocalDensity.current) { MaterialTheme.typography.bodyMedium.lineHeight.toDp() }
+    val metadataHeight = titleLineHeight * 2 + 24.dp
     val video = item.video
     val streamUri by resolvers.videoStreamFlow(video.videoId, OwnerKind.YouTubeVideo)
         .collectAsState(initial = MediaUri.Missing)
     val binaryAction = videoBinaryAction(streamUri)
-    val onBinaryLongClick = onVideoLongClick
-        ?.takeIf { binaryAction != VideoBinaryAction.Unavailable }
-        ?.let { callback -> { callback(binaryAction) } }
+    val onBinaryLongClick = onVideoLongClick?.let { callback -> { callback(binaryAction) } }
 
     Column(
         modifier = Modifier
@@ -257,30 +267,26 @@ private fun VideoCell(
             isVideoLocal = streamUri is MediaUri.Local,
         )
 
-        Text(
-            text = Dearrow.resolveTitle(
-                dearrowMode,
-                video.title,
-                video.dearrowTitle,
-                video.dearrowTitleCasual,
+        Column(modifier = Modifier.height(metadataHeight)) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.bodyMedium,
+                color = colors.onSurface,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .videoCardClick(onClick = onVideoClick, onLongClick = onBinaryLongClick),
             )
-                .ifEmpty { stringResource(R.string.common_untitled) },
-            style = MaterialTheme.typography.bodyMedium,
-            color = colors.onSurface,
-            minLines = 2,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier
-                .fillMaxWidth()
-                .videoCardClick(onClick = onVideoClick, onLongClick = onBinaryLongClick),
-        )
-
-        ChannelAndTimeRow(
-            channelId = video.channelId,
-            channelLabel = channelLabel,
-            publishedAtMs = video.publishedAt,
-            onChannelClick = onChannelClick,
-        )
+            Spacer(modifier = Modifier.height(4.dp))
+            ChannelAndTimeRow(
+                channelId = video.channelId,
+                channelLabel = channelLabel,
+                publishedAtMs = video.publishedAt,
+                onChannelClick = onChannelClick,
+            )
+            Spacer(modifier = Modifier.weight(1f))
+        }
     }
 }
 

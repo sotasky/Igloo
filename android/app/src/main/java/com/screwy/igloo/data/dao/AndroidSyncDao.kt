@@ -249,6 +249,29 @@ interface AndroidSyncDao {
 
     @Query(
         """
+        SELECT local_path FROM android_sync_assets
+        WHERE owner_kind = 'youtube_video'
+          AND ${youtubeVideoPrimaryAssetSql}
+          AND local_path IS NOT NULL
+          AND bucket IN (:buckets)
+        """,
+    )
+    suspend fun verifiedLocalPathsForYoutubeVideoPrimaryAssets(buckets: List<String>): List<String>
+
+    @Query(
+        """
+        UPDATE android_sync_assets
+        SET local_path = NULL, verified_at_ms = NULL, next_attempt_at_ms = 0
+        WHERE owner_kind = 'youtube_video'
+          AND ${youtubeVideoPrimaryAssetSql}
+          AND local_path IS NOT NULL
+          AND bucket IN (:buckets)
+        """,
+    )
+    suspend fun resetVerifiedLocalPathsForYoutubeVideoPrimaryAssets(buckets: List<String>): Int
+
+    @Query(
+        """
         SELECT asa.*
         FROM android_sync_assets asa
         WHERE asa.state = 'ready'

@@ -118,6 +118,18 @@ class StorageViewModel(
         }
     }
 
+    fun clearYoutubeDownloads() {
+        viewModelScope.launch(Dispatchers.IO) {
+            _statsLoading.value = true
+            try {
+                cacheOps.clearYoutubeDownloads()
+                _stats.value = cacheOps.stats()
+            } finally {
+                _statsLoading.value = false
+            }
+        }
+    }
+
     fun triggerSyncNow() {
         scheduler?.triggerAll()
     }

@@ -19,6 +19,12 @@ ensure_android_sdk
 export GRADLE_USER_HOME="${GRADLE_USER_HOME:-$SCRIPT_DIR/.gradle-home}"
 mkdir -p "$GRADLE_USER_HOME"
 
+if [ "${IGLOO_ANDROID_SCRIPT_LOCK_HELD:-}" != "1" ]; then
+    mkdir -p "$SCRIPT_DIR/.gradle-home"
+    export IGLOO_ANDROID_SCRIPT_LOCK_HELD=1
+    exec flock "$SCRIPT_DIR/.gradle-home/igloo-android.lock" "$SCRIPT_DIR/$(basename "$0")" "$@"
+fi
+
 echo "🚀 Igloo Android"
 echo "   JAVA_HOME=$JAVA_HOME"
 echo "   ANDROID_HOME=$ANDROID_HOME"
@@ -33,21 +39,21 @@ if [ "${1:-}" = "test" ]; then
         test_args+=("--tests" "$@")
     fi
     echo "🧪 Running unit tests..."
-    ./gradlew "${test_args[@]}" --no-daemon
+    ./gradlew "${test_args[@]}"
     echo "✅ All tests passed!"
     exit 0
 fi
 
 if [ "${1:-}" = "compile" ]; then
     echo "🔧 Compiling (no APK, no install)..."
-    ./gradlew :app:compileDebugKotlin --no-daemon
+    ./gradlew :app:compileDebugKotlin
     echo "✅ Compile successful!"
     exit 0
 fi
 
 if [ "${1:-}" = "apk" ]; then
     echo "📦 Building APK (no install)..."
-    ./gradlew clean :app:assembleDebug --no-daemon
+    ./gradlew clean :app:assembleDebug
     echo "✅ Build successful!"
     exit 0
 fi
@@ -60,14 +66,14 @@ if [ "${1:-}" = "androidTest" ]; then
         test_args+=("-Pandroid.testInstrumentationRunnerArguments.class=$1")
     fi
     echo "🧪 Running instrumentation tests (target: com.screwy.igloo.devtest)..."
-    ./gradlew "${test_args[@]}" --no-daemon
+    ./gradlew "${test_args[@]}"
     echo "✅ Instrumentation tests passed!"
     exit 0
 fi
 
 # ── Default: Build APK + Install ──
 
-./gradlew clean :app:assembleDebug --no-daemon
+./gradlew clean :app:assembleDebug
 echo ""
 echo "✅ Build successful!"
 

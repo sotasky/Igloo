@@ -46,14 +46,18 @@ import com.screwy.igloo.data.PreferencesRepo
 import com.screwy.igloo.data.dao.BookmarkDao
 import com.screwy.igloo.data.dao.ChannelFollowDao
 import com.screwy.igloo.data.dao.ChannelStarDao
+import com.screwy.igloo.data.dao.OfflineVideoDownloadDao
 import com.screwy.igloo.data.dao.VideoDao
-import com.screwy.igloo.media.MediaUri
 import com.screwy.igloo.net.IglooHostProvider
 import com.screwy.igloo.net.auth.AuthTokenProvider
 import com.screwy.igloo.outbox.OutboxKind
 import com.screwy.igloo.outbox.OutboxWriter
 import com.screwy.igloo.sync.OfflineVideoActions
+import com.screwy.igloo.ui.UiEffect
+import com.screwy.igloo.ui.UiEffects
+import com.screwy.igloo.ui.component.VideoBinaryAction
 import com.screwy.igloo.ui.component.sharePlainText
+import com.screwy.igloo.ui.component.videoBinaryAction
 import com.screwy.igloo.ui.nav.IglooNavigationSource
 import com.screwy.igloo.ui.nav.rememberIglooNavigator
 import kotlinx.coroutines.delay
@@ -111,7 +115,9 @@ fun PlayerRoute(videoId: String, navController: NavController, modifier: Modifie
     val bookmarkDao: BookmarkDao = koinInject()
     val channelFollowDao: ChannelFollowDao = koinInject()
     val channelStarDao: ChannelStarDao = koinInject()
+    val offlineVideoDownloadDao: OfflineVideoDownloadDao = koinInject()
     val offlineVideoActions: OfflineVideoActions = koinInject()
+    val uiEffects: UiEffects = koinInject()
     val videoDao: VideoDao = koinInject()
     val outboxWriter: OutboxWriter = koinInject()
     val player =
@@ -342,7 +348,12 @@ fun PlayerRoute(videoId: String, navController: NavController, modifier: Modifie
     val isBookmarked = bookmarkRow != null
     val isFollowed = channelId != null && followedChannels.any { it.channelId == channelId }
     val isStarred = channelId != null && starredChannels.any { it.channelId == channelId }
-    val hasLocalVideo = streamUri is MediaUri.Local
+    val offlineVideoDownload by
+        offlineVideoDownloadDao.flow(videoId).collectAsStateWithLifecycle(initialValue = null)
+    val binaryAction = videoBinaryAction(
+        streamUri = streamUri,
+        isManualDownload = offlineVideoDownload?.state == "downloaded",
+    )
     val displayPosterUri = thumbnailUri
     val playerTitle =
         Dearrow.resolveTitle(
@@ -358,9 +369,15 @@ fun PlayerRoute(videoId: String, navController: NavController, modifier: Modifie
         }
     val onNextVideo =
         nextVideoId?.let { nextId -> { navigator.openVideo(nextId, IglooNavigationSource.Player) } }
-    fun deleteLocalMedia() {
-        scope.launch {
-            offlineVideoActions.removeDownload(videoId)
+    fun onVideoBinaryAction() {
+        when (binaryAction) {
+            VideoBinaryAction.Download -> {
+                scope.launch {
+                    offlineVideoActions.requestDownload(videoId)
+                    uiEffects.emit(UiEffect.ToastRes(R.string.status_video_download_queued))
+                }
+            }
+            VideoBinaryAction.Delete -> showDeleteLocalDialog = true
         }
     }
     if (isFullscreen) {
@@ -436,7 +453,7 @@ fun PlayerRoute(videoId: String, navController: NavController, modifier: Modifie
                     isBookmarked = isBookmarked,
                     isFollowed = isFollowed,
                     isStarred = isStarred,
-                    hasLocalVideo = hasLocalVideo,
+                    videoBinaryAction = binaryAction,
                     onChannelClick = { cid ->
                         navigator.openChannel(cid, IglooNavigationSource.Player)
                     },
@@ -475,7 +492,7 @@ fun PlayerRoute(videoId: String, navController: NavController, modifier: Modifie
                         }
                     },
                     onUnfollow = { showUnfollowDialog = true },
-                    onDeleteLocal = { showDeleteLocalDialog = true },
+                    onVideoBinaryAction = ::onVideoBinaryAction,
                     onMentionClick = vm::resolveMentionAndNavigate,
                     onUrlClick = uriHandler::openUri,
                     onTimestampClick = { targetMs ->
@@ -523,7 +540,7 @@ fun PlayerRoute(videoId: String, navController: NavController, modifier: Modifie
                 TextButton(
                     onClick = {
                         showDeleteLocalDialog = false
-                        deleteLocalMedia()
+                        scope.launch { offlineVideoActions.removeDownload(videoId) }
                     }
                 ) {
                     Text(

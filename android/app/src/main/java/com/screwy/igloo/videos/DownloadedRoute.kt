@@ -14,6 +14,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavController
 import com.screwy.igloo.R
 import com.screwy.igloo.sync.OfflineVideoActions
+import com.screwy.igloo.ui.UiEffect
+import com.screwy.igloo.ui.UiEffects
 import com.screwy.igloo.ui.UiStateSwitch
 import com.screwy.igloo.ui.component.DeleteDownloadedVideoDialog
 import com.screwy.igloo.ui.component.VideoBinaryAction
@@ -38,6 +40,7 @@ fun DownloadedRoute(
     val canLoadMore by vm.canLoadMore.collectAsStateWithLifecycle()
     val isLoadingMore by vm.isLoadingMore.collectAsStateWithLifecycle()
     val offlineVideoActions: OfflineVideoActions = koinInject()
+    val uiEffects: UiEffects = koinInject()
     val navigator = rememberIglooNavigator(navController)
     val scope = rememberCoroutineScope()
     var deleteVideoId by rememberSaveable { mutableStateOf<String?>(null) }
@@ -60,10 +63,12 @@ fun DownloadedRoute(
                 onVideoLongClick = { videoId, action ->
                     when (action) {
                         VideoBinaryAction.Download -> {
-                            scope.launch { offlineVideoActions.requestDownload(videoId) }
+                            scope.launch {
+                                offlineVideoActions.requestDownload(videoId)
+                                uiEffects.emit(UiEffect.ToastRes(R.string.status_video_download_queued))
+                            }
                         }
                         VideoBinaryAction.Delete -> deleteVideoId = videoId
-                        VideoBinaryAction.Unavailable -> Unit
                     }
                 },
                 canLoadMore = canLoadMore && !isLoadingMore,

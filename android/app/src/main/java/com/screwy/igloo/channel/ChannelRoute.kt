@@ -30,6 +30,8 @@ import com.screwy.igloo.feed.FeedMediaGridModel
 import com.screwy.igloo.feed.SocialPostModel
 import com.screwy.igloo.feed.buildProfileOpenSnapshot
 import com.screwy.igloo.sync.OfflineVideoActions
+import com.screwy.igloo.ui.UiEffect
+import com.screwy.igloo.ui.UiEffects
 import com.screwy.igloo.ui.UiState
 import com.screwy.igloo.ui.UiStateSwitch
 import com.screwy.igloo.ui.component.BookmarkCategoryDisplay
@@ -92,6 +94,7 @@ fun ChannelRoute(
     var confirmUnfollow by remember { mutableStateOf(false) }
     var deleteVideoId by rememberSaveable { mutableStateOf<String?>(null) }
     val offlineVideoActions: OfflineVideoActions = koinInject()
+    val uiEffects: UiEffects = koinInject()
     val navigator = rememberIglooNavigator(navController)
     val scope = rememberCoroutineScope()
 
@@ -257,10 +260,12 @@ fun ChannelRoute(
                     onVideoLongClick = { videoId, action ->
                         when (action) {
                             VideoBinaryAction.Download -> {
-                                scope.launch { offlineVideoActions.requestDownload(videoId) }
+                                scope.launch {
+                                    offlineVideoActions.requestDownload(videoId)
+                                    uiEffects.emit(UiEffect.ToastRes(R.string.status_video_download_queued))
+                                }
                             }
                             VideoBinaryAction.Delete -> deleteVideoId = videoId
-                            VideoBinaryAction.Unavailable -> Unit
                         }
                     },
                 )

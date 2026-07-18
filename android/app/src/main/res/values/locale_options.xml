@@ -1,10 +1,8 @@
 <resources>
     <string-array name="supported_locale_tags" translatable="false">
         <item>en</item>
-        <item>tr</item>
     </string-array>
     <string-array name="supported_locale_labels" translatable="false">
         <item>English</item>
-        <item>Türkçe</item>
     </string-array>
 </resources>

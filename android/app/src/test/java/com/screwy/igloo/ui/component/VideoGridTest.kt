@@ -131,7 +131,14 @@ class VideoGridTest {
             VideoBinaryAction.Download,
             videoBinaryAction(MediaUri.Remote("https://igloo.example/video")),
         )
-        assertEquals(VideoBinaryAction.Unavailable, videoBinaryAction(MediaUri.Missing))
+        assertEquals(VideoBinaryAction.Download, videoBinaryAction(MediaUri.Missing))
+        assertEquals(
+            VideoBinaryAction.Download,
+            videoBinaryAction(
+                MediaUri.Local(java.io.File("/media/temporary-video.mp4")),
+                isManualDownload = false,
+            ),
+        )
     }
 
     @Test
