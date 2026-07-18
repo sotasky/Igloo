@@ -12,12 +12,14 @@ scripts/install.sh --check
 
 This checks for dependencies. You need Go 1.26 or newer, the `templ` generator, `yt-dlp`,
 `gallery-dl`, `ffmpeg`, SQLite, and such.
+
 For server/web development:
 
 ```bash
-scripts/dev/build.sh          # build Go server and assets
-scripts/dev/build.sh restart  # build and restart the local server
-go test ./...
+just build      # build Go server and assets
+just restart    # build and restart the local server
+just test-go    # Go suite only
+just test       # full repository gate
 ```
 
 Then open the local server and finish setup in the browser:
@@ -42,10 +44,10 @@ For Android work, keep the local server
 schema and the Room mirror in sync.
 
 ```bash
-android/test.sh <ClassFilter>  # focused JVM test while iterating
-android/test.sh                # full JVM unit test suite
-android/build.sh               # build, install, and relaunch on a connected device (first device with 192.168.1 in adb devices, convenience for me, you can change that)
-android/build.sh apk           # build APK without installing
+just test-android <ClassFilter>  # focused JVM test while iterating
+just test-android                # full JVM unit test suite
+just build-android               # build, install, and relaunch on a connected device
+just android-apk                 # build APK without installing
 ```
 
 ## Configuration

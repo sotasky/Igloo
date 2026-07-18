@@ -82,7 +82,10 @@ internal fun buildMediaImageRequest(
     val builder = ImageRequest.Builder(context)
         .data(data)
         .apply {
-            mediaImageMemoryCacheKey(uri)?.let(::memoryCacheKey)
+            mediaImageMemoryCacheKey(uri)?.let { cacheKey ->
+                memoryCacheKey(cacheKey)
+                placeholderMemoryCacheKey(cacheKey)
+            }
             if (widthPx > 0 && heightPx > 0) {
                 size(widthPx, heightPx)
             }

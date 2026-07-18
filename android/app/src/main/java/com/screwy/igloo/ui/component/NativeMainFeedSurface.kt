@@ -57,6 +57,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.recyclerview.widget.LinearLayoutManager
 import coil3.ImageLoader
 import com.screwy.igloo.R
+import com.screwy.igloo.data.IglooDatabase
 import com.screwy.igloo.data.PreferencesRepo
 import com.screwy.igloo.data.entity.FeedRow
 import com.screwy.igloo.data.entity.ThreadedFeedRow
@@ -65,9 +66,9 @@ import com.screwy.igloo.feed.SocialPostModel
 import com.screwy.igloo.media.MediaResolvers
 import com.screwy.igloo.net.IglooHostProvider
 import com.screwy.igloo.net.auth.AuthTokenProvider
+import com.screwy.igloo.outbox.PendingFeedActionOverrides
+import com.screwy.igloo.outbox.pendingFeedActionOverrides
 import com.screwy.igloo.ui.UiState
-import com.screwy.igloo.ui.nav.ApplyOverlayChrome
-import com.screwy.igloo.ui.nav.OverlayChromeState
 import com.screwy.igloo.ui.theme.iglooColors
 import kotlinx.coroutines.delay
 import org.koin.compose.koinInject
@@ -149,8 +150,17 @@ internal fun NativeFeedSurface(
     val iglooHostProvider: IglooHostProvider = koinInject()
     val mediaResolvers: MediaResolvers = koinInject()
     val prefs: PreferencesRepo = koinInject()
+    val db: IglooDatabase = koinInject()
     val useEmbedFriendlyShareLinks by prefs.shareEmbedFriendlyLinks()
         .collectAsStateWithLifecycle(initialValue = PreferencesRepo.Defaults.SHARE_EMBED_FRIENDLY_LINKS)
+    val pendingFeedActionRows by db.outboxDao().pendingFeedActionRowsFlow()
+        .collectAsStateWithLifecycle(initialValue = emptyList())
+    val displayRows = remember(rows, pendingFeedActionRows) {
+        nativeFeedRowsWithPendingActionOverrides(
+            rows = rows,
+            overrides = pendingFeedActionOverrides(pendingFeedActionRows),
+        )
+    }
     val lifecycleOwner = LocalLifecycleOwner.current
     val colors = nativeFeedColors()
     var pendingUnfollowChannelId by remember { mutableStateOf<String?>(null) }
@@ -207,10 +217,6 @@ internal fun NativeFeedSurface(
     }
     val showNewPostsPill = newPostsAvailable && pendingBookmark == null
 
-    ApplyOverlayChrome(
-        if (pendingBookmark != null) OverlayChromeState.HideTopBar else OverlayChromeState.None,
-    )
-
     LaunchedEffect(seenBatcher) {
         while (true) {
             delay(3_000L)
@@ -263,7 +269,7 @@ internal fun NativeFeedSurface(
                     factory = { controller.rootView },
                     update = {
                         controller.update(
-                            rows = rows,
+                            rows = displayRows,
                             channelHeader = channelHeader,
                             mediaModels = mediaModels,
                             colors = colors,
@@ -376,6 +382,57 @@ internal fun NativeFeedSurface(
                     },
                 )
             }
+    }
+}
+
+/**
+ * Applies queued likes and bookmarks to rendered rows only. Clears deliberately remain in the
+ * canonical Room tables until acknowledged, so the screen reads the queued intent here.
+ */
+internal fun nativeFeedRowsWithPendingActionOverrides(
+    rows: List<ThreadedFeedRow>,
+    overrides: PendingFeedActionOverrides,
+): List<ThreadedFeedRow> {
+    if (overrides.isEmpty) return rows
+
+    val bookmarkOverridesByHash = linkedMapOf<String, Boolean>()
+    rows.asSequence()
+        .flatMap { threaded -> (threaded.chain + threaded.row).asSequence() }
+        .forEach { row ->
+            val override = overrides.bookmarksByTweetId[row.item.tweetId] ?: return@forEach
+            row.item.contentHash
+                ?.trim()
+                ?.takeIf { it.isNotEmpty() }
+                ?.let { hash -> bookmarkOverridesByHash[hash] = override }
+        }
+
+    fun FeedRow.withPendingActions(): FeedRow {
+        val liked = overrides.likesByTweetId[item.tweetId]
+        val bookmarked =
+            overrides.bookmarksByTweetId[item.tweetId]
+                ?: item.contentHash
+                    ?.trim()
+                    ?.takeIf { it.isNotEmpty() }
+                    ?.let(bookmarkOverridesByHash::get)
+        if (liked == null && bookmarked == null) return this
+
+        return copy(
+            isLiked = liked?.let { if (it) 1 else 0 } ?: isLiked,
+            likedAt = if (liked == false) null else likedAt,
+            isBookmarked = bookmarked?.let { if (it) 1 else 0 } ?: isBookmarked,
+            bookmarkCategoryId = if (bookmarked == false) null else bookmarkCategoryId,
+            bookmarkCustomTitle = if (bookmarked == false) null else bookmarkCustomTitle,
+            bookmarkedAt = if (bookmarked == false) null else bookmarkedAt,
+            bookmarkAccountHandles = if (bookmarked == false) null else bookmarkAccountHandles,
+            bookmarkMediaIndices = if (bookmarked == false) null else bookmarkMediaIndices,
+        )
+    }
+
+    return rows.map { threaded ->
+        threaded.copy(
+            row = threaded.row.withPendingActions(),
+            chain = threaded.chain.map(FeedRow::withPendingActions),
+        )
     }
 }
 

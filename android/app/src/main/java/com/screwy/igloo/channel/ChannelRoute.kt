@@ -50,9 +50,7 @@ import com.screwy.igloo.ui.component.channelProfileHeaderUiModel
 import com.screwy.igloo.ui.component.channelProfileOverflowControls
 import com.screwy.igloo.ui.component.normalizeHandle
 import com.screwy.igloo.ui.component.parsePlatform
-import com.screwy.igloo.ui.nav.ApplyOverlayChrome
 import com.screwy.igloo.ui.nav.IglooNavigationSource
-import com.screwy.igloo.ui.nav.OverlayChromeState
 import com.screwy.igloo.ui.nav.ProfileOpenSnapshot
 import com.screwy.igloo.ui.nav.rememberIglooNavigator
 import kotlinx.coroutines.launch
@@ -97,14 +95,6 @@ fun ChannelRoute(
     val uiEffects: UiEffects = koinInject()
     val navigator = rememberIglooNavigator(navController)
     val scope = rememberCoroutineScope()
-
-    ApplyOverlayChrome(
-        if (pendingBookmark != null) {
-            OverlayChromeState.HideTopBar
-        } else {
-            OverlayChromeState.None
-        },
-    )
 
     UiStateSwitch(state = uiState, modifier = modifier) {
         val matchingSnapshot = initialSnapshot?.takeIf { it.channelId == channelId }
@@ -259,15 +249,15 @@ fun ChannelRoute(
                     },
                     onVideoLongClick = { videoId, action ->
                         when (action) {
-                            VideoBinaryAction.Download -> {
-                                scope.launch {
-                                    offlineVideoActions.requestDownload(videoId)
-                                    uiEffects.emit(UiEffect.ToastRes(R.string.status_video_download_queued))
-                                }
+                        VideoBinaryAction.Download -> {
+                            scope.launch {
+                                offlineVideoActions.requestDownload(videoId)
+                                uiEffects.emit(UiEffect.ToastRes(R.string.status_video_download_queued))
                             }
-                            VideoBinaryAction.Delete -> deleteVideoId = videoId
                         }
-                    },
+                        VideoBinaryAction.Delete -> deleteVideoId = videoId
+                    }
+                },
                 )
             }
             null -> androidx.compose.foundation.layout.Column(modifier = Modifier.fillMaxSize()) {

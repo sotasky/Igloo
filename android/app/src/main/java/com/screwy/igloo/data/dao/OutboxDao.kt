@@ -93,6 +93,19 @@ interface OutboxDao {
     @Query("SELECT * FROM outbox WHERE state = 'pending' ORDER BY created_at_ms, id")
     suspend fun pendingRows(): List<OutboxEntity>
 
+    /**
+     * Pending feed actions are rendered immediately, including clears that keep their
+     * canonical local state until the server acknowledges them.
+     */
+    @Query(
+        """
+        SELECT * FROM outbox
+        WHERE state = 'pending' AND kind IN ('like', 'bookmark')
+        ORDER BY created_at_ms, id
+        """
+    )
+    fun pendingFeedActionRowsFlow(): Flow<List<OutboxEntity>>
+
     // ─── Result application ───────────────────────────────────────────────────
 
     @Query("DELETE FROM outbox WHERE id = :id")

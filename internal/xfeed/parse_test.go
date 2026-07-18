@@ -46,6 +46,63 @@ func TestParseDumpFoldsParentAndQuoteMedia(t *testing.T) {
 	}
 }
 
+func TestParseDumpKeepsSourceAuthoredQuoteExpansionAsDirectItem(t *testing.T) {
+	output := []byte(`[
+		[2, {"tweet_id":"9000000000000000100","content":"foreign quote","date":"2026-05-09 10:27:49","author":{"name":"sample_parent","nick":"Sample Parent"},"user":{"name":"sample_source","nick":"Sample Source"},"quote_id":0,"reply_id":0,"retweet_id":0}],
+		[2, {"tweet_id":"9000000000000000200","content":"source photo","date":"2026-05-09 09:00:00","quote_by":"sample_parent","author":{"name":"unknown","nick":"Sample Source"},"user":{"name":"sample_source","nick":"Sample Source"},"quote_id":"9000000000000000100","reply_id":0,"retweet_id":0}],
+		[3, "https://pbs.twimg.com/media/source-photo.jpg?format=jpg&name=orig", {"tweet_id":"9000000000000000200","type":"photo","width":1200,"height":800}]
+	]`)
+
+	result := ParseDump(output, "sample_source")
+	if len(result.Items) != 2 {
+		t.Fatalf("items = %d, want 2", len(result.Items))
+	}
+	byID := make(map[string]FeedItem, len(result.Items))
+	for _, item := range result.Items {
+		byID[item.TweetID] = item
+	}
+
+	outer := byID["9000000000000000100"]
+	if outer.QuoteTweetID != "9000000000000000200" || len(outer.QuoteMedia) != 1 {
+		t.Fatalf("outer quote = %#v", outer)
+	}
+	source := byID["9000000000000000200"]
+	if source.AuthorHandle != "sample_source" || source.SourceHandle != "sample_source" ||
+		source.CanonicalURL != "https://x.com/sample_source/status/9000000000000000200" {
+		t.Fatalf("source identity = %#v", source)
+	}
+	if len(source.Media) != 1 || source.Media[0].Type != "photo" {
+		t.Fatalf("source media = %#v", source.Media)
+	}
+	if len(result.MissingQuoteParents) != 0 {
+		t.Fatalf("missing quote parents = %#v", result.MissingQuoteParents)
+	}
+}
+
+func TestParseDumpDoesNotUseRequestedSourceAsQuoteExpansionProvenance(t *testing.T) {
+	output := []byte(`[
+		[2, {"tweet_id":"9000000000000000300","content":"foreign quote","author":{"name":"sample_parent","nick":"Sample Parent"},"user":{"name":"sample_source","nick":"Sample Source"},"quote_id":0,"reply_id":0,"retweet_id":0}],
+		[2, {"tweet_id":"9000000000000000400","content":"unknown expansion","quote_by":"sample_parent","author":{"name":"unknown","nick":"Unknown"},"quote_id":"9000000000000000300","reply_id":0,"retweet_id":0}]
+	]`)
+
+	result := ParseDump(output, "sample_source")
+	if len(result.Items) != 1 || result.Items[0].TweetID != "9000000000000000300" {
+		t.Fatalf("items = %#v", result.Items)
+	}
+}
+
+func TestParseDumpDoesNotTreatRetweetQuoteExpansionAsSourcePost(t *testing.T) {
+	output := []byte(`[
+		[2, {"tweet_id":"9000000000000000500","content":"foreign quote","author":{"name":"sample_parent","nick":"Sample Parent"},"user":{"name":"sample_source","nick":"Sample Source"},"quote_id":0,"reply_id":0,"retweet_id":0}],
+		[2, {"tweet_id":"9000000000000000600","content":"RT @sample_source: source post","quote_by":"sample_parent","author":{"name":"sample_source","nick":"Sample Source"},"user":{"name":"sample_reposter","nick":"Sample Reposter"},"quote_id":"9000000000000000500","reply_id":0,"retweet_id":"9000000000000000700"}]
+	]`)
+
+	result := ParseDump(output, "sample_source")
+	if len(result.Items) != 1 || result.Items[0].TweetID != "9000000000000000500" {
+		t.Fatalf("items = %#v", result.Items)
+	}
+}
+
 func TestParseDumpRetweetKeepsWrapperAndStripsPrefix(t *testing.T) {
 	output := []byte(`[
 		[2, {"tweet_id":"1000000000000000300","retweet_id":"1000000000000000200","content":"RT @original_author: original text","date":"2026-05-09 10:00:00","lang":"en","author":{"name":"original_author","nick":"Original Author","profile_image":"https://pbs.twimg.com/profile_images/o_normal.jpg"},"user":{"name":"reposter","nick":"Reposter"},"quote_id":0,"reply_id":0}]
@@ -165,6 +222,70 @@ func TestClientFetchTimelineRetriesAllCookies(t *testing.T) {
 	}
 	if strings.Join(used, ",") != "/tmp/cookie-a.txt,/tmp/cookie-b.txt,/tmp/cookie-c.txt" {
 		t.Fatalf("cookie attempts = %#v", used)
+	}
+}
+
+type recordingOperationSink struct {
+	ops []model.DownloaderOperation
+}
+
+func (s *recordingOperationSink) RecordDownloaderOperation(_ context.Context, op model.DownloaderOperation) error {
+	s.ops = append(s.ops, op)
+	return nil
+}
+
+func TestClientFetchTimelineRetriesCookieAfterSemanticAuthorizationError(t *testing.T) {
+	var used []string
+	runner := func(_ context.Context, args []string) ([]byte, error) {
+		for i, arg := range args {
+			if arg == "--cookies" && i+1 < len(args) {
+				used = append(used, args[i+1])
+				break
+			}
+		}
+		if len(used) == 1 {
+			return []byte(`[-1, {"error":"AuthorizationError","message":"Account temporarily locked"}]`), nil
+		}
+		return []byte(`[
+			[2, {"tweet_id":"9000000000000000100","content":"second cookie worked","author":{"name":"sample_source","nick":"Sample Source"},"user":{"name":"sample_source"},"quote_id":0,"reply_id":0,"retweet_id":0}]
+		]`), nil
+	}
+	sink := &recordingOperationSink{}
+	client := &Client{
+		Runner:        runner,
+		CookiePool:    &CookiePool{paths: []string{"/tmp/cookie-a.txt", "/tmp/cookie-b.txt"}},
+		OperationSink: sink,
+	}
+
+	items, err := client.FetchTimeline(context.Background(), "sample_source", 1)
+	if err != nil {
+		t.Fatalf("FetchTimeline: %v", err)
+	}
+	if len(items) != 1 || items[0].BodyText != "second cookie worked" {
+		t.Fatalf("items = %#v", items)
+	}
+	if got := strings.Join(used, ","); got != "/tmp/cookie-a.txt,/tmp/cookie-b.txt" {
+		t.Fatalf("cookie attempts = %q", got)
+	}
+	if len(sink.ops) != 2 || sink.ops[0].Status != "failure" || sink.ops[0].ErrorKind != "auth" || sink.ops[1].Status != "success" {
+		t.Fatalf("operations = %#v", sink.ops)
+	}
+}
+
+func TestClientFetchTimelineClassifiesSemanticAuthRequired(t *testing.T) {
+	sink := &recordingOperationSink{}
+	client := &Client{
+		Runner: func(context.Context, []string) ([]byte, error) {
+			return []byte(`[-1, {"error":"AuthRequired","message":"Sign in is required"}]`), nil
+		},
+		OperationSink: sink,
+	}
+
+	if _, err := client.FetchTimeline(context.Background(), "sample_source", 1); err == nil {
+		t.Fatal("FetchTimeline succeeded after semantic auth failure")
+	}
+	if len(sink.ops) != 1 || sink.ops[0].Status != "failure" || sink.ops[0].ErrorKind != "auth" {
+		t.Fatalf("operations = %#v", sink.ops)
 	}
 }
 

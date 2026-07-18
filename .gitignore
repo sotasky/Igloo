@@ -32,7 +32,12 @@ __pycache__/
 # Local tool state
 .codex
 .mcp.local.json
-.agents
+.agents/*
+!.agents/skills/
+.agents/skills/*
+!.agents/skills/*/
+.agents/skills/*/*
+!.agents/skills/*/SKILL.md
 tmp/
 
 # just in case

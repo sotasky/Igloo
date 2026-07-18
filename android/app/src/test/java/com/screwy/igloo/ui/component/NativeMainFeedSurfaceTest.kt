@@ -5,13 +5,18 @@ import android.graphics.Rect
 import android.text.style.ClickableSpan
 import android.widget.ImageView
 import com.screwy.igloo.data.entity.FeedItemEntity
+import com.screwy.igloo.data.entity.OutboxEntity
+import com.screwy.igloo.data.entity.ThreadedFeedRow
 import com.screwy.igloo.feed.FeedMediaCellDescriptor
 import com.screwy.igloo.feed.FeedMediaCellModel
 import com.screwy.igloo.media.MediaUri
+import com.screwy.igloo.outbox.OutboxKind
+import com.screwy.igloo.outbox.pendingFeedActionOverrides
 import java.io.File
 import java.io.FileOutputStream
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -114,6 +119,18 @@ class NativeMainFeedSurfaceTest {
         assertEquals(
             1064,
             nativeQuoteMediaGridWidthPx(mediaGridWidthPx = 1112, horizontalPaddingPx = 24),
+        )
+    }
+
+    @Test
+    fun nativeSingleMediaHeightLimitPreservesItsAspectRatio() {
+        assertEquals(
+            NativeMediaDimensions(widthPx = 130, heightPx = NativeSingleMediaMaxHeightDp),
+            nativeSingleMediaDimensions(
+                maxWidthPx = 400,
+                aspectRatio = 0.25f,
+                maxHeightPx = NativeSingleMediaMaxHeightDp,
+            ),
         )
     }
 
@@ -342,6 +359,57 @@ class NativeMainFeedSurfaceTest {
 
         assertTrue(nativeFeedLikeBookmarkOnlyChange(original, liked))
         assertFalse(nativeFeedLikeBookmarkOnlyChange(original, changedBody))
+    }
+
+    @Test
+    fun pending_clear_updates_actions_without_changing_feed_media_rows() {
+        val target =
+            feedRow("post_1").copy(
+                item = FeedItemEntity(tweetId = "post_1", contentHash = "shared_content"),
+                isLiked = 1,
+                likedAt = 10L,
+                isBookmarked = 1,
+                bookmarkCategoryId = 2L,
+                bookmarkCustomTitle = "Saved",
+                bookmarkedAt = 10L,
+            )
+        val alias =
+            feedRow("post_alias").copy(
+                item = FeedItemEntity(tweetId = "post_alias", contentHash = "shared_content"),
+                isLiked = 1,
+                isBookmarked = 1,
+                bookmarkCategoryId = 2L,
+                bookmarkCustomTitle = "Saved",
+                bookmarkedAt = 10L,
+            )
+        val rows = listOf(ThreadedFeedRow(target, emptyList()), ThreadedFeedRow(alias, emptyList()))
+
+        val updated =
+            nativeFeedRowsWithPendingActionOverrides(
+                rows,
+                pendingFeedActionOverrides(
+                    listOf(
+                        OutboxEntity(
+                            kind = OutboxKind.CODE_LIKE,
+                            itemId = "post_1",
+                            payloadJson = """{"action":"clear"}""",
+                        ),
+                        OutboxEntity(
+                            kind = OutboxKind.CODE_BOOKMARK,
+                            itemId = "post_1",
+                            payloadJson = """{"action":"clear"}""",
+                        ),
+                    )
+                ),
+            )
+
+        assertEquals(target.item, updated[0].row.item)
+        assertEquals(0, updated[0].row.isLiked)
+        assertNull(updated[0].row.likedAt)
+        assertEquals(0, updated[0].row.isBookmarked)
+        assertNull(updated[0].row.bookmarkCategoryId)
+        assertEquals(1, updated[1].row.isLiked)
+        assertEquals(0, updated[1].row.isBookmarked)
     }
 
     @Test

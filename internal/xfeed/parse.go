@@ -84,6 +84,7 @@ func ValidTweetID(tweetID string) bool {
 
 func ParseDump(output []byte, fallbackSourceHandle string) ParseResult {
 	records := parseRecords(output)
+	sourceHandle := NormalizeHandle(fallbackSourceHandle)
 	metaByID := make(map[string]map[string]any)
 	mediaByID := make(map[string][]model.MediaRef)
 	var order []string
@@ -99,7 +100,7 @@ func ParseDump(output []byte, fallbackSourceHandle string) ParseResult {
 				order = append(order, tid)
 			}
 			metaByID[tid] = rec.Meta
-			if quoteID(rec.Meta) == "" {
+			if quoteID(rec.Meta) == "" || sourceOwnsQuoteExpansion(rec.Meta, sourceHandle) {
 				primaryIDs[tid] = true
 			}
 		}
@@ -211,7 +212,7 @@ func feedItemFromMeta(d map[string]any, fallbackSourceHandle string, media []mod
 
 	retweetID := firstString(d, "retweet_id")
 	isRetweet := retweetID != "" && retweetID != "0"
-	author := model.EffectiveTwitterAuthorHandle(authorHandle(d), source, isRetweet)
+	author := effectiveAuthorHandle(d, fallbackSourceHandle)
 	if !ValidHandle(author) {
 		return FeedItem{}
 	}
@@ -347,6 +348,37 @@ func userMap(d map[string]any) map[string]any {
 
 func authorHandle(d map[string]any) string {
 	return NormalizeHandle(firstString(authorMap(d), "name", "screen_name", "username"))
+}
+
+func effectiveAuthorHandle(d map[string]any, fallbackSourceHandle string) string {
+	source := userHandle(d)
+	if source == "" {
+		source = NormalizeHandle(fallbackSourceHandle)
+	}
+	retweetID := firstString(d, "retweet_id")
+	isRetweet := retweetID != "" && retweetID != "0"
+	return NormalizeHandle(model.EffectiveTwitterAuthorHandle(authorHandle(d), source, isRetweet))
+}
+
+func sourceOwnsQuoteExpansion(d map[string]any, sourceHandle string) bool {
+	sourceHandle = NormalizeHandle(sourceHandle)
+	if sourceHandle == "" {
+		return false
+	}
+	retweetID := firstString(d, "retweet_id")
+	if retweetID != "" && retweetID != "0" {
+		return false
+	}
+	author := authorHandle(d)
+	if strings.EqualFold(author, sourceHandle) {
+		return true
+	}
+	source := userHandle(d)
+	if source == "" {
+		return false
+	}
+	effectiveAuthor := model.EffectiveTwitterAuthorHandle(author, source, false)
+	return strings.EqualFold(NormalizeHandle(effectiveAuthor), sourceHandle)
 }
 
 func userHandle(d map[string]any) string {

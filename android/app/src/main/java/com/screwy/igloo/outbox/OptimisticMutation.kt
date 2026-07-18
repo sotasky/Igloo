@@ -21,6 +21,36 @@ import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.longOrNull
 
+/** Feed controls follow the latest queued intent without changing canonical clear state early. */
+internal data class PendingFeedActionOverrides(
+    val likesByTweetId: Map<String, Boolean> = emptyMap(),
+    val bookmarksByTweetId: Map<String, Boolean> = emptyMap(),
+) {
+    val isEmpty: Boolean
+        get() = likesByTweetId.isEmpty() && bookmarksByTweetId.isEmpty()
+}
+
+internal fun pendingFeedActionOverrides(rows: List<OutboxEntity>): PendingFeedActionOverrides {
+    val likesByTweetId = linkedMapOf<String, Boolean>()
+    val bookmarksByTweetId = linkedMapOf<String, Boolean>()
+    rows.forEach { row ->
+        val itemId = row.itemId?.trim().orEmpty()
+        val action =
+            when (row.mutationPayload().text("action")) {
+                "set" -> true
+                "clear" -> false
+                else -> null
+            }
+        if (itemId.isEmpty() || action == null) return@forEach
+
+        when (row.kind) {
+            OutboxKind.CODE_LIKE -> likesByTweetId[itemId] = action
+            OutboxKind.CODE_BOOKMARK -> bookmarksByTweetId[itemId] = action
+        }
+    }
+    return PendingFeedActionOverrides(likesByTweetId, bookmarksByTweetId)
+}
+
 internal suspend fun applyOptimisticMutation(db: IglooDatabase, row: OutboxEntity) {
     val payload = row.mutationPayload()
     val itemId = row.itemId.orEmpty()

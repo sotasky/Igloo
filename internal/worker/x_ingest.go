@@ -259,6 +259,7 @@ func (m *Manager) runIngestCycle(ctx context.Context) {
 
 		_ = m.db.RecordIngestSuccess(ch.ChannelID, float64(time.Now().Unix()), latencyMs)
 
+		m.enrichExistingGhostQuotes(ctx, items)
 		items = filterTimelineItemsForSource(handle, items)
 		filtered := applyChannelFiltersFromSettings(items, settings)
 
@@ -348,6 +349,34 @@ func filterTimelineItemsForSource(source string, items []model.FeedItem) []model
 	return result
 }
 
+func (m *Manager) enrichExistingGhostQuotes(ctx context.Context, items []model.FeedItem) {
+	if m == nil || m.db == nil || ctx.Err() != nil {
+		return
+	}
+	updates := make([]model.FeedItem, 0)
+	for _, item := range items {
+		if item.QuoteTweetID == "" {
+			continue
+		}
+		existing, err := m.db.GetFeedItemByTweetID(item.TweetID)
+		if err != nil {
+			log.Printf("[x_ingest] load quote ghost %s: %v", item.TweetID, err)
+			continue
+		}
+		if existing == nil || !existing.IsGhost {
+			continue
+		}
+		updated := *existing
+		if !copyQuoteFieldsForStatusEnrichment(&updated, item) {
+			continue
+		}
+		updates = append(updates, updated)
+	}
+	if len(updates) > 0 {
+		m.upsertXStatusEnrichmentItems(ctx, updates)
+	}
+}
+
 // FetchOneChannel fetches a single Twitter channel out-of-band from the main
 // ingest cycle. Used by the per-channel refresh button so a click produces
 // visible results within seconds instead of waiting for the multi-hour cycle
@@ -368,6 +397,7 @@ func (m *Manager) FetchOneChannel(ctx context.Context, channelID string) (int, e
 	}
 	_ = m.db.RecordIngestSuccess(channelID, float64(time.Now().Unix()), 0)
 
+	m.enrichExistingGhostQuotes(ctx, items)
 	items = filterTimelineItemsForSource(strings.TrimPrefix(channelID, "twitter_"), items)
 	filtered := applyChannelFiltersFromSettings(items, settings)
 	if len(filtered) == 0 {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -203,6 +204,59 @@ func TestResolveReplyChainDeclaresMediaForGhostParent(t *testing.T) {
 	}
 	if state != db.AssetStateQueued || kind != "video/mp4" || sourceURL != "https://video.example/parent.mp4" {
 		t.Fatalf("asset = state %q kind %q source %q, want queued video/mp4 source", state, kind, sourceURL)
+	}
+}
+
+func TestTweetToGhostFeedItemKeepsQuoteMedia(t *testing.T) {
+	d := newTestWorkerDB(t)
+	ghost := tweetToGhostFeedItem(&fxtwitter.Tweet{
+		ID:                "9000000000000000012",
+		AuthorHandle:      "sample_parent",
+		AuthorDisplayName: "Sample Parent",
+		Text:              "foreign quote",
+		Quote: &fxtwitter.Tweet{
+			ID:                "9000000000000000013",
+			AuthorHandle:      "sample_source",
+			AuthorDisplayName: "Sample Source",
+			Text:              "source photo",
+			MediaJSON:         `[{"url":"https://pbs.twimg.com/media/source-photo.jpg?name=orig","type":"photo"}]`,
+		},
+	})
+	if ghost.QuoteTweetID != "9000000000000000013" || ghost.QuoteAuthorHandle != "sample_source" || len(ghost.QuoteMedia) != 1 {
+		t.Fatalf("ghost quote = %#v", ghost)
+	}
+	if err := d.UpsertGhostFeedItem(ghost); err != nil {
+		t.Fatalf("UpsertGhostFeedItem: %v", err)
+	}
+	asset, err := d.GetAsset(db.BuildAssetID("twitter", "tweet", "9000000000000000013", "post_media", 0), "post_media")
+	if err != nil {
+		t.Fatalf("GetAsset: %v", err)
+	}
+	if asset == nil || asset.State != db.AssetStateQueued || !strings.Contains(asset.SourceURL, "source-photo.jpg") {
+		t.Fatalf("quote asset = %+v", asset)
+	}
+}
+
+func TestTweetToGhostFeedItemDropsUntrustedQuoteMedia(t *testing.T) {
+	ghost := tweetToGhostFeedItem(&fxtwitter.Tweet{
+		ID:           "9000000000000000022",
+		AuthorHandle: "sample_parent",
+		Quote: &fxtwitter.Tweet{
+			ID:           "9000000000000000023",
+			AuthorHandle: "sample_source",
+			MediaJSON: `[{
+				"url":"https://example.invalid/untrusted.jpg","type":"photo"
+			},{
+				"url":"https://pbs.twimg.com/media/trusted.jpg?name=orig","type":"photo"
+			}]`,
+		},
+	})
+	if ghost.QuoteTweetID != "9000000000000000023" || len(ghost.QuoteMedia) != 1 ||
+		!strings.Contains(ghost.QuoteMedia[0].URL, "trusted.jpg") {
+		t.Fatalf("trusted quote media = %#v", ghost)
+	}
+	if strings.Contains(ghost.QuoteMediaJSON, "example.invalid") {
+		t.Fatalf("untrusted quote media persisted: %q", ghost.QuoteMediaJSON)
 	}
 }
 

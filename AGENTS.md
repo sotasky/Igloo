@@ -6,6 +6,13 @@
 - `android/` is the current Android app.
 - Runtime/config defaults: native `~/.local/share/igloo/` and `~/.config/igloo/`; container `/igloo/data` and `/igloo/config`; bundled container assets `/app/static`.
 
+## Commands
+
+- Run routine build, test, generated-output, Android, and release workflows through `just` from the repository root. Bare `just` lists the recipes and their side effects.
+- Recipes delegate to the existing scripts; do not reconstruct script combinations by hand. Use a raw command only for installer bootstrap, read-only evidence, an exact CI reproduction, a partial-release recovery, or a narrowly scoped proof that has no recipe.
+- `just test` is the full completion gate. `just restart` verifies the local server path but does not replace tests. `just build-android` builds, installs, and relaunches the app, so never use it as a generic Android test command.
+- Release recipes remain explicit: only run `just release <patch|minor|major> "<user summary>"` or `just release-local ...` after the user has supplied both the requested bump and exact summary. Never invent public release text.
+
 ## Evidence
 
 - Start from local evidence: files, DB rows, logs, running DOM, device/app state, then code.
@@ -66,13 +73,13 @@ For Go code, protect the success path. Do not allocate rollback journals, diagno
 ## Test Gates
 
 - Use focused tests while developing or proving a narrow change, but use
-  `scripts/dev/test-full.sh` for full-suite completion claims.
+  `just test` for full-suite completion claims.
 - For full-suite verification, do not treat raw `go test ./...` or Android
   `BUILD SUCCESSFUL` output as enough. Check for skipped tests and ignored
   errors explicitly.
-- Run `scripts/dev/test-full.sh` for full-suite verification. It runs Go tests
-  with JSON output, fails/reports real skipped Go tests, runs
-  `go run github.com/kisielk/errcheck@latest ./...`, runs `android/test.sh`,
+- Run `just test` for full-suite verification. It runs Go tests
+  with JSON output, fails/reports real skipped Go tests, runs the pinned
+  static and security checks, runs the Android warning-aware test wrapper,
   inspects Android XML for failures/errors/skips, and reports Kotlin/JVM
   warnings from the Android test output.
 - Treat new or high-signal production `errcheck` findings as blockers. If
@@ -99,7 +106,7 @@ For Go code, protect the success path. Do not allocate rollback journals, diagno
 ## Releases
 
 - Releases are manually dispatched from the release workflow with an explicit patch, minor, or major bump.
-- Use `.github/scripts/prepare-release.sh` for release preparation and `.github/scripts/create-release-tag.sh` for local signed release commits/tags.
+- Use `just release <patch|minor|major> "<user summary>"` for a published release and `just release-local ...` for a local signed release tag. They delegate to `.github/scripts/create-release-tag.sh`; use the underlying scripts only for partial-release recovery.
 - Release scripts take the user-written summary as input and put it first in the generated notes, then a `Changelog` section with commits since the previous tag.
 - Release commits and tags are GPG-signed with `RELEASE_GPG_PRIVATE_KEY` and `RELEASE_GPG_PASSPHRASE`; optional `RELEASE_GIT_USER_NAME` and `RELEASE_GIT_USER_EMAIL` repository variables set the non-secret commit identity.
 - Release artifact workflows verify tags against `.github/release-gpg.pub` before accessing release secrets or publishing assets.
@@ -112,9 +119,8 @@ For Go code, protect the success path. Do not allocate rollback journals, diagno
 - Do not narrow a shared query for one caller if another caller needs the data. Add a separate query.
 - For web UI bugs, inspect the live DOM before source: element HTML, computed visibility, layout box, inline style, and classes.
 - For missing avatars, banners, names, bios, or hover profile cards, separate presentation bugs from readiness bugs. A presentation fix is valid only when the DB row and cached file already existed before render; otherwise fix the source path: parser, ingest batch, identity seed, profile refresh candidate query, worker queue/backfill, or failed download retry.
-- After server, web, static, or component changes that affect the running app, run `scripts/dev/build.sh restart`.
-- For Go changes, run `go test ./...`; for full-suite claims, use the
-  stricter `scripts/dev/test-full.sh` gate above.
+- After server, web, static, or component changes that affect the running app, run `just restart`.
+- For Go changes, run `just test-go`; for full-suite claims, use `just test`.
 
 ## Android
 
@@ -124,17 +130,17 @@ For Go code, protect the success path. Do not allocate rollback journals, diagno
 - Cursors are opaque. Server-owned identifiers stay server-owned.
 - Sync must converge for the retention window, associated assets, bookmarks, likes, and their assets. Partial sync is not success.
 - Retention widening triggers replay/backfill; narrowing prunes; bookmarks and likes survive prune.
-- Use project scripts: `android/build.sh`, `android/test.sh`, `scripts/dev/build.sh android`, `scripts/dev/build.sh all`.
-- Before committing Android changes, run the focused `android/test.sh <ClassFilter>` proof for the touched area.
+- Use the named Android recipes: `just test-android`, `just build-android`, `just build-android-with-server`, and `just restart-and-build-android`.
+- Before committing Android changes, run the focused `just test-android <ClassFilter>` proof for the touched area.
 - Treat Android JVM final-field mutation warnings as test failures. Replace
   concrete-class mocks with fakes/interfaces rather than adding JVM flags to
   silence the warning.
-- Do not run a separate full `android/test.sh` after `scripts/dev/test-full.sh`
+- Do not run a separate full `just test-android` after `just test`
   just to duplicate full-suite proof; run it separately when debugging Android
   failures or when Android-only output is needed.
- If any file under `android/` changes, `android/build.sh` is the required final
+- If any file under `android/` changes, `just build-android` is the required final
   Android proof before final response or commit. It builds, installs, and
-  relaunches the app on the device. Do not treat `android/test.sh`, a focused
+  relaunches the app on the device. Do not treat `just test-android`, a focused
   Gradle test, or `BUILD SUCCESSFUL` from compilation as a substitute. If
-  `android/build.sh` cannot run because no device or Android tool is available,
+  `just build-android` cannot run because no device or Android tool is available,
   say that explicitly in the final response.

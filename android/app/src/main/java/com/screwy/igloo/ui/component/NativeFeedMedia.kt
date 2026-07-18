@@ -239,10 +239,12 @@ internal data class NativeMediaDimensions(
     val heightPx: Int,
 )
 
+internal const val NativeSingleMediaMaxHeightDp = 520
+
 internal fun nativeSingleMediaDimensions(
     maxWidthPx: Int,
     aspectRatio: Float,
-    maxHeightPx: Int = dp(560),
+    maxHeightPx: Int = dp(NativeSingleMediaMaxHeightDp),
 ): NativeMediaDimensions {
     val safeRatio = aspectRatio.takeIf { it.isFinite() && it > 0f } ?: 1f
     val maxWidth = maxWidthPx.coerceAtLeast(1)

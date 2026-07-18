@@ -462,6 +462,7 @@ func TestUpsertFeedItemsFillsMissingQuoteFields(t *testing.T) {
 		AuthorHandle:     "sample_author",
 		BodyText:         "post",
 		QuoteTweetID:     "9000000000000000500",
+		QuoteMediaJSON:   `[]`,
 		CanonicalTweetID: "quote_fill",
 		PublishedAt:      &now,
 	}}); err != nil {

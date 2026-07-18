@@ -1,7 +1,7 @@
 package com.screwy.igloo.ui.component
 
+import android.view.WindowManager
 import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -42,6 +42,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -55,11 +56,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.window.DialogWindowProvider
 import com.screwy.igloo.R
 import com.screwy.igloo.data.IglooDatabase
 import com.screwy.igloo.data.PreferencesRepo
@@ -301,36 +306,47 @@ fun BookmarkSheet(
 
     BackHandler(onBack = onDismiss)
 
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(colors.overlayDim.copy(alpha = 0.32f))
-            .clickable(
-                interactionSource = backdropInteraction,
-                indication = null,
-                onClick = onDismiss,
-            )
-            .padding(horizontal = 10.dp),
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(
+            usePlatformDefaultWidth = false,
+            decorFitsSystemWindows = false,
+        ),
     ) {
-        Surface(
-            color = colors.surface,
-            shape = RoundedCornerShape(16.dp),
-            tonalElevation = 8.dp,
-            shadowElevation = 12.dp,
+        val dialogWindow = (LocalView.current.parent as? DialogWindowProvider)?.window
+        SideEffect {
+            dialogWindow?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING)
+        }
+
+        Box(
             modifier = Modifier
-                .align(Alignment.TopCenter)
-                .statusBarsPadding()
-                .padding(top = 8.dp)
-                .widthIn(max = 520.dp)
-                .fillMaxWidth()
-                .heightIn(max = 620.dp)
+                .fillMaxSize()
                 .clickable(
-                    interactionSource = panelInteraction,
+                    interactionSource = backdropInteraction,
                     indication = null,
-                    onClick = {},
-                ),
+                    onClick = onDismiss,
+                )
+                .padding(horizontal = 10.dp),
         ) {
-            Column(
+            Surface(
+                color = colors.surface,
+                shape = RoundedCornerShape(16.dp),
+                tonalElevation = 8.dp,
+                shadowElevation = 12.dp,
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .statusBarsPadding()
+                    .padding(top = 52.dp)
+                    .widthIn(max = 520.dp)
+                    .fillMaxWidth()
+                    .heightIn(max = 620.dp)
+                    .clickable(
+                        interactionSource = panelInteraction,
+                        indication = null,
+                        onClick = {},
+                    ),
+            ) {
+                Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .verticalScroll(rememberScrollState())
@@ -354,8 +370,8 @@ fun BookmarkSheet(
             // FilterChip makes it line up with the category chips naturally.
             FlowRow(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 categories.forEach { cat ->
                     FilterChip(
@@ -631,6 +647,9 @@ fun BookmarkSheet(
                     Text(stringResource(R.string.action_save))
                 }
             }
+
+            Spacer(modifier = Modifier.height(12.dp))
+        }
         }
         }
     }

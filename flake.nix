@@ -337,6 +337,7 @@
           default = pkgs.mkShell {
             packages = [
               go
+              pkgs.just
               (pkgs.lib.getBin pkgs.ffmpeg-headless)
               self.packages.${system}.gallery-dl
               self.packages.${system}.yt-dlp

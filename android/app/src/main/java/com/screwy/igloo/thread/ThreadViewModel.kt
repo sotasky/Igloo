@@ -6,6 +6,7 @@ import com.screwy.igloo.channel.ChannelRouteResolver
 import com.screwy.igloo.data.IglooDatabase
 import com.screwy.igloo.data.entity.FeedItemEntity
 import com.screwy.igloo.data.entity.FeedRow
+import com.screwy.igloo.data.entity.FeedRowActionState
 import com.screwy.igloo.feed.FeedMediaGridModel
 import com.screwy.igloo.feed.FeedMediaModelStore
 import com.screwy.igloo.feed.feedMediaCount
@@ -25,6 +26,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -47,8 +50,6 @@ class ThreadViewModel(
     )
     val mediaModels: StateFlow<Map<String, FeedMediaGridModel>> = mediaModelStore.mediaModels
 
-    private var currentTweetId: String? = null
-
     private val _pendingBookmark = MutableStateFlow<BookmarkTarget?>(null)
     val pendingBookmark: StateFlow<BookmarkTarget?> = _pendingBookmark.asStateFlow()
 
@@ -61,15 +62,25 @@ class ThreadViewModel(
         .map { rows -> rows.mapTo(linkedSetOf()) { it.channelId } }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), emptySet())
 
+    init {
+        viewModelScope.launch {
+            chain
+                .map { rows -> rows.map { it.item.tweetId } }
+                .distinctUntilChanged()
+                .collectLatest { tweetIds ->
+                    if (tweetIds.isEmpty()) return@collectLatest
+                    db.feedReadDao().actionStateFlow(tweetIds).collect(::applyActionStates)
+                }
+        }
+    }
+
     fun load(tweetId: String) {
-        currentTweetId = tweetId
         viewModelScope.launch {
             loadBlocking(tweetId)
         }
     }
 
     suspend fun loadBlocking(tweetId: String) {
-        currentTweetId = tweetId
         val rows = loadThreadRows(tweetId)
         _chain.value = rows
         mediaModelStore.setMediaModelRows(rows)
@@ -79,7 +90,6 @@ class ThreadViewModel(
         val action = if (newValue) OutboxKind.Action.Set else OutboxKind.Action.Clear
         viewModelScope.launch {
             outboxWriter.enqueue(OutboxKind.Like(tweetId = tweetId, action = action))
-            reloadCurrentThread()
         }
     }
 
@@ -114,7 +124,6 @@ class ThreadViewModel(
                     mediaIndices = payload.mediaIndices?.joinToString(","),
                 )
             )
-            reloadCurrentThread()
         }
     }
 
@@ -128,7 +137,6 @@ class ThreadViewModel(
                     action = OutboxKind.Action.Clear,
                 )
             )
-            reloadCurrentThread()
         }
     }
 
@@ -141,25 +149,47 @@ class ThreadViewModel(
 
     fun toggleFollow(channelId: String, newValue: Boolean) {
         val action = if (newValue) OutboxKind.Action.Set else OutboxKind.Action.Clear
+        patchRows({ row -> row.item.channelId == channelId || row.quoteChannelId == channelId }) { row ->
+            row.copy(
+                channelIsFollowed =
+                    if (row.item.channelId == channelId) {
+                        if (newValue) 1 else 0
+                    } else {
+                        row.channelIsFollowed
+                    },
+                quoteChannelIsFollowed =
+                    if (row.quoteChannelId == channelId) {
+                        if (newValue) 1 else 0
+                    } else {
+                        row.quoteChannelIsFollowed
+                    },
+            )
+        }
         viewModelScope.launch {
             outboxWriter.enqueue(OutboxKind.Follow(channelId = channelId, action = action))
-            reloadCurrentThread()
         }
     }
 
     fun toggleStar(channelId: String, newValue: Boolean) {
         val action = if (newValue) OutboxKind.Action.Set else OutboxKind.Action.Clear
+        patchRows({ it.item.channelId == channelId }) { row ->
+            row.copy(channelIsStarred = if (newValue) 1 else 0)
+        }
         viewModelScope.launch {
             outboxWriter.enqueue(OutboxKind.Star(channelId = channelId, action = action))
-            reloadCurrentThread()
         }
     }
 
     fun toggleMute(channelId: String, newValue: Boolean) {
         val action = if (newValue) OutboxKind.Action.Set else OutboxKind.Action.Clear
+        if (newValue) {
+            _chain.value =
+                _chain.value.filterNot { row ->
+                    row.item.channelId == channelId || row.item.reposterChannelId == channelId
+                }
+        }
         viewModelScope.launch {
             outboxWriter.enqueue(OutboxKind.Mute(channelId = channelId, action = action))
-            reloadCurrentThread()
         }
     }
 
@@ -178,11 +208,30 @@ class ThreadViewModel(
         mediaModelStore.setMediaModelRows(rows)
     }
 
-    private suspend fun reloadCurrentThread() {
-        val tweetId = currentTweetId ?: return
-        val rows = loadThreadRows(tweetId)
-        _chain.value = rows
-        mediaModelStore.setMediaModelRows(rows)
+    private fun applyActionStates(states: List<FeedRowActionState>) {
+        if (states.isEmpty()) return
+
+        val byId = states.associateBy { it.tweetId }
+        _chain.value = _chain.value.map { row ->
+            val state = byId[row.item.tweetId] ?: return@map row
+            row.copy(
+                isLiked = state.isLiked,
+                likedAt = state.likedAt,
+                isBookmarked = state.isBookmarked,
+                bookmarkCategoryId = state.bookmarkCategoryId,
+                bookmarkCustomTitle = state.bookmarkCustomTitle,
+                bookmarkedAt = state.bookmarkedAt,
+                bookmarkAccountHandles = state.bookmarkAccountHandles,
+                bookmarkMediaIndices = state.bookmarkMediaIndices,
+            )
+        }
+    }
+
+    private fun patchRows(
+        predicate: (FeedRow) -> Boolean,
+        transform: (FeedRow) -> FeedRow,
+    ) {
+        _chain.value = _chain.value.map { row -> if (predicate(row)) transform(row) else row }
     }
 
     private suspend fun loadThreadRows(tweetId: String): List<FeedRow> {

@@ -1171,7 +1171,7 @@ func (db *DB) UpsertFeedItemsDetailed(items []model.FeedItem) (FeedUpsertResult,
 					ELSE feed_items.quote_lang
 				END,
 				quote_media_json = CASE
-					WHEN COALESCE(feed_items.quote_media_json, '') = '' THEN COALESCE(excluded.quote_media_json, feed_items.quote_media_json)
+					WHEN COALESCE(feed_items.quote_media_json, '') IN ('', '[]') THEN COALESCE(excluded.quote_media_json, feed_items.quote_media_json)
 					ELSE feed_items.quote_media_json
 				END,
 				views = COALESCE(excluded.views, feed_items.views),
@@ -1240,7 +1240,7 @@ func (db *DB) UpsertFeedItemsDetailed(items []model.FeedItem) (FeedUpsertResult,
 			            OR LOWER(feed_items.quote_lang) IN ('und','unknown','qam','qct','qht','qme','qst','zxx')
 			            OR (LOWER(feed_items.quote_lang) GLOB 'q??' AND length(feed_items.quote_lang) = 3))
 			       AND feed_items.quote_lang IS NOT excluded.quote_lang)
-			   OR (COALESCE(feed_items.quote_media_json, '') = ''
+			   OR (COALESCE(feed_items.quote_media_json, '') IN ('', '[]')
 			       AND excluded.quote_media_json IS NOT NULL
 			       AND feed_items.quote_media_json IS NOT excluded.quote_media_json)
 			   OR (excluded.views IS NOT NULL AND feed_items.views IS NOT excluded.views)

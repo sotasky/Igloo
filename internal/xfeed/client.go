@@ -381,6 +381,9 @@ func (c *Client) run(ctx context.Context, rawURL string, args []string, cookieFi
 		runner = c.Runner
 	}
 	out, err := runner(ctx, args)
+	if err == nil {
+		err = galleryDLSemanticError(out)
+	}
 	downloadOp := model.DownloaderOperation{
 		Operation:   "x.gallerydl.dump",
 		Platform:    "twitter",
@@ -404,6 +407,46 @@ func (c *Client) run(ctx context.Context, rawURL string, args []string, cookieFi
 		return nil, fmt.Errorf("gallery-dl X feed: %w: %s", err, out)
 	}
 	return out, nil
+}
+
+func galleryDLSemanticError(output []byte) error {
+	for _, payload := range download.JSONPayloads(output) {
+		if err := galleryDLSemanticErrorFromPayload(payload); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func galleryDLSemanticErrorFromPayload(payload any) error {
+	values, ok := payload.([]any)
+	if !ok {
+		return nil
+	}
+	if len(values) >= 2 {
+		if code, ok := intFromAny(values[0]); ok && code == -1 {
+			if detail, ok := values[1].(map[string]any); ok {
+				name := strings.TrimSpace(firstString(detail, "error", "type", "code"))
+				message := strings.TrimSpace(firstString(detail, "message", "detail", "description"))
+				if name != "" && message != "" {
+					return fmt.Errorf("gallery-dl reported %s: %s", name, message)
+				}
+				if name != "" {
+					return fmt.Errorf("gallery-dl reported %s", name)
+				}
+				if message != "" {
+					return fmt.Errorf("gallery-dl reported: %s", message)
+				}
+			}
+			return fmt.Errorf("gallery-dl reported an error")
+		}
+	}
+	for _, value := range values {
+		if err := galleryDLSemanticErrorFromPayload(value); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func mustJSON(v any) string {

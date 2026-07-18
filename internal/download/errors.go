@@ -208,6 +208,8 @@ func containsAuthSignal(s string) bool {
 		"locked behind the login",
 		"not logged in",
 		"authentication",
+		"authorizationerror",
+		"authrequired",
 		"unauthorized",
 		"use --cookies",
 		"use --cookies-from-browser",

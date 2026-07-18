@@ -8,10 +8,9 @@
 
 ## Tests
 
-- [ ] `go test ./...`
-- [ ] `scripts/dev/test-full.sh`
-- [ ] `android/test.sh`
-- [ ] `android/build.sh`
+- [ ] `just test-go`
+- [ ] `just test`
+- [ ] `just build-android`
 - [ ] Not applicable:
 
 ## Notes

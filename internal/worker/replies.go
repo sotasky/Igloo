@@ -2,8 +2,10 @@ package worker
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -11,6 +13,7 @@ import (
 	"github.com/screwys/igloo/internal/db"
 	"github.com/screwys/igloo/internal/fxtwitter"
 	"github.com/screwys/igloo/internal/model"
+	"github.com/screwys/igloo/internal/xfeed"
 )
 
 const (
@@ -168,7 +171,7 @@ func tweetToGhostFeedItem(tw *fxtwitter.Tweet) model.FeedItem {
 		t := tw.CreatedAt
 		pubAt = &t
 	}
-	return model.FeedItem{
+	item := model.FeedItem{
 		TweetID:           tw.ID,
 		AuthorHandle:      tw.AuthorHandle,
 		AuthorDisplayName: tw.AuthorDisplayName,
@@ -184,6 +187,53 @@ func tweetToGhostFeedItem(tw *fxtwitter.Tweet) model.FeedItem {
 		FetchedAt:         tw.CreatedAt,
 		ContentHash:       "ghost-" + tw.ID,
 	}
+	if quote := tw.Quote; quote != nil && xfeed.ValidTweetID(quote.ID) && xfeed.ValidHandle(quote.AuthorHandle) {
+		item.QuoteTweetID = quote.ID
+		item.QuoteAuthorHandle = xfeed.NormalizeHandle(quote.AuthorHandle)
+		item.QuoteAuthorDisplayName = quote.AuthorDisplayName
+		item.QuoteAuthorAvatarURL = model.CleanFeedAvatarURL(quote.AuthorAvatarURL)
+		item.QuoteBodyText = quote.Text
+		item.QuoteLang = quote.Lang
+		item.QuoteMediaJSON = trustedTwitterQuoteMediaJSON(quote.MediaJSON)
+		if !quote.CreatedAt.IsZero() {
+			t := quote.CreatedAt
+			item.QuotePublishedAt = &t
+		}
+	}
+	item.ParseMedia()
+	return item
+}
+
+func trustedTwitterQuoteMediaJSON(raw string) string {
+	var refs []model.MediaRef
+	if json.Unmarshal([]byte(raw), &refs) != nil {
+		return ""
+	}
+	trusted := refs[:0]
+	for _, ref := range refs {
+		urlOK := ref.URL == "" || isTrustedTwitterQuoteMediaURL(ref.URL)
+		thumbnailOK := ref.ThumbnailURL == "" || isTrustedTwitterQuoteMediaURL(ref.ThumbnailURL)
+		if !urlOK || !thumbnailOK || (ref.URL == "" && ref.ThumbnailURL == "") {
+			continue
+		}
+		trusted = append(trusted, ref)
+	}
+	if len(trusted) == 0 {
+		return ""
+	}
+	data, err := json.Marshal(trusted)
+	if err != nil {
+		return ""
+	}
+	return string(data)
+}
+
+func isTrustedTwitterQuoteMediaURL(raw string) bool {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || (u.Scheme != "https" && u.Scheme != "http") {
+		return false
+	}
+	return strings.EqualFold(u.Hostname(), "pbs.twimg.com") || strings.EqualFold(u.Hostname(), "video.twimg.com")
 }
 
 // resolveCache prevents two workers from fetching the same parent within one cycle.

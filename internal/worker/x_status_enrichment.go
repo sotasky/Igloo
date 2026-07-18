@@ -106,23 +106,57 @@ func (m *Manager) applyRetweetQuoteEnrichment(ctx context.Context, req xfeed.Sta
 		return
 	}
 	updated := *existing
-	copyQuoteFieldsForStatusEnrichment(&updated, *rich)
+	if !copyQuoteFieldsForStatusEnrichment(&updated, *rich) {
+		return
+	}
 	m.upsertXStatusEnrichmentItems(ctx, []model.FeedItem{updated})
 }
 
-func copyQuoteFieldsForStatusEnrichment(dst *model.FeedItem, src model.FeedItem) {
-	if dst == nil || src.QuoteTweetID == "" {
-		return
+func copyQuoteFieldsForStatusEnrichment(dst *model.FeedItem, src model.FeedItem) bool {
+	if dst == nil || src.QuoteTweetID == "" ||
+		(dst.QuoteTweetID != "" && dst.QuoteTweetID != src.QuoteTweetID) {
+		return false
 	}
-	dst.QuoteTweetID = src.QuoteTweetID
-	dst.QuoteAuthorHandle = src.QuoteAuthorHandle
-	dst.QuoteAuthorDisplayName = src.QuoteAuthorDisplayName
-	dst.QuoteAuthorAvatarURL = src.QuoteAuthorAvatarURL
-	dst.QuoteBodyText = src.QuoteBodyText
-	dst.QuoteLang = src.QuoteLang
-	dst.QuotePublishedAt = src.QuotePublishedAt
-	dst.QuoteMediaJSON = src.QuoteMediaJSON
-	dst.QuoteMedia = src.QuoteMedia
+	changed := false
+	if dst.QuoteTweetID == "" {
+		dst.QuoteTweetID = src.QuoteTweetID
+		changed = true
+	}
+	if dst.QuoteAuthorHandle == "" && src.QuoteAuthorHandle != "" {
+		dst.QuoteAuthorHandle = src.QuoteAuthorHandle
+		changed = true
+	}
+	if dst.QuoteAuthorDisplayName == "" && src.QuoteAuthorDisplayName != "" {
+		dst.QuoteAuthorDisplayName = src.QuoteAuthorDisplayName
+		changed = true
+	}
+	if dst.QuoteAuthorAvatarURL == "" && src.QuoteAuthorAvatarURL != "" {
+		dst.QuoteAuthorAvatarURL = src.QuoteAuthorAvatarURL
+		changed = true
+	}
+	if dst.QuoteBodyText == "" && src.QuoteBodyText != "" {
+		dst.QuoteBodyText = src.QuoteBodyText
+		changed = true
+	}
+	if dst.QuoteLang == "" && src.QuoteLang != "" {
+		dst.QuoteLang = src.QuoteLang
+		changed = true
+	}
+	if dst.QuotePublishedAt == nil && src.QuotePublishedAt != nil {
+		dst.QuotePublishedAt = src.QuotePublishedAt
+		changed = true
+	}
+	if quoteMediaJSONMissing(dst.QuoteMediaJSON) && !quoteMediaJSONMissing(src.QuoteMediaJSON) {
+		dst.QuoteMediaJSON = src.QuoteMediaJSON
+		dst.QuoteMedia = src.QuoteMedia
+		changed = true
+	}
+	return changed
+}
+
+func quoteMediaJSONMissing(raw string) bool {
+	trimmed := strings.TrimSpace(raw)
+	return trimmed == "" || trimmed == "[]"
 }
 
 func (m *Manager) upsertXStatusEnrichmentItems(ctx context.Context, items []model.FeedItem) {

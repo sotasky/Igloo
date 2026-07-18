@@ -193,6 +193,70 @@ func TestFetchOneChannelUsesXFeedFetcherAndQueuesMedia(t *testing.T) {
 	}
 }
 
+func TestFetchOneChannelQueuesSourceQuoteExpansionMedia(t *testing.T) {
+	d := newTestWorkerDB(t)
+	const outerID = "9000000000000000100"
+	const sourceID = "9000000000000000200"
+	if err := d.UpsertGhostFeedItem(model.FeedItem{
+		TweetID:        outerID,
+		AuthorHandle:   "sample_parent",
+		BodyText:       "foreign quote",
+		QuoteTweetID:   sourceID,
+		QuoteMediaJSON: `[]`,
+		ContentHash:    "ghost-outer",
+	}); err != nil {
+		t.Fatalf("UpsertGhostFeedItem: %v", err)
+	}
+	output := []byte(`[
+		[2, {"tweet_id":"9000000000000000100","content":"foreign quote","author":{"name":"sample_parent","nick":"Sample Parent"},"user":{"name":"sample_source","nick":"Sample Source"},"quote_id":0,"reply_id":0,"retweet_id":0}],
+		[2, {"tweet_id":"9000000000000000200","content":"source photo","quote_by":"sample_parent","author":{"name":"sample_source","nick":"Sample Source"},"user":{"name":"sample_source","nick":"Sample Source"},"quote_id":"9000000000000000100","reply_id":0,"retweet_id":0}],
+		[3, "https://pbs.twimg.com/media/source-photo.jpg?format=jpg&name=orig", {"tweet_id":"9000000000000000200","type":"photo"}]
+	]`)
+	m := &Manager{
+		db:         d,
+		cfg:        testCfg(t.TempDir()),
+		downloader: testDownloader(),
+		xFeedFetcher: fakeXFeedFetcher{
+			timeline: func(_ context.Context, handle string, _ int) ([]model.FeedItem, error) {
+				return xfeed.ParseDump(output, handle).Items, nil
+			},
+			source: func(context.Context, string, int) ([]model.FeedItem, error) {
+				t.Fatal("source fetch should not be called")
+				return nil, nil
+			},
+		},
+	}
+
+	n, err := m.FetchOneChannel(context.Background(), "twitter_sample_source")
+	if err != nil {
+		t.Fatalf("FetchOneChannel: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("upserted = %d, want 1", n)
+	}
+	outer, err := d.GetFeedItemByTweetID(outerID)
+	if err != nil {
+		t.Fatalf("GetFeedItemByTweetID outer: %v", err)
+	}
+	if outer == nil || !outer.IsGhost || outer.QuoteTweetID != sourceID || !strings.Contains(outer.QuoteMediaJSON, "source-photo.jpg") {
+		t.Fatalf("foreign outer ghost = %+v", outer)
+	}
+	source, err := d.GetFeedItemByTweetID(sourceID)
+	if err != nil {
+		t.Fatalf("GetFeedItemByTweetID: %v", err)
+	}
+	if source == nil || source.AuthorHandle != "sample_source" || !strings.Contains(source.MediaJSON, "source-photo.jpg") {
+		t.Fatalf("source post = %+v", source)
+	}
+	asset, err := d.GetAsset(db.BuildAssetID("twitter", "tweet", sourceID, "post_media", 0), "post_media")
+	if err != nil {
+		t.Fatalf("GetAsset: %v", err)
+	}
+	if asset == nil || asset.State != db.AssetStateQueued || !strings.Contains(asset.SourceURL, "source-photo.jpg") {
+		t.Fatalf("source photo asset = %+v", asset)
+	}
+}
+
 func TestFetchOneChannelDropsDetachedForeignTimelineItems(t *testing.T) {
 	d := newTestWorkerDB(t)
 	m := &Manager{
