@@ -40,7 +40,7 @@ func ProfileCard(props PageProps, p *model.ChannelProfile, size string, isFollow
 		ctx = templ.ClearChildren(ctx)
 		noBanner := p.BannerURL == ""
 		hasStats := p.Followers > 0 || p.Following > 0
-		showProfileActions := isFollowing
+		showProfileActions := size == "hero"
 		var templ_7745c5c3_Var2 = []any{profileCardClasses(p, size, noBanner)}
 		templ_7745c5c3_Err = templ.RenderCSSItems(ctx, templ_7745c5c3_Buffer, templ_7745c5c3_Var2...)
 		if templ_7745c5c3_Err != nil {

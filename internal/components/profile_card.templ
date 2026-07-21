@@ -12,7 +12,7 @@ import (
 templ ProfileCard(props PageProps, p *model.ChannelProfile, size string, isFollowing bool, isStarred bool) {
 	{{ noBanner := p.BannerURL == "" }}
 	{{ hasStats := p.Followers > 0 || p.Following > 0 }}
-	{{ showProfileActions := isFollowing }}
+	{{ showProfileActions := size == "hero" }}
 	<div class={ profileCardClasses(p, size, noBanner) } data-channel-id={ p.ChannelID } data-platform={ p.Platform }>
 		if !noBanner {
 			<div class="profile-card-banner">

@@ -2260,6 +2260,45 @@ select.input:focus {
 .bookmark-sheet-overlay.visible .bookmark-sheet {
     transform: translateY(0);
 }
+.moment-actions-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 42001;
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+    padding: 12px;
+    background: rgba(0, 0, 0, 0.55);
+    opacity: 0;
+    transition: opacity 0.18s ease;
+}
+.moment-actions-overlay.visible { opacity: 1; }
+.moment-actions-sheet {
+    width: min(100%, 480px);
+    overflow: hidden;
+    border: 1px solid var(--border-color);
+    border-radius: 16px;
+    background: var(--bg-secondary);
+    box-shadow: 0 -18px 40px rgba(0, 0, 0, 0.45);
+    transform: translateY(24px);
+    transition: transform 0.2s ease;
+}
+.moment-actions-overlay.visible .moment-actions-sheet { transform: translateY(0); }
+.moment-actions-sheet-item {
+    display: block;
+    width: 100%;
+    border: 0;
+    border-bottom: 1px solid var(--border-color);
+    padding: 15px 18px;
+    background: transparent;
+    color: var(--text-primary);
+    cursor: pointer;
+    font: inherit;
+    text-align: left;
+}
+.moment-actions-sheet-item:last-child { border-bottom: 0; }
+.moment-actions-sheet-item:hover { background: rgba(var(--accent-primary-rgb), 0.12); }
+.moment-actions-sheet-item.danger { color: var(--status-error); }
 .bookmark-sheet.expanded {
     max-height: min(88vh, 900px);
 }

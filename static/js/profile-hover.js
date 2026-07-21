@@ -214,9 +214,6 @@
 			card.querySelectorAll('[data-profile-card-menu-action="unfollow"]').forEach((btn) => {
 				btn.style.display = isFollowing ? '' : 'none';
 			});
-			card.querySelectorAll('[data-profile-card-menu], .profile-card-top-actions .feed-star-btn').forEach((el) => {
-				el.style.display = isFollowing ? '' : 'none';
-			});
 		});
 	}
 

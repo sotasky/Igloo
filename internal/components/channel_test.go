@@ -379,7 +379,7 @@ func TestChannelPageShortsMode(t *testing.T) {
 		ChannelID:    "tt_testchan",
 		Name:         "Shorts Channel",
 		Platform:     "tiktok",
-		IsSubscribed: true,
+		IsSubscribed: false,
 		IsStarred:    true,
 	}
 	profile := &model.ChannelProfile{
@@ -406,7 +406,7 @@ func TestChannelPageShortsMode(t *testing.T) {
 		t.Error("expected profile hero star button")
 	}
 	if !strings.Contains(html, `data-profile-card-menu`) {
-		t.Error("expected profile hero action menu")
+		t.Error("expected profile hero action menu for an unfollowed TikTok channel")
 	}
 	if !strings.Contains(html, `data-profile-card-menu-action="settings"`) {
 		t.Error("expected profile hero settings menu item")
@@ -503,6 +503,26 @@ func TestChannelPageYouTubeUsesProfileHero(t *testing.T) {
 	}
 	if strings.Contains(html, `class="page-actions-bar"`) {
 		t.Error("youtube profile hero should replace page-actions-bar")
+	}
+}
+
+func TestChannelPageTwitterUsesProfileHero(t *testing.T) {
+	p := newTestPageProps()
+	ch := model.Channel{ChannelID: "twitter_testchan", Name: "Test Channel", Platform: "twitter"}
+	profile := &model.ChannelProfile{
+		ChannelID: "twitter_testchan", Platform: "twitter", Handle: "testchan", DisplayName: "Test Channel",
+	}
+
+	var buf bytes.Buffer
+	if err := ChannelPage(p, ch, profile, nil, model.Pager{Page: 1, PerPage: 40}, "", "", false).Render(context.Background(), &buf); err != nil {
+		t.Fatal(err)
+	}
+	html := buf.String()
+	if !strings.Contains(html, `data-profile-card-menu`) {
+		t.Fatal("expected profile hero action menu for Twitter channel")
+	}
+	if strings.Contains(html, `class="page-actions-bar"`) {
+		t.Fatal("Twitter profile hero should replace page-actions-bar")
 	}
 }
 

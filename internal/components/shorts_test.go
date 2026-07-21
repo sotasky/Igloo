@@ -80,6 +80,27 @@ func TestShortsPlayerHeaderRendersStoriesTabTrigger(t *testing.T) {
 	}
 }
 
+func TestShortsPlayerLongPressUsesMomentMutationOwners(t *testing.T) {
+	srcBytes, err := os.ReadFile("../../static/js/src/shorts/items.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := string(srcBytes)
+	for _, check := range []string{
+		"function bindMomentLongPress(entry)",
+		"if (!wrapper || !entry.data || !entry.data.repostIntroduced || !entry.data.repostChannelId) return",
+		"/api/mutations/channel_setting",
+		"field: 'include_reposts'",
+		"/api/mutations/mute",
+		"/api/mutations/follow",
+		"function openMomentActions(entry)",
+	} {
+		if !strings.Contains(src, check) {
+			t.Errorf("Moment long-press action wiring missing %q", check)
+		}
+	}
+}
+
 func TestShortsStoryTrayOpensByDefaultForNormalMoments(t *testing.T) {
 	indexBytes, err := os.ReadFile("../../static/js/src/shorts/index.js")
 	if err != nil {

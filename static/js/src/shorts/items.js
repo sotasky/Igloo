@@ -7,12 +7,178 @@ import { attachShortVideoDebug } from './debug.js'
 
 var _state = null
 var _fns = null
+var momentActionsSheet = null
+var momentActionsKeyHandler = null
 
 // initItems sets up module-level refs.
 //   fns: { goNext, updateCurrentActionButtons, currentData }
 export function initItems(stateRef, fns) {
   _state = stateRef
   _fns = fns
+}
+
+function closeMomentActions() {
+  if (momentActionsSheet && momentActionsSheet.parentNode) momentActionsSheet.remove()
+  momentActionsSheet = null
+  if (momentActionsKeyHandler) document.removeEventListener('keydown', momentActionsKeyHandler)
+  momentActionsKeyHandler = null
+}
+
+function reloadMomentsAfterAction() {
+  window.setTimeout(function () { window.location.reload() }, 150)
+}
+
+function applyMomentAction(entry, action) {
+  var data = entry && entry.data
+  if (!data) return
+  var reposterID = String(data.repostChannelId || '').trim()
+  var authorID = String(data.channelId || '').trim()
+  var reposterLabel = String(data.repostDisplayName || data.repostHandle || reposterID).trim()
+  var authorLabel = String(data.channelName || authorID).trim()
+  var now = Date.now()
+
+  if (action === 'disable_reposts' && reposterID) {
+    apiFetch('/api/mutations/channel_setting', {
+      method: 'PUT',
+      body: JSON.stringify({ channel_id: reposterID, field: 'include_reposts', value: 0, updated_at_ms: now })
+    }).then(function () {
+      showToast(tf('toast_reposts_disabled_for_account', 'Reposts disabled for %1$s', reposterLabel))
+      reloadMomentsAfterAction()
+    }).catch(function (err) {
+      showToast((err && err.payload && err.payload.error) || t('error_channel_settings_save_failed', 'Failed to save channel settings'))
+    })
+    return
+  }
+
+  if (action === 'mute_author' && authorID) {
+    apiFetch('/api/mutations/mute', {
+      method: 'POST',
+      body: JSON.stringify({ channel_id: authorID, action: 'set', updated_at_ms: now })
+    }).then(function () {
+      showToast(tf('toast_muted_account', 'Muted %1$s', authorLabel))
+      reloadMomentsAfterAction()
+    }).catch(function (err) {
+      showToast((err && err.payload && err.payload.error) || t('error_mute_account_failed', 'Failed to mute account'))
+    })
+    return
+  }
+
+  if (action === 'unfollow_reposter' && reposterID) {
+    askConfirm({
+      title: t('confirm_unfollow_channel_title', 'Unfollow Channel'),
+      body: tf('confirm_unfollow_channel_body', 'Unfollow %1$s?', reposterLabel),
+      confirmLabel: t('action_unfollow', 'Unfollow'),
+      cancelLabel: t('action_cancel', 'Cancel'),
+      danger: true
+    }).then(function (confirmed) {
+      if (!confirmed) return
+      return apiFetch('/api/mutations/follow', {
+        method: 'POST',
+        body: JSON.stringify({ channel_id: reposterID, action: 'clear', updated_at_ms: Date.now() })
+      }).then(function () {
+        showToast(tf('toast_unfollowed_channel', 'Unfollowed %1$s', reposterLabel))
+        reloadMomentsAfterAction()
+      })
+    }).catch(function (err) {
+      showToast((err && err.payload && err.payload.error) || t('error_unfollow_failed', 'Failed to unfollow'))
+    })
+  }
+}
+
+function openMomentActions(entry) {
+  var data = entry && entry.data
+  if (!data || !data.repostIntroduced || !String(data.repostChannelId || '').trim()) return false
+  closeMomentActions()
+
+  var overlay = document.createElement('div')
+  overlay.className = 'moment-actions-overlay'
+  overlay.setAttribute('role', 'presentation')
+  var sheet = document.createElement('div')
+  sheet.className = 'moment-actions-sheet'
+  sheet.setAttribute('role', 'dialog')
+  sheet.setAttribute('aria-modal', 'true')
+  sheet.setAttribute('aria-label', t('action_more', 'More'))
+  overlay.appendChild(sheet)
+
+  var reposterLabel = String(data.repostDisplayName || data.repostHandle || data.repostChannelId).trim()
+  var authorLabel = String(data.channelName || data.channelId).trim()
+  var actions = [
+    { key: 'disable_reposts', label: tf('action_turn_off_reposts_for_account', 'Turn off reposts for %1$s', reposterLabel) },
+    { key: 'mute_author', label: tf('action_mute_account_label', 'Mute %1$s', authorLabel) },
+    { key: 'unfollow_reposter', label: tf('action_unfollow_account_label', 'Unfollow %1$s', reposterLabel), danger: true }
+  ]
+  actions.forEach(function (action) {
+    var button = document.createElement('button')
+    button.type = 'button'
+    button.className = 'moment-actions-sheet-item' + (action.danger ? ' danger' : '')
+    button.textContent = action.label
+    button.addEventListener('click', function () {
+      closeMomentActions()
+      applyMomentAction(entry, action.key)
+    })
+    sheet.appendChild(button)
+  })
+  var cancel = document.createElement('button')
+  cancel.type = 'button'
+  cancel.className = 'moment-actions-sheet-item'
+  cancel.textContent = t('action_cancel', 'Cancel')
+  cancel.addEventListener('click', closeMomentActions)
+  sheet.appendChild(cancel)
+  overlay.addEventListener('click', function (event) {
+    if (event.target === overlay) closeMomentActions()
+  })
+  momentActionsKeyHandler = function (event) {
+    if (event.key === 'Escape') closeMomentActions()
+  }
+  document.addEventListener('keydown', momentActionsKeyHandler)
+  document.body.appendChild(overlay)
+  momentActionsSheet = overlay
+  requestAnimationFrame(function () { overlay.classList.add('visible') })
+  return true
+}
+
+function bindMomentLongPress(entry) {
+  var wrapper = entry && entry.refs && entry.refs.wrapper
+  if (!wrapper || !entry.data || !entry.data.repostIntroduced || !entry.data.repostChannelId) return
+  var timer = 0
+  var startX = 0
+  var startY = 0
+  var suppressClick = false
+  function clear() {
+    if (timer) window.clearTimeout(timer)
+    timer = 0
+  }
+  function isControl(target) {
+    return !!(target && target.closest && target.closest('a, button, input, textarea, select, .val-progress-container, .shorts-slide-controls'))
+  }
+  wrapper.addEventListener('pointerdown', function (event) {
+    if (isControl(event.target)) return
+    clear()
+    startX = event.clientX
+    startY = event.clientY
+    timer = window.setTimeout(function () {
+      timer = 0
+      suppressClick = openMomentActions(entry)
+    }, 500)
+  })
+  wrapper.addEventListener('pointermove', function (event) {
+    if (Math.abs(event.clientX - startX) > 12 || Math.abs(event.clientY - startY) > 12) clear()
+  })
+  wrapper.addEventListener('pointerup', clear)
+  wrapper.addEventListener('pointercancel', clear)
+  wrapper.addEventListener('contextmenu', function (event) {
+    if (isControl(event.target)) return
+    if (openMomentActions(entry)) {
+      suppressClick = true
+      event.preventDefault()
+    }
+  })
+  wrapper.addEventListener('click', function (event) {
+    if (!suppressClick) return
+    suppressClick = false
+    event.preventDefault()
+    event.stopPropagation()
+  }, true)
 }
 
 export function iconSvg(kind, active) {
@@ -556,6 +722,8 @@ export function makeShortItem(entryData, existingEl) {
     descToggle: descToggle
   }
   var entryObj = { el: item, data: entryData, refs: refs }
+
+  bindMomentLongPress(entryObj)
 
   if (video) {
     function revealVideoFrame() {
