@@ -3,9 +3,12 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import {
+  CINEMA_COMPACT_LEFT_SIDEBAR_WIDTH,
+  CINEMA_HIDE_LEFT_SIDEBAR_WIDTH,
   CINEMA_MIN_PLAYER_WIDTH,
   PLAYER_MAIN_HORIZONTAL_PADDING,
   PLAYER_SIDEBAR_WIDTH,
+  cinemaSidebarDefaultMode,
   initCinemaView,
   shouldAutoEnableCinema,
 } from "../../static/js/src/player/cinema.js";
@@ -24,6 +27,82 @@ test("cinema view recommends itself below a 720px video column", () => {
   assert.equal(CINEMA_MIN_PLAYER_WIDTH, 720);
   assert.equal(shouldAutoEnableCinema(layoutAtVideoWidth(719), false), true);
   assert.equal(shouldAutoEnableCinema(layoutAtVideoWidth(720), false), false);
+});
+
+test("cinema leaves the left sidebar full, compacts it, then hides it by available width", () => {
+  assert.equal(cinemaSidebarDefaultMode(CINEMA_COMPACT_LEFT_SIDEBAR_WIDTH), null);
+  assert.equal(cinemaSidebarDefaultMode(CINEMA_COMPACT_LEFT_SIDEBAR_WIDTH - 1), "compact");
+  assert.equal(cinemaSidebarDefaultMode(CINEMA_HIDE_LEFT_SIDEBAR_WIDTH - 1), "hidden");
+});
+
+test("cinema keeps a stacked next-in-line rail visible", () => {
+  const rootClasses = new Set();
+  const buttonClasses = new Set();
+  const buttonListeners = new Map();
+  const attributes = new Map();
+  const root = {
+    classList: {
+      contains: (name) => rootClasses.has(name),
+      toggle(name, enabled) { if (enabled) rootClasses.add(name); else rootClasses.delete(name); },
+    },
+    getBoundingClientRect() { return { width: CINEMA_HIDE_LEFT_SIDEBAR_WIDTH - 1 }; },
+    querySelector() { return { setAttribute(name, value) { attributes.set(name, value); } }; },
+  };
+  const button = {
+    classList: {
+      toggle(name, enabled) { if (enabled) buttonClasses.add(name); else buttonClasses.delete(name); },
+    },
+    addEventListener(name, listener) { buttonListeners.set(name, listener); },
+    setAttribute(name, value) { attributes.set(`button:${name}`, value); },
+  };
+  const mediaQuery = { matches: true, addEventListener() {} };
+  globalThis.window = { matchMedia: () => mediaQuery, ResizeObserver: class { constructor() {} observe() {} } };
+
+  initCinemaView({ root, button });
+  buttonListeners.get("click")();
+  assert.equal(rootClasses.has("cinema-view"), true);
+  assert.equal(rootClasses.has("cinema-hides-player-sidebar"), false);
+  assert.equal(attributes.get("aria-hidden"), "false");
+  assert.equal(buttonClasses.has("active"), false);
+
+  delete globalThis.window;
+});
+
+test("manual cinema can hide the left sidebar at a tight desktop width", () => {
+  const rootClasses = new Set();
+  const buttonListeners = new Map();
+  const cinemaEvents = [];
+  let layoutWidth = 1200;
+  const root = {
+    classList: {
+      contains: (name) => rootClasses.has(name),
+      toggle(name, enabled) { if (enabled) rootClasses.add(name); else rootClasses.delete(name); },
+    },
+    getBoundingClientRect() { return { width: layoutWidth }; },
+    querySelector() { return { setAttribute() {} }; },
+    dispatchEvent(event) { cinemaEvents.push(event); },
+  };
+  const button = {
+    classList: { toggle() {} },
+    addEventListener(name, listener) { buttonListeners.set(name, listener); },
+    setAttribute() {},
+  };
+  const mediaQuery = { matches: false, addEventListener() {} };
+  const originalCustomEvent = globalThis.CustomEvent;
+  globalThis.CustomEvent = class {
+    constructor(type, init) { this.type = type; this.detail = init.detail; }
+  };
+  globalThis.window = { matchMedia: () => mediaQuery, ResizeObserver: class { constructor() {} observe() {} } };
+
+  initCinemaView({ root, button });
+  layoutWidth = CINEMA_HIDE_LEFT_SIDEBAR_WIDTH - 1;
+  buttonListeners.get("click")();
+  assert.equal(cinemaEvents.at(-1).detail.defaultSidebarMode, "hidden");
+  assert.equal(cinemaEvents.at(-1).detail.forceSidebarMode, true);
+
+  if (originalCustomEvent === undefined) delete globalThis.CustomEvent;
+  else globalThis.CustomEvent = originalCustomEvent;
+  delete globalThis.window;
 });
 
 test("cinema view does not auto-hide a sidebar that is already stacked below the player", () => {
@@ -103,7 +182,7 @@ test("a manual cinema choice survives sidebar width changes", () => {
 test("cinema hides only the right player sidebar", () => {
   assert.match(
     css,
-    /\.player-layout\.cinema-view:not\(\.fullscreen-browse\):not\(\.fullscreen-immersive\)\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0,\s*1fr\)\s+minmax\(0,\s*0px\);/,
+    /\.player-layout\.cinema-view\.cinema-hides-player-sidebar:not\(\.fullscreen-browse\):not\(\.fullscreen-immersive\)\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0,\s*1fr\)\s+minmax\(0,\s*0px\);/,
   );
   assert.match(css, /\.sidebar-resize-handle\s*\{[\s\S]*?display:\s*block;/);
   assert.doesNotMatch(css, /cinema-left-sidebar-(?:compact|hidden)/);
@@ -117,12 +196,17 @@ test("cinema hides only the right player sidebar", () => {
   );
   assert.match(siteBase, /defaultSidebarMode[\s\S]*?setSidebarWidth\(SIDEBAR_COMPACT_WIDTH, false, false\)/);
   assert.match(siteBase, /setSidebarHidden\(cinemaSidebarDefaultMode === 'hidden'\)/);
+  assert.match(siteBase, /forceSidebarMode[\s\S]*?cinemaSidebarDefaultForced/);
+  assert.doesNotMatch(
+    readFileSync(new URL("../../static/js/src/player/cinema.js", import.meta.url), "utf8"),
+    /button\.classList\.toggle\('active'/,
+  );
 });
 
 test("fullscreen browse suspends cinema layout changes", () => {
   assert.match(
     css,
-    /\.player-layout\.cinema-view:not\(\.fullscreen-browse\):not\(\.fullscreen-immersive\)\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0,\s*1fr\)\s+minmax\(0,\s*0px\);/,
+    /\.player-layout\.cinema-view\.cinema-hides-player-sidebar:not\(\.fullscreen-browse\):not\(\.fullscreen-immersive\)\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0,\s*1fr\)\s+minmax\(0,\s*0px\);/,
   );
 });
 

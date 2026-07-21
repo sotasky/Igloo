@@ -3441,7 +3441,7 @@ select.input.themed-select-native {
     transition: grid-template-columns var(--transition-normal);
 }
 
-.player-layout.cinema-view:not(.fullscreen-browse):not(.fullscreen-immersive) {
+.player-layout.cinema-view.cinema-hides-player-sidebar:not(.fullscreen-browse):not(.fullscreen-immersive) {
     grid-template-columns: minmax(0, 1fr) minmax(0, 0px);
 }
 
@@ -4326,7 +4326,7 @@ select.input.themed-select-native {
     transition: opacity var(--transition-fast), padding-inline var(--transition-normal), border-color var(--transition-normal);
 }
 
-.player-layout.cinema-view:not(.fullscreen-browse):not(.fullscreen-immersive) .player-sidebar {
+.player-layout.cinema-view.cinema-hides-player-sidebar:not(.fullscreen-browse):not(.fullscreen-immersive) .player-sidebar {
     visibility: hidden;
     pointer-events: none;
     opacity: 0;
