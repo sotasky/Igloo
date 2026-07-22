@@ -1,8 +1,12 @@
 package com.screwy.igloo.ui.component
 
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.material3.Text
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -13,6 +17,7 @@ import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.swipeLeft
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.screwy.igloo.media.OwnerKind
@@ -118,6 +123,64 @@ class MomentRepostAttributionTest {
     }
 
     @Test
+    fun stationary_moment_gestures_leave_slideshow_swipes_to_the_pager() {
+        var currentSlide: () -> Int = { 0 }
+        var tapCount = 0
+        var longPressCount = 0
+
+        composeRule.setContent {
+            val pagerState = rememberPagerState(pageCount = { 2 })
+            currentSlide = { pagerState.currentPage }
+            Box(modifier = Modifier.size(width = 360.dp, height = 640.dp)) {
+                HorizontalPager(
+                    state = pagerState,
+                    modifier = Modifier.fillMaxSize().testTag(SlideshowTag),
+                ) { page ->
+                    Box(
+                        modifier =
+                            Modifier.fillMaxSize()
+                                .momentStationaryGestures(
+                                    onTap = { tapCount++ },
+                                    onLongPress = { longPressCount++ },
+                                )
+                    ) {
+                        Text("Slide ${page + 1}")
+                    }
+                }
+            }
+        }
+
+        val slideshow = composeRule.onNodeWithTag(SlideshowTag, useUnmergedTree = true)
+        slideshow.performTouchInput { swipeLeft() }
+        composeRule.waitUntil { currentSlide() == 1 }
+
+        composeRule.runOnIdle {
+            assertEquals(0, tapCount)
+            assertEquals(0, longPressCount)
+        }
+
+        slideshow.performTouchInput { click() }
+        slideshow.performTouchInput { longClick() }
+
+        composeRule.runOnIdle {
+            assertEquals(1, tapCount)
+            assertEquals(1, longPressCount)
+        }
+    }
+
+    @Test
+    fun slideshow_edge_swipe_opens_profile_once_after_the_threshold() {
+        val tracker = MomentSlideshowEdgeSwipeTracker()
+
+        assertFalse(tracker.onUnconsumedDrag(deltaX = -30f, thresholdPx = 80f))
+        assertTrue(tracker.onUnconsumedDrag(deltaX = -51f, thresholdPx = 80f))
+        assertFalse(tracker.onUnconsumedDrag(deltaX = -100f, thresholdPx = 80f))
+
+        tracker.reset()
+        assertTrue(tracker.onUnconsumedDrag(deltaX = -81f, thresholdPx = 80f))
+    }
+
+    @Test
     fun fallback_long_press_keeps_actions_available_without_ready_video() {
         assertTrue(
             shouldUseMomentActionFallbackLongPress(
@@ -156,3 +219,4 @@ class MomentRepostAttributionTest {
 }
 
 private const val DrawerEdgeTag = "moment-drawer-edge"
+private const val SlideshowTag = "moment-slideshow"

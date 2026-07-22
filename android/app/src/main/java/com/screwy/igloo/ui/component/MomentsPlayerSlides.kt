@@ -23,10 +23,16 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
@@ -97,6 +103,9 @@ internal fun MomentSlideshowSurface(
     onAutoAdvance: () -> Unit,
     manualAdvanceTick: Int = 0,
     onManualAdvanceAtEnd: () -> Unit = {},
+    onSwipeLeftAtEnd: (() -> Unit)? = null,
+    onTap: (() -> Unit)? = null,
+    onLongPress: (() -> Unit)? = null,
     muted: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
@@ -120,6 +129,38 @@ internal fun MomentSlideshowSurface(
     val effectiveSlideCount = effectiveSlideMedia.size.coerceAtLeast(1)
     val pagerState = rememberPagerState(pageCount = { effectiveSlideCount })
     val pagerScope = rememberCoroutineScope()
+    val edgeSwipeThresholdPx = with(LocalDensity.current) { 80.dp.toPx() }
+    val currentOnSwipeLeftAtEnd by rememberUpdatedState(onSwipeLeftAtEnd)
+    val edgeSwipeTracker = remember(videoId) { MomentSlideshowEdgeSwipeTracker() }
+    val edgeSwipeConnection =
+        remember(videoId, edgeSwipeThresholdPx) {
+            object : NestedScrollConnection {
+                override fun onPostScroll(
+                    consumed: Offset,
+                    available: Offset,
+                    source: NestedScrollSource,
+                ): Offset {
+                    if (
+                        source == NestedScrollSource.UserInput &&
+                            edgeSwipeTracker.onUnconsumedDrag(
+                                deltaX = available.x,
+                                thresholdPx = edgeSwipeThresholdPx,
+                            )
+                    ) {
+                        currentOnSwipeLeftAtEnd?.invoke()
+                    }
+                    return Offset.Zero
+                }
+
+                override suspend fun onPostFling(
+                    consumed: Velocity,
+                    available: Velocity,
+                ): Velocity {
+                    edgeSwipeTracker.reset()
+                    return Velocity.Zero
+                }
+            }
+        }
 
     LaunchedEffect(manualAdvanceTick, effectiveSlideCount) {
         if (manualAdvanceTick == 0 || effectiveSlideCount <= 0) return@LaunchedEffect
@@ -140,7 +181,8 @@ internal fun MomentSlideshowSurface(
     Box(
         modifier = modifier
             .fillMaxSize()
-            .background(Color.Black),
+            .background(Color.Black)
+            .nestedScroll(edgeSwipeConnection),
     ) {
         if (effectiveSlideMedia.isNotEmpty()) {
             HorizontalPager(
@@ -148,42 +190,51 @@ internal fun MomentSlideshowSurface(
                 modifier = Modifier.fillMaxSize(),
             ) { page ->
                 val slide = effectiveSlideMedia[page]
-                when (slide.kind) {
-                    MomentSlideKind.Image -> MomentStillImage(
-                        mediaUri = slide.uri,
-                        contentDescription = stringResource(R.string.content_description_slide_number, page + 1),
-                        modifier = Modifier.fillMaxSize(),
-                    )
-                    MomentSlideKind.Video -> MomentVideoSlide(
-                        mediaUri = slide.uri,
-                        isActive = isActive && pagerState.currentPage == page,
-                        muted = muted,
-                        onEnded = {
-                            val currentPage = pagerState.currentPage
-                            pagerScope.launch {
-                                if (currentPage < effectiveSlideCount - 1) {
-                                    pagerState.animateScrollToPage(
-                                        page = currentPage + 1,
-                                        animationSpec = tween(
-                                            durationMillis = AUTO_SWIPE_SCROLL_DURATION_MS,
-                                            easing = FastOutSlowInEasing,
-                                        ),
-                                    )
-                                } else if (autoSwipe) {
-                                    onAutoAdvance()
-                                } else {
-                                    pagerState.animateScrollToPage(
-                                        page = 0,
-                                        animationSpec = tween(
-                                            durationMillis = AUTO_SWIPE_SCROLL_DURATION_MS,
-                                            easing = FastOutSlowInEasing,
-                                        ),
-                                    )
+                Box(
+                    modifier =
+                        Modifier.fillMaxSize()
+                            .momentStationaryGestures(
+                                onTap = onTap,
+                                onLongPress = onLongPress,
+                            )
+                ) {
+                    when (slide.kind) {
+                        MomentSlideKind.Image -> MomentStillImage(
+                            mediaUri = slide.uri,
+                            contentDescription = stringResource(R.string.content_description_slide_number, page + 1),
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                        MomentSlideKind.Video -> MomentVideoSlide(
+                            mediaUri = slide.uri,
+                            isActive = isActive && pagerState.currentPage == page,
+                            muted = muted,
+                            onEnded = {
+                                val currentPage = pagerState.currentPage
+                                pagerScope.launch {
+                                    if (currentPage < effectiveSlideCount - 1) {
+                                        pagerState.animateScrollToPage(
+                                            page = currentPage + 1,
+                                            animationSpec = tween(
+                                                durationMillis = AUTO_SWIPE_SCROLL_DURATION_MS,
+                                                easing = FastOutSlowInEasing,
+                                            ),
+                                        )
+                                    } else if (autoSwipe) {
+                                        onAutoAdvance()
+                                    } else {
+                                        pagerState.animateScrollToPage(
+                                            page = 0,
+                                            animationSpec = tween(
+                                                durationMillis = AUTO_SWIPE_SCROLL_DURATION_MS,
+                                                easing = FastOutSlowInEasing,
+                                            ),
+                                        )
+                                    }
                                 }
-                            }
-                        },
-                        modifier = Modifier.fillMaxSize(),
-                    )
+                            },
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    }
                 }
             }
         } else {
@@ -239,6 +290,28 @@ internal fun MomentSlideshowSurface(
                 )
             }
         }
+    }
+}
+
+internal class MomentSlideshowEdgeSwipeTracker {
+    private var accumulatedX = 0f
+    private var triggered = false
+
+    fun onUnconsumedDrag(deltaX: Float, thresholdPx: Float): Boolean {
+        if (deltaX >= 0f) {
+            accumulatedX = 0f
+            triggered = false
+            return false
+        }
+        accumulatedX += deltaX
+        if (triggered || !isLeftSwipe(accumulatedX, thresholdPx)) return false
+        triggered = true
+        return true
+    }
+
+    fun reset() {
+        accumulatedX = 0f
+        triggered = false
     }
 }
 

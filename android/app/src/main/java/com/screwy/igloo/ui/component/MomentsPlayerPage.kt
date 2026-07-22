@@ -1,6 +1,7 @@
 package com.screwy.igloo.ui.component
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -210,7 +211,7 @@ internal fun MomentPage(
     val actionAvailability = momentActionAvailability(item)
 
     val pageModifier =
-        if (storyMode) {
+        if (storyMode || mediaMode == MomentMediaMode.Slideshow) {
             Modifier.fillMaxSize().background(Color.Black)
         } else {
             Modifier.fillMaxSize().background(Color.Black).pointerInput(item.videoId) {
@@ -226,7 +227,6 @@ internal fun MomentPage(
                 )
             }
         }
-
     Box(modifier = pageModifier) {
         when (mediaMode) {
             MomentMediaMode.Image ->
@@ -249,6 +249,15 @@ internal fun MomentPage(
                     onAutoAdvance = onAutoAdvance,
                     manualAdvanceTick = manualSlideAdvanceTick,
                     onManualAdvanceAtEnd = onAutoAdvance,
+                    onSwipeLeftAtEnd =
+                        if (storyMode) null else ({ onSwipeLeftToChannel(item.channelId) }),
+                    onTap = if (storyMode) ({ manualSlideAdvanceTick++ }) else null,
+                    onLongPress =
+                        if (!storyMode && actionAvailability.canToggleReposts) {
+                            { onRequestMomentActions(item) }
+                        } else {
+                            null
+                        },
                     muted = muted,
                     modifier = Modifier.fillMaxSize(),
                 )
@@ -281,7 +290,7 @@ internal fun MomentPage(
 
         if (
             !storyMode &&
-                mediaMode != MomentMediaMode.Video &&
+                mediaMode == MomentMediaMode.Image &&
                 actionAvailability.canToggleReposts
         ) {
             MomentRepostLongPressLayer(
@@ -290,15 +299,9 @@ internal fun MomentPage(
             )
         }
 
-        if (storyMode) {
+        if (storyMode && mediaMode != MomentMediaMode.Slideshow) {
             StoryTapAdvanceLayer(
-                onTap = {
-                    if (mediaMode == MomentMediaMode.Slideshow) {
-                        manualSlideAdvanceTick++
-                    } else {
-                        onAutoAdvance()
-                    }
-                },
+                onTap = onAutoAdvance,
                 modifier = Modifier.fillMaxSize(),
             )
         }
@@ -419,15 +422,30 @@ internal fun MomentPage(
 }
 
 @Composable
+private fun StoryTapAdvanceLayer(onTap: () -> Unit, modifier: Modifier = Modifier) {
+    Box(modifier = modifier.pointerInput(onTap) { detectTapGestures(onTap = { onTap() }) })
+}
+
+internal fun Modifier.momentStationaryGestures(
+    onTap: (() -> Unit)?,
+    onLongPress: (() -> Unit)?,
+): Modifier =
+    then(
+        if (onTap == null && onLongPress == null) {
+            Modifier
+        } else {
+            Modifier.combinedClickable(
+                onLongClick = onLongPress,
+                onClick = onTap ?: {},
+            )
+        }
+    )
+
+@Composable
 private fun storyCaptionBottomPadding(base: Dp): Dp =
     with(LocalDensity.current) {
         max(base.value, WindowInsets.navigationBars.getBottom(this).toDp().value + 12f).dp
     }
-
-@Composable
-private fun StoryTapAdvanceLayer(onTap: () -> Unit, modifier: Modifier = Modifier) {
-    Box(modifier = modifier.pointerInput(onTap) { detectTapGestures(onTap = { onTap() }) })
-}
 
 @Composable
 private fun MomentRepostLongPressLayer(onLongPress: () -> Unit, modifier: Modifier = Modifier) {
