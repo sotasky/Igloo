@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.PagerState
 import androidx.compose.foundation.pager.VerticalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.runtime.Composable
@@ -19,6 +20,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
@@ -217,6 +219,7 @@ fun MomentsPlayer(
     modifier: Modifier = Modifier,
 ) {
     if (items.isEmpty()) return
+    val pagerItems = rememberMomentPagerSessionItems(items)
 
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -243,21 +246,21 @@ fun MomentsPlayer(
     LaunchedEffect(autoSwipeDefault) { autoSwipeState = autoSwipeDefault }
     val effectiveAutoSwipe = forceAutoSwipe || autoSwipeState
 
-    val initialPage = momentPagerStartIndex(items, startVideoId, startIndex)
-    val pagerState = rememberPagerState(initialPage = initialPage, pageCount = { items.size })
-    val currentIndex = pagerState.currentPage.coerceIn(0, items.lastIndex)
+    val initialPage = momentPagerStartIndex(pagerItems, startVideoId, startIndex)
+    val pagerState = rememberPagerState(initialPage = initialPage, pageCount = { pagerItems.size })
+    val currentIndex = pagerState.currentPage.coerceIn(0, pagerItems.lastIndex)
     var lastAppliedStartRequest by remember { mutableStateOf<MomentPagerStartRequest?>(null) }
-    var settledVideoId by remember { mutableStateOf(items[initialPage].videoId) }
+    var settledVideoId by remember { mutableStateOf(pagerItems[initialPage].videoId) }
     val storyMode = exitOnEnd
     val storyProgressWindow =
-        remember(storyMode, currentIndex, items) {
-            if (storyMode) storyProgressWindow(items, currentIndex)
+        remember(storyMode, currentIndex, pagerItems) {
+            if (storyMode) storyProgressWindow(pagerItems, currentIndex)
             else StoryProgressWindow(index = 0, count = 0)
         }
     // The pager is keyed by video ID below, so it keeps the current video anchored as Room
     // inserts, removes, or reorders rows. A start ID is a one-shot navigation request, not a
     // reason to move an already-playing video whenever its index changes.
-    LaunchedEffect(items, startVideoId, activeTab) {
+    LaunchedEffect(pagerItems, startVideoId, activeTab) {
         val startRequest = momentPagerStartRequest(activeTab, startVideoId)
         if (startRequest == null) {
             lastAppliedStartRequest = null
@@ -265,7 +268,7 @@ fun MomentsPlayer(
         }
         val requestedPage =
             pendingMomentPagerStartIndex(
-                items = items,
+                items = pagerItems,
                 startRequest = startRequest,
                 lastAppliedStartRequest = lastAppliedStartRequest,
             )
@@ -297,35 +300,25 @@ fun MomentsPlayer(
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    // Drive view-event + onIndexChange from the pager's settled page. The
-    // platform pager owns drag/fling physics; waiting for a settled video ID
-    // prevents Room reindexing from becoming a cursor change or a rewind.
-    var lastFiredVideoId by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(pagerState, items) {
-        snapshotFlow { pagerState.settledPage.coerceIn(0, items.lastIndex) }
-            .distinctUntilChanged()
-            .collect { page ->
-                if (page !in items.indices) return@collect
-
-                val videoId = items[page].videoId
-                settledVideoId = videoId
-                if (lastFiredVideoId != videoId) {
-                    onIndexChange(items[page])
-                    onViewEvent(videoId)
-                    lastFiredVideoId = videoId
-                }
-            }
-    }
+    MomentPagerSettlementEffect(
+        pagerState = pagerState,
+        items = pagerItems,
+        onSettled = { item ->
+            settledVideoId = item.videoId
+            onIndexChange(item)
+            onViewEvent(item.videoId)
+        },
+    )
 
     var muted by remember { mutableStateOf(muteDefault) }
     LaunchedEffect(muteDefault) { muted = muteDefault }
     LaunchedEffect(muted) { slideshowAudioPlayer.volume = if (muted) 0f else 1f }
     var pendingUnfollowItem by remember { mutableStateOf<MomentItem?>(null) }
 
-    LaunchedEffect(pagerState, items, syncDao, baseUrlProvider.baseUrl()) {
+    LaunchedEffect(pagerState, pagerItems, syncDao, baseUrlProvider.baseUrl()) {
         val baseUrl = baseUrlProvider.baseUrl()
         combine(
-                snapshotFlow { pagerState.currentPage.coerceIn(0, items.lastIndex) },
+                snapshotFlow { pagerState.currentPage.coerceIn(0, pagerItems.lastIndex) },
                 snapshotFlow { pagerState.isScrollInProgress },
                 snapshotFlow { lifecycleStarted },
             ) { page, scrolling, started ->
@@ -333,7 +326,7 @@ fun MomentsPlayer(
             }
             .distinctUntilChanged()
             .collectLatest { (page, scrolling, started) ->
-                val currentItem = items.getOrNull(page)
+                val currentItem = pagerItems.getOrNull(page)
                 if (
                     currentItem == null ||
                         momentMediaMode(currentItem.mediaKind, currentItem.slideCount) !=
@@ -384,7 +377,7 @@ fun MomentsPlayer(
             if (storyMode) {
                 val target =
                     storyAdvanceTarget(
-                        items = items,
+                        items = pagerItems,
                         currentIndex = page,
                         crossProfile = storyCrossProfileAdvance,
                     )
@@ -398,7 +391,7 @@ fun MomentsPlayer(
                 animateAdvance = true
                 nextMomentPageForAutoSwipe(
                     currentPage = page,
-                    lastIndex = items.lastIndex,
+                    lastIndex = pagerItems.lastIndex,
                     autoSwipeEnabled = effectiveAutoSwipe,
                 )
             }
@@ -419,7 +412,7 @@ fun MomentsPlayer(
 
     Box(modifier = modifier.fillMaxSize().background(Color.Black)) {
         val pageContent: @Composable (Int) -> Unit = { page ->
-            val item = items[page]
+            val item = pagerItems[page]
             MomentPage(
                 pageIndex = page,
                 item = item,
@@ -463,7 +456,7 @@ fun MomentsPlayer(
         if (storyMode) {
             HorizontalPager(
                 state = pagerState,
-                key = { page -> items[page].videoId },
+                key = { page -> pagerItems[page].videoId },
                 beyondViewportPageCount = 0,
                 contentPadding = PaddingValues(0.dp),
                 pageSpacing = 0.dp,
@@ -474,7 +467,7 @@ fun MomentsPlayer(
         } else {
             VerticalPager(
                 state = pagerState,
-                key = { page -> items[page].videoId },
+                key = { page -> pagerItems[page].videoId },
                 beyondViewportPageCount = MOMENTS_PREPARE_RADIUS,
                 modifier = Modifier.fillMaxSize(),
             ) { page ->
@@ -511,6 +504,72 @@ fun MomentsPlayer(
                 },
             )
         }
+    }
+}
+
+/**
+ * Keeps the order already shown by this player session while applying metadata updates, removals,
+ * and newly synced rows. A Room backfill can sort new rows before the current page; exposing that
+ * reorder directly to Pager replaces the page at the same numeric position before key anchoring
+ * finishes. New rows remain available at the end of the current session and take their canonical
+ * order the next time the player opens.
+ */
+@Composable
+internal fun rememberMomentPagerSessionItems(items: List<MomentItem>): List<MomentItem> {
+    var sessionItems by remember { mutableStateOf(items) }
+    LaunchedEffect(items) {
+        val merged = mergeMomentPagerSessionItems(sessionItems, items)
+        if (merged != sessionItems) sessionItems = merged
+    }
+    return sessionItems
+}
+
+internal fun mergeMomentPagerSessionItems(
+    previous: List<MomentItem>,
+    incoming: List<MomentItem>,
+): List<MomentItem> {
+    val incomingById = incoming.associateBy(MomentItem::videoId)
+    val included = HashSet<String>(incoming.size)
+    val merged = ArrayList<MomentItem>(incoming.size)
+
+    previous.forEach { oldItem ->
+        val updated = incomingById[oldItem.videoId]
+        if (updated != null && included.add(updated.videoId)) merged += updated
+    }
+    incoming.forEach { item ->
+        if (included.add(item.videoId)) merged += item
+    }
+    return merged
+}
+
+/**
+ * Reports actual pager settlements without treating a Room playlist update as a page change.
+ *
+ * Pager keys move the current page to keep its video anchored when rows are inserted or reordered.
+ * Restarting the observer for the new list can run before that key remap and pair the old page number
+ * with a different row. Keep one observer for the pager lifetime and read the latest list only when
+ * the pager itself settles at a different page.
+ */
+@Composable
+internal fun MomentPagerSettlementEffect(
+    pagerState: PagerState,
+    items: List<MomentItem>,
+    onSettled: (MomentItem) -> Unit,
+) {
+    val latestItems by rememberUpdatedState(items)
+    val latestOnSettled by rememberUpdatedState(onSettled)
+    var lastSettledVideoId by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(pagerState) {
+        snapshotFlow { pagerState.settledPage }
+            .distinctUntilChanged()
+            .collect { page ->
+                val item = latestItems.getOrNull(page) ?: return@collect
+                if (lastSettledVideoId == item.videoId) return@collect
+
+                lastSettledVideoId = item.videoId
+                latestOnSettled(item)
+            }
     }
 }
 
