@@ -10845,7 +10845,7 @@ func feedDashboardSourcesCard(p PageProps, d FeedDashboardData) templ.Component 
 			}
 			for _, s := range d.Sources {
 				if FeedSourceFilterMatch(s, d.Filter) {
-					var templ_7745c5c3_Var625 = []any{"feed-row-" + s.DisplayStatus}
+					var templ_7745c5c3_Var625 = []any{"feed-row-" + s.Status}
 					templ_7745c5c3_Err = templ.RenderCSSItems(ctx, templ_7745c5c3_Buffer, templ_7745c5c3_Var625...)
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
@@ -10893,7 +10893,7 @@ func feedDashboardSourcesCard(p PageProps, d FeedDashboardData) templ.Component 
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
 					}
-					var templ_7745c5c3_Var629 = []any{"dot " + FeedSourceDotClass(s.DisplayStatus)}
+					var templ_7745c5c3_Var629 = []any{"dot " + FeedSourceDotClass(s.Status)}
 					templ_7745c5c3_Err = templ.RenderCSSItems(ctx, templ_7745c5c3_Buffer, templ_7745c5c3_Var629...)
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
@@ -10916,9 +10916,9 @@ func feedDashboardSourcesCard(p PageProps, d FeedDashboardData) templ.Component 
 						return templ_7745c5c3_Err
 					}
 					var templ_7745c5c3_Var631 string
-					templ_7745c5c3_Var631, templ_7745c5c3_Err = templ.JoinStringErrs(s.DisplayStatus)
+					templ_7745c5c3_Var631, templ_7745c5c3_Err = templ.JoinStringErrs(s.Status)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/modals.templ`, Line: 2126, Col: 28}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/components/modals.templ`, Line: 2126, Col: 21}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var631))
 					if templ_7745c5c3_Err != nil {
@@ -11008,7 +11008,7 @@ func feedDashboardSourcesCard(p PageProps, d FeedDashboardData) templ.Component 
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
 					}
-					if s.DisplayStatus != "ok" {
+					if s.Status != "ok" {
 						templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 922, "<button class=\"feed-probe-link\" type=\"button\" hx-get=\"")
 						if templ_7745c5c3_Err != nil {
 							return templ_7745c5c3_Err

@@ -124,6 +124,28 @@ func TestClassifyErrorPatterns(t *testing.T) {
 	}
 }
 
+func TestIsTransportFailureSeparatesConnectivityFromSourceFailures(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"dns", errors.New("Temporary failure in name resolution"), true},
+		{"route", errors.New("network is unreachable"), true},
+		{"timeout", context.DeadlineExceeded, true},
+		{"rate_limit", errors.New("HTTP 429: Too Many Requests"), false},
+		{"not_found", errors.New("Requested post not available"), false},
+		{"auth", errors.New("login required"), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := IsTransportFailure(tt.err, nil); got != tt.want {
+				t.Fatalf("IsTransportFailure(%v) = %t, want %t", tt.err, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestClassifyFailurePermanentAndRetryablePolicy(t *testing.T) {
 	tests := []struct {
 		name      string

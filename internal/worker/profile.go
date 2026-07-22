@@ -37,6 +37,20 @@ type instagramProfileFetchFn func(ctx context.Context, channelID, handle string)
 func (m *Manager) runProfileJobLoop(ctx context.Context) {
 	log.Printf("[profile] durable identity worker started")
 	for {
+		if delay := m.externalRetryDelay(time.Now()); delay > 0 {
+			timer := time.NewTimer(delay)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return
+			case <-m.profileKick:
+				if !timer.Stop() {
+					<-timer.C
+				}
+			case <-timer.C:
+			}
+			continue
+		}
 		profileWork := m.processProfileJobBatch(ctx, fetchprofile.Fetch)
 		if ctx.Err() != nil {
 			return
@@ -67,9 +81,13 @@ func (m *Manager) processProfileJobBatch(ctx context.Context, fetch fetchFn) boo
 	if m == nil || m.db == nil || fetch == nil || ctx.Err() != nil {
 		return false
 	}
+	limit := profileJobBatchSize
+	if m.externalNetwork.isUnavailable() {
+		limit = 1
+	}
 	jobs, err := m.db.ClaimProfileJobs(db.LeaseOptions{
 		Owner: profileJobLeaseOwner(),
-		Limit: profileJobBatchSize,
+		Limit: limit,
 	})
 	if err != nil {
 		log.Printf("[profile] ClaimProfileJobs: %v", err)
@@ -77,6 +95,14 @@ func (m *Manager) processProfileJobBatch(ctx context.Context, fetch fetchFn) boo
 	}
 	if len(jobs) == 0 {
 		return false
+	}
+	if !m.externalWorkAllowed(time.Now()) {
+		for _, job := range jobs {
+			if err := m.db.ReleaseProfileJob(job, time.Now().UnixMilli()); err != nil {
+				log.Printf("[profile] release %s while network probe is active: %v", job.ChannelID, err)
+			}
+		}
+		return true
 	}
 
 	var wg sync.WaitGroup
@@ -96,6 +122,12 @@ func (m *Manager) processProfileJob(ctx context.Context, fetch fetchFn, job mode
 	profile, err := m.fetchProfileJob(ctx, fetch, job.ChannelID)
 	now := time.Now().UTC()
 	if err != nil {
+		if m.ReportExternalResult(err) {
+			if releaseErr := m.db.ReleaseProfileJob(job, now.UnixMilli()); releaseErr != nil {
+				log.Printf("[profile] release %s after network failure: %v", job.ChannelID, releaseErr)
+			}
+			return
+		}
 		if errors.Is(err, fetchprofile.ErrNotFound) && platformForChannelID(job.ChannelID) != "twitter" {
 			profile = model.ChannelProfile{
 				ChannelID: job.ChannelID,
@@ -113,6 +145,7 @@ func (m *Manager) processProfileJob(ctx context.Context, fetch fetchFn, job mode
 			return
 		}
 	}
+	m.ReportExternalResult(nil)
 
 	replacements, previous, stagedPaths, stageErr := m.stageProfileJobAssets(ctx, job, profile)
 	stored, complete, err := m.db.CompleteProfileJob(job, profile, replacements, now.UnixMilli())
@@ -134,6 +167,12 @@ func (m *Manager) processProfileJob(ctx context.Context, fetch fetchFn, job mode
 	}
 	if stageErr == nil {
 		stageErr = errors.New("declared profile media is not ready")
+	}
+	if m.ReportExternalResult(stageErr) {
+		if releaseErr := m.db.ReleaseProfileJob(job, now.UnixMilli()); releaseErr != nil {
+			log.Printf("[profile] release incomplete %s after network failure: %v", job.ChannelID, releaseErr)
+		}
+		return
 	}
 	m.retryProfileJob(job, stageErr, now)
 }

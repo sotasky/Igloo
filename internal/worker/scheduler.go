@@ -66,6 +66,13 @@ func (m *Manager) runScheduler(ctx context.Context) {
 			if state.active || (m.cfg != nil && !m.cfg.PlatformEnabled(platform)) {
 				continue
 			}
+			if delay := m.externalRetryDelay(now); delay > 0 {
+				candidate := now.Add(delay)
+				if candidate.Before(nextWake) {
+					nextWake = candidate
+				}
+				continue
+			}
 			channel, count, err := m.db.NextSubscribedChannel(platform)
 			if err != nil {
 				log.Printf("[scheduler] next %s channel: %v", platform, err)
@@ -171,11 +178,18 @@ func (m *Manager) processDiscoveryChannel(ctx context.Context, platform string, 
 	started := time.Now()
 	log.Printf("[scheduler] checking %s (%s)", channel.Name, channel.ChannelID)
 	m.emitSchedulerEvent(fmt.Sprintf("Checking: %s", channel.Name), "start", channel.ChannelID, platform)
+	if !m.externalWorkAllowed(started) {
+		return
+	}
 
 	checkCtx, cancel := context.WithTimeout(ctx, discoveryChannelCheckTimeout)
 	snapshot, fetchErr := m.checkChannel(checkCtx, channel)
 	cancel()
 	if ctx.Err() != nil || !m.db.IsChannelFollowed(channel.ChannelID) {
+		return
+	}
+	if m.ReportExternalResult(fetchErr) {
+		m.applyPartialDiscoveryAfterTransportFailure(channel, snapshot, fetchErr)
 		return
 	}
 	if platform == "tiktok" || platform == "instagram" {
@@ -186,6 +200,10 @@ func (m *Manager) processDiscoveryChannel(ctx context.Context, platform string, 
 		fetchErr = errors.Join(fetchErr, storyErr)
 	}
 	if ctx.Err() != nil || !m.db.IsChannelFollowed(channel.ChannelID) {
+		return
+	}
+	if m.ReportExternalResult(fetchErr) {
+		m.applyPartialDiscoveryAfterTransportFailure(channel, snapshot, fetchErr)
 		return
 	}
 
@@ -217,6 +235,18 @@ func (m *Manager) processDiscoveryChannel(ctx context.Context, platform string, 
 	} else {
 		m.setStatus("scheduler", workerStatus("scheduler", true, detail, ""))
 	}
+}
+
+func (m *Manager) applyPartialDiscoveryAfterTransportFailure(channel model.Channel, snapshot download.SourceSnapshot, cause error) {
+	added, err := m.reconcileSourceSnapshot(channel, snapshot)
+	if added > 0 {
+		m.KickMediaWork()
+	}
+	if err != nil {
+		log.Printf("[scheduler] preserve partial %s after network failure: %v", channel.Name, err)
+	}
+	log.Printf("[scheduler] network interrupted %s: %v", channel.Name, cause)
+	m.setStatus("scheduler", workerStatus("scheduler", true, "internet unavailable; discovery paused", cause.Error()))
 }
 
 func (m *Manager) applyDiscoverySnapshot(channel model.Channel, snapshot download.SourceSnapshot) (int, error) {

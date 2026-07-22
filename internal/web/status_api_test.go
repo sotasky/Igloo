@@ -50,12 +50,40 @@ func TestBuildFeedSourcesShowsNeverIngestedChannelAsPending(t *testing.T) {
 		if source.Handle != "_sample_handle" {
 			continue
 		}
-		if source.Status != "unknown" || source.DisplayStatus != "pending" {
-			t.Fatalf("source status = %q display = %q; want unknown/pending", source.Status, source.DisplayStatus)
+		if source.Status != "pending" {
+			t.Fatalf("source status = %q; want pending", source.Status)
 		}
 		return
 	}
 	t.Fatalf("_sample_handle source missing from diagnostics: %#v", sources)
+}
+
+func TestBuildFeedSourcesDoesNotHideARecordedFailureBehindRecentSuccess(t *testing.T) {
+	srv := newTestServer(t)
+	const channelID = "twitter_sample_recent"
+	if err := srv.db.AddChannel(model.Channel{
+		ChannelID: channelID, SourceID: "sample_recent", Name: "sample_recent",
+		URL: "https://x.com/sample_recent", Platform: "twitter", IsSubscribed: true,
+	}); err != nil {
+		t.Fatalf("AddChannel: %v", err)
+	}
+	if err := srv.db.RecordIngestSuccess(channelID, float64(time.Now().Unix()), 10); err != nil {
+		t.Fatalf("RecordIngestSuccess: %v", err)
+	}
+	if err := srv.db.RecordIngestFailure(channelID, "source rejected the request", 0); err != nil {
+		t.Fatalf("RecordIngestFailure: %v", err)
+	}
+
+	sources, _ := srv.buildFeedSources()
+	for _, source := range sources {
+		if source.Handle == "sample_recent" {
+			if source.Status != "cooling" {
+				t.Fatalf("source status = %q; want cooling", source.Status)
+			}
+			return
+		}
+	}
+	t.Fatal("sample_recent source missing from diagnostics")
 }
 
 func TestBuildFeedSourcesUsesSourceChannelCounts(t *testing.T) {

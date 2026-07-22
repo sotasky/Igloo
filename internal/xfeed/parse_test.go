@@ -267,8 +267,37 @@ func TestClientFetchTimelineRetriesCookieAfterSemanticAuthorizationError(t *test
 	if got := strings.Join(used, ","); got != "/tmp/cookie-a.txt,/tmp/cookie-b.txt" {
 		t.Fatalf("cookie attempts = %q", got)
 	}
-	if len(sink.ops) != 2 || sink.ops[0].Status != "failure" || sink.ops[0].ErrorKind != "auth" || sink.ops[1].Status != "success" {
+	if len(sink.ops) != 1 || sink.ops[0].Status != "success" {
 		t.Fatalf("operations = %#v", sink.ops)
+	}
+	if !strings.Contains(sink.ops[0].SummaryJSON, `"attempts":2`) {
+		t.Fatalf("operation summary = %s", sink.ops[0].SummaryJSON)
+	}
+}
+
+func TestClientFetchTimelineDoesNotRotateCookiesForNotFound(t *testing.T) {
+	var attempts int
+	sink := &recordingOperationSink{}
+	client := &Client{
+		Runner: func(context.Context, []string) ([]byte, error) {
+			attempts++
+			return []byte(`[-1, {"error":"NotFoundError","message":"Requested user could not be found"}]`), nil
+		},
+		CookiePool:    &CookiePool{paths: []string{"/tmp/cookie-a.txt", "/tmp/cookie-b.txt"}},
+		OperationSink: sink,
+	}
+
+	if _, err := client.FetchTimeline(context.Background(), "missing_source", 1); err == nil {
+		t.Fatal("FetchTimeline succeeded for a missing source")
+	}
+	if attempts != 1 {
+		t.Fatalf("cookie attempts = %d; want 1", attempts)
+	}
+	if len(sink.ops) != 1 || sink.ops[0].Status != "failure" || sink.ops[0].ErrorKind != "not_found" {
+		t.Fatalf("operations = %#v", sink.ops)
+	}
+	if !strings.Contains(sink.ops[0].SummaryJSON, `"attempts":1`) {
+		t.Fatalf("operation summary = %s", sink.ops[0].SummaryJSON)
 	}
 }
 

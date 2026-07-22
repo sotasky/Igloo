@@ -357,25 +357,60 @@ func timePtr(t time.Time) *time.Time {
 }
 
 func (c *Client) dump(ctx context.Context, rawURL string, limit int) ([]byte, error) {
+	started := time.Now()
 	args := galleryDLArgs(rawURL, limit)
 	cookies := c.cookies()
-	if len(cookies) == 0 {
-		return c.run(ctx, rawURL, args, "")
-	}
-	var lastErr error
-	for i := 0; i < len(cookies); i++ {
-		cookie := cookies[i]
-		out, err := c.run(ctx, rawURL, append([]string{"--cookies", cookie}, args...), cookie)
-		if err == nil {
-			return out, nil
+	attempts := 0
+	usedArgs := args
+	usedCookie := ""
+	var output []byte
+	var err error
+	defer func() {
+		op := model.DownloaderOperation{
+			Operation:   "x.gallerydl.dump",
+			Platform:    "twitter",
+			Subject:     rawURL,
+			Tool:        "gallery-dl",
+			StartedAtMs: started.UnixMilli(),
+			EndedAtMs:   time.Now().UnixMilli(),
+			Status:      download.OperationStatusSuccess,
+			CookieLabel: download.CookieLabel(usedCookie, ""),
+			SummaryJSON: download.RedactText(mustJSON(map[string]any{
+				"args":     download.RedactArgs(usedArgs),
+				"attempts": attempts,
+			})),
 		}
-		lastErr = err
+		if err != nil {
+			op.Status = download.OperationStatusFailure
+			op.ErrorKind = download.ClassifyError(err, output)
+			op.Error = download.RedactText(err.Error())
+		}
+		if c != nil && c.OperationSink != nil {
+			_ = c.OperationSink.RecordDownloaderOperation(ctx, op)
+		}
+	}()
+	if len(cookies) == 0 {
+		attempts = 1
+		output, err = c.run(ctx, args)
+		return output, err
 	}
-	return nil, lastErr
+	for i := 0; i < len(cookies); i++ {
+		usedCookie = cookies[i]
+		usedArgs = append([]string{"--cookies", usedCookie}, args...)
+		attempts++
+		output, err = c.run(ctx, usedArgs)
+		if err == nil {
+			return output, nil
+		}
+		kind := download.ClassifyError(err, output)
+		if kind != download.ErrorKindAuth && kind != download.ErrorKindRateLimit {
+			break
+		}
+	}
+	return nil, err
 }
 
-func (c *Client) run(ctx context.Context, rawURL string, args []string, cookieFile string) ([]byte, error) {
-	start := time.Now()
+func (c *Client) run(ctx context.Context, args []string) ([]byte, error) {
 	runner := runGalleryDL
 	if c != nil && c.Runner != nil {
 		runner = c.Runner
@@ -384,27 +419,8 @@ func (c *Client) run(ctx context.Context, rawURL string, args []string, cookieFi
 	if err == nil {
 		err = galleryDLSemanticError(out)
 	}
-	downloadOp := model.DownloaderOperation{
-		Operation:   "x.gallerydl.dump",
-		Platform:    "twitter",
-		Subject:     rawURL,
-		Tool:        "gallery-dl",
-		StartedAtMs: start.UnixMilli(),
-		EndedAtMs:   time.Now().UnixMilli(),
-		Status:      download.OperationStatusSuccess,
-		CookieLabel: download.CookieLabel(cookieFile, ""),
-		SummaryJSON: download.RedactText(mustJSON(map[string]any{"args": download.RedactArgs(args)})),
-	}
 	if err != nil {
-		downloadOp.Status = download.OperationStatusFailure
-		downloadOp.ErrorKind = download.ClassifyError(err, out)
-		downloadOp.Error = download.RedactText(err.Error() + ": " + string(out))
-	}
-	if c != nil && c.OperationSink != nil {
-		_ = c.OperationSink.RecordDownloaderOperation(ctx, downloadOp)
-	}
-	if err != nil {
-		return nil, fmt.Errorf("gallery-dl X feed: %w: %s", err, out)
+		return out, fmt.Errorf("gallery-dl X feed: %w: %s", err, out)
 	}
 	return out, nil
 }

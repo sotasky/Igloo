@@ -76,8 +76,29 @@ func (m *Manager) runOneXStatusEnrichment(ctx context.Context, req xfeed.StatusE
 	if m == nil || m.db == nil {
 		return
 	}
-	status, err := m.xFeedClient().FetchStatus(ctx, req.Ref.Handle, req.Ref.TweetID)
-	if err != nil {
+	var status xfeed.ParseResult
+	for {
+		if delay := m.externalRetryDelay(time.Now()); delay > 0 {
+			timer := time.NewTimer(delay)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return
+			case <-timer.C:
+			}
+		}
+		if !m.externalWorkAllowed(time.Now()) {
+			continue
+		}
+		var err error
+		status, err = m.xFeedClient().FetchStatus(ctx, req.Ref.Handle, req.Ref.TweetID)
+		if err == nil {
+			m.ReportExternalResult(nil)
+			break
+		}
+		if m.ReportExternalResult(err) {
+			continue
+		}
 		if ctx.Err() == nil {
 			log.Printf("[x_status_enrichment] fetch %s/%s: %v", req.Ref.Handle, req.Ref.TweetID, err)
 		}

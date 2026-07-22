@@ -89,6 +89,10 @@ func (m *Manager) runMediaWorkLoop(ctx context.Context, kind mediaWorkerKind) {
 			continue
 		}
 		now := time.Now()
+		if delay := m.externalRetryDelay(now); delay > 0 {
+			resetMediaTimer(timer, delay)
+			continue
+		}
 		worked, previewDelay := m.processNextMediaWork(ctx, now, kind)
 		if worked {
 			resetMediaTimer(timer, 10*time.Millisecond)
@@ -203,7 +207,6 @@ func (m *Manager) processDownloadBatch(ctx context.Context, lane db.DownloadLane
 	if !ok {
 		return false
 	}
-
 	ch, err := m.db.GetChannel(job.OwnerChannelID)
 	if err != nil || ch == nil {
 		log.Printf("[downloadpool] GetChannel %s: %v", job.OwnerChannelID, err)
@@ -343,15 +346,29 @@ func (m *Manager) downloadVideo(ctx context.Context, job db.DownloadWork, platfo
 		Subtitles:          false,
 	}
 
+	if !m.externalWorkAllowed(time.Now()) {
+		if err := m.db.ReleaseDownloadWork(job.VideoID, job.LeaseOwner); err != nil {
+			log.Printf("[downloadpool] release %s while network probe is active: %v", job.VideoID, err)
+		}
+		return
+	}
 	completed, dlErr := m.downloader.DownloadCompleted(ctx, mediaLane, sourceURL, "video", opts)
 
 	if dlErr != nil {
 		m.removeFailedAttempt(ctx, mediaLane, completedVideoFiles{}, completed)
 		log.Printf("[downloadpool] download %s: %v", job.VideoID, dlErr)
+		if m.ReportExternalResult(dlErr) {
+			m.EmitDownload(fmt.Sprintf("Paused: %s — internet unavailable", job.Title), "warning", job.SourceChannelID, platform)
+			if err := m.db.ReleaseDownloadWork(job.VideoID, job.LeaseOwner); err != nil {
+				log.Printf("[downloadpool] release %s after network failure: %v", job.VideoID, err)
+			}
+			return
+		}
 		m.EmitDownload(fmt.Sprintf("Failed: %s — %v", job.Title, dlErr), "error", job.SourceChannelID, platform)
 		m.failDownloadJob(job, fmt.Errorf("download: %w", dlErr))
 		return
 	}
+	m.ReportExternalResult(nil)
 
 	if len(completed.MediaPaths) == 0 {
 		m.removeFailedAttempt(ctx, mediaLane, completedVideoFiles{}, completed)

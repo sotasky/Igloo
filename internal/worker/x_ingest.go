@@ -205,7 +205,12 @@ func (m *Manager) runIngestCycle(ctx context.Context) {
 	var totalUpserted int
 	cycleFailures := make(map[string]string)
 	fetchesStarted := 0
+	networkPaused := false
 	waitForFetch := func() bool {
+		if m.externalRetryDelay(time.Now()) > 0 {
+			networkPaused = true
+			return false
+		}
 		if fetchesStarted > 0 {
 			delay := m.xFeedFetchDelay()
 			select {
@@ -214,6 +219,14 @@ func (m *Manager) runIngestCycle(ctx context.Context) {
 			}
 		}
 		if ctx.Err() != nil || m.IsIngestPaused() {
+			return false
+		}
+		if m.externalRetryDelay(time.Now()) > 0 {
+			networkPaused = true
+			return false
+		}
+		if !m.externalWorkAllowed(time.Now()) {
+			networkPaused = true
 			return false
 		}
 		fetchesStarted++
@@ -225,6 +238,8 @@ func (m *Manager) runIngestCycle(ctx context.Context) {
 			if m.IsIngestPaused() {
 				log.Printf("[x_ingest] ingest cycle aborted (paused)")
 				m.EmitFeed(xIngestActivitySource, "Ingest cycle aborted (paused)", "warning")
+			} else if networkPaused {
+				log.Printf("[x_ingest] ingest cycle paused for internet recovery")
 			}
 			break
 		}
@@ -246,6 +261,10 @@ func (m *Manager) runIngestCycle(ctx context.Context) {
 				break
 			}
 			log.Printf("[x_ingest] fetch %s: %v", ch.ChannelID, fetchErr)
+			if m.ReportExternalResult(fetchErr) {
+				networkPaused = true
+				break
+			}
 			isTimeout := errors.Is(fetchErr, context.DeadlineExceeded)
 			if isTimeout {
 				m.EmitFeed(xIngestActivitySource, fmt.Sprintf("@%s — timeout", handle), "warning")
@@ -257,6 +276,7 @@ func (m *Manager) runIngestCycle(ctx context.Context) {
 			continue
 		}
 
+		m.ReportExternalResult(nil)
 		_ = m.db.RecordIngestSuccess(ch.ChannelID, float64(time.Now().Unix()), latencyMs)
 
 		m.enrichExistingGhostQuotes(ctx, items)
@@ -288,6 +308,10 @@ func (m *Manager) runIngestCycle(ctx context.Context) {
 		atomic.AddInt32(&m.ingestCycleDone, 1)
 		if err != nil {
 			log.Printf("[x_ingest] feed source %s: %v", source.SourceID, err)
+			if m.ReportExternalResult(err) {
+				networkPaused = true
+				break
+			}
 			cycleFailures[source.SourceID] = err.Error()
 		}
 	}
@@ -392,9 +416,13 @@ func (m *Manager) FetchOneChannel(ctx context.Context, channelID string) (int, e
 	settings, _ := m.db.GetChannelSettings(channelID)
 	items, err := m.fetchXTimeline(ctx, channelID, xTimelineLimit(settings))
 	if err != nil {
+		if m.ReportExternalResult(err) {
+			return 0, err
+		}
 		_ = m.db.RecordIngestFailure(channelID, err.Error(), 0)
 		return 0, err
 	}
+	m.ReportExternalResult(nil)
 	_ = m.db.RecordIngestSuccess(channelID, float64(time.Now().Unix()), 0)
 
 	m.enrichExistingGhostQuotes(ctx, items)
@@ -433,9 +461,13 @@ func (m *Manager) FetchOneFeedSource(ctx context.Context, sourceID string) (int,
 	limit := m.xMediaDownloadLimit()
 	items, err := m.xFeedClient().FetchSource(ctx, source.URL, limit)
 	if err != nil {
+		if m.ReportExternalResult(err) {
+			return 0, err
+		}
 		_ = m.db.RecordFeedSourceFailure(sourceID, err.Error())
 		return 0, err
 	}
+	m.ReportExternalResult(nil)
 	n, err := m.upsertFeedSourceItems(ctx, source, items)
 	if err != nil {
 		_ = m.db.RecordFeedSourceFailure(sourceID, err.Error())

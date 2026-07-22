@@ -58,11 +58,20 @@ func (m *Manager) processContentAsset(ctx context.Context, asset db.Asset, workL
 	}
 	oldPath := asset.FilePath
 	bulkLane := mediaLaneForDownloadWork(workLane)
+	if !m.externalWorkAllowed(time.Now()) {
+		m.releaseContentAsset(asset)
+		return
+	}
 	finalPath, contentType, err := m.downloadContentAsset(ctx, asset, bulkLane)
 	if err != nil {
+		if m.ReportExternalResult(err) {
+			m.releaseContentAsset(asset)
+			return
+		}
 		m.failContentAsset(asset, err)
 		return
 	}
+	m.ReportExternalResult(nil)
 	key, err := m.cfg.Storage.Key(finalPath)
 	if err != nil {
 		m.removeMediaPaths(ctx, mediaLaneForAsset(asset, bulkLane), finalPath)

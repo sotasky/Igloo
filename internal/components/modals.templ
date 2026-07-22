@@ -2118,12 +2118,12 @@ templ feedDashboardSourcesCard(p PageProps, d FeedDashboardData) {
 						<tbody>
 							for _, s := range d.Sources {
 								if FeedSourceFilterMatch(s, d.Filter) {
-									<tr class={ "feed-row-" + s.DisplayStatus }>
+									<tr class={ "feed-row-" + s.Status }>
 										<!-- Link to X profile (not internal /channels/) so we can verify whether a failing handle has actually been deleted/suspended on X. -->
 										<td><a href={ templ.SafeURL("https://x.com/" + s.Handle) } target="_blank" rel="noopener noreferrer" class="feed-handle-link">{ "@" + s.Handle }</a></td>
 										<td>
-											<span class={ "dot " + FeedSourceDotClass(s.DisplayStatus) }></span>
-											{ s.DisplayStatus }
+											<span class={ "dot " + FeedSourceDotClass(s.Status) }></span>
+											{ s.Status }
 											if FeedSourceShortError(s) != "" {
 												{ " " }
 												<span class="feed-source-error">{ FeedSourceShortError(s) }</span>
@@ -2132,7 +2132,7 @@ templ feedDashboardSourcesCard(p PageProps, d FeedDashboardData) {
 										<td class={ LastOkClass(s.LastSuccessAt) }>{ TimeAgoText(p, s.LastSuccessAt) }</td>
 										<td>{ fmt.Sprintf("%d", s.ItemCount) }</td>
 										<td>
-											if s.DisplayStatus != "ok" {
+											if s.Status != "ok" {
 												<button class="feed-probe-link" type="button"
 													hx-get={ "/api/x/probe?handle=" + s.Handle }
 													hx-swap="none"

@@ -1384,8 +1384,7 @@ type FeedActivityEntry struct {
 // FeedSourceEntry is a row in the feed sources diagnostics table.
 type FeedSourceEntry struct {
 	Handle         string
-	Status         string // "ok", "cooling", "failing", "degraded", "unknown"
-	DisplayStatus  string // relaxed status for display
+	Status         string // "ok", "cooling", "failing", "degraded", "pending"
 	LastSuccessAt  int64
 	ItemCount      int
 	LastError      string
@@ -1416,7 +1415,7 @@ func FeedSourceIsFailed(status string) bool {
 
 // FeedSourceFilterMatch returns true if source matches the filter.
 func FeedSourceFilterMatch(s FeedSourceEntry, filter string) bool {
-	st := s.DisplayStatus
+	st := s.Status
 	switch filter {
 	case "failed":
 		return st == "failing" || st == "degraded"
@@ -1445,7 +1444,7 @@ func FeedSourceFilterCount(sources []FeedSourceEntry, filter string) int {
 
 // FeedSourceShortError returns a truncated error message for display.
 func FeedSourceShortError(s FeedSourceEntry) string {
-	if !FeedSourceIsFailed(s.DisplayStatus) {
+	if !FeedSourceIsFailed(s.Status) {
 		return ""
 	}
 	if s.LastHTTPStatus != 0 && s.LastHTTPStatus != 500 {

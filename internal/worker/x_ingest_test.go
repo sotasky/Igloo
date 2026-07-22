@@ -348,6 +348,34 @@ func TestFetchOneChannelRecordsFailureBackoff(t *testing.T) {
 	}
 }
 
+func TestFetchOneChannelDoesNotChargeNetworkFailureToSource(t *testing.T) {
+	d := newTestWorkerDB(t)
+	m := &Manager{
+		db:  d,
+		cfg: testCfg(t.TempDir()),
+		xFeedFetcher: fakeXFeedFetcher{
+			timeline: func(context.Context, string, int) ([]model.FeedItem, error) {
+				return nil, errors.New("temporary failure in name resolution")
+			},
+		},
+	}
+
+	if _, err := m.FetchOneChannel(context.Background(), "twitter_sample_user"); err == nil {
+		t.Fatal("expected fetch error")
+	}
+	state, err := d.GetIngestState("twitter_sample_user")
+	if err != nil {
+		t.Fatalf("GetIngestState: %v", err)
+	}
+	if state.FailCount != 0 || state.LastError != "" || state.NextRetryAt != 0 {
+		t.Fatalf("network failure changed source state: %+v", state)
+	}
+	if m.externalRetryDelay(time.Now()) <= 0 {
+		t.Fatal("shared network backoff was not opened")
+	}
+	m.stopExternalWake()
+}
+
 func TestRunIngestCyclePublishesOneSourceBeforeLaterSourceReturns(t *testing.T) {
 	d := newTestWorkerDB(t)
 	for _, channel := range []model.Channel{

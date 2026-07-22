@@ -12,10 +12,9 @@ func TestFeedDashboardUnfollowButtonRemovesRowAndFormatsConfirm(t *testing.T) {
 	d := FeedDashboardData{
 		Sources: []FeedSourceEntry{
 			{
-				Handle:        "sample_handle",
-				Status:        "failing",
-				DisplayStatus: "failing",
-				ItemCount:     3,
+				Handle:    "sample_handle",
+				Status:    "failing",
+				ItemCount: 3,
 			},
 		},
 	}

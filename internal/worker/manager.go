@@ -54,6 +54,9 @@ type Manager struct {
 	activity          *ActivityRing // general server activity (200 items)
 	dlActivity        *ActivityRing // download-specific activity (100 items)
 	feedActivity      *ActivityRing // x_ingest/feed_media per-item activity (200 items)
+	externalNetwork   externalNetworkState
+	externalWakeMu    sync.Mutex
+	externalWake      *time.Timer
 
 	dlSessionCompleted       int32        // atomic
 	dlSessionFailed          int32        // atomic
@@ -175,6 +178,7 @@ func (m *Manager) StartAll() {
 
 // Shutdown cancels the context and waits for all goroutines to stop.
 func (m *Manager) Shutdown() {
+	m.stopExternalWake()
 	m.cancel()
 	m.wg.Wait()
 }
@@ -201,6 +205,7 @@ func (m *Manager) runDownloaderOperationPruner(ctx context.Context) {
 }
 
 func (m *Manager) ShutdownTimeout(timeout time.Duration) bool {
+	m.stopExternalWake()
 	m.cancel()
 	done := make(chan struct{})
 	go func() {

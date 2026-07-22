@@ -914,28 +914,19 @@ func (s *Server) buildFeedSources() ([]components.FeedSourceEntry, string) {
 	}
 
 	itemCounts, _ := s.db.CountFeedItemsBySourceChannel()
-	twoDaysAgo := time.Now().Unix() - 2*24*3600
 
 	var sources []components.FeedSourceEntry
 	for _, source := range sourceChannels {
 		handle := source.Handle
-		entry := components.FeedSourceEntry{Handle: handle, Status: "unknown", DisplayStatus: "unknown"}
+		entry := components.FeedSourceEntry{Handle: handle, Status: "pending"}
 		if st, ok := stateMap[handle]; ok {
 			entry.Status = st.Status
-			entry.DisplayStatus = st.Status
 			entry.LastSuccessAt = st.LastSuccessAt
 			entry.LastError = st.LastError
 			entry.LastHTTPStatus = st.LastHTTPStatus
 		}
 		if c, ok := itemCounts[source.ChannelID]; ok {
 			entry.ItemCount = c
-		}
-		// Relax status: if last OK was <2 days ago, consider it OK
-		if (entry.Status == "failing" || entry.Status == "degraded") && entry.LastSuccessAt > twoDaysAgo {
-			entry.DisplayStatus = "ok"
-		}
-		if entry.Status == "unknown" {
-			entry.DisplayStatus = "pending"
 		}
 		sources = append(sources, entry)
 	}

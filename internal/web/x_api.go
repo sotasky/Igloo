@@ -98,9 +98,9 @@ func (s *Server) handleXDiagnostics(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleXProbe(w http.ResponseWriter, r *http.Request) {
-	handle := r.URL.Query().Get("handle")
-	if handle == "" {
-		writeJSON(w, 400, map[string]any{"success": false, "error": "handle required"})
+	handle := xfeed.NormalizeHandle(r.URL.Query().Get("handle"))
+	if !xfeed.ValidHandle(handle) {
+		writeJSON(w, 400, map[string]any{"success": false, "error": "valid handle required"})
 		return
 	}
 
@@ -113,11 +113,19 @@ func (s *Server) handleXProbe(w http.ResponseWriter, r *http.Request) {
 	}
 	client := xfeed.NewClient(cookiesDir)
 	client.OperationSink = s.db
-	items, err := client.FetchTimeline(ctx, handle, 5)
+	items, err := client.FetchTimeline(ctx, handle, 1)
 	if err != nil {
+		channelID := "twitter_" + handle
+		if s.workers == nil || !s.workers.ReportExternalResult(err) {
+			_ = s.db.RecordIngestFailure(channelID, err.Error(), 0)
+		}
 		writeJSON(w, 200, map[string]any{"success": false, "error": err.Error()})
 		return
 	}
+	if s.workers != nil {
+		s.workers.ReportExternalResult(nil)
+	}
+	_ = s.db.RecordIngestSuccess("twitter_"+handle, float64(time.Now().Unix()), 0)
 
 	parentMedia := 0
 	quoteMedia := 0
@@ -151,6 +159,6 @@ func (s *Server) handleXProbe(w http.ResponseWriter, r *http.Request) {
 		"retweets":      retweets,
 		"replies":       replies,
 		"cookie_files":  len(xfeed.DiscoverCookieFiles(cookiesDir)),
-		"gallery_limit": 5,
+		"gallery_limit": 1,
 	})
 }
