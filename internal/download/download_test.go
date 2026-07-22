@@ -300,8 +300,8 @@ exit 1
 	if err != nil {
 		t.Fatalf("Download returned error: %v", err)
 	}
-	if len(paths) != 1 || paths[0] != filepath.Join(outDir, "sample-retry-2.mp4") {
-		t.Fatalf("paths = %#v, want immutable retry output in output dir", paths)
+	if len(paths) != 1 || paths[0] != filepath.Join(outDir, "sample.mp4") {
+		t.Fatalf("paths = %#v, want stable output in output dir", paths)
 	}
 	data, err := os.ReadFile(paths[0])
 	if err != nil {
@@ -370,8 +370,8 @@ exit 1
 	if err != nil {
 		t.Fatalf("Download returned error: %v", err)
 	}
-	if len(paths) != 1 || paths[0] != filepath.Join(outDir, "sample-retry-2.mp4") {
-		t.Fatalf("paths = %#v, want immutable retry output in output dir", paths)
+	if len(paths) != 1 || paths[0] != filepath.Join(outDir, "sample.mp4") {
+		t.Fatalf("paths = %#v, want stable output in output dir", paths)
 	}
 }
 
@@ -431,8 +431,8 @@ exit 1
 	if err != nil {
 		t.Fatalf("Download returned error: %v", err)
 	}
-	if len(paths) != 1 || paths[0] != filepath.Join(outDir, "sample-retry-2.mp4") {
-		t.Fatalf("paths = %#v, want immutable retry output in output dir", paths)
+	if len(paths) != 1 || paths[0] != filepath.Join(outDir, "sample.mp4") {
+		t.Fatalf("paths = %#v, want stable output in output dir", paths)
 	}
 }
 

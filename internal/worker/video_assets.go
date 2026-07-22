@@ -2,8 +2,6 @@ package worker
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 	"io"
 	"log"
@@ -302,16 +300,12 @@ func safeVideoFileName(name string) (string, error) {
 	return name, nil
 }
 
-func newDownloadAttemptID(videoID string) (string, error) {
+func downloadOutputID(videoID string) (string, error) {
 	videoID, err := safeVideoFileName(videoID)
 	if err != nil {
 		return "", err
 	}
-	var suffix [8]byte
-	if _, err := rand.Read(suffix[:]); err != nil {
-		return "", err
-	}
-	return videoID + "-attempt-" + hex.EncodeToString(suffix[:]), nil
+	return videoID, nil
 }
 
 func canonicalImageExtension(path string) string {

@@ -112,9 +112,9 @@ func (m *Manager) DownloadTemp(ctx context.Context, rawURL string, saveChannel b
 	if err := m.downloader.RunMedia(ctx, download.MediaLaneBulkForeground, func() error { return os.MkdirAll(tempDir, 0o755) }); err != nil {
 		return TempDownloadResult{Message: fmt.Sprintf("Create storage directory: %v", err)}
 	}
-	attemptID, err := newDownloadAttemptID(videoID)
+	outputID, err := downloadOutputID(videoID)
 	if err != nil {
-		return TempDownloadResult{Message: fmt.Sprintf("Download attempt: %v", err)}
+		return TempDownloadResult{Message: fmt.Sprintf("Download output: %v", err)}
 	}
 	subtitleDir, err := m.cfg.Storage.WritePath("subtitles/" + platform)
 	if err != nil {
@@ -123,7 +123,7 @@ func (m *Manager) DownloadTemp(ctx context.Context, rawURL string, saveChannel b
 
 	opts := download.Opts{
 		OutputDir:          tempDir,
-		ID:                 attemptID,
+		ID:                 outputID,
 		Cookies:            cookiesFile,
 		CookiesFromBrowser: cookiesBrowser,
 		CookieAlternates:   cookieSets,
@@ -202,7 +202,7 @@ func (m *Manager) DownloadTemp(ctx context.Context, rawURL string, saveChannel b
 		m.removeFailedAttempt(ctx, download.MediaLaneBulkForeground, files, completed)
 		return TempDownloadResult{Message: fmt.Sprintf("DB insert: %v", err)}
 	}
-	if err := m.publishCompletedVideoThumbnail(ctx, download.MediaLaneBulkForeground, videoID, platform, attemptID, files); err != nil {
+	if err := m.publishCompletedVideoThumbnail(ctx, download.MediaLaneBulkForeground, videoID, platform, outputID, files); err != nil {
 		log.Printf("[temp] thumbnail publish failed for %s: %v", videoID, err)
 	}
 	if err := m.storeCompletedSubtitles(ctx, videoID, files, completed); err != nil {
@@ -289,15 +289,15 @@ func (m *Manager) downloadPlaylist(ctx context.Context, rawURL, playlistID strin
 		}
 
 		videoURL := fmt.Sprintf("https://www.youtube.com/watch?v=%s", videoID)
-		attemptID, attemptErr := newDownloadAttemptID(videoID)
+		outputID, attemptErr := downloadOutputID(videoID)
 		if attemptErr != nil {
-			log.Printf("[temp] playlist item %s attempt allocation failed: %v", videoID, attemptErr)
+			log.Printf("[temp] playlist item %s output preparation failed: %v", videoID, attemptErr)
 			failed++
 			continue
 		}
 		opts := download.Opts{
 			OutputDir:          targetDir,
-			ID:                 attemptID,
+			ID:                 outputID,
 			Cookies:            authOpts.Cookies,
 			CookiesFromBrowser: authOpts.CookiesFromBrowser,
 		}
@@ -334,7 +334,7 @@ func (m *Manager) downloadPlaylist(ctx context.Context, rawURL, playlistID strin
 			failed++
 			continue
 		}
-		if err := m.publishCompletedVideoThumbnail(ctx, download.MediaLaneBulkForeground, videoID, "youtube", attemptID, files); err != nil {
+		if err := m.publishCompletedVideoThumbnail(ctx, download.MediaLaneBulkForeground, videoID, "youtube", outputID, files); err != nil {
 			log.Printf("[temp] playlist item %s thumbnail publish failed: %v", videoID, err)
 		}
 		m.removeTransientFiles(ctx, download.MediaLaneBulkForeground, files)

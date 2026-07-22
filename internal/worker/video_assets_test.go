@@ -127,6 +127,16 @@ func TestPrepareCompletedVideoFilesKeepsMediaExternalAndDefersExactThumbnail(t *
 	}
 }
 
+func TestDownloadOutputIDUsesTheStableVideoID(t *testing.T) {
+	got, err := downloadOutputID("sample_video")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "sample_video" {
+		t.Fatalf("output id = %q, want stable video id", got)
+	}
+}
+
 func TestDownloadVideoPublishesPrimaryAndQueuesSubtitleBeforeBlockedThumbnail(t *testing.T) {
 	root := t.TempDir()
 	database := newTestWorkerDBAt(t, root)
@@ -285,7 +295,7 @@ func TestFailedRedownloadPreservesReadyBytesAndRemovesOnlyAttemptOutputs(t *test
 		t.Fatalf("ready stream: %+v %v", before, err)
 	}
 
-	attemptID, err := newDownloadAttemptID(videoID)
+	attemptID, err := downloadOutputID(videoID)
 	if err != nil {
 		t.Fatal(err)
 	}

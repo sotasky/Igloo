@@ -216,6 +216,7 @@ func containsAuthSignal(s string) bool {
 		"cookies missing",
 		"cookies are missing",
 		"cookies required",
+		"cookies are no longer valid",
 		"invalid cookies",
 		"expired cookies",
 	)

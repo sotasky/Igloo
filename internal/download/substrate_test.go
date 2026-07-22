@@ -88,6 +88,7 @@ func TestClassifyErrorPatterns(t *testing.T) {
 		want string
 	}{
 		{"auth", errors.New("login required; cookies missing"), nil, ErrorKindAuth},
+		{"youtube_rotated_cookies", errors.New("WARNING: [youtube] The provided YouTube account cookies are no longer valid. They have likely been rotated in the browser as a security measure."), nil, ErrorKindAuth},
 		{"rate", errors.New("HTTP Error 429: Too Many Requests"), nil, ErrorKindRateLimit},
 		{"hyphenated_rate_limit", errors.New("Requested content is not available, rate-limit reached or login required. Use --cookies for authentication"), nil, ErrorKindRateLimit},
 		{

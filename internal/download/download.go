@@ -3,7 +3,6 @@ package download
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log"
 	"net/url"
 	"path"
@@ -110,9 +109,6 @@ func (d *Downloader) DownloadSubtitles(ctx context.Context, lane MediaLane, rawU
 		attempts := opts.cookieAttempts()
 		for index, auth := range attempts {
 			usedOpts := opts.withCookieSet(auth)
-			if index > 0 {
-				usedOpts.ID = fmt.Sprintf("%s-retry-%d", opts.ID, index+1)
-			}
 			paths, err = d.YtDlp.DownloadSubtitles(ctx, rawURL, usedOpts)
 			if err == nil || index+1 >= len(attempts) || !shouldTryNextCookieAttempt(err) {
 				return err
@@ -155,9 +151,6 @@ func (d *Downloader) downloadCompletedAdmitted(ctx context.Context, rawURL strin
 	attempts := opts.cookieAttempts()
 	for i, auth := range attempts {
 		usedOpts = opts.withCookieSet(auth)
-		if i > 0 && usedOpts.ID != "" {
-			usedOpts.ID = fmt.Sprintf("%s-retry-%d", opts.ID, i+1)
-		}
 		completed, err = d.downloadCompletedOnce(ctx, rawURL, mediaType, usedOpts)
 		if err == nil {
 			return completed, nil

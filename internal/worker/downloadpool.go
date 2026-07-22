@@ -324,9 +324,9 @@ func (m *Manager) downloadVideo(ctx context.Context, job db.DownloadWork, platfo
 		m.failDownloadJob(job, fmt.Errorf("mkdir: %w", err))
 		return
 	}
-	attemptID, err := newDownloadAttemptID(job.VideoID)
+	outputID, err := downloadOutputID(job.VideoID)
 	if err != nil {
-		m.failDownloadJob(job, fmt.Errorf("allocate download attempt: %w", err))
+		m.failDownloadJob(job, fmt.Errorf("prepare download output: %w", err))
 		return
 	}
 	sourceURL := buildSourceURL(platform, safeSourceID, job.VideoID)
@@ -335,7 +335,7 @@ func (m *Manager) downloadVideo(ctx context.Context, job db.DownloadWork, platfo
 	cookiesFile, cookiesBrowser := m.cookiesFor(platform)
 	opts := download.Opts{
 		OutputDir:          videoDir,
-		ID:                 attemptID,
+		ID:                 outputID,
 		Cookies:            cookiesFile,
 		CookiesFromBrowser: cookiesBrowser,
 		CookieAlternates:   m.cookieSetsFor(platform),
@@ -447,7 +447,7 @@ func (m *Manager) downloadVideo(ctx context.Context, job db.DownloadWork, platfo
 			RequiredReason: "retention",
 		}
 	}
-	if err := m.storeCompletedVideoOutputs(ctx, mediaLane, platform, attemptID, video, files, completed, subtitleAsset); err != nil {
+	if err := m.storeCompletedVideoOutputs(ctx, mediaLane, platform, outputID, video, files, completed, subtitleAsset); err != nil {
 		log.Printf("[downloadpool] StoreCompletedVideo %s: %v", job.VideoID, err)
 		m.failDownloadJob(job, fmt.Errorf("db insert: %w", err))
 		return
