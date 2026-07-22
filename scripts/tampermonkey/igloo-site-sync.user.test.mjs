@@ -1409,9 +1409,68 @@ test("offline cross-site follows are cached for button state", async () => {
   );
 });
 
-test("ghost-resubscribed X handles can be unfollowed immediately", async () => {
+test("server unfollows are not restored from the legacy local X list", async () => {
   const harness = buildHarness({
     localList: [{ handle: "bob", url: "https://x.com/bob" }],
+    twitterChannels: [],
+  });
+  runScript(harness, { exposeDebug: true });
+
+  await drainMicrotasks();
+
+  assert.equal(
+    harness.requestCalls.some(
+      (call) =>
+        call.method === "POST" &&
+        call.url === "https://localhost:5001/api/subscribe",
+    ),
+    false,
+    `unexpected re-subscribe from legacy local state: ${harness.requestCalls
+      .map((call) => `${call.method} ${call.url}`)
+      .join(", ")}`,
+  );
+});
+
+test("X unfollow clears the server and local follow state", async () => {
+  const harness = buildHarness({
+    localList: [{ handle: "bob", url: "https://x.com/bob" }],
+    twitterChannels: [{ channel_id: "twitter_bob", url: "https://x.com/bob" }],
+  });
+  runScript(harness, { exposeDebug: true });
+
+  await drainMicrotasks();
+  await harness.context.__iglooTest.handleUnsave("bob", null);
+  await drainMicrotasks();
+
+  assert.ok(
+    harness.requestCalls.some(
+      (call) =>
+        call.method === "DELETE" &&
+        call.url === "https://localhost:5001/api/unsubscribe/twitter_bob",
+    ),
+    `expected server unfollow, got ${harness.requestCalls
+      .map((call) => `${call.method} ${call.url}`)
+      .join(", ")}`,
+  );
+  assert.equal(harness.values.get("xsync_local_list").length, 0);
+  assert.ok(harness.toasts.includes("Removed @bob"));
+});
+
+test("pending offline X follows still retry when the server is reachable", async () => {
+  const harness = buildHarness({
+    initialValues: {
+      igloo_sync_follow_cache: {
+        version: 1,
+        entries: {
+          "twitter:sample_user": {
+            platform: "twitter",
+            key: "sample_user",
+            url: "https://x.com/sample_user",
+            pending: true,
+          },
+        },
+      },
+    },
     twitterChannels: [],
   });
   runScript(harness, { exposeDebug: true });
@@ -1422,29 +1481,12 @@ test("ghost-resubscribed X handles can be unfollowed immediately", async () => {
     harness.requestCalls.some(
       (call) =>
         call.method === "POST" &&
-        call.url === "https://localhost:5001/api/subscribe",
+        call.url === "https://localhost:5001/api/subscribe" &&
+        JSON.parse(call.data).url === "https://x.com/sample_user",
     ),
-    `expected ghost re-subscribe, got ${harness.requestCalls
+    `expected pending follow retry, got ${harness.requestCalls
       .map((call) => `${call.method} ${call.url}`)
       .join(", ")}`,
-  );
-
-  await harness.context.__iglooTest.handleUnsave("bob", null);
-  await drainMicrotasks();
-
-  assert.ok(
-    harness.requestCalls.some(
-      (call) =>
-        call.method === "DELETE" &&
-        call.url === "https://localhost:5001/api/unsubscribe/twitter_bob",
-    ),
-    `expected immediate unfollow DELETE, got ${harness.requestCalls
-      .map((call) => `${call.method} ${call.url}`)
-      .join(", ")}`,
-  );
-  assert.ok(
-    harness.toasts.includes("Removed @bob"),
-    `expected unfollow toast, got ${harness.toasts.join(", ")}`,
   );
 });
 

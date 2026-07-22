@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Igloo Site Sync
 // @namespace    local.igloo.site.sync
-// @version      8.0.36
+// @version      8.0.37
 // @author       screwys
 // @description  Follow X, TikTok, Instagram, and YouTube channels in Igloo; includes the full X media workflow.
 // @homepageURL  https://github.com/screwys/Igloo
@@ -36,7 +36,7 @@
 
 (function () {
   "use strict";
-  const SCRIPT_VERSION = "8.0.36";
+  const SCRIPT_VERSION = "8.0.37";
 
   const SETTINGS = {
     apiBase: "xsync_api_base",
@@ -1099,6 +1099,9 @@
   }
 
   function migrateLocalListToFollowCache() {
+    // Once dashboard sync is enabled, the server owns follow state. Re-importing
+    // this legacy list would turn a server-side unfollow back into a pending follow.
+    if (syncToDashboardEnabled()) return;
     const list = GM_getValue(SETTINGS.localList, []);
     if (!Array.isArray(list)) return;
     for (const item of list) {
@@ -1288,18 +1291,17 @@
     serverHandleToChannelId = map;
     console.log(`[XSync] loaded ${set.size} server handles`);
 
-    // Re-subscribe ghost-followed handles: local follow state absent from server.
-    // These happen when syncToServer() failed (e.g. expired token) during a
-    // previous session. Safe to retry — server returns 409 if already present.
+    // Retry only explicit follow writes that have not reached the server yet.
+    // A non-pending cache entry missing from the server represents an unfollow.
     if (syncToDashboardEnabled()) {
-      const ghosts = cachedFollowsForPlatform("twitter").filter(
-        (item) => item.pending || (item.key && !set.has(item.key)),
+      const pendingFollows = cachedFollowsForPlatform("twitter").filter(
+        (item) => item.pending,
       );
-      if (ghosts.length) {
+      if (pendingFollows.length) {
         console.log(
-          `[XSync] re-subscribing ${ghosts.length} ghost-followed handle(s)`,
+          `[XSync] retrying ${pendingFollows.length} pending follow(s)`,
         );
-        for (const item of ghosts) {
+        for (const item of pendingFollows) {
           const r = await apiRequest(
             "POST",
             "/api/subscribe",
@@ -1316,10 +1318,10 @@
               url: item.url || `https://x.com/${handle}`,
               pending: false,
             });
-            console.log(`[XSync] ghost synced: ${handle}`);
+            console.log(`[XSync] pending follow synced: ${handle}`);
           } else {
             console.warn(
-              `[XSync] ghost sync failed: ${item.key} (${r.status})`,
+              `[XSync] pending follow failed: ${item.key} (${r.status})`,
             );
           }
         }
@@ -1332,7 +1334,7 @@
   function isSaved(handle) {
     return (
       (serverHandleSet && serverHandleSet.has(handle.toLowerCase())) ||
-      isInLocalList(handle) ||
+      (!syncToDashboardEnabled() && isInLocalList(handle)) ||
       !!cachedFollow("twitter", handle)
     );
   }
