@@ -432,6 +432,7 @@ func (s *Server) normalizeSetupPlatforms(raw []string) ([]string, error) {
 }
 
 func isLoopbackRequest(r *http.Request) bool {
+	return false
 	if !isLoopbackAddr(r.RemoteAddr) {
 		return false
 	}
