@@ -94,10 +94,46 @@ func TestShortsPlayerLongPressUsesMomentMutationOwners(t *testing.T) {
 		"/api/mutations/mute",
 		"/api/mutations/follow",
 		"function openMomentActions(entry)",
+		"advanceMomentsAfterAction(entry)",
+		"function finishMomentUnfollow(entry, channelId, label, message)",
+		"finishMomentUnfollow(entry, reposterID, reposterLabel)",
+		"finishMomentUnfollow(entry, channelId, label, payload && payload.message)",
+		"followShortAuthor(entryObj, followBtn)",
+		"function followShortAuthor(entry, btn)",
 	} {
 		if !strings.Contains(src, check) {
 			t.Errorf("Moment long-press action wiring missing %q", check)
 		}
+	}
+	if strings.Contains(src, "window.location.reload") {
+		t.Fatal("Moment actions should advance without reloading the page")
+	}
+
+	indexBytes, err := os.ReadFile("../../static/js/src/shorts/index.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	indexSrc := string(indexBytes)
+	for _, check := range []string{
+		"function advanceAfterMomentAction(entry)",
+		"tabGridCache.delete(currentTab)",
+		"loadTabSnapshot(currentTab)",
+		"fetchShortsCursorFromServer()",
+		"var targetID = String(cursor && cursor.video_id || '').trim()",
+		"if (nextIndex >= 0 && targetID === entryID) nextIndex += 1",
+		"if (nextIndex < 0) {",
+		"showGrid()",
+		"openOverlayAtIndex(nextIndex, true)",
+	} {
+		if !strings.Contains(indexSrc, check) {
+			t.Errorf("Moment action advance wiring missing %q", check)
+		}
+	}
+	if strings.Contains(indexSrc, "nextIndex = Math.min(Math.max(0, activeIndex)") {
+		t.Fatal("Moment actions must not fall back to an earlier item")
+	}
+	if strings.Contains(indexSrc, "var followingIDs = state.cards.slice") {
+		t.Fatal("Moment actions must not carry pre-mutation DOM order across a server reorder")
 	}
 }
 

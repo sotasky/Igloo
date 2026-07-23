@@ -58,6 +58,34 @@ class MomentPagerSettlementTest {
         composeRule.runOnIdle { assertEquals(listOf("active"), settledVideoIds) }
     }
 
+    @Test
+    fun removing_the_current_video_advances_to_the_next_video() {
+        var items by
+            mutableStateOf(
+                listOf(
+                    momentItem("older"),
+                    momentItem("active"),
+                    momentItem("newer"),
+                )
+            )
+
+        composeRule.setContent {
+            val pagerItems = rememberMomentPagerSessionItems(items)
+            val pagerState = rememberPagerState(initialPage = 1, pageCount = { pagerItems.size })
+            VerticalPager(
+                state = pagerState,
+                key = { page -> pagerItems[page].videoId },
+                modifier = Modifier.size(width = 360.dp, height = 640.dp),
+            ) { page ->
+                Text(pagerItems[page].videoId)
+            }
+        }
+
+        composeRule.onNodeWithText("active").assertIsDisplayed()
+        composeRule.runOnIdle { items = items.filterNot { it.videoId == "active" } }
+        composeRule.onNodeWithText("newer").assertIsDisplayed()
+    }
+
     private fun momentItem(videoId: String): MomentItem =
         MomentItem(
             videoId = videoId,

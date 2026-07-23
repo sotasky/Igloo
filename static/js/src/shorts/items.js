@@ -24,8 +24,18 @@ function closeMomentActions() {
   momentActionsKeyHandler = null
 }
 
-function reloadMomentsAfterAction() {
-  window.setTimeout(function () { window.location.reload() }, 150)
+function advanceMomentsAfterAction(entry) {
+  if (_fns && typeof _fns.advanceAfterMomentAction === 'function') {
+    _fns.advanceAfterMomentAction(entry)
+    return
+  }
+  if (_fns && typeof _fns.goNext === 'function') _fns.goNext()
+}
+
+function finishMomentUnfollow(entry, channelId, label, message) {
+  syncShortAuthorFollow(channelId, false)
+  showToast(message || tf('toast_unfollowed_channel', 'Unfollowed %1$s', label))
+  advanceMomentsAfterAction(entry)
 }
 
 function applyMomentAction(entry, action) {
@@ -43,7 +53,7 @@ function applyMomentAction(entry, action) {
       body: JSON.stringify({ channel_id: reposterID, field: 'include_reposts', value: 0, updated_at_ms: now })
     }).then(function () {
       showToast(tf('toast_reposts_disabled_for_account', 'Reposts disabled for %1$s', reposterLabel))
-      reloadMomentsAfterAction()
+      advanceMomentsAfterAction(entry)
     }).catch(function (err) {
       showToast((err && err.payload && err.payload.error) || t('error_channel_settings_save_failed', 'Failed to save channel settings'))
     })
@@ -56,7 +66,7 @@ function applyMomentAction(entry, action) {
       body: JSON.stringify({ channel_id: authorID, action: 'set', updated_at_ms: now })
     }).then(function () {
       showToast(tf('toast_muted_account', 'Muted %1$s', authorLabel))
-      reloadMomentsAfterAction()
+      advanceMomentsAfterAction(entry)
     }).catch(function (err) {
       showToast((err && err.payload && err.payload.error) || t('error_mute_account_failed', 'Failed to mute account'))
     })
@@ -76,8 +86,7 @@ function applyMomentAction(entry, action) {
         method: 'POST',
         body: JSON.stringify({ channel_id: reposterID, action: 'clear', updated_at_ms: Date.now() })
       }).then(function () {
-        showToast(tf('toast_unfollowed_channel', 'Unfollowed %1$s', reposterLabel))
-        reloadMomentsAfterAction()
+        finishMomentUnfollow(entry, reposterID, reposterLabel)
       })
     }).catch(function (err) {
       showToast((err && err.payload && err.payload.error) || t('error_unfollow_failed', 'Failed to unfollow'))
@@ -831,7 +840,7 @@ export function makeShortItem(entryData, existingEl) {
     if (followBtn) {
       e.preventDefault()
       e.stopPropagation()
-      followShortAuthor(entryData, followBtn)
+      followShortAuthor(entryObj, followBtn)
       return
     }
     var btn = e.target && e.target.closest ? e.target.closest('[data-short-action]') : null
@@ -946,7 +955,8 @@ function syncShortAuthorFollow(channelId, following) {
   }
 }
 
-function followShortAuthor(entryData, btn) {
+function followShortAuthor(entry, btn) {
+  var entryData = entry && entry.data
   if (!entryData || !entryData.channelId || !btn || btn.disabled) return
   var channelId = String(entryData.channelId || '').trim()
   var handle = channelId.replace(/^(tiktok|instagram|youtube|twitter|x)_/, '')
@@ -970,7 +980,7 @@ function followShortAuthor(entryData, btn) {
       })
     }).then(function (payload) {
       if (!payload) return false
-      showToast((payload && payload.message) || tf('toast_unfollowed_channel', 'Unfollowed %1$s', label))
+      finishMomentUnfollow(entry, channelId, label, payload && payload.message)
       return true
     })
   } else {

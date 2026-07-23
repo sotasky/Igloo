@@ -744,6 +744,49 @@ if (layout) {
       })
     }
 
+    function advanceAfterMomentAction(entry) {
+      var entryID = String(entry && entry.data && entry.data.id || '').trim()
+      var keepOverlayOpen = state.overlayOpen
+
+      tabGridCache.delete(currentTab)
+      return Promise.all([
+        loadTabSnapshot(currentTab),
+        fetchShortsCursorFromServer()
+      ]).then(function (results) {
+        var snapshot = results[0]
+        var cursor = results[1]
+        var targetID = String(cursor && cursor.video_id || '').trim()
+        if (keepOverlayOpen && !targetID) {
+          goNext()
+          return false
+        }
+
+        resetTabState(currentTab, snapshot)
+        if (!keepOverlayOpen || !state.cards.length) {
+          showGrid()
+          return true
+        }
+
+        var nextIndex = state.cards.findIndex(function (card) {
+          return String(card.getAttribute('data-video-id') || '').trim() === targetID
+        })
+        if (nextIndex >= 0 && targetID === entryID) nextIndex += 1
+        if (nextIndex < 0) {
+          showGrid()
+          return true
+        }
+        if (nextIndex >= state.cards.length) {
+          showGrid()
+          return true
+        }
+        openOverlayAtIndex(nextIndex, true)
+        return true
+      }).catch(function () {
+        if (keepOverlayOpen) goNext()
+        return false
+      })
+    }
+
     function openCurrentTabDefault() {
       var openSeq = beginOpenRequest()
       if (currentTab === 'stories') {
@@ -1490,6 +1533,7 @@ if (layout) {
       goNext: goNext,
       updateCurrentActionButtons: updateCurrentActionButtons,
       currentData: currentData,
+      advanceAfterMomentAction: advanceAfterMomentAction,
       openStoryChannel: openStoryChannel,
       goStoryNext: goStoryNextManual,
       goStoryPrev: goStoryPrevManual
